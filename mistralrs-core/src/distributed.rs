@@ -9,11 +9,13 @@ use mistralrs_quant::{RingConfig, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::env;
+use std::future::Future;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::process::Command;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::Sender;
 use tracing::info;
@@ -27,6 +29,15 @@ use crate::{DeviceMapSetting, IsqOrganization, ModelPaths, Request};
 pub(crate) const IS_DAEMON_FLAG: &str = "__MISTRALRS_DAEMON_INTERNAL";
 const MISTRALRS_MN_GLOBAL_WORLD_SIZE: &str = "MISTRALRS_MN_GLOBAL_WORLD_SIZE";
 const MISTRALRS_MN_LOCAL_WORLD_SIZE: &str = "MISTRALRS_MN_LOCAL_WORLD_SIZE";
+const WORKER_READY_CONNECT_ATTEMPTS: usize = 200;
+const WORKER_READY_CONNECT_SLEEP_MS: u64 = 50;
+
+static TP_SESSION: OnceLock<Mutex<TensorParallelSession>> = OnceLock::new();
+
+struct TensorParallelSession {
+    ids: Vec<mistralrs_quant::Id>,
+    next_model_index: usize,
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct TensorParallelism {
@@ -161,14 +172,21 @@ pub fn is_daemon() -> bool {
 }
 
 pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
-    use std::io::BufRead;
-    use std::io::BufReader;
-
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
             use interprocess::local_socket::traits::Stream;
             use interprocess::local_socket::Stream as LocalStream;
+
+            let dispatch = move |req| {
+                let request_sender = request_sender.clone();
+                async move {
+                    request_sender
+                        .send(req)
+                        .await
+                        .map_err(|_| "daemon channel closed".to_string())
+                }
+            };
 
             loop {
                 let name = match ipc_name() {
@@ -185,82 +203,60 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
                         tracing::error!("Failed to read line from IPC stream: {e}");
                         continue;
                     }
-                    let mut req: Request = match serde_json::from_str(&buf) {
+                    let req: Request = match serde_json::from_str(&buf) {
                         Ok(req) => req,
                         Err(e) => {
                             tracing::error!("Failed to parse request JSON: {e}");
                             continue;
                         }
                     };
+                    handle_daemon_request(req, &dispatch).await;
+                }
+            }
+        });
+    });
+}
 
-                    req = match req {
-                        Request::ReIsq(x) => Request::ReIsq(x),
-                        Request::Calibration(x) => Request::Calibration(x),
-                        Request::Terminate => Request::Terminate,
-                        Request::Detokenize(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.response = sender;
-                            let req = Request::Detokenize(x);
+pub fn nccl_daemon_replicator_mistralrs(mistralrs: Arc<crate::MistralRs>) {
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            use interprocess::local_socket::traits::Stream;
+            use interprocess::local_socket::Stream as LocalStream;
 
-                            if request_sender.send(req).await.is_err() {
-                                tracing::error!("Daemon channel closed for Detokenize request");
-                                continue;
-                            }
-                            match receiver.recv().await {
-                                Some(resp) => {
-                                    if let Err(e) = resp {
-                                        tracing::error!("Detokenize response error: {e}");
-                                    }
-                                }
-                                None => tracing::error!("Detokenize response channel closed"),
-                            }
-                            continue;
-                        }
-                        Request::Tokenize(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.response = sender;
-                            let req = Request::Tokenize(x);
+            let dispatch = move |req| {
+                let mistralrs = mistralrs.clone();
+                async move {
+                    mistralrs
+                        .send_request_async(req)
+                        .await
+                        .map_err(|err| format!("{err:?}"))
+                }
+            };
 
-                            if request_sender.send(req).await.is_err() {
-                                tracing::error!("Daemon channel closed for Tokenize request");
-                                continue;
-                            }
-                            match receiver.recv().await {
-                                Some(resp) => {
-                                    if let Err(e) = resp {
-                                        tracing::error!("Tokenize response error: {e}");
-                                    }
-                                }
-                                None => tracing::error!("Tokenize response channel closed"),
-                            }
-                            continue;
-                        }
-                        Request::Normal(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.is_streaming = false;
-                            x.response = sender;
-                            let req = Request::Normal(x);
-
-                            if request_sender.send(req).await.is_err() {
-                                tracing::error!("Daemon channel closed for Normal request");
-                                continue;
-                            }
-                            match receiver.recv().await {
-                                Some(resp) => {
-                                    if let Err(e) = resp.as_result() {
-                                        tracing::error!("Normal response error: {e}");
-                                    }
-                                }
-                                None => tracing::error!("Normal response channel closed"),
-                            }
-                            continue;
-                        }
-                        Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
-                    };
-
-                    if request_sender.send(req).await.is_err() {
-                        tracing::error!("Daemon channel closed for request");
+            loop {
+                let name = match ipc_name() {
+                    Ok(name) => name,
+                    Err(e) => {
+                        tracing::error!("Failed to get IPC name in daemon: {e}");
+                        continue;
                     }
+                };
+                if let Ok(stream) = LocalStream::connect(name) {
+                    let mut reader = BufReader::new(stream);
+                    let mut buf = String::new();
+                    if let Err(e) = reader.read_line(&mut buf) {
+                        tracing::error!("Failed to read line from IPC stream: {e}");
+                        continue;
+                    }
+                    let req: Request = match serde_json::from_str(&buf) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            tracing::error!("Failed to parse request JSON: {e}");
+                            continue;
+                        }
+                    };
+                    handle_daemon_request(req, &dispatch).await;
                 }
             }
         });
@@ -268,9 +264,6 @@ pub fn nccl_daemon_replicator(request_sender: Sender<Request>) {
 }
 
 pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
-    use std::io::BufRead;
-    use std::io::BufReader;
-
     let ring_config = RingConfig::load();
 
     let master_ip = ring_config.master_ip();
@@ -278,69 +271,151 @@ pub fn ring_daemon_replicator(request_sender: Sender<Request>) {
     std::thread::spawn(move || {
         let rt = Runtime::new().unwrap();
         rt.block_on(async move {
+            let dispatch = move |req| {
+                let request_sender = request_sender.clone();
+                async move {
+                    request_sender
+                        .send(req)
+                        .await
+                        .map_err(|_| "daemon channel closed".to_string())
+                }
+            };
+
             loop {
                 if let Ok(stream) = TcpStream::connect(format!("{master_ip}:{master_port}")) {
                     let mut reader = BufReader::new(stream);
                     let mut buf = String::new();
-                    reader.read_line(&mut buf).unwrap();
-                    let mut req: Request = serde_json::from_str(&buf).unwrap();
-
-                    req = match req {
-                        Request::ReIsq(x) => Request::ReIsq(x),
-                        Request::Calibration(x) => Request::Calibration(x),
-                        Request::Terminate => Request::Terminate,
-                        Request::Detokenize(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.response = sender;
-                            let req = Request::Detokenize(x);
-
-                            request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.unwrap();
+                    if let Err(e) = reader.read_line(&mut buf) {
+                        tracing::error!("Failed to read line from ring stream: {e}");
+                        continue;
+                    }
+                    let req: Request = match serde_json::from_str(&buf) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            tracing::error!("Failed to parse request JSON: {e}");
                             continue;
                         }
-                        Request::Tokenize(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.response = sender;
-                            let req = Request::Tokenize(x);
-
-                            request_sender.send(req).await.unwrap();
-                            let resp = receiver.recv().await.unwrap();
-                            resp.unwrap();
-                            continue;
-                        }
-                        Request::Normal(mut x) => {
-                            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-                            x.is_streaming = false;
-                            x.response = sender;
-                            let req = Request::Normal(x);
-
-                            request_sender.send(req).await.unwrap();
-                            loop {
-                                let resp = receiver.recv().await.unwrap();
-                                match resp {
-                                    crate::Response::AgenticToolCallProgress { .. } => continue,
-                                    crate::Response::BlockDenoisingProgress(_) => continue,
-                                    crate::Response::File(_) => continue,
-                                    other => {
-                                        other.as_result().unwrap();
-                                        break;
-                                    }
-                                }
-                            }
-                            continue;
-                        }
-                        Request::TerminateAllSeqsNextStep => Request::TerminateAllSeqsNextStep,
                     };
-
-                    request_sender.send(req).await.unwrap();
+                    handle_daemon_request(req, &dispatch).await;
                 }
             }
         });
     });
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+pub fn ring_daemon_replicator_mistralrs(mistralrs: Arc<crate::MistralRs>) {
+    let ring_config = RingConfig::load();
+
+    let master_ip = ring_config.master_ip();
+    let master_port = ring_config.master_port;
+    std::thread::spawn(move || {
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let dispatch = move |req| {
+                let mistralrs = mistralrs.clone();
+                async move {
+                    mistralrs
+                        .send_request_async(req)
+                        .await
+                        .map_err(|err| format!("{err:?}"))
+                }
+            };
+
+            loop {
+                if let Ok(stream) = TcpStream::connect(format!("{master_ip}:{master_port}")) {
+                    let mut reader = BufReader::new(stream);
+                    let mut buf = String::new();
+                    if let Err(e) = reader.read_line(&mut buf) {
+                        tracing::error!("Failed to read line from ring stream: {e}");
+                        continue;
+                    }
+                    let req: Request = match serde_json::from_str(&buf) {
+                        Ok(req) => req,
+                        Err(e) => {
+                            tracing::error!("Failed to parse request JSON: {e}");
+                            continue;
+                        }
+                    };
+                    handle_daemon_request(req, &dispatch).await;
+                }
+            }
+        });
+    });
+}
+
+async fn handle_daemon_request<F, Fut>(req: Request, dispatch: &F)
+where
+    F: Fn(Request) -> Fut,
+    Fut: Future<Output = Result<(), String>>,
+{
+    match req {
+        Request::Detokenize(mut x) => {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            x.response = sender;
+            if let Err(e) = dispatch(Request::Detokenize(x)).await {
+                tracing::error!("Daemon dispatch failed for Detokenize request: {e}");
+                return;
+            }
+            match receiver.recv().await {
+                Some(resp) => {
+                    if let Err(e) = resp {
+                        tracing::error!("Detokenize response error: {e}");
+                    }
+                }
+                None => tracing::error!("Detokenize response channel closed"),
+            }
+        }
+        Request::Tokenize(mut x) => {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            x.response = sender;
+            if let Err(e) = dispatch(Request::Tokenize(x)).await {
+                tracing::error!("Daemon dispatch failed for Tokenize request: {e}");
+                return;
+            }
+            match receiver.recv().await {
+                Some(resp) => {
+                    if let Err(e) = resp {
+                        tracing::error!("Tokenize response error: {e}");
+                    }
+                }
+                None => tracing::error!("Tokenize response channel closed"),
+            }
+        }
+        Request::Normal(mut x) => {
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+            x.is_streaming = false;
+            x.response = sender;
+            if let Err(e) = dispatch(Request::Normal(x)).await {
+                tracing::error!("Daemon dispatch failed for Normal request: {e}");
+                return;
+            }
+            loop {
+                match receiver.recv().await {
+                    Some(crate::Response::AgenticToolCallProgress { .. })
+                    | Some(crate::Response::BlockDenoisingProgress(_))
+                    | Some(crate::Response::File(_)) => continue,
+                    Some(resp) => {
+                        if let Err(e) = resp.as_result() {
+                            tracing::error!("Normal response error: {e}");
+                        }
+                        break;
+                    }
+                    None => {
+                        tracing::error!("Normal response channel closed");
+                        break;
+                    }
+                }
+            }
+        }
+        req => {
+            if let Err(e) = dispatch(req).await {
+                tracing::error!("Daemon dispatch failed for request: {e}");
+            }
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(transparent)]
 pub(crate) struct BigCCharArray(#[serde(with = "BigArray")] pub(crate) [c_char; 128]);
 
@@ -348,8 +423,122 @@ pub(crate) struct BigCCharArray(#[serde(with = "BigArray")] pub(crate) [c_char; 
 pub(crate) enum WorkerTransferData {
     Init {
         id: BigCCharArray,
+        ids: Option<Vec<BigCCharArray>>,
         worker_rank: usize,
     },
+}
+
+pub fn begin_tensor_parallel_session(model_slots: usize) -> anyhow::Result<()> {
+    if model_slots == 0 || is_daemon() || !mistralrs_quant::distributed::use_nccl() {
+        return Ok(());
+    }
+    if TP_SESSION.get().is_some() {
+        return Ok(());
+    }
+
+    let ids = (0..model_slots)
+        .map(|_| mistralrs_quant::Id::new())
+        .collect::<Vec<_>>();
+    spawn_tensor_parallel_workers(&ids)?;
+    let _ = TP_SESSION.set(Mutex::new(TensorParallelSession {
+        ids,
+        next_model_index: 0,
+    }));
+    Ok(())
+}
+
+fn spawn_tensor_parallel_workers(ids: &[mistralrs_quant::Id]) -> anyhow::Result<()> {
+    let num_workers = mistralrs_quant::distributed::get_global_tp_size_from_devices()? - 1;
+    if num_workers == 0 {
+        return Ok(());
+    }
+
+    let payload_ids = ids.iter().map(id_to_payload).collect::<Vec<_>>();
+    for worker_rank in 0..num_workers {
+        let exe_path = env::current_exe().expect("Failed to get current exe");
+        let args = env::args().collect::<Vec<_>>();
+        let mut cmd = Command::new(exe_path);
+        cmd.args(&args[1..]);
+        let data = WorkerTransferData::Init {
+            id: payload_ids[0].clone(),
+            ids: Some(payload_ids.clone()),
+            worker_rank,
+        };
+
+        cmd.env(IS_DAEMON_FLAG, serde_json::to_string(&data)?);
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        cmd.stdin(std::process::Stdio::null());
+        spawn_worker_and_reap(&mut cmd)?;
+    }
+
+    Ok(())
+}
+
+fn spawn_worker_and_reap(cmd: &mut Command) -> anyhow::Result<()> {
+    let mut child = cmd.spawn().context("Failed to spawn process")?;
+    std::thread::spawn(move || {
+        if let Err(e) = child.wait() {
+            tracing::error!("Failed to wait for worker process: {e}");
+        }
+    });
+    Ok(())
+}
+
+fn id_to_payload(id: &mistralrs_quant::Id) -> BigCCharArray {
+    BigCCharArray(*id.internal())
+}
+
+fn ensure_worker_session(ids: Option<&[BigCCharArray]>) {
+    let Some(ids) = ids else {
+        return;
+    };
+    if TP_SESSION.get().is_some() {
+        return;
+    }
+    let ids = ids
+        .iter()
+        .map(|id| mistralrs_quant::Id::uninit(id.0))
+        .collect::<Vec<_>>();
+    let _ = TP_SESSION.set(Mutex::new(TensorParallelSession {
+        ids,
+        next_model_index: 0,
+    }));
+}
+
+fn next_tensor_parallel_id() -> anyhow::Result<Option<mistralrs_quant::Id>> {
+    let Some(session) = TP_SESSION.get() else {
+        return Ok(None);
+    };
+    let mut session = session
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Tensor parallel session lock poisoned"))?;
+    let id = session
+        .ids
+        .get(session.next_model_index)
+        .copied()
+        .with_context(|| {
+            format!(
+                "Tensor parallel session has no communicator id for model index {}",
+                session.next_model_index
+            )
+        })?;
+    session.next_model_index += 1;
+    Ok(Some(id))
+}
+
+fn send_worker_ready() -> anyhow::Result<()> {
+    for _ in 0..WORKER_READY_CONNECT_ATTEMPTS {
+        if let Ok(mut stream) = LocalStream::connect(ipc_name()?) {
+            stream.write_all(b"ready\n")?;
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(WORKER_READY_CONNECT_SLEEP_MS));
+    }
+
+    let mut stream = LocalStream::connect(ipc_name()?)?;
+    stream.write_all(b"ready\n")?;
+    Ok(())
 }
 
 pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
@@ -419,12 +608,13 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         let payload: WorkerTransferData = serde_json::from_str(&payload)?;
         let WorkerTransferData::Init {
             id: new_id,
+            ids,
             worker_rank,
         } = payload;
-        id = mistralrs_quant::Id::uninit(new_id.0);
+        ensure_worker_session(ids.as_deref());
+        id = next_tensor_parallel_id()?.unwrap_or_else(|| mistralrs_quant::Id::uninit(new_id.0));
 
-        let mut stream = LocalStream::connect(name)?;
-        stream.write_all(b"ready\n")?;
+        send_worker_ready()?;
         worker_rank + 1
     } else if cfg!(feature = "ring") {
         id = mistralrs_quant::Id::new();
@@ -432,6 +622,24 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         let config = RingConfig::load();
 
         config.rank
+    } else if let Some(session_id) = next_tensor_parallel_id()? {
+        id = session_id;
+        let num_workers = global_world_size - 1;
+        let listener = ListenerOptions::new().name(name).create_sync()?;
+        let mut ready_count = 0;
+
+        while ready_count < num_workers {
+            let stream = listener.accept()?;
+            let mut reader = BufReader::new(stream);
+            let mut message = String::new();
+            reader.read_line(&mut message)?;
+            if message.trim() == "ready" {
+                ready_count += 1;
+            }
+        }
+        info!("All workers have received the ids!");
+
+        0
     } else {
         id = mistralrs_quant::Id::new();
         let num_workers = global_world_size - 1;
@@ -446,6 +654,7 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
 
             let data = WorkerTransferData::Init {
                 id: BigCCharArray(*id.internal()),
+                ids: None,
                 worker_rank,
             };
 

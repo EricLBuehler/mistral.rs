@@ -696,7 +696,7 @@ mod nccl_ops {
             use half::{bf16, f16};
 
             let mut out_shape = l.shape().dims().to_vec();
-            out_shape[self.dim] = out_shape[self.dim] * self.comm.world_size();
+            out_shape[self.dim] *= self.comm.world_size();
             let out_shape = Shape::from(out_shape);
 
             let elem_count = out_shape.elem_count();
