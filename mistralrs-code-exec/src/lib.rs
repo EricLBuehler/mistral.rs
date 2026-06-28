@@ -604,7 +604,6 @@ fn denied_by_permission(
 ) -> Option<String> {
     let permission = tool_ctx
         .code_execution_permission
-        .map(Into::into)
         .map(|request_permission| ctx.permission.strictest(request_permission))
         .unwrap_or(ctx.permission);
 
