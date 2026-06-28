@@ -628,6 +628,18 @@ impl Engine {
                     }
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
+                    // See DefaultScheduler arm: cancel sequences whose receiver is gone
+                    // before they consume a (prefill) forward pass and block the queue.
+                    output.scheduled.retain(|seq| {
+                        let seq = seq.lock().unwrap();
+                        if seq.responder().is_closed() {
+                            seq.set_state(SequenceState::Done(StopReason::Canceled));
+                            false
+                        } else {
+                            true
+                        }
+                    });
+
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
