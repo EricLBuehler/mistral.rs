@@ -180,7 +180,7 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
 /// The architecture to load the multimodal model as.
 pub enum MultimodalLoaderType {
     #[serde(rename = "phi3v")]

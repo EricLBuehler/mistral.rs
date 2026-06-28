@@ -141,7 +141,7 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
 /// The architecture to load the normal model as.
 pub enum NormalLoaderType {
     #[serde(rename = "mistral")]

@@ -72,6 +72,7 @@ mod layers_masker;
 mod layers_utils;
 pub mod matformer;
 mod mla;
+pub mod model_metadata;
 mod models;
 mod paged_attention;
 mod perf_flags;

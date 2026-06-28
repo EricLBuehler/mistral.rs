@@ -14,7 +14,7 @@
 </div>
 
 <p align="center">
-  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/quickstart/"><b>Quickstart</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/guides/python/getting-started/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
+  | <a href="https://ericlbuehler.github.io/mistral.rs/"><b>Documentation</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/quickstart/"><b>Quickstart</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/reference/supported-models/"><b>Supported models</b></a> | <a href="https://crates.io/crates/mistralrs"><b>Rust SDK</b></a> | <a href="https://ericlbuehler.github.io/mistral.rs/guides/python/getting-started/"><b>Python SDK</b></a> | <a href="https://discord.gg/SZrecqK8qw"><b>Discord</b></a> |
 </p>
 
 <p align="center">
@@ -199,9 +199,9 @@ mistralrs doctor
 
 ## Supported Models
 
-40+ model families: text (Llama, Qwen 3/3.5/3.6, GLM, DeepSeek, GPT-OSS, Granite, Liquid LFM2/LFM2.5 dense and MoE, and more), multimodal (Gemma 4, Qwen 3-VL, LFM2-VL/LFM2.5-VL, Llama 4, Phi 4 multimodal, and more), speech (Voxtral ASR, Dia), image generation (FLUX), and embeddings (Embedding Gemma, Qwen 3 Embedding).
+Text, multimodal, speech, image generation, and embedding models across 45+ architectures. The **[supported models reference](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/)** is the single source of truth: it explains how to check whether your model's `config.json` is supported, lists every architecture with copy-paste run commands, and is generated directly from the engine's loader registry so it never drifts.
 
-[Full compatibility tables](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156)
+[Supported models reference](https://ericlbuehler.github.io/mistral.rs/reference/supported-models/) | [Request a new model](https://github.com/EricLBuehler/mistral.rs/issues/156)
 
 ## Python SDK
 
