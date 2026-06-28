@@ -1,4 +1,8 @@
 #[cfg(feature = "cuda")]
+const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
+#[cfg(feature = "cuda")]
+const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
+#[cfg(feature = "cuda")]
 const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (13, 3),
     (13, 2),
@@ -88,6 +92,7 @@ fn main() -> Result<(), String> {
 
         println!("cargo:rerun-if-changed=build.rs");
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
+        println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
         let mut builder = cudaforge::KernelBuilder::new()
@@ -148,8 +153,9 @@ fn main() -> Result<(), String> {
             excluded_files.push("grouped_mm_*.cu");
         }
         builder = builder.exclude(&excluded_files);
-        // cutlass_moe kernels need the CUTLASS headers; same pinned checkout as mistralrs-flash-attn.
-        builder = builder.with_cutlass(Some("7d49e6c7e2f8896c47f586706e67e1fb215529dc"));
+        let cutlass_commit =
+            std::env::var(CUTLASS_COMMIT_ENV).unwrap_or_else(|_| CUTLASS_COMMIT.to_string());
+        builder = builder.with_cutlass(Some(&cutlass_commit));
 
         // https://github.com/EricLBuehler/mistral.rs/issues/286
         if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
