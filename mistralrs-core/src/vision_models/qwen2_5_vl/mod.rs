@@ -440,7 +440,7 @@ impl Qwen2_5VLModel {
                         &[
                             range.batch..range.batch + 1,
                             range.local_start..range.local_end,
-                            0..xs.dim(1)?,
+                            0..xs.dim(2)?,
                         ],
                         &video_embeds
                             .i((range.embed_start..range.embed_start + range.len, ..))?
