@@ -112,8 +112,10 @@ impl Qwen3VLMoEModel {
                 ..Default::default()
             },
         )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
-        attention_mask = if is_first_chunk {
+        // Non-first paged prompt chunks are still prefill; only decode can drop the mask.
+        let is_paged_prefill_chunk =
+            ctx.is_paged() && input_ids.dim(1)? > 1 && !ctx.is_first_prompt_chunk();
+        attention_mask = if ctx.is_first_prompt_chunk() || is_paged_prefill_chunk {
             attention_mask
         } else {
             AttentionMask::None
