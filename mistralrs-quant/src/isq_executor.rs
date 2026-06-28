@@ -645,6 +645,7 @@ mod tests {
     use super::*;
 
     static ENV_LOCK: StdMutex<()> = StdMutex::new(());
+    const TEST_RECV_TIMEOUT: Duration = Duration::from_secs(1);
 
     fn plan(bytes: usize) -> IsqPlanParams {
         IsqPlanParams {
@@ -667,6 +668,17 @@ mod tests {
         plan.resources.input_bytes = bytes;
         plan.resources.large_job = false;
         plan
+    }
+
+    fn queued_job(plan: IsqPlanParams, consumer: IsqConsumer) -> QueuedJob {
+        QueuedJob {
+            plan,
+            consumer,
+            task: Box::new(|| JobOutcome {
+                success: true,
+                send: Box::new(|_| {}),
+            }),
+        }
     }
 
     #[test]
@@ -705,31 +717,37 @@ mod tests {
     #[test]
     fn executor_blocks_submit_for_queued_input_bytes() {
         let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
         let rx1 = executor.submit(input_plan(70), IsqConsumer::ImmediateLoad, move || {
-            std::thread::sleep(Duration::from_millis(100));
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
             Ok(1usize)
         });
+        started_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
 
-        let submitted = Arc::new(AtomicUsize::new(0));
-        let submitted_clone = submitted.clone();
-        let executor_clone = executor.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            submitted_clone.store(1, Ordering::SeqCst);
-            let rx2 =
-                executor_clone.submit(input_plan(70), IsqConsumer::ImmediateLoad, move || {
-                    Ok(2usize)
-                });
-            submitted_clone.store(2, Ordering::SeqCst);
-            tx.send(rx2).unwrap();
+        let second = queued_job(input_plan(70), IsqConsumer::ImmediateLoad);
+        {
+            let state = executor.inner.state.lock().unwrap();
+            assert!(!can_enqueue(&state, &executor.inner.config, &second));
+        }
+
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            rx1.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap().value,
+            1
+        );
+        {
+            let state = executor.inner.state.lock().unwrap();
+            assert!(can_enqueue(&state, &executor.inner.config, &second));
+        }
+        let rx2 = executor.submit(input_plan(70), IsqConsumer::ImmediateLoad, move || {
+            Ok(2usize)
         });
-
-        std::thread::sleep(Duration::from_millis(30));
-        assert_eq!(submitted.load(Ordering::SeqCst), 1);
-        assert!(rx.try_recv().is_err());
-        assert_eq!(rx1.recv().unwrap().unwrap().value, 1);
-        let rx2 = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(rx2.recv().unwrap().unwrap().value, 2);
+        assert_eq!(
+            rx2.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap().value,
+            2
+        );
     }
 
     #[test]
