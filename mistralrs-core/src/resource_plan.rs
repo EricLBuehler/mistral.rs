@@ -1,3 +1,6 @@
+use anyhow::Context;
+use num_traits::ToPrimitive;
+
 use crate::{MemoryGpuConfig, PagedAttentionConfig};
 
 #[derive(Clone, Copy, Debug)]
@@ -70,7 +73,13 @@ fn split_paged_config(
             .div_ceil(active_weight)
             .max(1)
     };
-    let share_f32 = |value: f32| value * model_weight as f32 / active_weight as f32;
+    let model_weight_f32 = model_weight
+        .to_f32()
+        .context("model weight cannot be represented as f32")?;
+    let active_weight_f32 = active_weight
+        .to_f32()
+        .context("active weight cannot be represented as f32")?;
+    let share_f32 = |value: f32| value * model_weight_f32 / active_weight_f32;
 
     let mem_gpu = match config.mem_gpu {
         MemoryGpuConfig::MbAmount(mb) => MemoryGpuConfig::BestEffortMbAmount {

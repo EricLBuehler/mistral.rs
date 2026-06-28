@@ -469,9 +469,19 @@ fn spawn_tensor_parallel_workers(ids: &[mistralrs_quant::Id]) -> anyhow::Result<
         cmd.stdout(std::process::Stdio::null());
         cmd.stderr(std::process::Stdio::null());
         cmd.stdin(std::process::Stdio::null());
-        cmd.spawn().expect("Failed to spawn process");
+        spawn_worker_and_reap(&mut cmd)?;
     }
 
+    Ok(())
+}
+
+fn spawn_worker_and_reap(cmd: &mut Command) -> anyhow::Result<()> {
+    let mut child = cmd.spawn().context("Failed to spawn process")?;
+    std::thread::spawn(move || {
+        if let Err(e) = child.wait() {
+            tracing::error!("Failed to wait for worker process: {e}");
+        }
+    });
     Ok(())
 }
 
