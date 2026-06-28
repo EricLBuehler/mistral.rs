@@ -3,7 +3,8 @@
 mod cuda_build {
     use cudaforge::{KernelBuilder, Result};
     use std::{fs, path::PathBuf};
-    const CUTLASS_COMMIT: &str = "7d49e6c7e2f8896c47f586706e67e1fb215529dc";
+    const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
+    const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
 
     const KERNEL_FILES: [&str; 53] = [
         "kernels/flash_api.cu",
@@ -101,6 +102,7 @@ mod cuda_build {
 
     pub fn build() -> Result<()> {
         println!("cargo::rerun-if-changed=build.rs");
+        println!("cargo::rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         for kernel_file in KERNEL_FILES.iter() {
             println!("cargo::rerun-if-changed={kernel_file}");
         }
@@ -131,10 +133,12 @@ mod cuda_build {
             "-DMISTRALRS_FLASH_ATTN_HEADER_HASH=0x{:016x}",
             header_hash()?
         );
+        let cutlass_commit =
+            std::env::var(CUTLASS_COMMIT_ENV).unwrap_or_else(|_| CUTLASS_COMMIT.to_string());
         let mut builder = KernelBuilder::new()
             .source_files(kernels)
             .out_dir(&build_dir)
-            .with_cutlass(Some(CUTLASS_COMMIT)) // ✅ Auto-fetch and include CUTLASS from GitHub
+            .with_cutlass(Some(&cutlass_commit))
             .arg("-std=c++17")
             .arg("-O3")
             .arg("-U__CUDA_NO_HALF_OPERATORS__")
