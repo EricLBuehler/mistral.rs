@@ -1279,6 +1279,12 @@ impl MistralRs {
 
         let device = get_mut_arcmutex!(pipeline).device();
         mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
+        #[cfg(feature = "cuda")]
+        match cuda::preload::preload_candle_ptx(&device) {
+            Ok(count) if count > 0 => info!("Preloaded {count} Candle CUDA PTX functions."),
+            Ok(_) => {}
+            Err(err) => warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
