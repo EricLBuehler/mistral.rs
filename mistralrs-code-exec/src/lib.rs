@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use session::PythonSession;
 use tokio::sync::Mutex;
 
-pub use mistralrs_mcp::{ShellOptions, ShellSkillMount};
+pub use mistralrs_mcp::{CodeExecutionPermission, ShellOptions, ShellSkillMount};
 pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
 pub use shell::{ShellConfig, ShellManager};
@@ -76,7 +76,7 @@ pub struct CodeExecutionConfig {
     #[serde(default)]
     pub permission: CodeExecutionPermission,
     #[serde(skip)]
-    pub approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
+    pub approval_callback: Option<CodeExecutionApprovalCallback>,
 }
 
 impl fmt::Debug for CodeExecutionConfig {
@@ -92,35 +92,6 @@ impl fmt::Debug for CodeExecutionConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodeExecutionPermission {
-    #[default]
-    Auto,
-    Ask,
-    Deny,
-}
-
-impl CodeExecutionPermission {
-    fn strictest(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
-            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
-            (Self::Auto, Self::Auto) => Self::Auto,
-        }
-    }
-}
-
-impl From<mistralrs_mcp::CodeExecutionPermission> for CodeExecutionPermission {
-    fn from(value: mistralrs_mcp::CodeExecutionPermission) -> Self {
-        match value {
-            mistralrs_mcp::CodeExecutionPermission::Auto => Self::Auto,
-            mistralrs_mcp::CodeExecutionPermission::Ask => Self::Ask,
-            mistralrs_mcp::CodeExecutionPermission::Deny => Self::Deny,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
     pub approval_id: String,
@@ -131,7 +102,7 @@ pub struct CodeExecutionApproval {
 }
 
 pub type CodeExecutionApprovalCallback =
-    dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static;
+    Arc<dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static>;
 
 fn default_python_path() -> PathBuf {
     if cfg!(windows) {
@@ -235,7 +206,7 @@ struct SpawnCtx {
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
     permission: CodeExecutionPermission,
-    approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
+    approval_callback: Option<CodeExecutionApprovalCallback>,
 }
 
 impl SpawnCtx {
@@ -633,7 +604,6 @@ fn denied_by_permission(
 ) -> Option<String> {
     let permission = tool_ctx
         .code_execution_permission
-        .map(Into::into)
         .map(|request_permission| ctx.permission.strictest(request_permission))
         .unwrap_or(ctx.permission);
 
