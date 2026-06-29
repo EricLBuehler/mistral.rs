@@ -405,17 +405,21 @@ impl Qwen2VLModel {
                 }
                 .to_dtype(self.text.dtype)?;
 
-                for (batch, batch_ids) in continuous_img_pad.into_iter().enumerate() {
-                    let mut last_end = 0;
-                    for (start, end) in batch_ids {
-                        xs = xs.slice_assign(
-                            &[batch..batch + 1, start..end, 0..xs.dim(2)?],
-                            &image_embeds
-                                .i((last_end..last_end + (end - start), ..))?
-                                .unsqueeze(0)?,
-                        )?;
-                        last_end = end - start;
-                    }
+                for range in crate::vision_models::chunked_multimodal_ranges(
+                    &continuous_img_pad,
+                    seqlen_offsets,
+                    input_ids.dim(1)?,
+                ) {
+                    xs = xs.slice_assign(
+                        &[
+                            range.batch..range.batch + 1,
+                            range.local_start..range.local_end,
+                            0..xs.dim(2)?,
+                        ],
+                        &image_embeds
+                            .i((range.embed_start..range.embed_start + range.len, ..))?
+                            .unsqueeze(0)?,
+                    )?;
                 }
             }
 
@@ -427,17 +431,21 @@ impl Qwen2VLModel {
                         .context("pixel_values_videos require video_grid_thw")?,
                 )?;
 
-                for (batch, batch_ids) in continuous_vid_pad.into_iter().enumerate() {
-                    let mut last_end = 0;
-                    for (start, end) in batch_ids {
-                        xs = xs.slice_assign(
-                            &[batch..batch + 1, start..end, 0..xs.dim(2)?],
-                            &video_embeds
-                                .i((last_end..last_end + (end - start), ..))?
-                                .unsqueeze(0)?,
-                        )?;
-                        last_end = end - start;
-                    }
+                for range in crate::vision_models::chunked_multimodal_ranges(
+                    &continuous_vid_pad,
+                    seqlen_offsets,
+                    input_ids.dim(1)?,
+                ) {
+                    xs = xs.slice_assign(
+                        &[
+                            range.batch..range.batch + 1,
+                            range.local_start..range.local_end,
+                            0..xs.dim(2)?,
+                        ],
+                        &video_embeds
+                            .i((range.embed_start..range.embed_start + range.len, ..))?
+                            .unsqueeze(0)?,
+                    )?;
                 }
             }
 
@@ -456,9 +464,9 @@ impl Qwen2VLModel {
         }
         let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
         let mut ropeidx_attn_mask_indices_bs = Vec::new();
-        for (len, offset) in seqlens.iter().zip(seqlen_offsets) {
+        for len in seqlens.iter() {
             ropeidx_attn_mask_indices_bs.push(Tensor::from_vec(
-                (*offset as i64..(*len as i64 + *offset as i64)).collect(),
+                (0_i64..*len as i64).collect(),
                 (*len,),
                 input_ids.device(),
             )?);
