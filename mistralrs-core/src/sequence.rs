@@ -939,6 +939,7 @@ impl Sequence {
             SequenceState::Error
                 | SequenceState::FinishedAborted
                 | SequenceState::FinishedIgnored
+                | SequenceState::Error
                 | SequenceState::Done(_)
         )
     }
@@ -2079,6 +2080,51 @@ mod tests {
         assert!(!required_tool_call_should_force(&mut seq, 8192));
         seq.tokens.extend(std::iter::repeat_n(1, 1024));
         assert!(required_tool_call_should_force(&mut seq, 8192));
+    }
+
+    #[test]
+    fn error_state_is_finished_for_paged_attention_cleanup() {
+        let seq = make_test_sequence();
+        seq.set_state(SequenceState::Error);
+
+        assert!(
+            seq.is_finished_paged_attn(),
+            "SequenceState::Error must be terminal for PagedAttention cleanup"
+        );
+    }
+
+    #[test]
+    fn paged_attention_finished_state_predicate_preserves_existing_states() {
+        for state in [
+            SequenceState::Done(StopReason::Length(0)),
+            SequenceState::FinishedAborted,
+            SequenceState::FinishedIgnored,
+            SequenceState::Error,
+        ] {
+            let seq = make_test_sequence();
+            seq.set_state(state);
+
+            assert!(
+                seq.is_finished_paged_attn(),
+                "{state:?} should be terminal for PagedAttention cleanup"
+            );
+        }
+
+        for state in [
+            SequenceState::RunningPrompt,
+            SequenceState::RunningCompletion,
+            SequenceState::RunningPrefillPrompt,
+            SequenceState::Waiting,
+            SequenceState::Swapped,
+        ] {
+            let seq = make_test_sequence();
+            seq.set_state(state);
+
+            assert!(
+                !seq.is_finished_paged_attn(),
+                "{state:?} should not be terminal for PagedAttention cleanup"
+            );
+        }
     }
 
     #[test]
