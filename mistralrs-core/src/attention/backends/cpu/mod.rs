@@ -11,7 +11,7 @@ mod single_q;
 mod tests;
 mod threading;
 
-use candle_core::{Context, Result, Storage, Tensor, WithDType};
+use candle_core::{Context, DType, Result, Storage, Tensor, WithDType};
 use std::iter::Sum;
 
 use crate::attention::SdpaParams;
@@ -20,6 +20,20 @@ use elem::ElemOps;
 use mask::MaskInfo;
 
 const SINGLE_Q_STACK_DV: usize = 256;
+
+enum MaskData<'a> {
+    Borrowed(&'a [f32]),
+    Owned(Vec<f32>),
+}
+
+impl<'a> MaskData<'a> {
+    fn as_slice(&self) -> &[f32] {
+        match self {
+            Self::Borrowed(data) => data,
+            Self::Owned(data) => data,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct TensorView<'a, T> {
@@ -51,6 +65,38 @@ struct CpuAttnCtx<'a, T> {
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
+}
+
+fn cpu_mask_data(storage: &Storage, start_offset: usize, dtype: DType) -> Result<MaskData<'_>> {
+    let Storage::Cpu(cpu) = storage else {
+        candle_core::bail!("Expected CPU storage for mask");
+    };
+
+    match dtype {
+        DType::F32 => {
+            let data = cpu
+                .as_slice::<f32>()
+                .context("Expected f32 CPU storage for mask")?;
+            Ok(MaskData::Borrowed(&data[start_offset..]))
+        }
+        DType::F16 => {
+            let data = cpu
+                .as_slice::<half::f16>()
+                .context("Expected f16 CPU storage for mask")?;
+            Ok(MaskData::Owned(
+                data[start_offset..].iter().map(|v| v.to_f32()).collect(),
+            ))
+        }
+        DType::BF16 => {
+            let data = cpu
+                .as_slice::<half::bf16>()
+                .context("Expected bf16 CPU storage for mask")?;
+            Ok(MaskData::Owned(
+                data[start_offset..].iter().map(|v| v.to_f32()).collect(),
+            ))
+        }
+        _ => candle_core::bail!("Unsupported CPU attention mask dtype {dtype:?}"),
+    }
 }
 
 pub(in crate::attention) fn run_flash_attn_cpu<T>(
@@ -87,30 +133,29 @@ where
         candle_core::bail!("Expected CPU storage for v");
     };
 
-    let mut mask_buffer = None;
+    let mut mask_guard = None;
+    let mut mask_dtype = None;
+    let mut mask_start_offset = 0;
     let mut mask_dims = None;
     if let Some(mask_tensor) = mask {
         mask_dims = Some(mask_tensor.shape().dims().to_vec());
         let (guard, layout) = mask_tensor.storage_and_layout();
-        let buffer = if let Storage::Cpu(cpu) = &*guard {
-            let data = cpu
-                .as_slice::<T>()
-                .context("Expected CPU storage for mask")?;
-            data[layout.start_offset()..]
-                .iter()
-                .map(|v| ElemOps::to_f32(*v))
-                .collect::<Vec<_>>()
-        } else {
-            candle_core::bail!("Expected CPU storage for mask");
-        };
-        mask_buffer = Some(buffer);
+        mask_dtype = Some(mask_tensor.dtype());
+        mask_start_offset = layout.start_offset();
+        mask_guard = Some(guard);
     }
+    let mask_data = match (mask_guard.as_deref(), mask_dtype) {
+        (Some(storage), Some(dtype)) => Some(cpu_mask_data(storage, mask_start_offset, dtype)?),
+        _ => None,
+    };
 
     let q = TensorView::new(q_data, q)?;
     let k = TensorView::new(k_data, k)?;
     let v = TensorView::new(v_data, v)?;
-    let mask = match (mask_buffer.as_deref(), mask_dims.as_deref()) {
-        (Some(data), Some(dims)) => Some(MaskInfo::new(data, dims, q.dims[0], q.dims[2])),
+    let mask = match (mask_data.as_ref(), mask_dims.as_deref()) {
+        (Some(data), Some(dims)) => {
+            Some(MaskInfo::new(data.as_slice(), dims, q.dims[0], q.dims[2]))
+        }
         _ => None,
     };
     let ctx = CpuAttnCtx {
