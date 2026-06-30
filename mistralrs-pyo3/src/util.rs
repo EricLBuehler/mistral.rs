@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     fs::{self, File},
     io::{Cursor, Read},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -102,6 +103,65 @@ pub(crate) fn next_request_id() -> usize {
     id
 }
 
+fn resolve_local_media_path(path: &Path) -> PyApiResult<PathBuf> {
+    let cwd = std::env::current_dir()
+        .and_then(|path| path.canonicalize())
+        .map_err(|e| format!("Could not resolve current directory: {e}"))?;
+    let candidate = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    let resolved = candidate.canonicalize().map_err(|e| {
+        format!(
+            "Could not resolve local media path `{}`: {e}",
+            path.display()
+        )
+    })?;
+
+    if !resolved.starts_with(&cwd) {
+        return Err(PyApiErr::from(format!(
+            "Access denied: local media path is outside the current working directory: {}",
+            path.display()
+        )));
+    }
+
+    Ok(resolved)
+}
+
+fn parse_media_url(url_unparsed: &str) -> PyApiResult<url::Url> {
+    if let Ok(url) = url::Url::parse(url_unparsed) {
+        if url.scheme() == "file" {
+            let path = url
+                .to_file_path()
+                .map_err(|_| format!("Could not parse file path: {url}"))?;
+            let resolved = resolve_local_media_path(&path)?;
+            return url::Url::from_file_path(&resolved)
+                .map_err(|_| format!("Could not parse file path: {}", resolved.display()).into());
+        }
+
+        return Ok(url);
+    }
+
+    let resolved = resolve_local_media_path(Path::new(url_unparsed))?;
+    url::Url::from_file_path(&resolved)
+        .map_err(|_| format!("Could not parse file path: {}", resolved.display()).into())
+}
+
+fn read_local_media_file(url: &url::Url) -> PyApiResult<Vec<u8>> {
+    let path = url
+        .to_file_path()
+        .map_err(|_| format!("Could not parse file path: {url}"))?;
+    let path = resolve_local_media_path(&path)?;
+
+    let mut file = File::open(&path)
+        .map_err(|e| format!("Could not open file at path: {}: {e}", path.display()))?;
+    let metadata = fs::metadata(&path)?;
+    let mut buffer = vec![0; metadata.len() as usize];
+    file.read_exact(&mut buffer)?;
+    Ok(buffer)
+}
+
 pub(crate) fn send_request_with_optional_stream(
     runner: Arc<MistralRs>,
     model_id: Option<String>,
@@ -199,20 +259,7 @@ pub(crate) fn parse_embedding_response(response: Response) -> Result<Vec<f32>, S
 }
 
 pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
-            )
-        })?
-    };
+    let url = parse_media_url(url_unparsed)?;
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
         // Read from http
@@ -221,21 +268,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
             Err(e) => return Err(PyApiErr::from(format!("{e}"))),
         }
     } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            // Read from local file
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
-        } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
-        }
+        read_local_media_file(&url)?
     } else if url.scheme() == "data" {
         // Decode with base64
         let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
@@ -253,20 +286,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
 /// Parses and loads an audio file from a URL, file path, or data URL.
 /// Mirrors `parse_image_url` but returns an `AudioInput`.
 pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
-            )
-        })?
-    };
+    let url = parse_media_url(url_unparsed)?;
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
         match reqwest::blocking::get(url.clone()) {
@@ -277,20 +297,7 @@ pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
             Err(e) => return Err(PyApiErr::from(format!("{e}"))),
         }
     } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
-        } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
-        }
+        read_local_media_file(&url)?
     } else if url.scheme() == "data" {
         let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
         data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
@@ -313,20 +320,7 @@ const DEFAULT_FPS: f64 = 24.0;
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg on `$PATH`.
 pub(crate) fn parse_video_url(url_unparsed: &str) -> PyApiResult<VideoInput> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
-            )
-        })?
-    };
+    let url = parse_media_url(url_unparsed)?;
 
     let bytes = if url.scheme() == "http" || url.scheme() == "https" {
         match reqwest::blocking::get(url.clone()) {
@@ -337,20 +331,7 @@ pub(crate) fn parse_video_url(url_unparsed: &str) -> PyApiResult<VideoInput> {
             Err(e) => return Err(PyApiErr::from(format!("{e}"))),
         }
     } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
-        } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
-        }
+        read_local_media_file(&url)?
     } else if url.scheme() == "data" {
         let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
         data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
@@ -566,5 +547,147 @@ fn parse_fps_fraction(s: &str) -> Option<f64> {
         }
     } else {
         s.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod local_media_path_tests {
+    use super::*;
+    use std::{
+        env, fs,
+        path::PathBuf,
+        sync::{Mutex as StdMutex, MutexGuard},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static CWD_LOCK: StdMutex<()> = StdMutex::new(());
+
+    struct Fixture {
+        _guard: MutexGuard<'static, ()>,
+        old_cwd: PathBuf,
+        base: PathBuf,
+        cwd: PathBuf,
+        outside_file: PathBuf,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            pyo3::prepare_freethreaded_python();
+            let guard = CWD_LOCK.lock().unwrap();
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let base = env::temp_dir().join(format!(
+                "mistralrs-local-media-{name}-{}-{nonce}",
+                std::process::id()
+            ));
+            let cwd = base.join("root").join("a").join("b").join("c");
+            let outside = base.join("root").join("outside");
+            fs::create_dir_all(&cwd).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+
+            fs::write(cwd.join("inside.bin"), b"inside").unwrap();
+            let outside_file = outside.join("outside.bin");
+            fs::write(&outside_file, b"outside").unwrap();
+
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside_file, cwd.join("link.bin")).unwrap();
+
+            let old_cwd = env::current_dir().unwrap();
+            env::set_current_dir(&cwd).unwrap();
+
+            Self {
+                _guard: guard,
+                old_cwd,
+                base,
+                cwd,
+                outside_file,
+            }
+        }
+
+        fn inside_file_url(&self) -> String {
+            url::Url::from_file_path(self.cwd.join("inside.bin"))
+                .unwrap()
+                .to_string()
+        }
+
+        fn outside_file_url(&self) -> String {
+            url::Url::from_file_path(&self.outside_file)
+                .unwrap()
+                .to_string()
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.old_cwd);
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn assert_denied(result: PyApiResult<url::Url>) {
+        let err = result.expect_err("expected local media path to be denied");
+        assert!(
+            err.to_string()
+                .contains("outside the current working directory")
+                || err
+                    .to_string()
+                    .contains("Could not resolve local media path"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocks_file_url_etc_passwd() {
+        let _fixture = Fixture::new("etc-passwd");
+        assert_denied(parse_media_url("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn blocks_absolute_path_outside_cwd() {
+        let fixture = Fixture::new("absolute-outside");
+        assert_denied(parse_media_url(&fixture.outside_file.display().to_string()));
+    }
+
+    #[test]
+    fn blocks_parent_traversal_outside_cwd() {
+        let _fixture = Fixture::new("traversal");
+        assert_denied(parse_media_url("../../../outside/outside.bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocks_symlink_escape_from_inside_cwd() {
+        let _fixture = Fixture::new("symlink");
+        assert_denied(parse_media_url("link.bin"));
+    }
+
+    #[test]
+    fn allows_valid_local_file_inside_cwd() {
+        let _fixture = Fixture::new("inside");
+        let url = parse_media_url("inside.bin").unwrap();
+        assert_eq!(url.scheme(), "file");
+    }
+
+    #[test]
+    fn allows_file_url_inside_cwd() {
+        let fixture = Fixture::new("inside-file-url");
+        let url = parse_media_url(&fixture.inside_file_url()).unwrap();
+        assert_eq!(url.scheme(), "file");
+    }
+
+    #[test]
+    fn rejects_file_url_outside_cwd() {
+        let fixture = Fixture::new("outside-file-url");
+        assert_denied(parse_media_url(&fixture.outside_file_url()));
+    }
+
+    #[test]
+    fn allows_remote_url() {
+        let _fixture = Fixture::new("remote");
+        let url = parse_media_url("https://example.com/media.png").unwrap();
+        assert_eq!(url.scheme(), "https");
     }
 }
