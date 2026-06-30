@@ -993,6 +993,10 @@ pub async fn parse_request(
         oairequest.dry_allowed_length,
     )?;
 
+    if oairequest.max_tokens == Some(0) {
+        anyhow::bail!("max_tokens must be at least 1.");
+    }
+
     let is_streaming = oairequest.stream.unwrap_or(false);
 
     if oairequest.grammar.is_some() && oairequest.response_format.is_some() {

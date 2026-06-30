@@ -7,6 +7,7 @@ use half::f16;
 use rayon::prelude::*;
 use rayon::ThreadPool;
 
+use std::any::TypeId;
 use std::sync::LazyLock;
 use std::{f32, iter::Sum};
 
@@ -284,7 +285,7 @@ pub fn run_flash_attn_cpu<T>(
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor>
 where
-    T: WithDType + Sum + num_traits::real::Real + DowncastF32 + UpcastF32 + Copy,
+    T: WithDType + Sum + num_traits::real::Real + DowncastF32 + UpcastF32 + Copy + 'static,
 {
     // Inline CPU slice extraction for q, k, v, and optional mask
     let (q_guard, q_layout) = q.storage_and_layout();
@@ -341,6 +342,29 @@ where
     let mask_slice = mask_buffer.as_deref();
 
     if q.shape().dims()[1] == 1 {
+        if TypeId::of::<T>() == TypeId::of::<f32>()
+            && mask_slice.is_none()
+            && sdpa_params.softcap.unwrap_or(0.0) == 0.0
+        {
+            let q_data =
+                unsafe { std::slice::from_raw_parts(q_data.as_ptr() as *const f32, q_data.len()) };
+            let k_data =
+                unsafe { std::slice::from_raw_parts(k_data.as_ptr() as *const f32, k_data.len()) };
+            let v_data =
+                unsafe { std::slice::from_raw_parts(v_data.as_ptr() as *const f32, v_data.len()) };
+            return flash_attn_cpu_single_q_f32(
+                q_data,
+                k_data,
+                v_data,
+                q.shape().dims(),
+                k.shape().dims(),
+                v.shape().dims(),
+                q_stride,
+                k_stride,
+                v_stride,
+                sdpa_params.softmax_scale,
+            );
+        }
         return flash_attn_cpu_single_q(
             q_data,
             k_data,
@@ -375,6 +399,287 @@ where
         0.0,
         sdpa_params.softcap.unwrap_or(0.0),
     )
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn vec_dot_f32_neon(a: &[f32], b: &[f32]) -> f32 {
+    use core::arch::aarch64::*;
+
+    let mut sum0 = vdupq_n_f32(0.0);
+    let mut sum1 = vdupq_n_f32(0.0);
+    let mut sum2 = vdupq_n_f32(0.0);
+    let mut sum3 = vdupq_n_f32(0.0);
+    let mut i = 0usize;
+    while i + 16 <= a.len() {
+        sum0 = vfmaq_f32(
+            sum0,
+            vld1q_f32(a.as_ptr().add(i)),
+            vld1q_f32(b.as_ptr().add(i)),
+        );
+        sum1 = vfmaq_f32(
+            sum1,
+            vld1q_f32(a.as_ptr().add(i + 4)),
+            vld1q_f32(b.as_ptr().add(i + 4)),
+        );
+        sum2 = vfmaq_f32(
+            sum2,
+            vld1q_f32(a.as_ptr().add(i + 8)),
+            vld1q_f32(b.as_ptr().add(i + 8)),
+        );
+        sum3 = vfmaq_f32(
+            sum3,
+            vld1q_f32(a.as_ptr().add(i + 12)),
+            vld1q_f32(b.as_ptr().add(i + 12)),
+        );
+        i += 16;
+    }
+    let mut sum = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    while i + 4 <= a.len() {
+        sum = vfmaq_f32(
+            sum,
+            vld1q_f32(a.as_ptr().add(i)),
+            vld1q_f32(b.as_ptr().add(i)),
+        );
+        i += 4;
+    }
+    let mut out = vaddvq_f32(sum);
+    while i < a.len() {
+        out += *a.get_unchecked(i) * *b.get_unchecked(i);
+        i += 1;
+    }
+    out
+}
+
+#[inline(always)]
+fn vec_dot_f32_fast(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        return vec_dot_f32_neon(a, b);
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        vec_dot_f32(a, b)
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn scale_slice_f32_neon(xs: &mut [f32], scale: f32) {
+    use core::arch::aarch64::*;
+
+    let scale_v = vdupq_n_f32(scale);
+    let mut i = 0usize;
+    while i + 16 <= xs.len() {
+        let p = xs.as_mut_ptr().add(i);
+        vst1q_f32(p, vmulq_f32(vld1q_f32(p), scale_v));
+        vst1q_f32(p.add(4), vmulq_f32(vld1q_f32(p.add(4)), scale_v));
+        vst1q_f32(p.add(8), vmulq_f32(vld1q_f32(p.add(8)), scale_v));
+        vst1q_f32(p.add(12), vmulq_f32(vld1q_f32(p.add(12)), scale_v));
+        i += 16;
+    }
+    while i + 4 <= xs.len() {
+        let p = xs.as_mut_ptr().add(i);
+        vst1q_f32(p, vmulq_f32(vld1q_f32(p), scale_v));
+        i += 4;
+    }
+    while i < xs.len() {
+        *xs.get_unchecked_mut(i) *= scale;
+        i += 1;
+    }
+}
+
+#[inline(always)]
+fn scale_slice_f32(xs: &mut [f32], scale: f32) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        scale_slice_f32_neon(xs, scale);
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for v in xs {
+            *v *= scale;
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn mul_add_slice_f32_neon(acc: &mut [f32], values: &[f32], scale: f32) {
+    use core::arch::aarch64::*;
+
+    let scale_v = vdupq_n_f32(scale);
+    let mut i = 0usize;
+    while i + 16 <= acc.len() {
+        let p = acc.as_mut_ptr().add(i);
+        vst1q_f32(
+            p,
+            vfmaq_f32(vld1q_f32(p), vld1q_f32(values.as_ptr().add(i)), scale_v),
+        );
+        vst1q_f32(
+            p.add(4),
+            vfmaq_f32(
+                vld1q_f32(p.add(4)),
+                vld1q_f32(values.as_ptr().add(i + 4)),
+                scale_v,
+            ),
+        );
+        vst1q_f32(
+            p.add(8),
+            vfmaq_f32(
+                vld1q_f32(p.add(8)),
+                vld1q_f32(values.as_ptr().add(i + 8)),
+                scale_v,
+            ),
+        );
+        vst1q_f32(
+            p.add(12),
+            vfmaq_f32(
+                vld1q_f32(p.add(12)),
+                vld1q_f32(values.as_ptr().add(i + 12)),
+                scale_v,
+            ),
+        );
+        i += 16;
+    }
+    while i + 4 <= acc.len() {
+        let p = acc.as_mut_ptr().add(i);
+        vst1q_f32(
+            p,
+            vfmaq_f32(vld1q_f32(p), vld1q_f32(values.as_ptr().add(i)), scale_v),
+        );
+        i += 4;
+    }
+    while i < acc.len() {
+        *acc.get_unchecked_mut(i) += *values.get_unchecked(i) * scale;
+        i += 1;
+    }
+}
+
+#[inline(always)]
+fn mul_add_slice_f32(acc: &mut [f32], values: &[f32], scale: f32) {
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        mul_add_slice_f32_neon(acc, values, scale);
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for (acc, value) in acc.iter_mut().zip(values.iter()) {
+            *acc += *value * scale;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flash_attn_cpu_single_q_f32(
+    q_data: &[f32],
+    k_data: &[f32],
+    v_data: &[f32],
+    qshape: &[usize],
+    kshape: &[usize],
+    vshape: &[usize],
+    qstride: &[usize],
+    kstride: &[usize],
+    vstride: &[usize],
+    scale: f32,
+) -> Result<Tensor> {
+    let (b, _q_len, h, d) = (qshape[0], qshape[1], qshape[2], qshape[3]);
+    let kv_len = kshape[1];
+    let dv = d;
+
+    let k_h = kshape[2];
+    let v_h = vshape[2];
+    let rk2 = h / k_h;
+    let rv2 = h / v_h;
+
+    let mut out = vec![0f32; b * h * dv];
+
+    let total_rows = b * h;
+    let pool = candle_core::utils::barrier_pool();
+    let n_total = pool.n_workers() + 1;
+    let rows_per_thread = total_rows.div_ceil(n_total);
+    let out_ptr = out.as_mut_ptr() as usize;
+    let q_ptr = q_data.as_ptr() as usize;
+    let k_ptr = k_data.as_ptr() as usize;
+    let v_ptr = v_data.as_ptr() as usize;
+
+    pool.execute(|tid| {
+        let start = tid * rows_per_thread;
+        if start >= total_rows {
+            return;
+        }
+        let end = total_rows.min((tid + 1) * rows_per_thread);
+        let q_data = unsafe { std::slice::from_raw_parts(q_ptr as *const f32, q_data.len()) };
+        let k_data = unsafe { std::slice::from_raw_parts(k_ptr as *const f32, k_data.len()) };
+        let v_data = unsafe { std::slice::from_raw_parts(v_ptr as *const f32, v_data.len()) };
+        let out_ptr = out_ptr as *mut f32;
+        for row_idx in start..end {
+            let out_chunk =
+                unsafe { std::slice::from_raw_parts_mut(out_ptr.add(row_idx * dv), dv) };
+            let b_i = row_idx / h;
+            let h_i = row_idx % h;
+            let k_head = h_i / rk2;
+            let v_head = h_i / rv2;
+            let q_base = b_i * qstride[0] + h_i * qstride[2];
+            let q_row = &q_data[q_base..q_base + d];
+
+            let mut stack_vkq = [0f32; SINGLE_Q_STACK_DV];
+            let mut heap_vkq;
+            let vkq: &mut [f32] = if dv <= SINGLE_Q_STACK_DV {
+                &mut stack_vkq[..dv]
+            } else {
+                heap_vkq = vec![0f32; dv];
+                heap_vkq.as_mut_slice()
+            };
+            let mut s = 0f32;
+            let mut m = f32::NEG_INFINITY;
+
+            for kv_pos in 0..kv_len {
+                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+                {
+                    let next_pos = kv_pos + 1;
+                    if next_pos < kv_len {
+                        let next_k_base =
+                            b_i * kstride[0] + next_pos * kstride[1] + k_head * kstride[2];
+                        let next_v_base =
+                            b_i * vstride[0] + next_pos * vstride[1] + v_head * vstride[2];
+                        unsafe {
+                            prefetch(k_data.as_ptr().add(next_k_base) as *const u8);
+                            prefetch(v_data.as_ptr().add(next_v_base) as *const u8);
+                        }
+                    }
+                }
+
+                let k_base = b_i * kstride[0] + kv_pos * kstride[1] + k_head * kstride[2];
+                let k_row = &k_data[k_base..k_base + d];
+                let s_val = vec_dot_f32_fast(q_row, k_row) * scale;
+
+                let m_old = m;
+                let mut ms = 1.0;
+                let mut vs = 1.0;
+                if s_val > m {
+                    m = s_val;
+                    ms = (m_old - m).exp();
+                    scale_slice_f32(vkq, ms);
+                } else {
+                    vs = (s_val - m).exp();
+                }
+
+                let v_base = b_i * vstride[0] + kv_pos * vstride[1] + v_head * vstride[2];
+                mul_add_slice_f32(vkq, &v_data[v_base..v_base + dv], vs);
+                s = s * ms + vs;
+            }
+
+            let inv_s = 1.0 / s;
+            for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
+                *o = *v * inv_s;
+            }
+        }
+    });
+
+    Tensor::from_vec(out, (b, h, 1, dv), &Device::Cpu)
 }
 
 #[allow(clippy::too_many_arguments)]
