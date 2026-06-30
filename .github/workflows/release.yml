@@ -85,8 +85,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
-          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+          - { runner: ubuntu-22.04, triple: x86_64-unknown-linux-gnu }
+          - { runner: ubuntu-22.04-arm, triple: aarch64-unknown-linux-gnu }
     env:
       RUSTFLAGS: "-C target-cpu=generic"
     steps:
