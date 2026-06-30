@@ -12,7 +12,7 @@ use std::{
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::Embedding;
 use mistralrs_quant::{
-    softcap, ColumnParallelLayer, GgufMatMul, QuantMethod, QuantMethodConfig, ReplicatedLayer,
+    softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -1638,24 +1638,19 @@ impl TextModel {
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            let embed_weight = mapper.cast_nm_device(embed_tokens.embeddings(), false)?;
-            if normal_loading_metadata.loading_isq
-                && embed_weight.device().is_cuda()
-                && !cfg.keep_tied_lm_head_unquantized
-            {
-                let w_f32 = embed_weight.to_dtype(DType::F32)?;
-                let q_weight = candle_core::quantized::QTensor::quantize(
-                    &w_f32,
-                    candle_core::quantized::GgmlDType::Q8_0,
-                )?;
-                Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(q_weight),
-                    b: None,
-                })?) as Arc<dyn QuantMethod>
+            let embed_weight = mapper.cast_nm_device(
+                embed_tokens.embeddings(),
+                normal_loading_metadata.loading_isq,
+            )?;
+            let lin = candle_nn::Linear::new(embed_weight, None);
+            if cfg.keep_tied_lm_head_unquantized {
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?)
+                    as Arc<dyn QuantMethod>
             } else {
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    candle_nn::Linear::new(embed_weight, None),
-                ))?) as Arc<dyn QuantMethod>
+                ReplicatedLayer::from_linear(
+                    lin,
+                    mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
+                )?
             }
         };
 
