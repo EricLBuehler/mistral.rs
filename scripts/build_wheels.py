@@ -338,6 +338,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
         cmd.extend(["--auditwheel", "skip"])
 
     env = os.environ.copy()
+    env["RUSTFLAGS"] = "-C target-cpu=generic"
 
     # macOS-specific settings for Metal builds
     if plat.os == OS.DARWIN and "metal" in features:
