@@ -640,7 +640,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -673,7 +673,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -686,7 +686,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "cudaforge",
 ]
@@ -694,7 +694,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "block2",
  "half",
@@ -709,7 +709,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -728,7 +728,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=22e9cb4#22e9cb4afa5cda9dd30bc95158a868f383fff951"
+source = "git+https://github.com/huggingface/candle.git?rev=83c1296#83c129649e137adc04fa37ed07c412df1490f9dc"
 dependencies = [
  "ug",
  "ug-cuda",

@@ -25,10 +25,12 @@ jobs:
           - name: cuda
             features: cuda,nccl
             cuda: "13.0"
+            test_args: ""
           # cuTile's JIT tool (tileiras) ships with CUDA 13.1+, so this job needs >= 13.1.
           - name: cuda+cutile
             features: cuda,cutile
             cuda: "13.1"
+            test_args: "--workspace --exclude mistralrs-flash-attn"
           # - name: cuda+nccl
           #   features: cuda,nccl
 
@@ -66,4 +68,4 @@ jobs:
         run: cargo clippy --features ${{ matrix.features }}
 
       - name: Test
-        run: cargo test --features ${{ matrix.features }}
+        run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }}
