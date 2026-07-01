@@ -212,6 +212,10 @@ pub fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
+    if oairequest.max_tokens == Some(0) {
+        anyhow::bail!("max_tokens must be at least 1.");
+    }
+
     let stop_toks = convert_stop_tokens(oairequest.stop_seqs);
 
     let is_streaming = oairequest.stream.unwrap_or(false);

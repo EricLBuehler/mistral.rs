@@ -117,6 +117,24 @@ impl Engine {
             }
         );
 
+        let is_text_generation = matches!(
+            &request.messages,
+            RequestMessage::Chat { .. }
+                | RequestMessage::Completion { .. }
+                | RequestMessage::CompletionTokens(_)
+                | RequestMessage::MultimodalChat { .. }
+        );
+        if is_text_generation && request.sampling_params.max_len == Some(0) {
+            request
+                .response
+                .send(Response::ValidationError(
+                    "max_tokens must be at least 1.".into(),
+                ))
+                .await
+                .unwrap_or_else(|_| warn!("Receiver disconnected"));
+            return;
+        }
+
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
             RequestMessage::Chat { .. }

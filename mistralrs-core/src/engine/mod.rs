@@ -7,11 +7,10 @@ use crate::{
         CacheBackendMetadata, CacheInstruction,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    response::CompletionChoice,
     scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
-    tools, CompletionResponse, SchedulerConfig, DEBUG,
+    tools, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
@@ -46,7 +45,9 @@ use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
     pipeline::{ModelCategory, Pipeline},
     request::Request,
-    response::{ChatCompletionResponse, Choice, ResponseMessage},
+    response::{
+        ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
+    },
     sequence::{SequenceRecognizer, SequenceState},
     Constraint,
 };

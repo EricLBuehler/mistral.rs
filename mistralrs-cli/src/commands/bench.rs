@@ -33,6 +33,11 @@ struct BenchResult {
     latency_ms: f32,
 }
 
+const BENCH_TOKEN_BASE: u32 = 1000;
+const BENCH_TOKEN_SPAN: u32 = 2048;
+const BENCH_ITER_STRIDE: u32 = 131;
+const BENCH_CASE_STRIDE: u32 = 719;
+
 pub struct BenchRunConfig {
     pub prompt_lens: Vec<usize>,
     pub gen_len: usize,
@@ -129,8 +134,9 @@ pub async fn run_bench(
     // Warmup runs
     if warmup > 0 {
         info!("Running {} warmup iteration(s)...", warmup);
-        for _ in 0..warmup {
-            run_single_bench(&mistralrs, 32, 16).await?;
+        for i in 0..warmup {
+            let token_start = bench_token_start(i, 0, 0);
+            run_single_bench(&mistralrs, 32, 16, token_start).await?;
         }
         info!("Warmup complete.");
 
@@ -163,19 +169,21 @@ pub async fn run_bench(
     for i in 0..iterations {
         info!("Iteration {}/{}...", i + 1, iterations);
 
-        for (prompt_len, results) in prefill_results.iter_mut() {
+        for (prompt_idx, (prompt_len, results)) in prefill_results.iter_mut().enumerate() {
             if *prompt_len == 0 {
                 continue;
             }
-            let usage = run_single_bench(&mistralrs, *prompt_len, 1).await?;
+            let token_start = bench_token_start(i + warmup, prompt_idx, 0);
+            let usage = run_single_bench(&mistralrs, *prompt_len, 1, token_start).await?;
             let tok_per_sec = usage.avg_prompt_tok_per_sec;
             let prefill_ms = usage.total_prompt_time_sec * 1000.0;
             results.push((tok_per_sec, prefill_ms));
         }
 
         if gen_len > 0 {
-            for (depth, results) in decode_results.iter_mut() {
-                let usage = run_single_bench(&mistralrs, *depth, gen_len).await?;
+            for (depth_idx, (depth, results)) in decode_results.iter_mut().enumerate() {
+                let token_start = bench_token_start(i + warmup, depth_idx, prompt_lens.len());
+                let usage = run_single_bench(&mistralrs, *depth, gen_len, token_start).await?;
                 let tok_per_sec = usage.avg_compl_tok_per_sec;
                 let ms_per_tok = if tok_per_sec > 0.0 {
                     1000.0 / tok_per_sec
@@ -243,11 +251,18 @@ fn calculate_stats(values: &[f32]) -> (f32, f32) {
     (mean, std_dev)
 }
 
+fn bench_token_start(iteration: usize, case_idx: usize, group_offset: usize) -> u32 {
+    ((iteration + 1) as u32 * BENCH_ITER_STRIDE
+        + (case_idx + group_offset) as u32 * BENCH_CASE_STRIDE)
+        % BENCH_TOKEN_SPAN
+}
+
 /// Run a single benchmark iteration.
 async fn run_single_bench(
     mistralrs: &Arc<mistralrs_core::MistralRs>,
     prompt_tokens: usize,
     gen_tokens: usize,
+    token_start: u32,
 ) -> Result<Usage> {
     let mut sampling_params = SamplingParams::deterministic();
     sampling_params.max_len = Some(gen_tokens);
@@ -255,8 +270,7 @@ async fn run_single_bench(
     let sender = mistralrs.get_sender(None).unwrap();
     let (tx, mut rx) = channel(100);
 
-    // Use token IDs for prompt to ensure exact length
-    let tokens: Vec<u32> = (1000..1000 + prompt_tokens as u32).collect();
+    let tokens = bench_tokens(prompt_tokens, token_start);
 
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
@@ -291,6 +305,16 @@ async fn run_single_bench(
 
     sender.send(req).await?;
 
+    recv_usage(&mut rx).await
+}
+
+fn bench_tokens(prompt_tokens: usize, token_start: u32) -> Vec<u32> {
+    (0..prompt_tokens)
+        .map(|idx| BENCH_TOKEN_BASE + (token_start + idx as u32) % BENCH_TOKEN_SPAN)
+        .collect()
+}
+
+async fn recv_usage(rx: &mut tokio::sync::mpsc::Receiver<Response>) -> Result<Usage> {
     loop {
         match rx.recv().await {
             Some(Response::AgenticToolCallProgress { .. }) => continue,

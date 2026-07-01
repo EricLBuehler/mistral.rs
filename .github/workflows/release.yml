@@ -38,6 +38,8 @@ env:
 jobs:
   metal:
     runs-on: macos-15
+    env:
+      RUSTFLAGS: "-C target-cpu=generic"
     steps:
       - uses: actions/checkout@v4
         with:
