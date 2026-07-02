@@ -681,6 +681,7 @@ impl MistralRsForServerBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<SharedMistralRsState> {
+        candle_core::utils::init_global_threadpool();
         // Determine if we're in single-model or multi-model mode
         if !self.models.is_empty() {
             self.build_multi_model().await

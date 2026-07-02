@@ -27,6 +27,7 @@ use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    candle_core::utils::init_global_threadpool();
     let cli = Cli::parse();
     init_tracing(cli.global.verbose);
 

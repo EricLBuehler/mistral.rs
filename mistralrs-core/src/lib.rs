@@ -29,6 +29,15 @@ use std::{
 use tokio::sync::mpsc::{channel, Sender};
 use tracing::{debug, info, warn};
 
+fn build_engine_runtime() -> Runtime {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(candle_core::utils::get_num_threads())
+        .on_thread_start(candle_core::utils::set_thread_affinity)
+        .build()
+        .unwrap()
+}
+
 pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISION") {
     Some(value) => value,
     None => "unknown",
@@ -748,9 +757,10 @@ impl MistralRs {
         // Propagate Engine::new's outcome so a creation failure is a clean load error, not a zombie-engine panic.
         let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
         let engine_handler = thread::spawn(move || {
+            candle_core::utils::init_global_threadpool();
             #[cfg(feature = "metal")]
             objc::rc::autoreleasepool(move || {
-                let rt = Runtime::new().unwrap();
+                let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
                     let engine = match Engine::new(
@@ -789,7 +799,7 @@ impl MistralRs {
 
             #[cfg(not(feature = "metal"))]
             {
-                let rt = Runtime::new().unwrap();
+                let rt = build_engine_runtime();
                 rt.block_on(async move {
                     file_store_for_engine.spawn_cleanup_task();
                     let engine = match Engine::new(
