@@ -27,10 +27,10 @@ jobs:
             features: cuda,nccl
             cuda: "13.0"
             test_args: ""
-          # cuTile's JIT tool (tileiras) ships with CUDA 13.1+, so this job needs >= 13.1.
+          # cutile-compiler 0.1.0 emits Tile IR 13.2 bytecode, so tileiras (and thus the toolkit) must be >= 13.2.
           - name: cuda+cutile
             features: cuda,cutile
-            cuda: "13.1"
+            cuda: "13.2"
             test_args: "--workspace --exclude mistralrs-flash-attn"
           # - name: cuda+nccl
           #   features: cuda,nccl
