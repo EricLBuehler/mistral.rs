@@ -1567,6 +1567,10 @@ async fn parse_openresponses_request(
         );
     }
 
+    if oairequest.max_output_tokens == Some(0) {
+        anyhow::bail!("max_output_tokens must be at least 1.");
+    }
+
     // Build request context to echo back request parameters
     // Must capture these before consuming oairequest
     let request_context = RequestContext {

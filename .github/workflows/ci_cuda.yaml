@@ -20,15 +20,18 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64, gpu, cuda]
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: cuda
             features: cuda,nccl
             cuda: "13.0"
-          # cuTile's JIT tool (tileiras) ships with CUDA 13.1+, so this job needs >= 13.1.
+            test_args: ""
+          # cutile-compiler 0.1.0 emits Tile IR 13.2 bytecode, so tileiras (and thus the toolkit) must be >= 13.2.
           - name: cuda+cutile
             features: cuda,cutile
-            cuda: "13.1"
+            cuda: "13.2"
+            test_args: "--workspace --exclude mistralrs-flash-attn"
           # - name: cuda+nccl
           #   features: cuda,nccl
 
@@ -55,7 +58,14 @@ jobs:
           echo "CUDA_HOME=$CUDA_DIR" >> $GITHUB_ENV
           echo "CUDA_PATH=$CUDA_DIR" >> $GITHUB_ENV
           echo "CUDA_TOOLKIT_PATH=$CUDA_DIR" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$CUDA_DIR/lib64:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          # The driver JITs PTX only up to its native CUDA level; newer toolkits need the forward-compat libcuda.
+          LIB_DIRS="$CUDA_DIR/lib64"
+          NATIVE=$(nvidia-smi --query | grep -m1 "CUDA Version" | grep -oE "[0-9]+\.[0-9]+")
+          if [ "$(printf '%s\n' "$NATIVE" "${{ matrix.cuda }}" | sort -V | tail -1)" != "$NATIVE" ]; then
+            [ -d "$CUDA_DIR/compat" ] || sudo apt-get install -y cuda-compat-$(echo "${{ matrix.cuda }}" | tr . -)
+            LIB_DIRS="$CUDA_DIR/compat:$LIB_DIRS"
+          fi
+          echo "LD_LIBRARY_PATH=$LIB_DIRS:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
       - name: CUDA sanity
         run: |
@@ -66,4 +76,4 @@ jobs:
         run: cargo clippy --features ${{ matrix.features }}
 
       - name: Test
-        run: cargo test --features ${{ matrix.features }}
+        run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }}

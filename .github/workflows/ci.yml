@@ -11,6 +11,10 @@ on:
 
 name: Continuous integration
 
+# Suppress .cargo/config.toml target-cpu=native: ring asserts baseline aes/sha2 on aarch64-apple-darwin, native in runner VMs drops them
+env:
+  RUSTFLAGS: ""
+
 jobs:
   check:
     name: Check

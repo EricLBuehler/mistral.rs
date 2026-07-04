@@ -1292,9 +1292,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                     let v_chunks = v.chunk(num_seqs, 0).unwrap();
 
                     for (seq_idx, seq) in seqs.iter_mut().enumerate() {
-                        // chunk() returns non-contiguous views; all_data must be contiguous.
-                        let seq_k = k_chunks.get(seq_idx).unwrap().contiguous().unwrap();
-                        let seq_v = v_chunks.get(seq_idx).unwrap().contiguous().unwrap();
+                        let seq_k = k_chunks.get(seq_idx).unwrap().clone();
+                        let seq_v = v_chunks.get(seq_idx).unwrap().clone();
 
                         let seq_cache = if modify_draft_cache {
                             seq.normal_draft_cache()

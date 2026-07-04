@@ -38,6 +38,9 @@ env:
 jobs:
   metal:
     runs-on: macos-15
+    env:
+      # empty (not generic) so the apple-m1 baseline stays: ring asserts static aes/sha2 on aarch64-apple-darwin
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
         with:

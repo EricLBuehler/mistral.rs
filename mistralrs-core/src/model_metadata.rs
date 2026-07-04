@@ -582,7 +582,10 @@ mod tests {
     #[test]
     fn supported_models_matches_committed() {
         let rendered = render_supported_models_markdown();
-        let on_disk = std::fs::read_to_string(COMMITTED).expect("supported-models.md exists");
+        // Windows runners check out with autocrlf, so normalize before comparing.
+        let on_disk = std::fs::read_to_string(COMMITTED)
+            .expect("supported-models.md exists")
+            .replace("\r\n", "\n");
         assert!(
             on_disk == rendered,
             "committed supported-models.md is out of date; regenerate with: {REGEN_HINT}",

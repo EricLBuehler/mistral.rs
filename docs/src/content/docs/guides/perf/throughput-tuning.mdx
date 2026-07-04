@@ -117,6 +117,25 @@ The mechanism depends on the attention mode:
 
 Automatic device mapping reserves activation and KV memory for a worst case you declare: `--max-seq-len` (default 4096) and `--max-batch-size` (default 1). If you expect long prompts or large batches, raise these so layers are not placed too greedily; if memory is tight, the defaults already keep reservations small. See [distributed inference](/mistral.rs/guides/perf/distributed-inference/) for manual placement.
 
+## CPU threads and affinity
+
+CPU inference uses Candle's thread pools. On Linux systems that expose heterogeneous CPU capacity through sysfs, mistral.rs defaults the CPU worker count to the high-capacity cores. On homogeneous systems it falls back to the physical core count.
+
+Set `RAYON_NUM_THREADS` or `CANDLE_NUM_THREADS` to override the worker count:
+
+```bash
+CANDLE_NUM_THREADS=10 mistralrs bench --cpu -m meta-llama/Llama-3.2-3B-Instruct
+```
+
+For CPU affinity on Linux, use `CANDLE_CPU_MASK` with cpulist syntax. When no thread-count env var is set, the mask size also becomes the default worker count:
+
+```bash
+CANDLE_CPU_MASK=15-19 mistralrs bench --cpu -m meta-llama/Llama-3.2-3B-Instruct
+CANDLE_CPU_MASK=5-9,15-19 mistralrs serve --cpu -m meta-llama/Llama-3.2-3B-Instruct
+```
+
+Hard affinity is not enabled by default because it can help one CPU/model pair and hurt another. To try the automatic high-capacity CPU mask without spelling out a list, set `CANDLE_CPU_AFFINITY=1`. The full list is in the [environment variables reference](/mistral.rs/reference/environment-variables/#cpu-runtime).
+
 ## CUDA defaults worth knowing
 
 On CUDA, two decode fast paths are on by default and need no tuning: FlashInfer paged kernels and CUDA decode graphs. They exist as env-var switches (`MISTRALRS_FLASHINFER_DECODE`, `MISTRALRS_CUDA_GRAPHS`) only for debugging and benchmarking comparisons; details on the [paged attention page](/mistral.rs/guides/perf/paged-attention/).
