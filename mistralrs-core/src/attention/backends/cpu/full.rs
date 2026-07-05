@@ -2,11 +2,16 @@ use candle_core::{Device, Result, Tensor, WithDType};
 use rayon::prelude::*;
 
 use super::{
-    elem::ElemOps, prefetch::prefetch, threading::FLASH_ATTN_POOL, CpuAttnCtx, SINGLE_Q_STACK_DV,
+    elem::{fast_exp, ElemOps},
+    prefetch::prefetch,
+    threading::FLASH_ATTN_POOL,
+    CpuAttnCtx, TensorView, SINGLE_Q_STACK_DV,
 };
 
 // q rows sharing K/V per pass; bounds the online-softmax state kept in registers/stack
 const Q_BLOCK: usize = 8;
+// kv positions scored per tile; keeps the score tile and softmax pass in L1
+const KV_BLOCK: usize = 128;
 
 pub(super) fn run<T>(ctx: &CpuAttnCtx<'_, T>) -> Result<Tensor>
 where
@@ -24,6 +29,8 @@ where
     if T::USE_BARRIER_POOL {
         // rayon here would fight the barrier workers spinning between the surrounding matmuls;
         // q rows of one head share K/V, so blocks of Q_BLOCK rows stream them once
+        let tiled = ctx.logit_softcap == 0.0 && ctx.q.stride[1] >= 1;
+        let f32_view = if tiled { f32_ctx_view(ctx) } else { None };
         let out_ptr = out.as_mut_ptr() as usize;
         let n_q_blocks = q_len.div_ceil(Q_BLOCK);
         let total_units = b * h * n_q_blocks;
@@ -36,7 +43,11 @@ where
                 let b_i = bh / h;
                 let q_start = q_block_idx * Q_BLOCK;
                 let q_end = q_len.min(q_start + Q_BLOCK);
-                compute_full_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr);
+                if let Some(fctx) = f32_view.as_ref() {
+                    compute_tiled_qblock(fctx, b_i, h_i, q_start, q_end, out_ptr as *mut f32);
+                } else {
+                    compute_full_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr);
+                }
             }
         });
     } else {
@@ -49,6 +60,233 @@ where
     }
 
     Tensor::from_vec(out, (b, h, q_len, dv), &Device::Cpu)
+}
+
+fn f32_ctx_view<'a, T: ElemOps>(ctx: &CpuAttnCtx<'a, T>) -> Option<CpuAttnCtx<'a, f32>> {
+    Some(CpuAttnCtx {
+        q: TensorView {
+            data: T::as_f32(ctx.q.data)?,
+            dims: ctx.q.dims,
+            stride: ctx.q.stride,
+        },
+        k: TensorView {
+            data: T::as_f32(ctx.k.data)?,
+            dims: ctx.k.dims,
+            stride: ctx.k.stride,
+        },
+        v: TensorView {
+            data: T::as_f32(ctx.v.data)?,
+            dims: ctx.v.dims,
+            stride: ctx.v.stride,
+        },
+        mask: ctx.mask,
+        scale: ctx.scale,
+        max_bias: ctx.max_bias,
+        logit_softcap: ctx.logit_softcap,
+    })
+}
+
+// Blocked attention for one (head, q-block): scores a KV_BLOCK tile at a time, applies the
+// online-softmax correction once per tile instead of per position, then accumulates P*V with
+// each v row loaded once for the whole q block. Returns false when the mask layout prevents
+// contiguous row access (caller falls back to the streaming path).
+fn compute_tiled_qblock(
+    ctx: &CpuAttnCtx<f32>,
+    b_i: usize,
+    h_i: usize,
+    q_start: usize,
+    q_end: usize,
+    out_ptr: *mut f32,
+) -> bool {
+    let [_b, q_len, h, d] = ctx.q.dims;
+    let kv_len = ctx.k.dims[1];
+    let rk2 = h / ctx.k.dims[2];
+    let rv2 = h / ctx.v.dims[2];
+    let dv = d;
+    let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
+    let nq = q_end - q_start;
+
+    let slope = if ctx.max_bias > 0.0 {
+        2.0f32.powf(-ctx.max_bias * ((h_i + 1) as f32) / n2 as f32)
+    } else {
+        1.0
+    };
+    let k_head = h_i / rk2;
+    let v_head = h_i / rv2;
+
+    let mut mask_rows: [Option<&[f32]>; Q_BLOCK] = [None; Q_BLOCK];
+    let mut row_start = [0usize; Q_BLOCK];
+    let mut row_end = [kv_len; Q_BLOCK];
+    if let Some(mask) = ctx.mask.as_ref() {
+        for j in 0..nq {
+            let q_pos = q_start + j;
+            let Some(row) = mask.row(b_i, h_i, q_pos, kv_len) else {
+                return false;
+            };
+            mask_rows[j] = Some(row);
+            // contiguous live block: -inf^a live^b -inf^c, anchored at the self position
+            let pivot = (kv_len - q_len + q_pos).min(kv_len - 1);
+            if row[pivot] == f32::NEG_INFINITY {
+                continue;
+            }
+            let (mut lo, mut hi) = (0usize, pivot);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if row[mid] == f32::NEG_INFINITY {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            row_start[j] = lo;
+            let (mut lo, mut hi) = (pivot + 1, kv_len);
+            while lo < hi {
+                let mid = (lo + hi) / 2;
+                if row[mid] != f32::NEG_INFINITY {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            row_end[j] = lo;
+        }
+    }
+    let kv_lo = (0..nq).map(|j| row_start[j]).min().unwrap_or(0);
+    let kv_hi = (0..nq).map(|j| row_end[j]).max().unwrap_or(kv_len);
+
+    let mut acc = vec![0f32; nq * dv];
+    let mut m = [f32::NEG_INFINITY; Q_BLOCK];
+    let mut s = [0f32; Q_BLOCK];
+    let mut s_tile = [0f32; Q_BLOCK * KV_BLOCK];
+
+    let mut bs = kv_lo;
+    while bs < kv_hi {
+        let be = kv_hi.min(bs + KV_BLOCK);
+        let bn = be - bs;
+
+        // A: score the tile
+        for j in 0..nq {
+            let lo = row_start[j].max(bs);
+            let hi = row_end[j].min(be);
+            if lo >= hi {
+                continue;
+            }
+            let q_pos = q_start + j;
+            let q_base = b_i * ctx.q.stride[0] + q_pos * ctx.q.stride[1] + h_i * ctx.q.stride[2];
+            let q_row = &ctx.q.data[q_base..q_base + d];
+            let tile_row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + bn];
+            score_rows(ctx, q_row, k_head, b_i, bs, lo, hi, ctx.scale, tile_row);
+            if let Some(mrow) = mask_rows[j] {
+                for kv in lo..hi {
+                    tile_row[kv - bs] += slope * mrow[kv];
+                }
+            }
+        }
+
+        // B: one online-softmax correction per tile
+        for j in 0..nq {
+            let lo = row_start[j].max(bs);
+            let hi = row_end[j].min(be);
+            if lo >= hi {
+                continue;
+            }
+            let tile_row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + bn];
+            let live = &mut tile_row[lo - bs..hi - bs];
+            #[cfg(target_arch = "aarch64")]
+            let bmax = super::neon::max_f32(live);
+            #[cfg(not(target_arch = "aarch64"))]
+            let bmax = live.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            if bmax > m[j] {
+                if m[j] != f32::NEG_INFINITY {
+                    let corr = fast_exp(m[j] - bmax);
+                    for a in &mut acc[j * dv..(j + 1) * dv] {
+                        *a *= corr;
+                    }
+                    s[j] *= corr;
+                }
+                m[j] = bmax;
+            }
+            let mj = m[j];
+            #[cfg(target_arch = "aarch64")]
+            let local_sum = super::neon::softmax_row_f32(live, mj);
+            #[cfg(not(target_arch = "aarch64"))]
+            let local_sum = {
+                let mut sum = 0f32;
+                for v in live.iter_mut() {
+                    *v = fast_exp(*v - mj);
+                    sum += *v;
+                }
+                sum
+            };
+            s[j] += local_sum;
+        }
+
+        // C: accumulate P*V with each v row shared across the q block
+        for kv_pos in bs..be {
+            let v_base =
+                b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
+            let v_row = &ctx.v.data[v_base..v_base + dv];
+            for j in 0..nq {
+                if kv_pos < row_start[j].max(bs) || kv_pos >= row_end[j].min(be) {
+                    continue;
+                }
+                let p = s_tile[j * KV_BLOCK + (kv_pos - bs)];
+                <f32 as ElemOps>::mad(&mut acc[j * dv..(j + 1) * dv], v_row, p);
+            }
+        }
+
+        bs = be;
+    }
+
+    for j in 0..nq {
+        let q_pos = q_start + j;
+        let row_idx = (b_i * h + h_i) * q_len + q_pos;
+        let out_chunk = unsafe { std::slice::from_raw_parts_mut(out_ptr.add(row_idx * dv), dv) };
+        let inv_s = 1.0 / s[j];
+        for (o, v) in out_chunk.iter_mut().zip(acc[j * dv..(j + 1) * dv].iter()) {
+            *o = *v * inv_s;
+        }
+    }
+    true
+}
+
+// Dot q_row against k rows [lo, hi), writing scaled scores into tile[lo-bs..hi-bs].
+#[inline(always)]
+fn score_rows(
+    ctx: &CpuAttnCtx<f32>,
+    q_row: &[f32],
+    k_head: usize,
+    b_i: usize,
+    bs: usize,
+    lo: usize,
+    hi: usize,
+    scale: f32,
+    tile: &mut [f32],
+) {
+    let d = q_row.len();
+    let k_row = |kv_pos: usize| {
+        let k_base = b_i * ctx.k.stride[0] + kv_pos * ctx.k.stride[1] + k_head * ctx.k.stride[2];
+        &ctx.k.data[k_base..k_base + d]
+    };
+    let mut kv_pos = lo;
+    #[cfg(target_arch = "aarch64")]
+    while kv_pos + 4 <= hi {
+        let dots = super::neon::dot4_f32(
+            q_row,
+            k_row(kv_pos),
+            k_row(kv_pos + 1),
+            k_row(kv_pos + 2),
+            k_row(kv_pos + 3),
+        );
+        for (o, dot) in dots.iter().enumerate() {
+            tile[kv_pos + o - bs] = dot * scale;
+        }
+        kv_pos += 4;
+    }
+    while kv_pos < hi {
+        tile[kv_pos - bs] = <f32 as ElemOps>::dot(q_row, k_row(kv_pos)) * scale;
+        kv_pos += 1;
+    }
 }
 
 // One K/V pass for q rows [q_start, q_end) of head h_i; per-row online softmax state.

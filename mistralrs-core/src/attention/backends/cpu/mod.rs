@@ -16,6 +16,7 @@ use std::iter::Sum;
 
 use crate::attention::SdpaParams;
 
+pub(crate) use elem::fast_exp;
 use elem::ElemOps;
 use mask::MaskInfo;
 

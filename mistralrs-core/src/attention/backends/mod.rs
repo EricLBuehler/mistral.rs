@@ -1,4 +1,4 @@
-pub(super) mod cpu;
+pub(crate) mod cpu;
 mod flash;
 #[cfg(feature = "metal")]
 pub(crate) mod metal_flash_attn;
