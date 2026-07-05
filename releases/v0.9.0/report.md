@@ -203,15 +203,19 @@ End-of-day board (qwen3-4b, mistral.rs / llama.cpp, ratio):
 | q4k | 128 | 512 | 2048 | 8192 | 16384 |
 |---|---|---|---|---|---|
 | prefill | 0.42x | 0.69x | 0.79x | 0.86x | - |
-| decode | 1.06x | 1.07x | 1.12x | 1.69x | **2.52x** |
+| decode | 1.06x | 1.07x | 1.12x | 1.53x | **1.81x** |
 
 | q8_0 | 128 | 512 | 2048 | 8192 |
 |---|---|---|---|---|
 | prefill | 0.79x | 0.66x | 0.72x | 0.81x |
-| decode | 0.84x | 0.84x | 0.92x | **1.48x** |
+| decode | 0.84x | 0.84x | 0.92x | **1.33x** |
+
+llama.cpp's flash-attention CPU kernel inverts at depth on x86 (fa=1 beats fa=0 through ~2k,
+then loses to it: 6.3 vs 8.8 t/s at 16384), so the decode ratios above take llama.cpp's best
+configuration at every point, mixing fa=1 shallow and fa=0 deep.
 
 Decode wins q4k at every depth and both quants at agent depths, with the same widening-with-depth
-shape as the aarch64 curves (15.9 vs 6.3 t/s at 16384 depth); recall verified. Prefill trails llama.cpp's mature AMX path (a chip
+shape as the aarch64 curves (15.9 vs 8.8 t/s at 16384 depth); recall verified. Prefill trails llama.cpp's mature AMX path (a chip
 feature most of the x86 fleet lacks; a non-AMX comparison point is a follow-up).
 
 What was built (candle + mistralrs, all runtime-feature-detected):

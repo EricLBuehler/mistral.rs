@@ -34,3 +34,8 @@ recall: 1
 FINAL_SWEEP_DONE
 │ Decode (128 tokens @ d16384) ┆ 15.9 ± 0.1  ┆ 62.72 ms/T          │
 | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |  tg128 @ d16384 |          6.30 ± 0.02 |
+# fa=0 reference rows (llama.cpp flash-attn CPU inverts at depth on x86; best-per-point policy)
+lcp q4k fa0 tg128 d128 31.63 | d512 29.30 | d2048 24.21 | d8192 14.07 | d16384 8.76
+lcp q4k fa1 tg128 d16384 6.30
+lcp q8_0 fa0 tg128 d512 28.45 | d2048 23.58 | d8192 13.73
+mrs q4k tg128 d16384 15.9
