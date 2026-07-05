@@ -65,7 +65,10 @@ pub(crate) fn cpu_kv_f16() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        let on = std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");
+        // only worth it where the native fp16 attention kernels exist; elsewhere f16 KV would
+        // push attention onto the scalar convert fallback and lose to plain f32
+        let fast = cfg!(target_arch = "aarch64");
+        let on = fast && std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");
         if on {
             tracing::info!("Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).");
         }
