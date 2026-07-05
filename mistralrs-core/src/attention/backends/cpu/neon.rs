@@ -251,48 +251,108 @@ pub(super) fn fp16_fast() -> bool {
     })
 }
 
+#[target_feature(enable = "fp16,fhm")]
+unsafe fn dot_f16_main(ap: *const u16, bp: *const u16, n: usize) -> f32 {
+    use core::arch::aarch64::*;
+    let acc0: float32x4_t;
+    let acc1: float32x4_t;
+    core::arch::asm!(
+        "movi {a0:v}.4s, #0",
+        "movi {a1:v}.4s, #0",
+        "2:",
+        "ldr {t0:q}, [{ap}], #16",
+        "ldr {t1:q}, [{bp}], #16",
+        "fmlal {a0:v}.4s, {t0:v}.4h, {t1:v}.4h",
+        "fmlal2 {a1:v}.4s, {t0:v}.4h, {t1:v}.4h",
+        "subs {n}, {n}, #8",
+        "b.gt 2b",
+        ap = inout(reg) ap => _,
+        bp = inout(reg) bp => _,
+        n = inout(reg) n => _,
+        a0 = out(vreg) acc0,
+        a1 = out(vreg) acc1,
+        t0 = out(vreg) _,
+        t1 = out(vreg) _,
+        options(nostack, readonly),
+    );
+    vaddvq_f32(vaddq_f32(acc0, acc1))
+}
+
 #[inline(always)]
 pub(super) fn dot_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
-    use core::arch::aarch64::*;
     debug_assert_eq!(a.len(), b.len());
     let len = a.len();
     let main = len & !7;
-    let acc0: float32x4_t;
-    let acc1: float32x4_t;
-    unsafe {
-        let ap = a.as_ptr() as *const u16;
-        let bp = b.as_ptr() as *const u16;
-        if main >= 8 {
-            let n = main;
-            core::arch::asm!(
-                "movi {a0:v}.4s, #0",
-                "movi {a1:v}.4s, #0",
-                "2:",
-                "ldr {t0:q}, [{ap}], #16",
-                "ldr {t1:q}, [{bp}], #16",
-                "fmlal {a0:v}.4s, {t0:v}.4h, {t1:v}.4h",
-                "fmlal2 {a1:v}.4s, {t0:v}.4h, {t1:v}.4h",
-                "subs {n}, {n}, #8",
-                "b.gt 2b",
-                ap = inout(reg) ap => _,
-                bp = inout(reg) bp => _,
-                n = inout(reg) n => _,
-                a0 = out(vreg) acc0,
-                a1 = out(vreg) acc1,
-                t0 = out(vreg) _,
-                t1 = out(vreg) _,
-                options(nostack, readonly),
-            );
-        } else {
-            acc0 = vdupq_n_f32(0.0);
-            acc1 = vdupq_n_f32(0.0);
-        }
-        let mut sum = vaddvq_f32(vaddq_f32(acc0, acc1));
-        for i in main..len {
-            sum += a[i].to_f32() * b[i].to_f32();
-        }
-        sum
+    let mut sum = if main >= 8 {
+        unsafe { dot_f16_main(a.as_ptr() as *const u16, b.as_ptr() as *const u16, main) }
+    } else {
+        0.0
+    };
+    for i in main..len {
+        sum += a[i].to_f32() * b[i].to_f32();
     }
+    sum
+}
+
+#[target_feature(enable = "fp16,fhm")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn dot4_f16_main(
+    qp: *const u16,
+    p0: *const u16,
+    p1: *const u16,
+    p2: *const u16,
+    p3: *const u16,
+    n: usize,
+) -> [f32; 4] {
+    use core::arch::aarch64::*;
+    let a0: float32x4_t;
+    let a1: float32x4_t;
+    let a2: float32x4_t;
+    let a3: float32x4_t;
+    core::arch::asm!(
+        "movi {a0:v}.4s, #0",
+        "movi {a1:v}.4s, #0",
+        "movi {a2:v}.4s, #0",
+        "movi {a3:v}.4s, #0",
+        "2:",
+        "ldr {tq:q}, [{qp}], #16",
+        "ldr {t0:q}, [{p0}], #16",
+        "ldr {t1:q}, [{p1}], #16",
+        "ldr {t2:q}, [{p2}], #16",
+        "ldr {t3:q}, [{p3}], #16",
+        "fmlal {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
+        "fmlal2 {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
+        "fmlal {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
+        "fmlal2 {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
+        "fmlal {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
+        "fmlal2 {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
+        "fmlal {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
+        "fmlal2 {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
+        "subs {n}, {n}, #8",
+        "b.gt 2b",
+        qp = inout(reg) qp => _,
+        p0 = inout(reg) p0 => _,
+        p1 = inout(reg) p1 => _,
+        p2 = inout(reg) p2 => _,
+        p3 = inout(reg) p3 => _,
+        n = inout(reg) n => _,
+        a0 = out(vreg) a0,
+        a1 = out(vreg) a1,
+        a2 = out(vreg) a2,
+        a3 = out(vreg) a3,
+        tq = out(vreg) _,
+        t0 = out(vreg) _,
+        t1 = out(vreg) _,
+        t2 = out(vreg) _,
+        t3 = out(vreg) _,
+        options(nostack, readonly),
+    );
+    [
+        vaddvq_f32(a0),
+        vaddvq_f32(a1),
+        vaddvq_f32(a2),
+        vaddvq_f32(a3),
+    ]
 }
 
 #[inline(always)]
@@ -304,120 +364,70 @@ pub(super) fn dot4_f16(
     k2: &[half::f16],
     k3: &[half::f16],
 ) -> [f32; 4] {
-    use core::arch::aarch64::*;
     let len = q.len();
     let main = len & !7;
-    let a0: float32x4_t;
-    let a1: float32x4_t;
-    let a2: float32x4_t;
-    let a3: float32x4_t;
-    unsafe {
-        let qp = q.as_ptr() as *const u16;
-        let p0 = k0.as_ptr() as *const u16;
-        let p1 = k1.as_ptr() as *const u16;
-        let p2 = k2.as_ptr() as *const u16;
-        let p3 = k3.as_ptr() as *const u16;
-        if main >= 8 {
-            let n = main;
-            core::arch::asm!(
-                "movi {a0:v}.4s, #0",
-                "movi {a1:v}.4s, #0",
-                "movi {a2:v}.4s, #0",
-                "movi {a3:v}.4s, #0",
-                "2:",
-                "ldr {tq:q}, [{qp}], #16",
-                "ldr {t0:q}, [{p0}], #16",
-                "ldr {t1:q}, [{p1}], #16",
-                "ldr {t2:q}, [{p2}], #16",
-                "ldr {t3:q}, [{p3}], #16",
-                "fmlal {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
-                "fmlal2 {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
-                "fmlal {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
-                "fmlal2 {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
-                "fmlal {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
-                "fmlal2 {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
-                "fmlal {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
-                "fmlal2 {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
-                "subs {n}, {n}, #8",
-                "b.gt 2b",
-                qp = inout(reg) qp => _,
-                p0 = inout(reg) p0 => _,
-                p1 = inout(reg) p1 => _,
-                p2 = inout(reg) p2 => _,
-                p3 = inout(reg) p3 => _,
-                n = inout(reg) n => _,
-                a0 = out(vreg) a0,
-                a1 = out(vreg) a1,
-                a2 = out(vreg) a2,
-                a3 = out(vreg) a3,
-                tq = out(vreg) _,
-                t0 = out(vreg) _,
-                t1 = out(vreg) _,
-                t2 = out(vreg) _,
-                t3 = out(vreg) _,
-                options(nostack, readonly),
-            );
-        } else {
-            a0 = vdupq_n_f32(0.0);
-            a1 = vdupq_n_f32(0.0);
-            a2 = vdupq_n_f32(0.0);
-            a3 = vdupq_n_f32(0.0);
+    let mut out = if main >= 8 {
+        unsafe {
+            dot4_f16_main(
+                q.as_ptr() as *const u16,
+                k0.as_ptr() as *const u16,
+                k1.as_ptr() as *const u16,
+                k2.as_ptr() as *const u16,
+                k3.as_ptr() as *const u16,
+                main,
+            )
         }
-        let mut out = [
-            vaddvq_f32(a0),
-            vaddvq_f32(a1),
-            vaddvq_f32(a2),
-            vaddvq_f32(a3),
-        ];
-        for i in main..len {
-            let qi = q[i].to_f32();
-            out[0] += qi * k0[i].to_f32();
-            out[1] += qi * k1[i].to_f32();
-            out[2] += qi * k2[i].to_f32();
-            out[3] += qi * k3[i].to_f32();
-        }
-        out
+    } else {
+        [0.0; 4]
+    };
+    for i in main..len {
+        let qi = q[i].to_f32();
+        out[0] += qi * k0[i].to_f32();
+        out[1] += qi * k1[i].to_f32();
+        out[2] += qi * k2[i].to_f32();
+        out[3] += qi * k3[i].to_f32();
     }
+    out
 }
 
 // acc (f32) += values (f16) * scale
+#[target_feature(enable = "fp16")]
+unsafe fn mad_f16_main(ap: *mut f32, vp: *const u16, scale: f32, n: usize) {
+    core::arch::asm!(
+        "dup {s:v}.4s, {scale:v}.s[0]",
+        "2:",
+        "ldr {tv:q}, [{vp}], #16",
+        "ldp {t0:q}, {t1:q}, [{ap}]",
+        "fcvtl {lo:v}.4s, {tv:v}.4h",
+        "fcvtl2 {hi:v}.4s, {tv:v}.8h",
+        "fmla {t0:v}.4s, {lo:v}.4s, {s:v}.4s",
+        "fmla {t1:v}.4s, {hi:v}.4s, {s:v}.4s",
+        "stp {t0:q}, {t1:q}, [{ap}], #32",
+        "subs {n}, {n}, #8",
+        "b.gt 2b",
+        ap = inout(reg) ap => _,
+        vp = inout(reg) vp => _,
+        n = inout(reg) n => _,
+        scale = in(vreg) scale,
+        s = out(vreg) _,
+        tv = out(vreg) _,
+        t0 = out(vreg) _,
+        t1 = out(vreg) _,
+        lo = out(vreg) _,
+        hi = out(vreg) _,
+        options(nostack),
+    );
+}
+
 #[inline(always)]
 pub(super) fn mad_f16(acc: &mut [f32], values: &[half::f16], scale: f32) {
     let len = acc.len();
     let main = len & !7;
-    unsafe {
-        if main >= 8 {
-            let ap = acc.as_mut_ptr();
-            let vp = values.as_ptr() as *const u16;
-            let n = main;
-            core::arch::asm!(
-                "dup {s:v}.4s, {scale:v}.s[0]",
-                "2:",
-                "ldr {tv:q}, [{vp}], #16",
-                "ldp {t0:q}, {t1:q}, [{ap}]",
-                "fcvtl {lo:v}.4s, {tv:v}.4h",
-                "fcvtl2 {hi:v}.4s, {tv:v}.8h",
-                "fmla {t0:v}.4s, {lo:v}.4s, {s:v}.4s",
-                "fmla {t1:v}.4s, {hi:v}.4s, {s:v}.4s",
-                "stp {t0:q}, {t1:q}, [{ap}], #32",
-                "subs {n}, {n}, #8",
-                "b.gt 2b",
-                ap = inout(reg) ap => _,
-                vp = inout(reg) vp => _,
-                n = inout(reg) n => _,
-                scale = in(vreg) core::mem::transmute::<f32, [f32; 1]>(scale)[0],
-                s = out(vreg) _,
-                tv = out(vreg) _,
-                t0 = out(vreg) _,
-                t1 = out(vreg) _,
-                lo = out(vreg) _,
-                hi = out(vreg) _,
-                options(nostack),
-            );
-        }
-        for i in main..len {
-            acc[i] += values[i].to_f32() * scale;
-        }
+    if main >= 8 {
+        unsafe { mad_f16_main(acc.as_mut_ptr(), values.as_ptr() as *const u16, scale, main) };
+    }
+    for i in main..len {
+        acc[i] += values[i].to_f32() * scale;
     }
 }
 
