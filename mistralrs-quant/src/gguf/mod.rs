@@ -371,6 +371,12 @@ impl QuantMethod for GgufMatMul {
                 return None;
             }
         }
+        // cpu handles bf16 activations natively (widened once inside the packed matmul)
+        if let QMatMul::QTensor(qt) = &self.w {
+            if qt.device().is_cpu() {
+                return None;
+            }
+        }
         Some(DType::F32)
     }
 

@@ -155,6 +155,8 @@ impl ElemOps for f16 {
 }
 
 impl ElemOps for bf16 {
+    const USE_BARRIER_POOL: bool = cfg!(target_arch = "aarch64");
+
     #[inline(always)]
     fn to_f32(self) -> f32 {
         self.to_f32()
@@ -162,7 +164,42 @@ impl ElemOps for bf16 {
 
     #[inline(always)]
     fn dot(a: &[Self], b: &[Self]) -> f32 {
+        #[cfg(target_arch = "aarch64")]
+        if super::neon::bf16_fast() {
+            return super::neon::dot_bf16(a, b);
+        }
         dot_cast(a, b)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn dot4(q: &[Self], k0: &[Self], k1: &[Self], k2: &[Self], k3: &[Self]) -> [f32; 4] {
+        if super::neon::bf16_fast() {
+            return super::neon::dot4_bf16(q, k0, k1, k2, k3);
+        }
+        [
+            dot_cast(q, k0),
+            dot_cast(q, k1),
+            dot_cast(q, k2),
+            dot_cast(q, k3),
+        ]
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn scale_acc(xs: &mut [f32], scale: f32) {
+        scale_f32(xs, scale)
+    }
+
+    #[inline(always)]
+    fn mad(acc: &mut [f32], values: &[Self], scale: f32) {
+        #[cfg(target_arch = "aarch64")]
+        if super::neon::bf16_fast() {
+            return super::neon::mad_bf16(acc, values, scale);
+        }
+        for (acc, value) in acc.iter_mut().zip(values.iter()) {
+            *acc += value.to_f32() * scale;
+        }
     }
 }
 
