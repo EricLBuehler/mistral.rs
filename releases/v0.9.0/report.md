@@ -175,7 +175,7 @@ with context) and the MoE gap.
    215.9/210.8/164.7 vs 229.2/224.0/207.2 (0.79-0.94x), recall verified. The dequantize path
    survives only as a fallback for unsupported layouts; expert-bucketed GEMM for prefill is the
    scoped follow-up.
-6. bf16 activations on CPU, now the default on FEAT_BF16 aarch64. The first attempt looked like
+6. bf16 activations on CPU: fully working, deliberately not the default. The first attempt looked like
    a lost cause (garbage output) and uncovered a latent candle bug: the bfdot-specialized
    CurrentCpuBF16 keeps raw bf16 bits in its vector unit, and the elementwise add kernels wrote
    against the widening variant's semantics, so every bf16 tensor add on FEAT_BF16 hardware
@@ -184,9 +184,11 @@ with context) and the MoE gap.
    matmuls, bfdot attention kernels): qwen3-4b q4k decodes at 32.0 vs 28.0 t/s and prefills 4-10%
    faster than f32; gemma is at parity; the 8B MoE and all dense models pass recall in bf16.
    bf16 shares f32's exponent range, so the f16 residual-overflow hazard does not apply.
-   Remaining bf16 follow-ups: lfm2.5-230m prefill pays a ~20% tail tax (bf16 rms_norm, scalar
-   silu, mask widening) that a native bf16 elementwise pass would recover; a bfmmla GEMM would
-   give unquantized bf16 models ~2x f32 matmul throughput.
+   Against the tuned f32 stack, however, bf16 loses 15-20% at decode: ISQ weights and the f16 KV
+   cache already bank the memory wins, so bf16 only adds per-op conversion tax across the ~250
+   ops per decode token. f32 activations remain the CPU default; --dtype bf16 is fully supported
+   (and halves memory for unquantized models). bf16 becomes the default candidate again once a
+   native bf16 elementwise pass and a bfmmla GEMM (2x f32 matmul for unquantized weights) land.
 
 ## Appendix: Full Tables
 

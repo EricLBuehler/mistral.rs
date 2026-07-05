@@ -125,13 +125,10 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
     #[cfg(not(feature = "accelerate"))]
     {
         // f16 passes the probe matmul on CPU but its range is too small for modern residual
-        // streams (gemma activations exceed 65504). bf16 has f32's range and the quantized
-        // matmul + attention paths consume it natively where the ISA can (aarch64 FEAT_BF16).
+        // streams (gemma activations exceed 65504). bf16 runs correctly (FEAT_BF16 kernels) but
+        // taxes every elementwise op with converts while ISQ + the f16 KV cache already bank the
+        // memory wins, so f32 activations stay the default until a native bf16 op pass lands.
         if devices.iter().all(|d| matches!(d, Device::Cpu)) {
-            #[cfg(target_arch = "aarch64")]
-            if std::arch::is_aarch64_feature_detected!("bf16") {
-                return Ok(DType::BF16);
-            }
             return Ok(DType::F32);
         }
         let dev_dtypes = get_dtypes();
