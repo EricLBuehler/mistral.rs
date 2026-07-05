@@ -246,6 +246,14 @@ Follow-ups: AMX epilogue amortization, a non-AMX comparison point, an ARM-native
 bandwidth design, and the q8_0 shallow-decode cell (llama.cpp's q8_0 gemv sustains a few percent more effective
 bandwidth per core; block-pairing landed, the rest needs deeper streaming work).
 
+## Build notes
+
+All benchmarks are source builds of both engines on the same machine (llama.cpp with
+GGML_NATIVE=ON, mistral.rs with target-cpu=native), which is what the reproducer scripts do.
+Prebuilt installer binaries are portable (runtime-dispatched kernels, generic code elsewhere)
+and land within ~8% of source-built throughput on both architectures; a multi-variant fat
+binary to close that gap is a follow-up.
+
 ## Appendix: Full Tables
 
 All values are tokens per second; speedup is mistral.rs divided by llama.cpp in the same row.
