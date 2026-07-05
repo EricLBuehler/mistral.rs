@@ -239,3 +239,240 @@ pub(super) fn max_f32(row: &[f32]) -> f32 {
         m
     }
 }
+
+// f16 NEON intrinsics are unstable on stable rustc, so the fp16 kernels use inline asm:
+// fmlal/fmlal2 do f16 x f16 multiplies with f32 accumulation (FEAT_FP16FML).
+pub(super) fn fp16_fast() -> bool {
+    use std::sync::OnceLock;
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(|| {
+        std::arch::is_aarch64_feature_detected!("fp16")
+            && std::arch::is_aarch64_feature_detected!("fhm")
+    })
+}
+
+#[inline(always)]
+pub(super) fn dot_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
+    use core::arch::aarch64::*;
+    debug_assert_eq!(a.len(), b.len());
+    let len = a.len();
+    let main = len & !7;
+    let mut acc0: float32x4_t;
+    let mut acc1: float32x4_t;
+    unsafe {
+        let mut ap = a.as_ptr() as *const u16;
+        let mut bp = b.as_ptr() as *const u16;
+        if main >= 8 {
+            let mut n = main;
+            core::arch::asm!(
+                "movi {a0:v}.4s, #0",
+                "movi {a1:v}.4s, #0",
+                "2:",
+                "ldr {t0:q}, [{ap}], #16",
+                "ldr {t1:q}, [{bp}], #16",
+                "fmlal {a0:v}.4s, {t0:v}.4h, {t1:v}.4h",
+                "fmlal2 {a1:v}.4s, {t0:v}.4h, {t1:v}.4h",
+                "subs {n}, {n}, #8",
+                "b.gt 2b",
+                ap = inout(reg) ap,
+                bp = inout(reg) bp,
+                n = inout(reg) n => _,
+                a0 = out(vreg) acc0,
+                a1 = out(vreg) acc1,
+                t0 = out(vreg) _,
+                t1 = out(vreg) _,
+                options(nostack, readonly),
+            );
+        } else {
+            acc0 = vdupq_n_f32(0.0);
+            acc1 = vdupq_n_f32(0.0);
+        }
+        let mut sum = vaddvq_f32(vaddq_f32(acc0, acc1));
+        for i in main..len {
+            sum += a[i].to_f32() * b[i].to_f32();
+        }
+        sum
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn dot4_f16(
+    q: &[half::f16],
+    k0: &[half::f16],
+    k1: &[half::f16],
+    k2: &[half::f16],
+    k3: &[half::f16],
+) -> [f32; 4] {
+    use core::arch::aarch64::*;
+    let len = q.len();
+    let main = len & !7;
+    let mut a0: float32x4_t;
+    let mut a1: float32x4_t;
+    let mut a2: float32x4_t;
+    let mut a3: float32x4_t;
+    unsafe {
+        let mut qp = q.as_ptr() as *const u16;
+        let mut p0 = k0.as_ptr() as *const u16;
+        let mut p1 = k1.as_ptr() as *const u16;
+        let mut p2 = k2.as_ptr() as *const u16;
+        let mut p3 = k3.as_ptr() as *const u16;
+        if main >= 8 {
+            let mut n = main;
+            core::arch::asm!(
+                "movi {a0:v}.4s, #0",
+                "movi {a1:v}.4s, #0",
+                "movi {a2:v}.4s, #0",
+                "movi {a3:v}.4s, #0",
+                "2:",
+                "ldr {tq:q}, [{qp}], #16",
+                "ldr {t0:q}, [{p0}], #16",
+                "ldr {t1:q}, [{p1}], #16",
+                "ldr {t2:q}, [{p2}], #16",
+                "ldr {t3:q}, [{p3}], #16",
+                "fmlal {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
+                "fmlal2 {a0:v}.4s, {tq:v}.4h, {t0:v}.4h",
+                "fmlal {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
+                "fmlal2 {a1:v}.4s, {tq:v}.4h, {t1:v}.4h",
+                "fmlal {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
+                "fmlal2 {a2:v}.4s, {tq:v}.4h, {t2:v}.4h",
+                "fmlal {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
+                "fmlal2 {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
+                "subs {n}, {n}, #8",
+                "b.gt 2b",
+                qp = inout(reg) qp,
+                p0 = inout(reg) p0,
+                p1 = inout(reg) p1,
+                p2 = inout(reg) p2,
+                p3 = inout(reg) p3,
+                n = inout(reg) n => _,
+                a0 = out(vreg) a0,
+                a1 = out(vreg) a1,
+                a2 = out(vreg) a2,
+                a3 = out(vreg) a3,
+                tq = out(vreg) _,
+                t0 = out(vreg) _,
+                t1 = out(vreg) _,
+                t2 = out(vreg) _,
+                t3 = out(vreg) _,
+                options(nostack, readonly),
+            );
+        } else {
+            a0 = vdupq_n_f32(0.0);
+            a1 = vdupq_n_f32(0.0);
+            a2 = vdupq_n_f32(0.0);
+            a3 = vdupq_n_f32(0.0);
+        }
+        let mut out = [
+            vaddvq_f32(a0),
+            vaddvq_f32(a1),
+            vaddvq_f32(a2),
+            vaddvq_f32(a3),
+        ];
+        for i in main..len {
+            let qi = q[i].to_f32();
+            out[0] += qi * k0[i].to_f32();
+            out[1] += qi * k1[i].to_f32();
+            out[2] += qi * k2[i].to_f32();
+            out[3] += qi * k3[i].to_f32();
+        }
+        out
+    }
+}
+
+// acc (f32) += values (f16) * scale
+#[inline(always)]
+pub(super) fn mad_f16(acc: &mut [f32], values: &[half::f16], scale: f32) {
+    use core::arch::aarch64::*;
+    let len = acc.len();
+    let main = len & !7;
+    unsafe {
+        if main >= 8 {
+            let mut ap = acc.as_mut_ptr();
+            let mut vp = values.as_ptr() as *const u16;
+            let mut n = main;
+            core::arch::asm!(
+                "dup {s:v}.4s, {scale:v}.s[0]",
+                "2:",
+                "ldr {tv:q}, [{vp}], #16",
+                "ldp {t0:q}, {t1:q}, [{ap}]",
+                "fcvtl {lo:v}.4s, {tv:v}.4h",
+                "fcvtl2 {hi:v}.4s, {tv:v}.8h",
+                "fmla {t0:v}.4s, {lo:v}.4s, {s:v}.4s",
+                "fmla {t1:v}.4s, {hi:v}.4s, {s:v}.4s",
+                "stp {t0:q}, {t1:q}, [{ap}], #32",
+                "subs {n}, {n}, #8",
+                "b.gt 2b",
+                ap = inout(reg) ap,
+                vp = inout(reg) vp,
+                n = inout(reg) n => _,
+                scale = in(vreg) core::mem::transmute::<f32, [f32; 1]>(scale)[0],
+                s = out(vreg) _,
+                tv = out(vreg) _,
+                t0 = out(vreg) _,
+                t1 = out(vreg) _,
+                lo = out(vreg) _,
+                hi = out(vreg) _,
+                options(nostack),
+            );
+        }
+        for i in main..len {
+            acc[i] += values[i].to_f32() * scale;
+        }
+    }
+}
+
+#[cfg(test)]
+mod f16_kernel_tests {
+    use super::*;
+    use half::f16;
+
+    #[test]
+    fn f16_asm_kernels_match_reference() {
+        if !fp16_fast() {
+            return;
+        }
+        for len in [8usize, 16, 64, 128, 131] {
+            let a: Vec<f16> = (0..len)
+                .map(|i| f16::from_f32((i as f32 * 0.13).sin()))
+                .collect();
+            let b: Vec<f16> = (0..len)
+                .map(|i| f16::from_f32((i as f32 * 0.07).cos()))
+                .collect();
+            let c: Vec<f16> = (0..len)
+                .map(|i| f16::from_f32(0.3 - i as f32 * 0.001))
+                .collect();
+            let d: Vec<f16> = (0..len)
+                .map(|i| f16::from_f32(0.9 - i as f32 * 0.002))
+                .collect();
+            let e: Vec<f16> = (0..len)
+                .map(|i| f16::from_f32((i % 7) as f32 * 0.1))
+                .collect();
+            let refdot = |x: &[f16], y: &[f16]| -> f32 {
+                x.iter().zip(y).map(|(p, q)| p.to_f32() * q.to_f32()).sum()
+            };
+            assert!((dot_f16(&a, &b) - refdot(&a, &b)).abs() < 1e-2 * len as f32);
+            let d4 = dot4_f16(&a, &b, &c, &d, &e);
+            for (got, want) in d4.iter().zip([
+                refdot(&a, &b),
+                refdot(&a, &c),
+                refdot(&a, &d),
+                refdot(&a, &e),
+            ]) {
+                assert!(
+                    (got - want).abs() < 1e-2 * len as f32,
+                    "{got} vs {want} len={len}"
+                );
+            }
+            let mut acc = vec![0.5f32; len];
+            let mut acc_ref = acc.clone();
+            mad_f16(&mut acc, &a, 1.7);
+            for (r, v) in acc_ref.iter_mut().zip(&a) {
+                *r += v.to_f32() * 1.7;
+            }
+            for (g, w) in acc.iter().zip(&acc_ref) {
+                assert!((g - w).abs() < 1e-3, "mad {g} vs {w} len={len}");
+            }
+        }
+    }
+}

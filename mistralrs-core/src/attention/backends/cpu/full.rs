@@ -29,8 +29,7 @@ where
     if T::USE_BARRIER_POOL {
         // rayon here would fight the barrier workers spinning between the surrounding matmuls;
         // q rows of one head share K/V, so blocks of Q_BLOCK rows stream them once
-        let tiled = ctx.logit_softcap == 0.0 && ctx.q.stride[1] >= 1;
-        let f32_view = if tiled { f32_ctx_view(ctx) } else { None };
+        let tiled = ctx.logit_softcap == 0.0;
         let out_ptr = out.as_mut_ptr() as usize;
         let n_q_blocks = q_len.div_ceil(Q_BLOCK);
         let total_units = b * h * n_q_blocks;
@@ -43,9 +42,7 @@ where
                 let b_i = bh / h;
                 let q_start = q_block_idx * Q_BLOCK;
                 let q_end = q_len.min(q_start + Q_BLOCK);
-                if let Some(fctx) = f32_view.as_ref() {
-                    compute_tiled_qblock(fctx, b_i, h_i, q_start, q_end, out_ptr as *mut f32);
-                } else {
+                if !(tiled && compute_tiled_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr)) {
                     compute_full_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr);
                 }
             }
@@ -62,42 +59,21 @@ where
     Tensor::from_vec(out, (b, h, q_len, dv), &Device::Cpu)
 }
 
-fn f32_ctx_view<'a, T: ElemOps>(ctx: &CpuAttnCtx<'a, T>) -> Option<CpuAttnCtx<'a, f32>> {
-    Some(CpuAttnCtx {
-        q: TensorView {
-            data: T::as_f32(ctx.q.data)?,
-            dims: ctx.q.dims,
-            stride: ctx.q.stride,
-        },
-        k: TensorView {
-            data: T::as_f32(ctx.k.data)?,
-            dims: ctx.k.dims,
-            stride: ctx.k.stride,
-        },
-        v: TensorView {
-            data: T::as_f32(ctx.v.data)?,
-            dims: ctx.v.dims,
-            stride: ctx.v.stride,
-        },
-        mask: ctx.mask,
-        scale: ctx.scale,
-        max_bias: ctx.max_bias,
-        logit_softcap: ctx.logit_softcap,
-    })
-}
-
 // Blocked attention for one (head, q-block): scores a KV_BLOCK tile at a time, applies the
 // online-softmax correction once per tile instead of per position, then accumulates P*V with
 // each v row loaded once for the whole q block. Returns false when the mask layout prevents
 // contiguous row access (caller falls back to the streaming path).
-fn compute_tiled_qblock(
-    ctx: &CpuAttnCtx<f32>,
+fn compute_tiled_qblock<T>(
+    ctx: &CpuAttnCtx<'_, T>,
     b_i: usize,
     h_i: usize,
     q_start: usize,
     q_end: usize,
-    out_ptr: *mut f32,
-) -> bool {
+    out_ptr: *mut T,
+) -> bool
+where
+    T: ElemOps,
+{
     let [_b, q_len, h, d] = ctx.q.dims;
     let kv_len = ctx.k.dims[1];
     let rk2 = h / ctx.k.dims[2];
@@ -117,6 +93,9 @@ fn compute_tiled_qblock(
     let mut mask_rows: [Option<&[f32]>; Q_BLOCK] = [None; Q_BLOCK];
     let mut row_start = [0usize; Q_BLOCK];
     let mut row_end = [kv_len; Q_BLOCK];
+    // causal/window masks are uniformly zero inside the live range; skipping their reads
+    // removes an O(len^2) f32 stream that llama.cpp's mask-free kernels never pay
+    let mut row_binary = [false; Q_BLOCK];
     if let Some(mask) = ctx.mask.as_ref() {
         for j in 0..nq {
             let q_pos = q_start + j;
@@ -149,6 +128,10 @@ fn compute_tiled_qblock(
                 }
             }
             row_end[j] = lo;
+            let (rs, re) = (row_start[j], row_end[j]);
+            if re > rs {
+                row_binary[j] = row[rs] == 0.0 && row[re - 1] == 0.0 && row[(rs + re) / 2] == 0.0;
+            }
         }
     }
     let kv_lo = (0..nq).map(|j| row_start[j]).min().unwrap_or(0);
@@ -176,9 +159,11 @@ fn compute_tiled_qblock(
             let q_row = &ctx.q.data[q_base..q_base + d];
             let tile_row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + bn];
             score_rows(ctx, q_row, k_head, b_i, bs, lo, hi, ctx.scale, tile_row);
-            if let Some(mrow) = mask_rows[j] {
-                for kv in lo..hi {
-                    tile_row[kv - bs] += slope * mrow[kv];
+            if !row_binary[j] {
+                if let Some(mrow) = mask_rows[j] {
+                    for kv in lo..hi {
+                        tile_row[kv - bs] += slope * mrow[kv];
+                    }
                 }
             }
         }
@@ -231,7 +216,7 @@ fn compute_tiled_qblock(
                     continue;
                 }
                 let p = s_tile[j * KV_BLOCK + (kv_pos - bs)];
-                <f32 as ElemOps>::mad(&mut acc[j * dv..(j + 1) * dv], v_row, p);
+                T::mad(&mut acc[j * dv..(j + 1) * dv], v_row, p);
             }
         }
 
@@ -244,7 +229,7 @@ fn compute_tiled_qblock(
         let out_chunk = unsafe { std::slice::from_raw_parts_mut(out_ptr.add(row_idx * dv), dv) };
         let inv_s = 1.0 / s[j];
         for (o, v) in out_chunk.iter_mut().zip(acc[j * dv..(j + 1) * dv].iter()) {
-            *o = *v * inv_s;
+            *o = T::cast(*v * inv_s);
         }
     }
     true
@@ -252,9 +237,9 @@ fn compute_tiled_qblock(
 
 // Dot q_row against k rows [lo, hi), writing scaled scores into tile[lo-bs..hi-bs].
 #[inline(always)]
-fn score_rows(
-    ctx: &CpuAttnCtx<f32>,
-    q_row: &[f32],
+fn score_rows<T: ElemOps>(
+    ctx: &CpuAttnCtx<'_, T>,
+    q_row: &[T],
     k_head: usize,
     b_i: usize,
     bs: usize,
@@ -269,9 +254,8 @@ fn score_rows(
         &ctx.k.data[k_base..k_base + d]
     };
     let mut kv_pos = lo;
-    #[cfg(target_arch = "aarch64")]
     while kv_pos + 4 <= hi {
-        let dots = super::neon::dot4_f32(
+        let dots = T::dot4(
             q_row,
             k_row(kv_pos),
             k_row(kv_pos + 1),
@@ -284,7 +268,7 @@ fn score_rows(
         kv_pos += 4;
     }
     while kv_pos < hi {
-        tile[kv_pos - bs] = <f32 as ElemOps>::dot(q_row, k_row(kv_pos)) * scale;
+        tile[kv_pos - bs] = T::dot(q_row, k_row(kv_pos)) * scale;
         kv_pos += 1;
     }
 }

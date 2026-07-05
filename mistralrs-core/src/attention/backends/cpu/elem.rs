@@ -43,6 +43,15 @@ pub(in crate::attention) trait ElemOps: Copy + DowncastF32 {
     fn to_f32(self) -> f32;
     fn dot(a: &[Self], b: &[Self]) -> f32;
 
+    fn dot4(q: &[Self], k0: &[Self], k1: &[Self], k2: &[Self], k3: &[Self]) -> [f32; 4] {
+        [
+            Self::dot(q, k0),
+            Self::dot(q, k1),
+            Self::dot(q, k2),
+            Self::dot(q, k3),
+        ]
+    }
+
     #[inline(always)]
     fn scale_acc(xs: &mut [f32], scale: f32) {
         for v in xs {
@@ -78,6 +87,12 @@ impl ElemOps for f32 {
         dot_f32(a, b)
     }
 
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn dot4(q: &[Self], k0: &[Self], k1: &[Self], k2: &[Self], k3: &[Self]) -> [f32; 4] {
+        super::neon::dot4_f32(q, k0, k1, k2, k3)
+    }
+
     #[inline(always)]
     fn scale_acc(xs: &mut [f32], scale: f32) {
         scale_f32(xs, scale)
@@ -90,6 +105,9 @@ impl ElemOps for f32 {
 }
 
 impl ElemOps for f16 {
+    // f32 accumulators everywhere; only the K/V streams are half precision
+    const USE_BARRIER_POOL: bool = cfg!(target_arch = "aarch64");
+
     #[inline(always)]
     fn to_f32(self) -> f32 {
         self.to_f32()
@@ -97,7 +115,42 @@ impl ElemOps for f16 {
 
     #[inline(always)]
     fn dot(a: &[Self], b: &[Self]) -> f32 {
+        #[cfg(target_arch = "aarch64")]
+        if super::neon::fp16_fast() {
+            return super::neon::dot_f16(a, b);
+        }
         dot_cast(a, b)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn dot4(q: &[Self], k0: &[Self], k1: &[Self], k2: &[Self], k3: &[Self]) -> [f32; 4] {
+        if super::neon::fp16_fast() {
+            return super::neon::dot4_f16(q, k0, k1, k2, k3);
+        }
+        [
+            dot_cast(q, k0),
+            dot_cast(q, k1),
+            dot_cast(q, k2),
+            dot_cast(q, k3),
+        ]
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(always)]
+    fn scale_acc(xs: &mut [f32], scale: f32) {
+        scale_f32(xs, scale)
+    }
+
+    #[inline(always)]
+    fn mad(acc: &mut [f32], values: &[Self], scale: f32) {
+        #[cfg(target_arch = "aarch64")]
+        if super::neon::fp16_fast() {
+            return super::neon::mad_f16(acc, values, scale);
+        }
+        for (acc, value) in acc.iter_mut().zip(values.iter()) {
+            *acc += value.to_f32() * scale;
+        }
     }
 }
 

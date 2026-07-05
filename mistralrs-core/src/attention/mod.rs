@@ -140,11 +140,26 @@ fn run_flash_attn_cpu_for_dtype(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    match q.dtype() {
+    // KV may be stored at lower precision than the activations (f16 CPU KV cache);
+    // kernels accumulate in f32 either way, so convert q down and the output back up.
+    let out_dtype = q.dtype();
+    let q_conv;
+    let q = if q.dtype() != k.dtype() {
+        q_conv = q.to_dtype(k.dtype())?;
+        &q_conv
+    } else {
+        q
+    };
+    let res = match k.dtype() {
         DType::F32 => cpu::run_flash_attn_cpu::<f32>(q, k, v, mask, sdpa_params),
         DType::F16 => cpu::run_flash_attn_cpu::<half::f16>(q, k, v, mask, sdpa_params),
         DType::BF16 => cpu::run_flash_attn_cpu::<half::bf16>(q, k, v, mask, sdpa_params),
-        _ => Err(candle_core::Error::Msg("Unsupported data type".into())),
+        other => candle_core::bail!("Unsupported dtype for CPU flash attn: {other:?}"),
+    }?;
+    if res.dtype() != out_dtype {
+        res.to_dtype(out_dtype)
+    } else {
+        Ok(res)
     }
 }
 

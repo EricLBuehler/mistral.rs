@@ -181,46 +181,84 @@ fn compute_group_range<T>(
     let mut m = [f32::NEG_INFINITY; MAX_GQA_GROUP];
     let mut s = [0f32; MAX_GQA_GROUP];
 
-    for kv_pos in kv_start..kv_end {
-        let next_pos = kv_pos + 1;
-        if next_pos < kv_end {
-            let next_k_base =
-                b_i * ctx.k.stride[0] + next_pos * ctx.k.stride[1] + k_head * ctx.k.stride[2];
-            let next_v_base =
-                b_i * ctx.v.stride[0] + next_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
-            unsafe {
-                prefetch(ctx.k.data.as_ptr().add(next_k_base) as *const u8);
-                prefetch(ctx.v.data.as_ptr().add(next_v_base) as *const u8);
-            }
-        }
-
+    // Score a tile of kv positions per pass so the softmax correction runs once per tile
+    // (vectorized max/exp) instead of a branchy scalar update per position.
+    const TILE: usize = 128;
+    let mut s_tile = [0f32; MAX_GQA_GROUP * TILE];
+    let k_row = |kv_pos: usize| {
         let k_base = b_i * ctx.k.stride[0] + kv_pos * ctx.k.stride[1] + k_head * ctx.k.stride[2];
-        let k_row = &ctx.k.data[k_base..k_base + meta.d];
-        let v_base = b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
-        let v_row = &ctx.v.data[v_base..v_base + meta.dv];
+        &ctx.k.data[k_base..k_base + meta.d]
+    };
+    let mut bs = kv_start;
+    while bs < kv_end {
+        let be = kv_end.min(bs + TILE);
+        let bn = be - bs;
 
         for j in 0..group {
             let h_i = h0 + j;
             let q_base = b_i * ctx.q.stride[0] + h_i * ctx.q.stride[2];
             let q_row = &ctx.q.data[q_base..q_base + meta.d];
-            let s_val = T::dot(q_row, k_row) * ctx.scale;
+            let tile = &mut s_tile[j * TILE..j * TILE + bn];
+            let mut kv_pos = bs;
+            while kv_pos + 4 <= be {
+                let dots = T::dot4(
+                    q_row,
+                    k_row(kv_pos),
+                    k_row(kv_pos + 1),
+                    k_row(kv_pos + 2),
+                    k_row(kv_pos + 3),
+                );
+                for (o, dot) in dots.iter().enumerate() {
+                    tile[kv_pos + o - bs] = dot * ctx.scale;
+                }
+                kv_pos += 4;
+            }
+            while kv_pos < be {
+                tile[kv_pos - bs] = T::dot(q_row, k_row(kv_pos)) * ctx.scale;
+                kv_pos += 1;
+            }
 
+            #[cfg(target_arch = "aarch64")]
+            let bmax = super::neon::max_f32(tile);
+            #[cfg(not(target_arch = "aarch64"))]
+            let bmax = tile.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let chunk_base = j * n_kv_chunks * stride;
             let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
-
-            let m_old = m[j];
-            let mut ms = 1.0;
-            let mut vs = 1.0;
-            if s_val > m[j] {
-                m[j] = s_val;
-                ms = (m_old - m[j]).exp();
-                T::scale_acc(vkq, ms);
-            } else {
-                vs = (s_val - m[j]).exp();
+            if bmax > m[j] {
+                if m[j] != f32::NEG_INFINITY {
+                    let corr = super::elem::fast_exp(m[j] - bmax);
+                    T::scale_acc(vkq, corr);
+                    s[j] *= corr;
+                }
+                m[j] = bmax;
             }
-            T::mad(vkq, v_row, vs);
-            s[j] = s[j] * ms + vs;
+            #[cfg(target_arch = "aarch64")]
+            let local_sum = super::neon::softmax_row_f32(tile, m[j]);
+            #[cfg(not(target_arch = "aarch64"))]
+            let local_sum = {
+                let mut sum = 0f32;
+                for v in tile.iter_mut() {
+                    *v = super::elem::fast_exp(*v - m[j]);
+                    sum += *v;
+                }
+                sum
+            };
+            s[j] += local_sum;
         }
+
+        for kv_pos in bs..be {
+            let v_base =
+                b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
+            let v_row = &ctx.v.data[v_base..v_base + meta.dv];
+            for j in 0..group {
+                let p = s_tile[j * TILE + (kv_pos - bs)];
+                let chunk_base = j * n_kv_chunks * stride;
+                let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
+                T::mad(vkq, v_row, p);
+            }
+        }
+
+        bs = be;
     }
 
     for j in 0..group {

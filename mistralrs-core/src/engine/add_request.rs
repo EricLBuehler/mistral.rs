@@ -568,7 +568,14 @@ impl Engine {
                 let n_tokens = prompt_tokens.len();
                 let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
                 let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let dtype = metadata.activation_dtype;
+                let mut dtype = metadata.activation_dtype;
+                // matches the f16 conversion KvCache::append applies on CPU
+                if device.is_cpu()
+                    && dtype == candle_core::DType::F32
+                    && crate::kv_cache::cpu_kv_f16()
+                {
+                    dtype = candle_core::DType::F16;
+                }
                 let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
                 for layer_idx in 0..model_metadata.num_layers() {
                     if !needs_preallocated_cache

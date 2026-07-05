@@ -61,6 +61,18 @@ pub enum KvCacheSnapshot {
     },
 }
 
+pub(crate) fn cpu_kv_f16() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");
+        if on {
+            tracing::info!("Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).");
+        }
+        on
+    })
+}
+
 impl KvCache {
     pub fn new_normal(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
         let k = SingleCache::new(dim, max_seq_len, capacity_seq_len);
@@ -142,6 +154,17 @@ impl KvCache {
         }
         let k = k.contiguous()?;
         let v = v.contiguous()?;
+        // f16 KV on CPU halves attention memory traffic; kernels read it with native
+        // fp16 NEON and accumulate in f32. MISTRALRS_CPU_KV_F32=1 restores f32 storage.
+        let (k, v) = if k.device().is_cpu() && k.dtype() == candle_core::DType::F32 && cpu_kv_f16()
+        {
+            (
+                k.to_dtype(candle_core::DType::F16)?,
+                v.to_dtype(candle_core::DType::F16)?,
+            )
+        } else {
+            (k, v)
+        };
         let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
