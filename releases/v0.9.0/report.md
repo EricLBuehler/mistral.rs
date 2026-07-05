@@ -9,14 +9,15 @@ This report reflects the post-optimization state: an initial sweep identified de
 | Model | Quant | Prefill mean speedup | Decode mean speedup |
 |---|---|---:|---:|
 | gemma4-e4b | Q4_K | 2.75x | 1.31x |
-| gemma4-e4b | Q6_K | 2.72x | 1.17x |
-| gemma4-e4b | Q8_0 | 2.08x | 1.16x |
-| qwen3-4b | Q4_K | 1.43x | 1.06x |
-| qwen3-4b | Q6_K | 1.51x | 1.01x |
-| qwen3-4b | Q8_0 | 1.18x | 1.03x |
-| lfm2.5-230m | Q4_K | 0.92x | 1.10x |
-| lfm2.5-230m | Q6_K | 0.96x | 1.03x |
-| lfm2.5-230m | Q8_0 | 0.90x | 0.98x |
+| gemma4-e4b | Q6_K | 2.80x | 1.21x |
+| gemma4-e4b | Q8_0 | 2.18x | 1.20x |
+| qwen3-4b | Q4_K | 1.45x | 1.32x |
+| qwen3-4b | Q6_K | 1.49x | 1.14x |
+| qwen3-4b | Q8_0 | 1.15x | 1.13x |
+| lfm2.5-230m | Q4_K | 1.05x | 1.02x |
+| lfm2.5-230m | Q6_K | 1.05x | 1.06x |
+| lfm2.5-230m | Q8_0 | 1.07x | 0.96x |
+| lfm2.5-8b-a1b | Q4_K | 0.89x | 1.02x |
 
 ![CPU speedup bars](figures/cpu_speedup_bars.png)
 
@@ -144,6 +145,42 @@ taskset -c 5-9,15-19 llama.cpp/build-cpu/bin/llama-bench -m Qwen3-4B-Q4_K_M.gguf
 
 Host: GB10 (spark-4ec2), Linux 6.17.0-1021-nvidia, 20 cores (10x Cortex-X925 3.9 GHz on CPUs 5-9/15-19, 10x Cortex-A725 2.8 GHz on CPUs 0-4/10-14), 1 NUMA node. Full details in `raw/metadata.txt`.
 
+
+## Night 2: winning the curves, and a real CPU MoE path
+
+The first pass won the measured grid; this pass targets the asymptotes (how throughput degrades
+with context) and the MoE gap.
+
+1. f16 KV cache on CPU (default; MISTRALRS_CPU_KV_F32=1 opts out). K/V convert once at cache
+   append; attention kernels read them with fmlal/fmlal2 asm micro-kernels (f16 NEON intrinsics
+   are unstable on stable rustc) and accumulate in f32. Q converts at the attention entry, output
+   returns at the activation dtype. Halves attention memory traffic; recall verified on all models.
+2. Tiled decode softmax: decode attention scores 128-position kv tiles with one vectorized
+   max/exp correction per tile instead of a branchy scalar update per position. Combined with f16
+   KV this cuts the decode depth slope from 5.1 to 2.36 ms/tok per 1k context vs llama.cpp's 4.35:
+   the decode curve now wins asymptotically (~1.4x at 16384 depth, widening with depth).
+3. Prefill slope: 0.89 -> 0.758 ms/tok per 1k (llama.cpp 0.596) via f16 KV plus skipping the
+   O(len^2) mask-row reads for binary causal/window masks. Parity holds through 16k (0.97x at
+   16384); beyond that llama.cpp's shallower slope would win - the remaining gap is a lane-packed
+   fp16 score micro-kernel, a scoped follow-up.
+4. Parallel elementwise in candle: contiguous unary/binary maps over 64k+ elements split across
+   the barrier pool (with an in-pool reentrancy guard), and mimalloc as the CLI allocator to kill
+   tensor-op allocation churn. Together these took lfm2.5-230m dense prefill from 0.69x at 8192 to
+   0.92x, and its prefill means above parity (1.05-1.07x).
+5. CPU MoE, rebuilt: gather_forward previously dequantized every expert on every call (the
+   "dequantize-then-matmul" fallback), which made an 8B MoE effectively unusable on CPU (minutes
+   per token). QTensor::indexed_gemv now runs each (token, expert) pair as a gemv against the
+   expert's rows inside the repacked weights with one shared lhs quantization pass. lfm2.5-8B-A1B
+   q4k: decode 81.2/79.7/75.9 t/s vs llama.cpp 79.7/77.1/75.0 (1.01-1.03x ahead), prefill
+   215.9/210.8/164.7 vs 229.2/224.0/207.2 (0.79-0.94x), recall verified. The dequantize path
+   survives only as a fallback for unsupported layouts; expert-bucketed GEMM for prefill is the
+   scoped follow-up.
+6. bf16 activations on CPU (investigated, not landed): a bf16 run works but regresses badly
+   (decode 8.9 vs 23.9 t/s) because the repacked matmul fast path takes f32 lhs only and candle's
+   bf16 elementwise ops are scalar convert loops. The memory-traffic win bf16 would buy is already
+   banked by the f16 KV cache; native bf16 (bfdot lhs quantization + vectorized bf16 elementwise)
+   is a scoped follow-up.
+
 ## Appendix: Full Tables
 
 All values are tokens per second; speedup is mistral.rs divided by llama.cpp in the same row.
@@ -154,63 +191,63 @@ All values are tokens per second; speedup is mistral.rs divided by llama.cpp in 
 
 | Length | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 143.7 | 90.0 | 1.598x |
-| 512 | 180.4 | 90.6 | 1.992x |
-| 2048 | 132.5 | 83.6 | 1.585x |
-| 4096 | 100.7 | 76.0 | 1.325x |
-| 8192 | 72.3 | 64.2 | 1.127x |
-| 16384 | 46.2 | 48.9 | 0.945x |
+| 128 | 148.6 | 90.0 | 1.652x |
+| 512 | 160.1 | 90.6 | 1.768x |
+| 2048 | 142.3 | 83.6 | 1.702x |
+| 4096 | 100.3 | 76.0 | 1.320x |
+| 8192 | 74.9 | 64.2 | 1.167x |
+| 16384 | 53.6 | 48.9 | 1.097x |
 
 ##### Q4_K Decode
 
 | Depth | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 39.9 | 36.9 | 1.081x |
-| 512 | 37.9 | 34.4 | 1.103x |
-| 2048 | 29.4 | 27.6 | 1.064x |
-| 4096 | 24.2 | 22.0 | 1.098x |
-| 8192 | 16.6 | 15.6 | 1.067x |
-| 16384 | 8.8 | 9.3 | 0.946x |
+| 128 | 40.3 | 36.9 | 1.092x |
+| 512 | 38.9 | 34.4 | 1.132x |
+| 2048 | 34.1 | 27.6 | 1.234x |
+| 4096 | 29.4 | 22.0 | 1.333x |
+| 8192 | 22.8 | 15.6 | 1.466x |
+| 16384 | 15.6 | 9.3 | 1.678x |
 
 ##### Q6_K Prefill
 
 | Length | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 108.3 | 69.1 | 1.567x |
-| 512 | 127.9 | 70.3 | 1.819x |
-| 2048 | 104.2 | 66.0 | 1.580x |
-| 4096 | 84.4 | 61.4 | 1.375x |
-| 8192 | 63.8 | 53.3 | 1.197x |
+| 128 | 98.5 | 69.1 | 1.425x |
+| 512 | 123.4 | 70.3 | 1.755x |
+| 2048 | 105.0 | 66.0 | 1.592x |
+| 4096 | 88.7 | 61.4 | 1.445x |
+| 8192 | 66.9 | 53.3 | 1.255x |
 
 ##### Q6_K Decode
 
 | Depth | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 29.6 | 29.2 | 1.015x |
-| 512 | 28.0 | 28.0 | 0.999x |
-| 2048 | 23.7 | 23.2 | 1.024x |
-| 4096 | 19.6 | 19.1 | 1.027x |
-| 8192 | 14.2 | 14.1 | 1.007x |
+| 128 | 29.7 | 29.2 | 1.018x |
+| 512 | 28.8 | 28.0 | 1.027x |
+| 2048 | 26.0 | 23.2 | 1.123x |
+| 4096 | 22.9 | 19.1 | 1.200x |
+| 8192 | 18.8 | 14.1 | 1.334x |
 
 ##### Q8_0 Prefill
 
 | Length | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 94.0 | 89.4 | 1.051x |
-| 512 | 123.0 | 91.6 | 1.343x |
-| 2048 | 109.2 | 83.7 | 1.304x |
-| 4096 | 87.9 | 76.5 | 1.148x |
-| 8192 | 67.3 | 64.4 | 1.045x |
+| 128 | 87.1 | 89.4 | 0.974x |
+| 512 | 113.6 | 91.6 | 1.240x |
+| 2048 | 107.5 | 83.7 | 1.284x |
+| 4096 | 89.8 | 76.5 | 1.173x |
+| 8192 | 69.4 | 64.4 | 1.078x |
 
 ##### Q8_0 Decode
 
 | Depth | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 24.8 | 24.1 | 1.028x |
-| 512 | 23.7 | 23.2 | 1.023x |
-| 2048 | 20.6 | 19.8 | 1.040x |
-| 4096 | 17.4 | 16.6 | 1.048x |
-| 8192 | 12.9 | 13.0 | 0.990x |
+| 128 | 24.7 | 24.1 | 1.024x |
+| 512 | 23.9 | 23.2 | 1.032x |
+| 2048 | 22.1 | 19.8 | 1.116x |
+| 4096 | 19.9 | 16.6 | 1.199x |
+| 8192 | 16.7 | 13.0 | 1.281x |
 
 #### gemma4-e4b
 
@@ -238,41 +275,41 @@ All values are tokens per second; speedup is mistral.rs divided by llama.cpp in 
 
 | Length | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 152.2 | 57.2 | 2.659x |
-| 512 | 184.0 | 59.7 | 3.082x |
-| 2048 | 168.3 | 58.4 | 2.880x |
-| 4096 | 147.8 | 57.2 | 2.584x |
-| 8192 | 133.2 | 55.2 | 2.411x |
+| 128 | 146.7 | 57.2 | 2.563x |
+| 512 | 179.6 | 59.7 | 3.009x |
+| 2048 | 171.3 | 58.4 | 2.931x |
+| 4096 | 147.6 | 57.2 | 2.581x |
+| 8192 | 160.1 | 55.2 | 2.898x |
 
 ##### Q6_K Decode
 
 | Depth | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 23.9 | 20.4 | 1.171x |
-| 512 | 23.4 | 20.1 | 1.161x |
-| 2048 | 22.7 | 19.5 | 1.167x |
-| 4096 | 21.9 | 18.9 | 1.160x |
-| 8192 | 20.1 | 16.7 | 1.202x |
+| 128 | 24.2 | 20.4 | 1.185x |
+| 512 | 23.7 | 20.1 | 1.176x |
+| 2048 | 23.2 | 19.5 | 1.192x |
+| 4096 | 22.7 | 18.9 | 1.203x |
+| 8192 | 21.4 | 16.7 | 1.280x |
 
 ##### Q8_0 Prefill
 
 | Length | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 131.8 | 72.2 | 1.826x |
-| 512 | 164.9 | 75.6 | 2.183x |
-| 2048 | 165.7 | 73.2 | 2.263x |
-| 4096 | 146.9 | 71.5 | 2.055x |
-| 8192 | 141.8 | 68.5 | 2.071x |
+| 128 | 125.4 | 72.2 | 1.737x |
+| 512 | 158.6 | 75.6 | 2.099x |
+| 2048 | 173.2 | 73.2 | 2.365x |
+| 4096 | 156.4 | 71.5 | 2.188x |
+| 8192 | 171.0 | 68.5 | 2.497x |
 
 ##### Q8_0 Decode
 
 | Depth | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 20.1 | 17.5 | 1.149x |
-| 512 | 19.7 | 17.2 | 1.147x |
-| 2048 | 19.3 | 16.8 | 1.152x |
-| 4096 | 18.7 | 16.2 | 1.151x |
-| 8192 | 17.4 | 14.6 | 1.190x |
+| 128 | 20.5 | 17.5 | 1.172x |
+| 512 | 20.2 | 17.2 | 1.176x |
+| 2048 | 19.8 | 16.8 | 1.182x |
+| 4096 | 19.3 | 16.2 | 1.188x |
+| 8192 | 18.5 | 14.6 | 1.266x |
 
 #### lfm2.5-230m
 
@@ -280,58 +317,76 @@ All values are tokens per second; speedup is mistral.rs divided by llama.cpp in 
 
 | Length | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 1229.6 | 1255.5 | 0.979x |
-| 512 | 1678.9 | 1624.3 | 1.034x |
-| 2048 | 1506.4 | 1484.5 | 1.015x |
-| 4096 | 1223.7 | 1359.5 | 0.900x |
-| 8192 | 816.7 | 1181.6 | 0.691x |
+| 128 | 1328.2 | 1255.5 | 1.058x |
+| 512 | 1796.5 | 1624.3 | 1.106x |
+| 2048 | 1721.8 | 1484.5 | 1.160x |
+| 4096 | 1427.3 | 1359.5 | 1.050x |
+| 8192 | 1013.0 | 1181.6 | 0.857x |
 
 ##### Q4_K Decode
 
 | Depth | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 469.0 | 509.5 | 0.920x |
-| 512 | 457.5 | 482.6 | 0.948x |
-| 2048 | 447.4 | 404.4 | 1.106x |
-| 4096 | 444.5 | 337.6 | 1.317x |
-| 8192 | 299.0 | 252.3 | 1.185x |
+| 128 | 375.7 | 509.5 | 0.737x |
+| 512 | 450.6 | 482.6 | 0.934x |
+| 2048 | 444.6 | 404.4 | 1.099x |
+| 4096 | 417.6 | 337.6 | 1.237x |
+| 8192 | 269.7 | 252.3 | 1.069x |
 
 ##### Q6_K Prefill
 
 | Length | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 1080.6 | 1278.7 | 0.845x |
-| 512 | 1480.4 | 1363.5 | 1.086x |
-| 2048 | 1439.6 | 1287.3 | 1.118x |
-| 4096 | 1138.2 | 1183.5 | 0.962x |
-| 8192 | 786.4 | 1027.1 | 0.766x |
+| 128 | 1209.0 | 1278.7 | 0.945x |
+| 512 | 1486.6 | 1363.5 | 1.090x |
+| 2048 | 1540.4 | 1287.3 | 1.197x |
+| 4096 | 1298.1 | 1183.5 | 1.097x |
+| 8192 | 944.8 | 1027.1 | 0.920x |
 
 ##### Q6_K Decode
 
 | Depth | mistral.rs ISQ q6_k | llama.cpp GGUF Q6_K | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 471.5 | 429.1 | 1.099x |
-| 512 | 475.4 | 414.7 | 1.146x |
-| 2048 | 305.1 | 359.2 | 0.849x |
-| 4096 | 316.4 | 301.8 | 1.048x |
-| 8192 | 233.7 | 232.6 | 1.005x |
+| 128 | 379.2 | 429.1 | 0.884x |
+| 512 | 471.8 | 414.7 | 1.138x |
+| 2048 | 418.7 | 359.2 | 1.165x |
+| 4096 | 289.3 | 301.8 | 0.959x |
+| 8192 | 272.5 | 232.6 | 1.172x |
 
 ##### Q8_0 Prefill
 
 | Length | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 1356.4 | 1744.8 | 0.777x |
-| 512 | 1876.7 | 1749.1 | 1.073x |
-| 2048 | 1663.7 | 1622.3 | 1.026x |
-| 4096 | 1318.9 | 1462.0 | 0.902x |
-| 8192 | 860.9 | 1230.0 | 0.700x |
+| 128 | 1377.8 | 1744.8 | 0.790x |
+| 512 | 2165.0 | 1749.1 | 1.238x |
+| 2048 | 2058.5 | 1622.3 | 1.269x |
+| 4096 | 1654.0 | 1462.0 | 1.131x |
+| 8192 | 1108.8 | 1230.0 | 0.901x |
 
 ##### Q8_0 Decode
 
 | Depth | mistral.rs ISQ q8_0 | llama.cpp GGUF Q8_0 | mistral.rs speedup |
 |---:|---:|---:|---:|
-| 128 | 299.8 | 368.9 | 0.813x |
-| 512 | 324.3 | 353.7 | 0.917x |
-| 2048 | 312.3 | 308.6 | 1.012x |
-| 4096 | 298.7 | 267.6 | 1.116x |
-| 8192 | 224.9 | 211.2 | 1.065x |
+| 128 | 287.6 | 368.9 | 0.780x |
+| 512 | 324.7 | 353.7 | 0.918x |
+| 2048 | 310.0 | 308.6 | 1.004x |
+| 4096 | 293.8 | 267.6 | 1.098x |
+| 8192 | 210.5 | 211.2 | 0.996x |
+
+#### lfm2.5-8b-a1b
+
+##### Q4_K Prefill
+
+| Length | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+|---:|---:|---:|---:|
+| 512 | 215.9 | 229.2 | 0.942x |
+| 2048 | 210.8 | 224.0 | 0.941x |
+| 8192 | 164.7 | 207.2 | 0.795x |
+
+##### Q4_K Decode
+
+| Depth | mistral.rs ISQ q4_k | llama.cpp GGUF Q4_K_M | mistral.rs speedup |
+|---:|---:|---:|---:|
+| 128 | 81.2 | 79.7 | 1.019x |
+| 512 | 79.7 | 77.1 | 1.034x |
+| 2048 | 75.9 | 75.0 | 1.012x |

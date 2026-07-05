@@ -456,3 +456,97 @@
 {"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 70.0, "mode": "decode", "length": 8192, "tps": 224.9}
 {"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 1501.0, "mode": "prefill", "length": 16384, "tps": 46.2}
 {"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 1501.0, "mode": "decode", "length": 16384, "tps": 8.8}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "prefill", "length": 128, "tps": 148.6}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "prefill", "length": 512, "tps": 160.1}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "prefill", "length": 2048, "tps": 142.3}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "prefill", "length": 4096, "tps": 100.3}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "prefill", "length": 8192, "tps": 74.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "decode", "length": 128, "tps": 40.3}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "decode", "length": 512, "tps": 38.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "decode", "length": 2048, "tps": 34.1}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "decode", "length": 4096, "tps": 29.4}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 769.1, "mode": "decode", "length": 8192, "tps": 22.8}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "prefill", "length": 128, "tps": 98.5}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "prefill", "length": 512, "tps": 123.4}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "prefill", "length": 2048, "tps": 105.0}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "prefill", "length": 4096, "tps": 88.7}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "prefill", "length": 8192, "tps": 66.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "decode", "length": 128, "tps": 29.7}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "decode", "length": 512, "tps": 28.8}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "decode", "length": 2048, "tps": 26.0}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "decode", "length": 4096, "tps": 22.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 904.5, "mode": "decode", "length": 8192, "tps": 18.8}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "prefill", "length": 128, "tps": 87.1}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "prefill", "length": 512, "tps": 113.6}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "prefill", "length": 2048, "tps": 107.5}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "prefill", "length": 4096, "tps": 89.8}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "prefill", "length": 8192, "tps": 69.4}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "decode", "length": 128, "tps": 24.7}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "decode", "length": 512, "tps": 23.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "decode", "length": 2048, "tps": 22.1}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "decode", "length": 4096, "tps": 19.9}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 896.4, "mode": "decode", "length": 8192, "tps": 16.7}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "prefill", "length": 128, "tps": 146.7}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "prefill", "length": 512, "tps": 179.6}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "prefill", "length": 2048, "tps": 171.3}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "prefill", "length": 4096, "tps": 147.6}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "prefill", "length": 8192, "tps": 160.1}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "decode", "length": 128, "tps": 24.2}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "decode", "length": 512, "tps": 23.7}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "decode", "length": 2048, "tps": 23.2}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "decode", "length": 4096, "tps": 22.7}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 522.6, "mode": "decode", "length": 8192, "tps": 21.4}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "prefill", "length": 128, "tps": 125.4}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "prefill", "length": 512, "tps": 158.6}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "prefill", "length": 2048, "tps": 173.2}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "prefill", "length": 4096, "tps": 156.4}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "prefill", "length": 8192, "tps": 171.0}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "decode", "length": 128, "tps": 20.5}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "decode", "length": 512, "tps": 20.2}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "decode", "length": 2048, "tps": 19.8}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "decode", "length": 4096, "tps": 19.3}
+{"engine": "mistralrs", "model": "gemma4-e4b", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 524.9, "mode": "decode", "length": 8192, "tps": 18.5}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "prefill", "length": 128, "tps": 1328.2}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "prefill", "length": 512, "tps": 1796.5}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "prefill", "length": 2048, "tps": 1721.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "prefill", "length": 4096, "tps": 1427.3}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "prefill", "length": 8192, "tps": 1013.0}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "decode", "length": 128, "tps": 375.7}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "decode", "length": 512, "tps": 450.6}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "decode", "length": 2048, "tps": 444.6}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "decode", "length": 4096, "tps": 417.6}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 59.6, "mode": "decode", "length": 8192, "tps": 269.7}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "prefill", "length": 128, "tps": 1209.0}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "prefill", "length": 512, "tps": 1486.6}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "prefill", "length": 2048, "tps": 1540.4}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "prefill", "length": 4096, "tps": 1298.1}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "prefill", "length": 8192, "tps": 944.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "decode", "length": 128, "tps": 379.2}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "decode", "length": 512, "tps": 471.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "decode", "length": 2048, "tps": 418.7}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "decode", "length": 4096, "tps": 289.3}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q6k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 65.5, "mode": "decode", "length": 8192, "tps": 272.5}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "prefill", "length": 128, "tps": 1377.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "prefill", "length": 512, "tps": 2165.0}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "prefill", "length": 2048, "tps": 2058.5}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "prefill", "length": 4096, "tps": 1654.0}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "prefill", "length": 8192, "tps": 1108.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "decode", "length": 128, "tps": 287.6}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "decode", "length": 512, "tps": 324.7}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "decode", "length": 2048, "tps": 310.0}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "decode", "length": 4096, "tps": 293.8}
+{"engine": "mistralrs", "model": "lfm2.5-230m", "quant": "q8_0", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 56.1, "mode": "decode", "length": 8192, "tps": 210.5}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 1260.1, "mode": "prefill", "length": 16384, "tps": 53.6}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "mask", "gen_len": 256, "iterations": 2, "warmup": 1, "wall_s": 1260.1, "mode": "decode", "length": 16384, "tps": 15.6}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 512, "tps": 215.9, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 2048, "tps": 210.8, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 8192, "tps": 164.7, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 81.2, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 79.7, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 75.9, "affinity": "mask"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 512, "tps": 229.2, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 2048, "tps": 224.0, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 8192, "tps": 207.2, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 79.7, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 77.1, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 75.0, "affinity": "taskset"}
