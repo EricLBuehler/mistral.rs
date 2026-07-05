@@ -171,8 +171,9 @@ with context) and the MoE gap.
    "dequantize-then-matmul" fallback), which made an 8B MoE effectively unusable on CPU (minutes
    per token). QTensor::indexed_gemv now runs each (token, expert) pair as a gemv against the
    expert's rows inside the repacked weights with one shared lhs quantization pass. lfm2.5-8B-A1B
-   q4k: decode 81.2/79.7/75.9 t/s vs llama.cpp 79.7/77.1/75.0 (1.01-1.03x ahead), prefill
-   215.9/210.8/164.7 vs 229.2/224.0/207.2 (0.79-0.94x), recall verified. The dequantize path
+   q4k: decode 81.2/79.7/75.9/70.3/68.4 t/s vs llama.cpp 79.7/77.1/75.0/69.9/61.8 across depths
+   128-8192 (1.01-1.11x ahead, widening with depth), prefill 215.9/210.8/164.7 vs
+   229.2/224.0/207.2 (0.79-0.94x), recall verified. The dequantize path
    survives only as a fallback for unsupported layouts; expert-bucketed GEMM for prefill is the
    scoped follow-up.
 6. bf16 activations on CPU: fully working, deliberately not the default. The first attempt looked like

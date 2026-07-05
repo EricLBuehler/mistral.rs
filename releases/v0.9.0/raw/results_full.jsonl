@@ -550,3 +550,7 @@
 {"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 79.7, "affinity": "taskset"}
 {"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 77.1, "affinity": "taskset"}
 {"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 75.0, "affinity": "taskset"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 4096, "tps": 70.3, "affinity": "mask"}
+{"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 8192, "tps": 68.4, "affinity": "mask"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 4096, "tps": 69.89, "affinity": "taskset"}
+{"engine": "llamacpp", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "decode", "length": 8192, "tps": 61.81, "affinity": "taskset"}
