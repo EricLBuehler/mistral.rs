@@ -172,8 +172,9 @@ with context) and the MoE gap.
    per token). QTensor::indexed_gemv now runs each (token, expert) pair as a gemv against the
    expert's rows inside the repacked weights with one shared lhs quantization pass. lfm2.5-8B-A1B
    q4k: decode 81.2/79.7/75.9/70.3/68.4 t/s vs llama.cpp 79.7/77.1/75.0/69.9/61.8 across depths
-   128-8192 (1.01-1.11x ahead, widening with depth), prefill 215.9/210.8/164.7 vs
-   229.2/224.0/207.2 (0.79-0.94x), recall verified. The dequantize path
+   128-8192 (1.01-1.11x ahead, widening with depth), prefill 234.8/232.9/180.8 vs
+   229.2/224.0/207.2 (1.02x/1.04x/0.87x after the expert-bucketed matmul; was 0.79-0.94x),
+   recall verified. The dequantize path
    survives only as a fallback for unsupported layouts; expert-bucketed GEMM for prefill is the
    scoped follow-up.
 6. bf16 activations on CPU: fully working, deliberately not the default. The first attempt looked like
@@ -234,9 +235,15 @@ What was built (candle + mistralrs, all runtime-feature-detected):
 4. GEMM-structured prefill scoring: K tiles transposed once through a 16x16 shuffle network,
    16 scores per fma, no horizontal reductions.
 
-Follow-ups: AMX epilogue amortization, an avx2/avx-vnni consumer tier (Ryzen, older Xeon,
-laptops), a non-AMX comparison point, porting the register-tiled P.V trick back to aarch64, and
-the q8_0 shallow-decode cell (llama.cpp's q8_0 gemv sustains a few percent more effective
+The consumer tier landed: AVX-VNNI (vpdpbusd ymm) and pure AVX2 (maddubs) kernel variants plus
+256-bit attention micro-ops and F16C f16 KV, so non-AVX512 x86 (Ryzen, pre-Ice-Lake Xeon,
+laptops) runs real kernels instead of scalar fallbacks - forced-AVX2 on Sapphire Rapids reaches
+~75% of the AVX512 path and passes recall. A direct aarch64 port of the register-tiled P.V was
+measured and REJECTED (-9 to -13% at depth: NEON's register file forces per-row V re-streaming);
+the ~2x aarch64 attention-bandwidth headroom (50 vs 130 GB/s) needs an ARM-native design.
+
+Follow-ups: AMX epilogue amortization, a non-AMX comparison point, an ARM-native attention
+bandwidth design, and the q8_0 shallow-decode cell (llama.cpp's q8_0 gemv sustains a few percent more effective
 bandwidth per core; block-pairing landed, the rest needs deeper streaming work).
 
 ## Appendix: Full Tables
