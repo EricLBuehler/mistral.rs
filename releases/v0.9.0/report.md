@@ -232,7 +232,9 @@ What was built (candle + mistralrs, all runtime-feature-detected):
    16 scores per fma, no horizontal reductions.
 
 Follow-ups: AMX epilogue amortization, an avx2/avx-vnni consumer tier (Ryzen, older Xeon,
-laptops), a non-AMX comparison point, and porting the register-tiled P.V trick back to aarch64.
+laptops), a non-AMX comparison point, porting the register-tiled P.V trick back to aarch64, and
+the q8_0 shallow-decode cell (llama.cpp's q8_0 gemv sustains a few percent more effective
+bandwidth per core; block-pairing landed, the rest needs deeper streaming work).
 
 ## Appendix: Full Tables
 
