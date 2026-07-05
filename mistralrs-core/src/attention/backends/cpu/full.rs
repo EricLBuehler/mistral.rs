@@ -35,6 +35,8 @@ where
         let total_units = b * h * n_q_blocks;
         candle_core::utils::barrier_pool().execute_chunked(total_units, |range| {
             let out_ptr = out_ptr as *mut T;
+            let mut kscratch: Vec<f32> = Vec::new();
+            let mut qscratch: Vec<f32> = Vec::new();
             for unit in range {
                 let q_block_idx = unit % n_q_blocks;
                 let bh = unit / n_q_blocks;
@@ -42,7 +44,18 @@ where
                 let b_i = bh / h;
                 let q_start = q_block_idx * Q_BLOCK;
                 let q_end = q_len.min(q_start + Q_BLOCK);
-                if !(tiled && compute_tiled_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr)) {
+                if !(tiled
+                    && compute_tiled_qblock(
+                        ctx,
+                        b_i,
+                        h_i,
+                        q_start,
+                        q_end,
+                        out_ptr,
+                        &mut kscratch,
+                        &mut qscratch,
+                    ))
+                {
                     compute_full_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr);
                 }
             }
@@ -63,6 +76,7 @@ where
 // online-softmax correction once per tile instead of per position, then accumulates P*V with
 // each v row loaded once for the whole q block. Returns false when the mask layout prevents
 // contiguous row access (caller falls back to the streaming path).
+#[allow(clippy::too_many_arguments)]
 fn compute_tiled_qblock<T>(
     ctx: &CpuAttnCtx<'_, T>,
     b_i: usize,
@@ -70,6 +84,8 @@ fn compute_tiled_qblock<T>(
     q_start: usize,
     q_end: usize,
     out_ptr: *mut T,
+    kscratch: &mut Vec<f32>,
+    qscratch: &mut Vec<f32>,
 ) -> bool
 where
     T: ElemOps,
@@ -142,10 +158,42 @@ where
     let mut s = [0f32; Q_BLOCK];
     let mut s_tile = [0f32; Q_BLOCK * KV_BLOCK];
 
+    if T::EXPAND_SCORE {
+        qscratch.resize(nq * d, 0.0);
+        for j in 0..nq {
+            let q_pos = q_start + j;
+            let q_base = b_i * ctx.q.stride[0] + q_pos * ctx.q.stride[1] + h_i * ctx.q.stride[2];
+            T::expand_row(
+                &mut qscratch[j * d..(j + 1) * d],
+                &ctx.q.data[q_base..q_base + d],
+            );
+        }
+        kscratch.resize((KV_BLOCK + 16) * d, 0.0);
+    }
+
     let mut bs = kv_lo;
     while bs < kv_hi {
         let be = kv_hi.min(bs + KV_BLOCK);
         let bn = be - bs;
+
+        // score the whole tile as a small gemm against transposed-K scratch when the
+        // arch provides it: K streamed once for all q rows, 16 scores per fma
+        let k_row_of =
+            |kv: usize| b_i * ctx.k.stride[0] + kv * ctx.k.stride[1] + k_head * ctx.k.stride[2];
+        let block_scored = T::EXPAND_SCORE
+            && T::score_block(
+                qscratch,
+                nq,
+                d,
+                ctx.k.data,
+                &k_row_of,
+                bs,
+                bn,
+                kscratch,
+                ctx.scale,
+                &mut s_tile,
+                KV_BLOCK,
+            );
 
         // A: score the tile
         for j in 0..nq {
@@ -158,7 +206,9 @@ where
             let q_base = b_i * ctx.q.stride[0] + q_pos * ctx.q.stride[1] + h_i * ctx.q.stride[2];
             let q_row = &ctx.q.data[q_base..q_base + d];
             let tile_row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + bn];
-            score_rows(ctx, q_row, k_head, b_i, bs, lo, hi, ctx.scale, tile_row);
+            if !block_scored {
+                score_rows(ctx, q_row, k_head, b_i, bs, lo, hi, ctx.scale, tile_row);
+            }
             if !row_binary[j] {
                 if let Some(mrow) = mask_rows[j] {
                     for kv in lo..hi {
@@ -177,10 +227,7 @@ where
             }
             let tile_row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + bn];
             let live = &mut tile_row[lo - bs..hi - bs];
-            #[cfg(target_arch = "aarch64")]
-            let bmax = super::neon::max_f32(live);
-            #[cfg(not(target_arch = "aarch64"))]
-            let bmax = live.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let bmax = super::elem::simd_max_f32(live);
             if bmax > m[j] {
                 if m[j] != f32::NEG_INFINITY {
                     let corr = fast_exp(m[j] - bmax);
@@ -192,32 +239,55 @@ where
                 m[j] = bmax;
             }
             let mj = m[j];
-            #[cfg(target_arch = "aarch64")]
-            let local_sum = super::neon::softmax_row_f32(live, mj);
-            #[cfg(not(target_arch = "aarch64"))]
-            let local_sum = {
-                let mut sum = 0f32;
-                for v in live.iter_mut() {
-                    *v = fast_exp(*v - mj);
-                    sum += *v;
-                }
-                sum
-            };
+            let local_sum = super::elem::simd_softmax_row_f32(live, mj);
             s[j] += local_sum;
         }
 
-        // C: accumulate P*V with each v row shared across the q block
-        for kv_pos in bs..be {
-            let v_base =
-                b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
-            let v_row = &ctx.v.data[v_base..v_base + dv];
-            for j in 0..nq {
-                if kv_pos < row_start[j].max(bs) || kv_pos >= row_end[j].min(be) {
-                    continue;
-                }
-                let p = s_tile[j * KV_BLOCK + (kv_pos - bs)];
-                T::mad(&mut acc[j * dv..(j + 1) * dv], v_row, p);
+        // dead tile slots must be zero: the pv kernel below runs the full tile span
+        for j in 0..nq {
+            let lo = row_start[j].max(bs);
+            let hi = row_end[j].min(be);
+            let row = &mut s_tile[j * KV_BLOCK..j * KV_BLOCK + (be - bs)];
+            if lo >= hi {
+                row.fill(0.0);
+            } else {
+                row[..lo - bs].fill(0.0);
+                row[hi - bs..].fill(0.0);
             }
+        }
+
+        // C: accumulate P*V with each v row shared across the q block; register-tiled
+        // groups of 4 rows where the arch provides it
+        let v_row_of =
+            |kv: usize| b_i * ctx.v.stride[0] + kv * ctx.v.stride[1] + v_head * ctx.v.stride[2];
+        let mut j0 = 0;
+        while j0 < nq {
+            let g = (nq - j0).min(4);
+            let handled = T::pv_tile(
+                &mut acc[j0 * dv..],
+                dv,
+                g,
+                dv,
+                ctx.v.data,
+                &v_row_of,
+                bs,
+                be,
+                &s_tile[j0 * KV_BLOCK..],
+                KV_BLOCK,
+            );
+            if !handled {
+                for kv_pos in bs..be {
+                    let v_base = v_row_of(kv_pos);
+                    let v_row = &ctx.v.data[v_base..v_base + dv];
+                    for j in j0..j0 + g {
+                        let p = s_tile[j * KV_BLOCK + (kv_pos - bs)];
+                        if p != 0.0 {
+                            T::mad(&mut acc[j * dv..(j + 1) * dv], v_row, p);
+                        }
+                    }
+                }
+            }
+            j0 += g;
         }
 
         bs = be;
@@ -256,6 +326,12 @@ fn score_rows<T: ElemOps>(
     };
     let mut kv_pos = lo;
     while kv_pos + 4 <= hi {
+        if kv_pos + 8 <= hi {
+            unsafe {
+                super::prefetch::prefetch(k_row(kv_pos + 4).as_ptr() as *const u8);
+                super::prefetch::prefetch(k_row(kv_pos + 6).as_ptr() as *const u8);
+            }
+        }
         let dots = T::dot4(
             q_row,
             k_row(kv_pos),

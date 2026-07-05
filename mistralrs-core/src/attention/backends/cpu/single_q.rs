@@ -201,6 +201,12 @@ fn compute_group_range<T>(
             let tile = &mut s_tile[j * TILE..j * TILE + bn];
             let mut kv_pos = bs;
             while kv_pos + 4 <= be {
+                if kv_pos + 8 <= be {
+                    unsafe {
+                        prefetch(k_row(kv_pos + 4).as_ptr() as *const u8);
+                        prefetch(k_row(kv_pos + 6).as_ptr() as *const u8);
+                    }
+                }
                 let dots = T::dot4(
                     q_row,
                     k_row(kv_pos),
@@ -218,10 +224,7 @@ fn compute_group_range<T>(
                 kv_pos += 1;
             }
 
-            #[cfg(target_arch = "aarch64")]
-            let bmax = super::neon::max_f32(tile);
-            #[cfg(not(target_arch = "aarch64"))]
-            let bmax = tile.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            let bmax = super::elem::simd_max_f32(tile);
             let chunk_base = j * n_kv_chunks * stride;
             let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
             if bmax > m[j] {
@@ -232,29 +235,38 @@ fn compute_group_range<T>(
                 }
                 m[j] = bmax;
             }
-            #[cfg(target_arch = "aarch64")]
-            let local_sum = super::neon::softmax_row_f32(tile, m[j]);
-            #[cfg(not(target_arch = "aarch64"))]
-            let local_sum = {
-                let mut sum = 0f32;
-                for v in tile.iter_mut() {
-                    *v = super::elem::fast_exp(*v - m[j]);
-                    sum += *v;
-                }
-                sum
-            };
+            let local_sum = super::elem::simd_softmax_row_f32(tile, m[j]);
             s[j] += local_sum;
         }
 
-        for kv_pos in bs..be {
-            let v_base =
-                b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2];
-            let v_row = &ctx.v.data[v_base..v_base + meta.dv];
-            for j in 0..group {
-                let p = s_tile[j * TILE + (kv_pos - bs)];
-                let chunk_base = j * n_kv_chunks * stride;
-                let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
-                T::mad(vkq, v_row, p);
+        let v_row_of = |kv_pos: usize| {
+            b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2]
+        };
+        let handled = T::pv_tile(
+            rows,
+            n_kv_chunks * stride,
+            group,
+            meta.dv,
+            ctx.v.data,
+            &v_row_of,
+            bs,
+            be,
+            &s_tile,
+            TILE,
+        );
+        if !handled {
+            for kv_pos in bs..be {
+                let v_base = v_row_of(kv_pos);
+                if kv_pos + 2 < be {
+                    unsafe { prefetch(ctx.v.data.as_ptr().add(v_row_of(kv_pos + 2)) as *const u8) };
+                }
+                let v_row = &ctx.v.data[v_base..v_base + meta.dv];
+                for j in 0..group {
+                    let p = s_tile[j * TILE + (kv_pos - bs)];
+                    let chunk_base = j * n_kv_chunks * stride;
+                    let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
+                    T::mad(vkq, v_row, p);
+                }
             }
         }
 
