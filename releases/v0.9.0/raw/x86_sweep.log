@@ -32,3 +32,5 @@ lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU       
 lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |   tg128 @ d8192 |         12.27 ± 0.04 |
 recall: 1
 FINAL_SWEEP_DONE
+│ Decode (128 tokens @ d16384) ┆ 15.9 ± 0.1  ┆ 62.72 ms/T          │
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |  tg128 @ d16384 |          6.30 ± 0.02 |

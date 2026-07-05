@@ -200,10 +200,10 @@ build with its AMX path active. Baseline before the port: 0.38-0.79x across the 
 
 End-of-day board (qwen3-4b, mistral.rs / llama.cpp, ratio):
 
-| q4k | 128 | 512 | 2048 | 8192 |
-|---|---|---|---|---|
-| prefill | 0.42x | 0.69x | 0.79x | 0.86x |
-| decode | 1.06x | 1.07x | 1.12x | **1.69x** |
+| q4k | 128 | 512 | 2048 | 8192 | 16384 |
+|---|---|---|---|---|---|
+| prefill | 0.42x | 0.69x | 0.79x | 0.86x | - |
+| decode | 1.06x | 1.07x | 1.12x | 1.69x | **2.52x** |
 
 | q8_0 | 128 | 512 | 2048 | 8192 |
 |---|---|---|---|---|
@@ -211,7 +211,7 @@ End-of-day board (qwen3-4b, mistral.rs / llama.cpp, ratio):
 | decode | 0.84x | 0.84x | 0.92x | **1.48x** |
 
 Decode wins q4k at every depth and both quants at agent depths, with the same widening-with-depth
-shape as the aarch64 curves; recall verified. Prefill trails llama.cpp's mature AMX path (a chip
+shape as the aarch64 curves (15.9 vs 6.3 t/s at 16384 depth); recall verified. Prefill trails llama.cpp's mature AMX path (a chip
 feature most of the x86 fleet lacks; a non-AMX comparison point is a follow-up).
 
 What was built (candle + mistralrs, all runtime-feature-detected):
