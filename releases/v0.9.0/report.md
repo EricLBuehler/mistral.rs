@@ -194,6 +194,9 @@ with context) and the MoE gap.
 
 ## x86: Sapphire Rapids (one day, one rented box)
 
+Raw data: `raw/results_x86.jsonl` (normalized, includes both fa configs per point) and
+`raw/x86_sweep.log` (bench stdout).
+
 The aarch64 kernels above do not exist on x86, so a c7i.8xlarge (Xeon Platinum 8488C, 16 cores,
 AVX512/VNNI/AMX) was rented to port them. llama.cpp at the same pinned commit (2d97363), native
 build with its AMX path active. Baseline before the port: 0.38-0.79x across the board.
