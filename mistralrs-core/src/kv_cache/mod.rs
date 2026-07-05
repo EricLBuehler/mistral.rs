@@ -68,7 +68,10 @@ pub(crate) fn cpu_kv_f16() -> bool {
         // only worth it where the native fp16 attention kernels exist; elsewhere f16 KV would
         // push attention onto the scalar convert fallback and lose to plain f32
         #[cfg(target_arch = "x86_64")]
-        let fast = std::arch::is_x86_feature_detected!("avx512f");
+        let fast = std::arch::is_x86_feature_detected!("avx512f")
+            || (std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+                && std::arch::is_x86_feature_detected!("f16c"));
         #[cfg(not(target_arch = "x86_64"))]
         let fast = cfg!(target_arch = "aarch64");
         let on = fast && std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");

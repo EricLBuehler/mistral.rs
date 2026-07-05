@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 pub(super) fn avx512() -> bool {
     static OK: OnceLock<bool> = OnceLock::new();
-    *OK.get_or_init(|| is_x86_feature_detected!("avx512f"))
+    *OK.get_or_init(|| !force_avx2() && is_x86_feature_detected!("avx512f"))
 }
 
 #[target_feature(enable = "avx512f")]
@@ -176,6 +176,9 @@ pub(super) fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     if avx512() {
         return unsafe { dot_f32_avx512(a, b) };
     }
+    if avx2_f16c() {
+        return unsafe { dot_f32_avx2(a, b) };
+    }
     let mut sum = 0f32;
     for (x, y) in a.iter().zip(b) {
         sum += x * y;
@@ -228,6 +231,9 @@ pub(super) fn max_f32(xs: &[f32]) -> f32 {
 pub(super) fn softmax_row_f32(row: &mut [f32], m: f32) -> f32 {
     if avx512() {
         return unsafe { softmax_row_f32_avx512(row, m) };
+    }
+    if avx2_f16c() {
+        return unsafe { softmax_row_f32_avx2(row, m) };
     }
     let mut sum = 0f32;
     for v in row.iter_mut() {
@@ -369,6 +375,10 @@ pub(super) fn dot_f16(a: &[half::f16], b: &[half::f16]) -> Option<f32> {
     if avx512() {
         return Some(unsafe { dot_f16_avx512(a, b) });
     }
+    if avx2_f16c() {
+        let r = unsafe { dot4_f16_avx2(a, b, b, b, b) };
+        return Some(r[0]);
+    }
     None
 }
 
@@ -383,6 +393,9 @@ pub(super) fn dot4_f16(
     if avx512() {
         return Some(unsafe { dot4_f16_avx512(q, k0, k1, k2, k3) });
     }
+    if avx2_f16c() {
+        return Some(unsafe { dot4_f16_avx2(q, k0, k1, k2, k3) });
+    }
     None
 }
 
@@ -390,6 +403,10 @@ pub(super) fn dot4_f16(
 pub(super) fn mad_f16(acc: &mut [f32], values: &[half::f16], scale: f32) -> bool {
     if avx512() {
         unsafe { mad_f16_avx512(acc, values, scale) };
+        return true;
+    }
+    if avx2_f16c() {
+        unsafe { mad_f16_avx2(acc, values, scale) };
         return true;
     }
     false
@@ -495,6 +512,10 @@ unsafe fn expand_f16_avx512(dst: &mut [f32], src: &[half::f16]) {
 pub(super) fn expand_f16(dst: &mut [f32], src: &[half::f16]) -> bool {
     if avx512() {
         unsafe { expand_f16_avx512(dst, src) };
+        return true;
+    }
+    if avx2_f16c() {
+        unsafe { expand_f16_avx2(dst, src) };
         return true;
     }
     false
@@ -620,4 +641,190 @@ pub(super) fn score_block_f16(
         score_block_avx512(q_rows, nq, d, kt, kt_stride, bn, scale, s_tile, tile_stride);
     }
     true
+}
+
+// 256-bit tier for CPUs without AVX512 (everything Haswell/Zen1+): same ops, ymm
+// width, f16 through F16C. pv_tile stays 512-only; the generic mad loop covers it.
+pub(super) fn avx2_f16c() -> bool {
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(|| {
+        is_x86_feature_detected!("avx2")
+            && is_x86_feature_detected!("fma")
+            && is_x86_feature_detected!("f16c")
+    })
+}
+
+fn force_avx2() -> bool {
+    static F: OnceLock<bool> = OnceLock::new();
+    *F.get_or_init(|| std::env::var("MISTRALRS_FORCE_AVX2").as_deref() == Ok("1"))
+}
+
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_f32_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use core::arch::x86_64::*;
+    let len = a.len();
+    let main = len & !7;
+    let mut acc = _mm256_setzero_ps();
+    let mut i = 0;
+    while i < main {
+        acc = _mm256_fmadd_ps(
+            _mm256_loadu_ps(a.as_ptr().add(i)),
+            _mm256_loadu_ps(b.as_ptr().add(i)),
+            acc,
+        );
+        i += 8;
+    }
+    let hi = _mm256_extractf128_ps(acc, 1);
+    let lo = _mm256_castps256_ps128(acc);
+    let s = _mm_add_ps(lo, hi);
+    let s = _mm_hadd_ps(s, s);
+    let s = _mm_hadd_ps(s, s);
+    let mut sum = _mm_cvtss_f32(s);
+    for j in main..len {
+        sum += a[j] * b[j];
+    }
+    sum
+}
+
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn dot4_f16_avx2(
+    q: &[half::f16],
+    k0: &[half::f16],
+    k1: &[half::f16],
+    k2: &[half::f16],
+    k3: &[half::f16],
+) -> [f32; 4] {
+    use core::arch::x86_64::*;
+    let len = q.len();
+    let main = len & !7;
+    let mut a = [_mm256_setzero_ps(); 4];
+    let ks = [k0, k1, k2, k3];
+    let mut i = 0;
+    while i < main {
+        let x = _mm256_cvtph_ps(_mm_loadu_si128(q.as_ptr().add(i) as *const _));
+        for (acc, k) in a.iter_mut().zip(ks.iter()) {
+            *acc = _mm256_fmadd_ps(
+                x,
+                _mm256_cvtph_ps(_mm_loadu_si128(k.as_ptr().add(i) as *const _)),
+                *acc,
+            );
+        }
+        i += 8;
+    }
+    let mut out = [0f32; 4];
+    for (o, acc) in out.iter_mut().zip(a.iter()) {
+        let hi = _mm256_extractf128_ps(*acc, 1);
+        let lo = _mm256_castps256_ps128(*acc);
+        let s = _mm_add_ps(lo, hi);
+        let s = _mm_hadd_ps(s, s);
+        let s = _mm_hadd_ps(s, s);
+        *o = _mm_cvtss_f32(s);
+    }
+    for j in main..len {
+        let qj = q[j].to_f32();
+        for (o, k) in out.iter_mut().zip(ks.iter()) {
+            *o += qj * k[j].to_f32();
+        }
+    }
+    out
+}
+
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn mad_f16_avx2(acc: &mut [f32], values: &[half::f16], scale: f32) {
+    use core::arch::x86_64::*;
+    let len = acc.len();
+    let main = len & !7;
+    let s = _mm256_set1_ps(scale);
+    let mut i = 0;
+    while i < main {
+        let v = _mm256_cvtph_ps(_mm_loadu_si128(values.as_ptr().add(i) as *const _));
+        let a = _mm256_loadu_ps(acc.as_ptr().add(i));
+        _mm256_storeu_ps(acc.as_mut_ptr().add(i), _mm256_fmadd_ps(v, s, a));
+        i += 8;
+    }
+    for j in main..len {
+        acc[j] += values[j].to_f32() * scale;
+    }
+}
+
+#[target_feature(enable = "avx2,fma,f16c")]
+unsafe fn expand_f16_avx2(dst: &mut [f32], src: &[half::f16]) {
+    use core::arch::x86_64::*;
+    let len = dst.len();
+    let main = len & !7;
+    let mut i = 0;
+    while i < main {
+        let v = _mm256_cvtph_ps(_mm_loadu_si128(src.as_ptr().add(i) as *const _));
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i), v);
+        i += 8;
+    }
+    for j in main..len {
+        dst[j] = src[j].to_f32();
+    }
+}
+
+#[target_feature(enable = "avx2,fma")]
+unsafe fn softmax_row_f32_avx2(row: &mut [f32], m: f32) -> f32 {
+    use core::arch::x86_64::*;
+    const LOG2E: f32 = std::f32::consts::LOG2_E;
+    const C0: f32 = 0.693_359_375;
+    const C1: f32 = -2.121_944_4e-4;
+    let len = row.len();
+    let main = len & !7;
+    let mv = _mm256_set1_ps(m);
+    let mut sumv = _mm256_setzero_ps();
+    let mut i = 0;
+    while i < main {
+        let x = _mm256_sub_ps(_mm256_loadu_ps(row.as_ptr().add(i)), mv);
+        let x = _mm256_max_ps(
+            _mm256_set1_ps(-87.0),
+            _mm256_min_ps(_mm256_set1_ps(87.0), x),
+        );
+        let z = _mm256_round_ps::<0>(_mm256_mul_ps(x, _mm256_set1_ps(LOG2E)));
+        let r = _mm256_fnmadd_ps(
+            z,
+            _mm256_set1_ps(C1),
+            _mm256_fnmadd_ps(z, _mm256_set1_ps(C0), x),
+        );
+        let r2 = _mm256_mul_ps(r, r);
+        let p = _mm256_fmadd_ps(
+            r,
+            _mm256_fmadd_ps(
+                r,
+                _mm256_fmadd_ps(
+                    r,
+                    _mm256_fmadd_ps(
+                        r,
+                        _mm256_set1_ps(0.001_392_034_5),
+                        _mm256_set1_ps(0.008_333_45),
+                    ),
+                    _mm256_set1_ps(0.041_665_795),
+                ),
+                _mm256_set1_ps(0.166_665_46),
+            ),
+            _mm256_set1_ps(0.5),
+        );
+        let p = _mm256_add_ps(r, _mm256_mul_ps(r2, p));
+        let zi = _mm256_cvtps_epi32(z);
+        let e = _mm256_castsi256_ps(_mm256_slli_epi32(
+            _mm256_add_epi32(zi, _mm256_set1_epi32(127)),
+            23,
+        ));
+        let v = _mm256_mul_ps(e, _mm256_add_ps(_mm256_set1_ps(1.0), p));
+        _mm256_storeu_ps(row.as_mut_ptr().add(i), v);
+        sumv = _mm256_add_ps(sumv, v);
+        i += 8;
+    }
+    let hi = _mm256_extractf128_ps(sumv, 1);
+    let lo = _mm256_castps256_ps128(sumv);
+    let s = _mm_add_ps(lo, hi);
+    let s = _mm_hadd_ps(s, s);
+    let s = _mm_hadd_ps(s, s);
+    let mut sum = _mm_cvtss_f32(s);
+    for j in main..len {
+        let v = super::elem::fast_exp(row[j] - m);
+        row[j] = v;
+        sum += v;
+    }
+    sum
 }
