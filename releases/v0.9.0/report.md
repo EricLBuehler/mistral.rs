@@ -191,6 +191,45 @@ with context) and the MoE gap.
    (and halves memory for unquantized models). bf16 becomes the default candidate again once a
    native bf16 elementwise pass and a bfmmla GEMM (2x f32 matmul for unquantized weights) land.
 
+
+## x86: Sapphire Rapids (one day, one rented box)
+
+The aarch64 kernels above do not exist on x86, so a c7i.8xlarge (Xeon Platinum 8488C, 16 cores,
+AVX512/VNNI/AMX) was rented to port them. llama.cpp at the same pinned commit (2d97363), native
+build with its AMX path active. Baseline before the port: 0.38-0.79x across the board.
+
+End-of-day board (qwen3-4b, mistral.rs / llama.cpp, ratio):
+
+| q4k | 128 | 512 | 2048 | 8192 |
+|---|---|---|---|---|
+| prefill | 0.42x | 0.69x | 0.79x | 0.86x |
+| decode | 1.06x | 1.07x | 1.12x | **1.69x** |
+
+| q8_0 | 128 | 512 | 2048 | 8192 |
+|---|---|---|---|---|
+| prefill | 0.79x | 0.66x | 0.72x | 0.81x |
+| decode | 0.84x | 0.84x | 0.92x | **1.48x** |
+
+Decode wins q4k at every depth and both quants at agent depths, with the same widening-with-depth
+shape as the aarch64 curves; recall verified. Prefill trails llama.cpp's mature AMX path (a chip
+feature most of the x86 fleet lacks; a non-AMX comparison point is a follow-up).
+
+What was built (candle + mistralrs, all runtime-feature-detected):
+1. AVX512-VNNI repacked kernels for q4k/q6k/q8_0: weights tiled [n/16][k][16 rows] so one
+   vpdpbusd yields 16 output columns; gemv, m-tiled, and fused multi-projection paths share the
+   layout; min/offset terms corrected through the q8k bsums.
+2. An AMX-int8 macro-tile path (m>=32, q4k): 2x2 C tiles per A/B load pair via asm (the
+   intrinsics are unstable), k=32 sub-tiles so per-subblock scales apply exactly.
+3. AVX512 attention micro-kernels: dots, 16-lane Cephes exp, f16 K/V via vcvtph2ps, and the
+   change that mattered most - register-tiled P.V accumulation holding 4 q-rows' accumulators in
+   the full zmm register file across each kv tile. Decode attention went from 22 GB/s effective
+   to 95 GB/s (the instance's bandwidth ceiling) with that one restructuring.
+4. GEMM-structured prefill scoring: K tiles transposed once through a 16x16 shuffle network,
+   16 scores per fma, no horizontal reductions.
+
+Follow-ups: AMX epilogue amortization, an avx2/avx-vnni consumer tier (Ryzen, older Xeon,
+laptops), a non-AMX comparison point, and porting the register-tiled P.V trick back to aarch64.
+
 ## Appendix: Full Tables
 
 All values are tokens per second; speedup is mistral.rs divided by llama.cpp in the same row.
