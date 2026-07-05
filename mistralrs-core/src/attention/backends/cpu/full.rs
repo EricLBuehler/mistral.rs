@@ -5,7 +5,7 @@ use super::{
     elem::{fast_exp, ElemOps},
     prefetch::prefetch,
     threading::FLASH_ATTN_POOL,
-    CpuAttnCtx, TensorView, SINGLE_Q_STACK_DV,
+    CpuAttnCtx, SINGLE_Q_STACK_DV,
 };
 
 // q rows sharing K/V per pass; bounds the online-softmax state kept in registers/stack
@@ -237,6 +237,7 @@ where
 
 // Dot q_row against k rows [lo, hi), writing scaled scores into tile[lo-bs..hi-bs].
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn score_rows<T: ElemOps>(
     ctx: &CpuAttnCtx<'_, T>,
     q_row: &[T],

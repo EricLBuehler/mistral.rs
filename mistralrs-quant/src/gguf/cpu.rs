@@ -57,9 +57,8 @@ pub fn qtensor_indexed_moe_forward(
             [_, _, _] => (x.clone(), ids.clone(), Some(vec![])),
             _ => (x.clone(), ids.clone(), None),
         };
-        if out_shape.is_some() && x3.rank() == 3 && ids2.rank() == 2 {
+        if let Some(shape) = out_shape.filter(|_| x3.rank() == 3 && ids2.rank() == 2) {
             if let Some(out) = qtensor.indexed_gemv(&x3, &ids2)? {
-                let shape = out_shape.unwrap();
                 return if shape.is_empty() {
                     Ok(out)
                 } else {

@@ -173,7 +173,7 @@ pub(super) fn dot4_f32(q: &[f32], k0: &[f32], k1: &[f32], k2: &[f32], k3: &[f32]
 pub(super) fn softmax_row_f32(row: &mut [f32], m: f32) -> f32 {
     use core::arch::aarch64::*;
 
-    const C0: f32 = 0.693_359_375;
+    const C0: f32 = 0.693_359_4;
     const C1: f32 = -2.121_944_4e-4;
     unsafe {
         let log2e = vdupq_n_f32(std::f32::consts::LOG2_E);
@@ -257,13 +257,13 @@ pub(super) fn dot_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
     let len = a.len();
     let main = len & !7;
-    let mut acc0: float32x4_t;
-    let mut acc1: float32x4_t;
+    let acc0: float32x4_t;
+    let acc1: float32x4_t;
     unsafe {
-        let mut ap = a.as_ptr() as *const u16;
-        let mut bp = b.as_ptr() as *const u16;
+        let ap = a.as_ptr() as *const u16;
+        let bp = b.as_ptr() as *const u16;
         if main >= 8 {
-            let mut n = main;
+            let n = main;
             core::arch::asm!(
                 "movi {a0:v}.4s, #0",
                 "movi {a1:v}.4s, #0",
@@ -274,8 +274,8 @@ pub(super) fn dot_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
                 "fmlal2 {a1:v}.4s, {t0:v}.4h, {t1:v}.4h",
                 "subs {n}, {n}, #8",
                 "b.gt 2b",
-                ap = inout(reg) ap,
-                bp = inout(reg) bp,
+                ap = inout(reg) ap => _,
+                bp = inout(reg) bp => _,
                 n = inout(reg) n => _,
                 a0 = out(vreg) acc0,
                 a1 = out(vreg) acc1,
@@ -307,18 +307,18 @@ pub(super) fn dot4_f16(
     use core::arch::aarch64::*;
     let len = q.len();
     let main = len & !7;
-    let mut a0: float32x4_t;
-    let mut a1: float32x4_t;
-    let mut a2: float32x4_t;
-    let mut a3: float32x4_t;
+    let a0: float32x4_t;
+    let a1: float32x4_t;
+    let a2: float32x4_t;
+    let a3: float32x4_t;
     unsafe {
-        let mut qp = q.as_ptr() as *const u16;
-        let mut p0 = k0.as_ptr() as *const u16;
-        let mut p1 = k1.as_ptr() as *const u16;
-        let mut p2 = k2.as_ptr() as *const u16;
-        let mut p3 = k3.as_ptr() as *const u16;
+        let qp = q.as_ptr() as *const u16;
+        let p0 = k0.as_ptr() as *const u16;
+        let p1 = k1.as_ptr() as *const u16;
+        let p2 = k2.as_ptr() as *const u16;
+        let p3 = k3.as_ptr() as *const u16;
         if main >= 8 {
-            let mut n = main;
+            let n = main;
             core::arch::asm!(
                 "movi {a0:v}.4s, #0",
                 "movi {a1:v}.4s, #0",
@@ -340,11 +340,11 @@ pub(super) fn dot4_f16(
                 "fmlal2 {a3:v}.4s, {tq:v}.4h, {t3:v}.4h",
                 "subs {n}, {n}, #8",
                 "b.gt 2b",
-                qp = inout(reg) qp,
-                p0 = inout(reg) p0,
-                p1 = inout(reg) p1,
-                p2 = inout(reg) p2,
-                p3 = inout(reg) p3,
+                qp = inout(reg) qp => _,
+                p0 = inout(reg) p0 => _,
+                p1 = inout(reg) p1 => _,
+                p2 = inout(reg) p2 => _,
+                p3 = inout(reg) p3 => _,
                 n = inout(reg) n => _,
                 a0 = out(vreg) a0,
                 a1 = out(vreg) a1,
@@ -383,14 +383,13 @@ pub(super) fn dot4_f16(
 // acc (f32) += values (f16) * scale
 #[inline(always)]
 pub(super) fn mad_f16(acc: &mut [f32], values: &[half::f16], scale: f32) {
-    use core::arch::aarch64::*;
     let len = acc.len();
     let main = len & !7;
     unsafe {
         if main >= 8 {
-            let mut ap = acc.as_mut_ptr();
-            let mut vp = values.as_ptr() as *const u16;
-            let mut n = main;
+            let ap = acc.as_mut_ptr();
+            let vp = values.as_ptr() as *const u16;
+            let n = main;
             core::arch::asm!(
                 "dup {s:v}.4s, {scale:v}.s[0]",
                 "2:",
@@ -403,8 +402,8 @@ pub(super) fn mad_f16(acc: &mut [f32], values: &[half::f16], scale: f32) {
                 "stp {t0:q}, {t1:q}, [{ap}], #32",
                 "subs {n}, {n}, #8",
                 "b.gt 2b",
-                ap = inout(reg) ap,
-                vp = inout(reg) vp,
+                ap = inout(reg) ap => _,
+                vp = inout(reg) vp => _,
                 n = inout(reg) n => _,
                 scale = in(vreg) core::mem::transmute::<f32, [f32; 1]>(scale)[0],
                 s = out(vreg) _,

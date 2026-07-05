@@ -65,9 +65,9 @@ where
     // Rows sharing a kv head stream K/V together so the cache traffic is paid once per group;
     // group must divide rk2 so a group never straddles kv heads.
     let mut group = 1;
-    if meta.rk2 == meta.rv2 && meta.h % meta.rk2 == 0 {
+    if meta.rk2 == meta.rv2 && meta.h.is_multiple_of(meta.rk2) {
         for g in 1..=meta.rk2.min(MAX_GQA_GROUP) {
-            if meta.rk2 % g == 0 {
+            if meta.rk2.is_multiple_of(g) {
                 group = g;
             }
         }

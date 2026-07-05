@@ -47,7 +47,7 @@ mod backends;
 
 #[allow(unused)]
 pub(crate) use backends::cpu::fast_exp;
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
+pub(crate) use backends::{flash_attn, naive_sdpa, sinks_attn};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;

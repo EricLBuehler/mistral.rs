@@ -33,13 +33,6 @@ impl DowncastF32 for bf16 {
 pub(in crate::attention) trait ElemOps: Copy + DowncastF32 {
     const USE_BARRIER_POOL: bool = false;
 
-    fn as_f32(_data: &[Self]) -> Option<&[f32]> {
-        None
-    }
-    fn as_f32_mut(_data: &mut [Self]) -> Option<&mut [f32]> {
-        None
-    }
-
     fn to_f32(self) -> f32;
     fn dot(a: &[Self], b: &[Self]) -> f32;
 
@@ -69,13 +62,6 @@ pub(in crate::attention) trait ElemOps: Copy + DowncastF32 {
 
 impl ElemOps for f32 {
     const USE_BARRIER_POOL: bool = true;
-
-    fn as_f32(data: &[Self]) -> Option<&[f32]> {
-        Some(data)
-    }
-    fn as_f32_mut(data: &mut [Self]) -> Option<&mut [f32]> {
-        Some(data)
-    }
 
     #[inline(always)]
     fn to_f32(self) -> f32 {
@@ -256,7 +242,7 @@ fn dot_cast<T: ElemOps>(a: &[T], b: &[T]) -> f32 {
 #[inline(always)]
 pub(crate) fn fast_exp(x: f32) -> f32 {
     const LOG2E: f32 = std::f32::consts::LOG2_E;
-    const C0: f32 = 0.693_359_375;
+    const C0: f32 = 0.693_359_4;
     const C1: f32 = -2.121_944_4e-4;
     let x = x.clamp(-87.0, 87.0);
     let z = (x * LOG2E).round();
