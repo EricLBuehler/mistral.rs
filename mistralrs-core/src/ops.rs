@@ -3606,6 +3606,15 @@ pub(crate) fn quantized_ffn(
         }
     }
 
+    if xs.device().is_cpu() {
+        if let Some(mut out) = mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[gate, up])? {
+            let rhs = out.pop().unwrap();
+            let lhs = out.pop().unwrap();
+            let inter = mul_and_act(&lhs, &rhs, act)?;
+            return down.forward(&inter);
+        }
+    }
+
     let lhs = gate.forward(xs)?;
     let rhs = up.forward(xs)?;
     let inter = mul_and_act(&lhs, &rhs, act)?;
@@ -3626,6 +3635,17 @@ pub(crate) fn qkv_projections(
     #[cfg(feature = "metal")]
     if let Some(qkv) = mistralrs_quant::try_fused_qkv_metal(xs, q_proj, k_proj, v_proj)? {
         return Ok(qkv);
+    }
+
+    if xs.device().is_cpu() {
+        if let Some(mut out) =
+            mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[q_proj, k_proj, v_proj])?
+        {
+            let v = out.pop().unwrap();
+            let k = out.pop().unwrap();
+            let q = out.pop().unwrap();
+            return Ok((q, k, v));
+        }
     }
 
     Ok((

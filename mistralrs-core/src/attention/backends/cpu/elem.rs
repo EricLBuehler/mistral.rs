@@ -146,3 +146,21 @@ fn dot_cast<T: ElemOps>(a: &[T], b: &[T]) -> f32 {
     }
     sum
 }
+
+// Cephes-style exp for the online-softmax hot path; inputs are <= 0 after max
+// subtraction, ~1e-7 rel error, ~4x faster than libm expf.
+#[inline(always)]
+pub(in crate::attention) fn fast_exp(x: f32) -> f32 {
+    const LOG2E: f32 = std::f32::consts::LOG2_E;
+    const C0: f32 = 0.693_359_375;
+    const C1: f32 = -2.121_944_4e-4;
+    let x = x.clamp(-87.0, 87.0);
+    let z = (x * LOG2E).round();
+    let r = x - z * C0 - z * C1;
+    let r2 = r * r;
+    let p = r + r2
+        * (0.5
+            + r * (0.166_665_46 + r * (0.041_665_795 + r * (0.008_333_45 + r * 0.001_392_034_5))));
+    let e = f32::from_bits((((z as i32) + 127) << 23) as u32);
+    e * (1.0 + p)
+}

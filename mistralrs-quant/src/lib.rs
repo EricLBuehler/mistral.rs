@@ -1210,8 +1210,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Get the underlying QTensor if this is a GGUF quantized layer.
-    /// Used for direct kernel access in the grouped MoE prefill path.
-    #[cfg(feature = "cuda")]
+    /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
     }
@@ -1332,6 +1331,29 @@ pub fn try_fused_quantized_gate_up(
     Ok(Some(gguf::fast_mmvq::fused_glu(
         &gate_q, &up_q, xs, activation,
     )?))
+}
+
+/// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
+/// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
+pub fn try_fused_gemv_shared_lhs_cpu(
+    xs: &Tensor,
+    ws: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if !xs.device().is_cpu() || xs.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if ws.iter().any(|w| w.has_bias()) {
+        return Ok(None);
+    }
+    let mut qs = Vec::with_capacity(ws.len());
+    for w in ws {
+        let Some(q) = w.get_qtensor() else {
+            return Ok(None);
+        };
+        qs.push(q);
+    }
+    let refs: Vec<&candle_core::quantized::QTensor> = qs.iter().map(|a| a.as_ref()).collect();
+    candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
 }
 
 #[cfg(feature = "cuda")]

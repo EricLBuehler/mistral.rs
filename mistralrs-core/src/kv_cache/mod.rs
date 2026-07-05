@@ -558,6 +558,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     let template_cache_csl = old_k.current_seq_len;
                     let template_cache_msl = old_k.max_seq_len;
                     let template_cache_capsl = old_k.capacity_seq_len;
+                    let template_cache_wpos = old_k.write_pos;
 
                     caches.push(KvCache::Rotating {
                         k: RotatingCache {
@@ -566,6 +567,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            write_pos: template_cache_wpos,
                             last_append_result: None,
                         },
                         v: RotatingCache {
@@ -574,6 +576,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            write_pos: template_cache_wpos,
                             last_append_result: None,
                         },
                     });
@@ -663,6 +666,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 capacity_seq_len: cache_k.capacity_seq_len,
+                                write_pos: cache_k.write_pos,
                                 last_append_result: None,
                             },
                             v: RotatingCache {
@@ -671,6 +675,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 capacity_seq_len: cache_v.capacity_seq_len,
+                                write_pos: cache_v.write_pos,
                                 last_append_result: None,
                             },
                         });
@@ -724,6 +729,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            write_pos: 0,
                             last_append_result: None,
                         },
                         v: RotatingCache {
@@ -732,6 +738,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            write_pos: 0,
                             last_append_result: None,
                         },
                     };

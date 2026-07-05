@@ -357,7 +357,6 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         match &self.w {
             candle_core::quantized::QMatMul::QTensor(qt) => Some(qt.clone()),

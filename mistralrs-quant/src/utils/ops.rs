@@ -2664,14 +2664,19 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<f32> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i];
-                        let b_val = b_slice[b_offset + i];
-                        apply_cpu_activation(a_val, activation) * b_val
-                    })
-                    .collect();
+                // barrier pool instead of rayon: its workers already own these cores and
+                // would otherwise spin against the rayon threads between matmuls
+                let mut result = vec![0f32; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut f32;
+                    for i in range {
+                        let v = apply_cpu_activation(a[i], activation) * b[i];
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::F32(result)
             }
             DType::F16 => {
