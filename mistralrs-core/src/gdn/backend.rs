@@ -895,7 +895,7 @@ fn causal_conv1d_full(
 
     let weight = conv1d_weight.squeeze(1)?.to_dtype(padded_t.dtype())?;
 
-    if padded_t.dtype() == candle_core::DType::F32 {
+    if padded_t.device().is_cpu() && padded_t.dtype() == candle_core::DType::F32 {
         return causal_conv1d_full_cpu_f32(&padded_t, &weight, batch_size, conv_dim, seq_len, dims);
     }
 

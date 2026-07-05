@@ -47,6 +47,8 @@ mod backends;
 
 #[allow(unused)]
 pub(crate) use backends::cpu::fast_exp;
+#[cfg(feature = "cuda")]
+use backends::naive::maybe_synchronize;
 pub(crate) use backends::{flash_attn, naive_sdpa, sinks_attn};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
