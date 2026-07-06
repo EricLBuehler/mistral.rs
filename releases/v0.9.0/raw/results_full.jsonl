@@ -557,5 +557,5 @@
 {"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 512, "tps": 234.8, "affinity": "mask", "note": "expert-bucketed matmul"}
 {"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 2048, "tps": 232.9, "affinity": "mask", "note": "expert-bucketed matmul"}
 {"engine": "mistralrs", "model": "lfm2.5-8b-a1b", "quant": "q4k", "mode": "prefill", "length": 8192, "tps": 180.8, "affinity": "mask", "note": "expert-bucketed matmul"}
-{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "depth": 8192, "tps": 23.3, "affinity": "mask", "note": "register-held pv v2"}
-{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "depth": 16384, "tps": 16.6, "affinity": "mask", "note": "register-held pv v2"}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "tps": 23.3, "affinity": "mask", "note": "register-held pv v2", "length": 8192}
+{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "tps": 16.6, "affinity": "mask", "note": "register-held pv v2", "length": 16384}

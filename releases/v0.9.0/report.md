@@ -246,6 +246,18 @@ Follow-ups: AMX epilogue amortization, a non-AMX comparison point, an ARM-native
 bandwidth design, and the q8_0 shallow-decode cell (llama.cpp's q8_0 gemv sustains a few percent more effective
 bandwidth per core; block-pairing landed, the rest needs deeper streaming work).
 
+## Late addition: register-held P.V on aarch64
+
+After the x86 register-tiled P.V trick landed, the aarch64 port took two attempts: a direct
+copy regressed 9-13% at depth, and profiling showed the culprit was a per-position p == 0 skip
+branch (never taken in decode, mispredicted every position), not the V re-streaming the smaller
+NEON register file forces. The branch-free version (accumulator pinned in 64-f32 register
+chunks, masked positions zeroed before the sweep) lands d8192 22.8 -> 23.3 and d16384
+15.6 -> 16.6 t/s, bringing the ARM deep-decode ratio to 1.79x - within a hair of the x86 1.81x.
+In-engine decode attention now runs at ~68 GB/s effective on GB10 against a ~130 GB/s machine
+ceiling; the remaining gap (scoring-phase horizontal reductions, second V pass) is scoped for
+the next release.
+
 ## Build notes
 
 All benchmarks are source builds of both engines on the same machine (llama.cpp with
@@ -279,8 +291,8 @@ All values are tokens per second; speedup is mistral.rs divided by llama.cpp in 
 | 512 | 38.9 | 34.4 | 1.132x |
 | 2048 | 34.1 | 27.6 | 1.234x |
 | 4096 | 29.4 | 22.0 | 1.333x |
-| 8192 | 22.8 | 15.6 | 1.466x |
-| 16384 | 15.6 | 9.3 | 1.678x |
+| 8192 | 23.3 | 15.6 | 1.498x |
+| 16384 | 16.6 | 9.3 | 1.785x |
 
 ##### Q6_K Prefill
 
