@@ -23,10 +23,10 @@ safetensors, so any HF model id works directly):
 
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
-mistralrs run --cpu -m Qwen/Qwen3-4B --isq 4
+mistralrs run --cpu -m Qwen/Qwen3-4B --quant 4
 ```
 
-Or an OpenAI-compatible server with a web UI: `mistralrs serve -m Qwen/Qwen3-4B --isq 4 --cpu`
+Or an OpenAI-compatible server with a web UI: `mistralrs serve -m Qwen/Qwen3-4B --quant 4 --cpu`
 
 **Numbers** (both engines built from source with native flags, llama.cpp at its best config
 per point - including where fa=0 beat its own fa=1):
