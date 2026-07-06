@@ -369,3 +369,22 @@ Full x86 rows (including prefill and both fa configs): `raw/results_x86.jsonl`.
 | 2048 | 75.9 | 75.0 | 1.012x |
 | 4096 | 70.3 | 69.9 | 1.006x |
 | 8192 | 68.4 | 61.8 | 1.107x |
+
+## Appendix: ik_llama.cpp
+
+ik_llama.cpp is the CPU-performance-focused fork by the author of llama.cpp's K-quants, and
+the fastest CPU implementation in the llama.cpp family. Same box (c7i.8xlarge), same GGUF,
+commit bbc7de4, pinned `taskset -c 0-15 -t 16`, its best fa configuration per point (fa=1
+won every point for it). qwen3-4b Q4_K_M, tokens per second:
+
+| | pp512 | pp2048 | pp8192 | d512 | d2048 | d8192 | d16384 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ik_llama.cpp | 391.3 | 348.9 | 235.8 | 32.9 | 28.2 | 18.0 | 12.2 |
+| mistral.rs | 274.5 | 216.0 | 170.2 | 32.4 | 29.2 | 21.5 | 15.9 |
+| mistral.rs speedup | 0.70x | 0.62x | 0.72x | 0.98x | 1.04x | 1.19x | **1.30x** |
+
+Decode diverges in mistral.rs's favor with depth (+30% at 16K) against a flash-attention
+implementation substantially better than mainline's (12.2 vs mainline's best 8.8 t/s at
+d16384). ik's prefill GEMM kernels lead the family and nearly match mainline's AMX path
+without using AMX. Not benchmarked on aarch64: ik HEAD does not compile there (gcc 13,
+Ubuntu 24.04).
