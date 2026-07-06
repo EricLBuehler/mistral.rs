@@ -93,8 +93,8 @@ unsafe fn scale_f32_avx512(xs: &mut [f32], scale: f32) {
         _mm512_storeu_ps(xs.as_mut_ptr().add(i), _mm512_mul_ps(v, s));
         i += 16;
     }
-    for j in main..len {
-        xs[j] *= scale;
+    for x in &mut xs[main..] {
+        *x *= scale;
     }
 }
 
@@ -110,13 +110,14 @@ unsafe fn max_f32_avx512(xs: &[f32]) -> f32 {
         i += 16;
     }
     let mut m = _mm512_reduce_max_ps(acc);
-    for j in main..len {
-        m = m.max(xs[j]);
+    for &x in &xs[main..] {
+        m = m.max(x);
     }
     m
 }
 
 // Cephes exp on 16 lanes; same polynomial as the scalar fast_exp.
+#[allow(clippy::excessive_precision)]
 #[target_feature(enable = "avx512f")]
 unsafe fn softmax_row_f32_avx512(row: &mut [f32], m: f32) -> f32 {
     use core::arch::x86_64::*;
@@ -163,10 +164,10 @@ unsafe fn softmax_row_f32_avx512(row: &mut [f32], m: f32) -> f32 {
         i += 16;
     }
     let mut sum = _mm512_reduce_add_ps(sumv);
-    for j in main..len {
-        let v = super::elem::fast_exp(row[j] - m);
-        row[j] = v;
-        sum += v;
+    for v in &mut row[main..] {
+        let e = super::elem::fast_exp(*v - m);
+        *v = e;
+        sum += e;
     }
     sum
 }
@@ -241,37 +242,6 @@ pub(super) fn softmax_row_f32(row: &mut [f32], m: f32) -> f32 {
         sum += *v;
     }
     sum
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn avx_kernels_match_reference() {
-        for len in [16usize, 64, 128, 131] {
-            let a: Vec<f32> = (0..len).map(|i| (i as f32 * 0.13).sin()).collect();
-            let b: Vec<f32> = (0..len).map(|i| (i as f32 * 0.07).cos()).collect();
-            let refdot: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
-            assert!((dot_f32(&a, &b) - refdot).abs() < 1e-3 * len as f32);
-            let d4 = dot4_f32(&a, &b, &a, &b, &a);
-            assert!((d4[0] - refdot).abs() < 1e-3 * len as f32);
-            let mut acc = vec![0.5f32; len];
-            let mut acc_ref = acc.clone();
-            mad_f32(&mut acc, &a, 1.7);
-            for (r, v) in acc_ref.iter_mut().zip(&a) {
-                *r += v * 1.7;
-            }
-            for (g, w) in acc.iter().zip(&acc_ref) {
-                assert!((g - w).abs() < 1e-4);
-            }
-            let mut row = a.clone();
-            let m = max_f32(&row);
-            let s = softmax_row_f32(&mut row, m);
-            let want: f32 = a.iter().map(|v| (v - m).exp()).sum();
-            assert!((s - want).abs() / want < 1e-3, "softmax sum {s} vs {want}");
-        }
-    }
 }
 
 // f16 K/V kernels: hardware vcvtph2ps widening, f32 accumulation. Halves the KV
@@ -763,6 +733,7 @@ unsafe fn expand_f16_avx2(dst: &mut [f32], src: &[half::f16]) {
     }
 }
 
+#[allow(clippy::excessive_precision)]
 #[target_feature(enable = "avx2,fma")]
 unsafe fn softmax_row_f32_avx2(row: &mut [f32], m: f32) -> f32 {
     use core::arch::x86_64::*;
@@ -821,10 +792,41 @@ unsafe fn softmax_row_f32_avx2(row: &mut [f32], m: f32) -> f32 {
     let s = _mm_hadd_ps(s, s);
     let s = _mm_hadd_ps(s, s);
     let mut sum = _mm_cvtss_f32(s);
-    for j in main..len {
-        let v = super::elem::fast_exp(row[j] - m);
-        row[j] = v;
-        sum += v;
+    for v in &mut row[main..] {
+        let e = super::elem::fast_exp(*v - m);
+        *v = e;
+        sum += e;
     }
     sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn avx_kernels_match_reference() {
+        for len in [16usize, 64, 128, 131] {
+            let a: Vec<f32> = (0..len).map(|i| (i as f32 * 0.13).sin()).collect();
+            let b: Vec<f32> = (0..len).map(|i| (i as f32 * 0.07).cos()).collect();
+            let refdot: f32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
+            assert!((dot_f32(&a, &b) - refdot).abs() < 1e-3 * len as f32);
+            let d4 = dot4_f32(&a, &b, &a, &b, &a);
+            assert!((d4[0] - refdot).abs() < 1e-3 * len as f32);
+            let mut acc = vec![0.5f32; len];
+            let mut acc_ref = acc.clone();
+            mad_f32(&mut acc, &a, 1.7);
+            for (r, v) in acc_ref.iter_mut().zip(&a) {
+                *r += v * 1.7;
+            }
+            for (g, w) in acc.iter().zip(&acc_ref) {
+                assert!((g - w).abs() < 1e-4);
+            }
+            let mut row = a.clone();
+            let m = max_f32(&row);
+            let s = softmax_row_f32(&mut row, m);
+            let want: f32 = a.iter().map(|v| (v - m).exp()).sum();
+            assert!((s - want).abs() / want < 1e-3, "softmax sum {s} vs {want}");
+        }
+    }
 }
