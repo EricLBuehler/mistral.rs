@@ -45,6 +45,7 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+shll = "shll"
 "ammount" = "ammount"
 "layrnorm" = "layrnorm"
 "ot" = "ot"
