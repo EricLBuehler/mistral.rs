@@ -73,6 +73,15 @@ serving benchmarks are the next report. This one is about the curves.
 of the table (portable builds); the repro scripts build from source and match the table. Post
 your `mistralrs bench` + `llama-bench` lines and I will look.
 
+**"Mainline llama.cpp CPU is known-slow, compare against ik_llama.cpp"** -> We did (bbc7de4,
+same box, same GGUF, its best fa config per point). x86 qwen3-4b Q4_K decode, ik vs us:
+d512 32.9 vs 32.4 (tie), d2048 28.2 vs 29.2, d8192 18.0 vs 21.5 (+19% us), d16384 12.2 vs 15.9
+(+30% us). ik's prefill is excellent (391 t/s pp512, beats us - its GEMM kernels are the best
+in the family and it nearly matches mainline's AMX path without AMX). Its flash attention is
+far better than mainline's (12.2 vs 8.8 at depth) but the depth curve still diverges in our
+favor. Could not build ik on aarch64 (HEAD does not compile on gcc 13 / Ubuntu 24.04; three
+separate errors). The comparison in the post targets mainline because that is what people run.
+
 **gusbags-class perf bug reports** -> collect exact model/quant/flags + the log header
 (DType/paged attn lines) and file an issue; the Spark NCCL 8 t/s report from the v0.8.2 thread
 is still on the follow-up list.
