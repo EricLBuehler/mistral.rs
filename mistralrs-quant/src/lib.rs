@@ -85,6 +85,7 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
