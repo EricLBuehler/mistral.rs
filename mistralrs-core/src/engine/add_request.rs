@@ -736,6 +736,16 @@ impl Engine {
                             crate::reasoning_parsers::ReasoningMode::TagBased,
                             Box::new(ctx),
                         );
+                    } else if chat_template.uses_gemma_turns() {
+                        // Gemma-family thinking convention (MedGemma 1.5 etc):
+                        // <unused94>thought\n...<unused95>. Pass-through for models
+                        // that never emit the tokens.
+                        seq.enable_reasoning(
+                            crate::reasoning_parsers::ReasoningMode::TagBased,
+                            Box::new(
+                                crate::reasoning_parsers::TagReasoningContext::new_gemma_thought(),
+                            ),
+                        );
                     }
                 }
             }
