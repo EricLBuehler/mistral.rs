@@ -1293,6 +1293,9 @@ pub fn try_fused_quantized_gate_up(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if gate.has_bias() || up.has_bias() {
         return Ok(None);
     }
@@ -1363,6 +1366,9 @@ pub fn try_fused_quantized_qkv(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }

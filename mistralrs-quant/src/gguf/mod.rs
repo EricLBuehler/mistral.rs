@@ -1,4 +1,3 @@
-#[cfg(not(feature = "cuda"))]
 mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
@@ -343,10 +342,14 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        #[cfg(feature = "cuda")]
-        let res = cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?;
-
         // For CPU and Metal: use dequantize-then-matmul approach
+        #[cfg(feature = "cuda")]
+        let res = if x.device().is_cuda() {
+            cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
+        } else {
+            cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
+        };
+
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
