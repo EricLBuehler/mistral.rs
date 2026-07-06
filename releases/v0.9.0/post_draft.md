@@ -18,14 +18,15 @@ memory bandwidth (accumulators live in registers across each KV tile, V converts
 position), so throughput degrades with context at the hardware's floor. That is exactly where
 long chats and agent workloads live.
 
-**Try it in 60 seconds** (works with your existing GGUFs):
+**Try it in 60 seconds** (no model files to hunt down - it quantizes on the fly from
+safetensors, so any HF model id works directly):
 
 ```
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
-mistralrs run --cpu --format gguf -m Qwen/Qwen3-4B-GGUF -f Qwen3-4B-Q4_K_M.gguf
+mistralrs run --cpu -m Qwen/Qwen3-4B --isq 4
 ```
 
-Or an OpenAI-compatible server with a web UI: `mistralrs serve -m Qwen/Qwen3-4B --quant 4`
+Or an OpenAI-compatible server with a web UI: `mistralrs serve -m Qwen/Qwen3-4B --isq 4 --cpu`
 
 **Numbers** (both engines built from source with native flags, llama.cpp at its best config
 per point - including where fa=0 beat its own fa=1):
