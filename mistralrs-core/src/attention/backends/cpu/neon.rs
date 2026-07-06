@@ -723,3 +723,90 @@ mod bf16_kernel_tests {
         }
     }
 }
+
+// P.V with register-held accumulator chunks: the mad loop's acc ldp/stp per 8 values
+// is ~30% of decode attention cycles. dv is processed in 64-f32 chunks (16 vregs of
+// accumulator) held across the whole kv span; v re-reads are L1-resident tile hits.
+#[target_feature(enable = "fp16")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn pv_chunk_f16(
+    acc: *mut f32,
+    cn: usize,
+    v_base: *const u16,
+    v_stride: usize,
+    p: *const f32,
+    kv_n: usize,
+) {
+    use core::arch::aarch64::*;
+    let nv = cn / 4;
+    let mut a = [vdupq_n_f32(0.0); 16];
+    for (x, ax) in a.iter_mut().enumerate().take(nv) {
+        *ax = vld1q_f32(acc.add(x * 4));
+    }
+    for kv in 0..kv_n {
+        let pv = vdupq_n_f32(*p.add(kv));
+        let vp = v_base.add(kv * v_stride);
+        let mut x = 0;
+        while x + 2 <= nv {
+            let vh = vreinterpretq_f16_u16(vld1q_u16(vp.add(x * 4)));
+            a[x] = vfmaq_f32(a[x], vcvt_f32_f16(vget_low_f16(vh)), pv);
+            a[x + 1] = vfmaq_f32(a[x + 1], vcvt_high_f32_f16(vh), pv);
+            x += 2;
+        }
+    }
+    for (x, ax) in a.iter().enumerate().take(nv) {
+        vst1q_f32(acc.add(x * 4), *ax);
+    }
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn pv_tile_f16(
+    vkq: *mut f32,
+    vkq_stride: usize,
+    group: usize,
+    dv: usize,
+    v_data: &[half::f16],
+    v_row_of: &dyn Fn(usize) -> usize,
+    bs: usize,
+    be: usize,
+    p_tile: &[f32],
+    tile_stride: usize,
+) -> bool {
+    if !fp16_fast() || !dv.is_multiple_of(8) || dv > 256 || be <= bs {
+        return false;
+    }
+    // rows must be contiguous with a fixed stride for the chunk kernel's v walk
+    let v0 = v_row_of(bs);
+    let v_stride = if be > bs + 1 {
+        v_row_of(bs + 1) - v0
+    } else {
+        dv
+    };
+    for kv in bs + 1..be {
+        if v_row_of(kv) != v0 + (kv - bs) * v_stride {
+            return false;
+        }
+    }
+    let kv_n = be - bs;
+    unsafe {
+        for j in 0..group {
+            let row_acc = vkq.add(j * vkq_stride);
+            let p = p_tile.as_ptr().add(j * tile_stride);
+            let mut c0 = 0;
+            while c0 < dv {
+                let cn = (dv - c0).min(64);
+                pv_chunk_f16(
+                    row_acc.add(c0),
+                    cn,
+                    v_data.as_ptr().add(v0 + c0) as *const u16,
+                    v_stride,
+                    p,
+                    kv_n,
+                );
+                c0 += cn;
+            }
+        }
+    }
+    true
+}

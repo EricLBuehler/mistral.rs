@@ -274,7 +274,7 @@ impl ElemOps for f16 {
         )
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
     #[allow(clippy::too_many_arguments)]
     fn pv_tile(
         rows: &mut [f32],
@@ -288,6 +288,20 @@ impl ElemOps for f16 {
         p_tile: &[f32],
         tile_stride: usize,
     ) -> bool {
+        #[cfg(target_arch = "aarch64")]
+        return super::neon::pv_tile_f16(
+            rows.as_mut_ptr(),
+            vkq_stride,
+            group,
+            dv,
+            v_data,
+            v_row_of,
+            bs,
+            be,
+            p_tile,
+            tile_stride,
+        );
+        #[cfg(target_arch = "x86_64")]
         super::avx::pv_tile_f16(
             rows.as_mut_ptr(),
             vkq_stride,
