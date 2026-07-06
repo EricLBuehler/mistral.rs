@@ -10,7 +10,7 @@ Hey all! After the v0.8.2 CUDA release, several of you asked the right question:
 what about hardware I actually own?" So this release is entirely about CPU.
 
 The result: mistral.rs now decodes faster than llama.cpp on CPU - on ARM and on x86 - and the
-lead grows with context depth. At 16K context: 1.8x on a Xeon, 1.7x on ARM. Q4_K decode is at
+lead grows with context depth. At 16K context: 1.81x on a Xeon, 1.79x on ARM. Q4_K decode is at
 or ahead of llama.cpp at every context length we measured, on both architectures.
 
 The interesting part is the shape of the curve, not one number: our decode attention runs at
@@ -32,7 +32,7 @@ per point - including where fa=0 beat its own fa=1):
 
 - gemma-4-E4B q4k prefill: 2.4-3.2x, decode 1.3x (ARM)
 - qwen3-4B q4k decode: 1.06x -> 1.81x as depth grows 128 -> 16K (x86, Sapphire Rapids w/ AMX)
-- qwen3-4B q4k decode: 1.09x -> 1.68x (ARM, GB10)
+- qwen3-4B q4k decode: 1.09x -> 1.79x (ARM, GB10)
 - LFM2.5-8B MoE: decode ahead at every depth (the CPU MoE path was rebuilt from scratch)
 - Q8_0 (scheme-identical on both engines, for the quant-fairness folks): decode 1.02-1.33x ARM,
   ahead at depth on x86
