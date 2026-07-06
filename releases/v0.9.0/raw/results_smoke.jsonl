@@ -1,4 +1,0 @@
-{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "default", "gen_len": 32, "iterations": 1, "warmup": 0, "wall_s": 16.8, "mode": "prefill", "length": 512, "tps": 126.6}
-{"engine": "mistralrs", "model": "qwen3-4b", "quant": "q4k", "affinity": "default", "gen_len": 32, "iterations": 1, "warmup": 0, "wall_s": 16.8, "mode": "decode", "length": 512, "tps": 18.8}
-{"engine": "llamacpp", "model": "qwen3-4b", "quant": "q4k", "affinity": "default", "gen_len": 32, "iterations": 1, "warmup": 1, "mode": "prefill", "length": 512, "tps": 93.066652, "stddev": 0.0, "wall_s": 11.2}
-{"engine": "llamacpp", "model": "qwen3-4b", "quant": "q4k", "affinity": "default", "gen_len": 32, "iterations": 1, "warmup": 1, "mode": "decode", "length": 512, "tps": 13.924346, "stddev": 0.0, "wall_s": 8.2}
