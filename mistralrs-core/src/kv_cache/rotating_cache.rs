@@ -212,6 +212,13 @@ impl RotatingCache {
     }
 
     pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+        if len > self.current_seq_len {
+            candle_core::bail!(
+                "Sliding KV cache cannot extend via set_len (current {}, requested {})",
+                self.current_seq_len,
+                len,
+            );
+        }
         // Once the retained window has dropped old tokens, rollback would require
         // data that is no longer present.
         if self.current_seq_len > self.max_seq_len && len < self.current_seq_len {
