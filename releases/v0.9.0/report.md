@@ -380,8 +380,8 @@ won every point for it). qwen3-4b Q4_K_M, tokens per second:
 | | pp512 | pp2048 | pp8192 | d512 | d2048 | d8192 | d16384 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | ik_llama.cpp | 391.3 | 348.9 | 235.8 | 32.9 | 28.2 | 18.0 | 12.2 |
-| mistral.rs | 274.5 | 216.0 | 170.2 | 32.4 | 29.2 | 21.5 | 15.9 |
-| mistral.rs speedup | 0.70x | 0.62x | 0.72x | 0.98x | 1.04x | 1.19x | **1.30x** |
+| mistral.rs | 274.5 | 239.2 | 140.6 | 32.4 | 29.2 | 21.5 | 15.9 |
+| mistral.rs speedup | 0.70x | 0.69x | 0.60x | 0.98x | 1.04x | 1.19x | **1.30x** |
 
 Decode diverges in mistral.rs's favor with depth (+30% at 16K) against a flash-attention
 implementation substantially better than mainline's (12.2 vs mainline's best 8.8 t/s at
