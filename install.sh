@@ -36,6 +36,29 @@ info() { printf "${BLUE}info:${NC} %s\n" "$1" >&2; }
 success() { printf "${GREEN}success:${NC} %s\n" "$1" >&2; }
 warn() { printf "${YELLOW}warning:${NC} %s\n" "$1" >&2; }
 error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
+# Echo a dependency-install command (rustup, brew, apt, ...) before running it.
+show_cmd() { printf "${BOLD}  \$ %s${NC}\n" "$1" >&2; }
+
+# Format a byte count for humans (e.g. 1234567 -> 1.2 MiB).
+human_size() {
+    awk -v b="$1" 'BEGIN {
+        split("B KiB MiB GiB TiB", u, " ")
+        i = 1
+        while (b >= 1024 && i < 5) { b /= 1024; i++ }
+        printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i]
+    }'
+}
+
+# Content-Length of a URL after redirects; empty if it cannot be determined.
+remote_download_size() {
+    curl --proto '=https' --tlsv1.2 -sfIL "$1" 2>/dev/null \
+        | tr -d '\r' | awk 'tolower($1) == "content-length:" { len = $2 } END { if (len) print len }'
+}
+
+# On-disk size of the managed install dir; empty if unavailable.
+installed_size() {
+    du -sh "$PREBUILT_DIR" 2>/dev/null | awk '{print $1}'
+}
 
 # Banner
 print_banner() {
@@ -99,6 +122,7 @@ version_gte() {
 # Install Rust via rustup
 install_rust() {
     info "Installing Rust via rustup..."
+    show_cmd "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     . "$HOME/.cargo/env"
     success "Rust installed successfully"
@@ -107,6 +131,7 @@ install_rust() {
 # Update Rust to latest version
 update_rust() {
     info "Updating Rust to latest version..."
+    show_cmd "rustup update stable"
     rustup update stable
     success "Rust updated successfully"
 }
@@ -236,9 +261,11 @@ check_xcode_cli_tools() {
                 ;;
         esac
         info "Installing Xcode Command Line Tools..."
+        show_cmd "xcode-select --install"
         xcode-select --install
         echo "Please complete the installation in the dialog, then press Enter to continue..."
         read_input
+        show_cmd "sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer"
         sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
     fi
 }
@@ -256,6 +283,7 @@ check_metal_toolchain() {
                 ;;
         esac
         info "Installing Metal Toolchain..."
+        show_cmd "xcodebuild -downloadComponent MetalToolchain"
         xcodebuild -downloadComponent MetalToolchain
     fi
 }
@@ -374,9 +402,11 @@ install_ffmpeg() {
         if command -v brew >/dev/null 2>&1; then
             if brew list ffmpeg >/dev/null 2>&1; then
                 info "Reinstalling FFmpeg via Homebrew..."
+                show_cmd "brew reinstall ffmpeg"
                 brew reinstall ffmpeg
             else
                 info "Installing FFmpeg via Homebrew..."
+                show_cmd "brew install ffmpeg"
                 brew install ffmpeg
             fi
         else
@@ -386,9 +416,11 @@ install_ffmpeg() {
     else
         if command -v apt-get >/dev/null 2>&1; then
             info "Installing FFmpeg via apt..."
+            show_cmd "sudo apt-get update && sudo apt-get install -y ffmpeg"
             sudo apt-get update && sudo apt-get install -y ffmpeg
         elif command -v dnf >/dev/null 2>&1; then
             info "Installing FFmpeg via dnf..."
+            show_cmd "sudo dnf install -y ffmpeg"
             sudo dnf install -y ffmpeg
         else
             warn "Could not detect package manager. Install FFmpeg manually: https://ffmpeg.org/download.html"
@@ -548,8 +580,14 @@ detect_legacy_cuda_prebuilt_asset() {
 install_prebuilt() {
     asset="$1"
     tmp=$(mktemp -d)
-    info "Downloading $asset"
-    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$RELEASE_BASE/$asset" -o "$tmp/$asset"; then
+    asset_url="$RELEASE_BASE/$asset"
+    download_size=$(remote_download_size "$asset_url")
+    if [ -n "$download_size" ]; then
+        info "Downloading $asset ($(human_size "$download_size"))"
+    else
+        info "Downloading $asset"
+    fi
+    if ! curl --proto '=https' --tlsv1.2 -fSL --progress-bar "$asset_url" -o "$tmp/$asset"; then
         rm -rf "$tmp"
         return 1
     fi
@@ -838,6 +876,8 @@ print_success() {
         printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
     fi
     printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
+    size=$(installed_size)
+    [ -n "$size" ] && printf "  size        %s\n" "$size"
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
