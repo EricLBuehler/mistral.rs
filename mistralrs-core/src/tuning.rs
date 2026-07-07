@@ -145,7 +145,7 @@ fn select_devices(force_cpu: bool) -> Result<Vec<Device>> {
         return Ok(vec![Device::Cpu]);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(feature = "cuda")]
     {
         if let Ok(dev) = Device::new_cuda(0) {
             return Ok(crate::device_map::get_all_similar_devices(&dev)?);
