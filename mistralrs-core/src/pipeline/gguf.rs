@@ -615,6 +615,7 @@ impl Loader for GGUFLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
             mapper: pipeline_mapper,

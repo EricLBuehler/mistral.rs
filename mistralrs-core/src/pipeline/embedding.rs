@@ -653,6 +653,7 @@ impl Loader for EmbeddingLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Embedding],
                 },
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             mapper: pipeline_mapper,
             modules,

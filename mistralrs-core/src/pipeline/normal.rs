@@ -909,6 +909,7 @@ impl Loader for NormalLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),

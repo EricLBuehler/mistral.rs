@@ -1148,9 +1148,13 @@ impl MistralRs {
         let is_multi_threaded = tokio::runtime::Handle::try_current()
             .is_ok_and(|h| h.runtime_flavor() != tokio::runtime::RuntimeFlavor::CurrentThread);
 
-        // Do a dummy run
+        // Do a dummy run; skip UQFF writes, whose CPU-resident model cannot serve requests.
+        let loaded_for_uqff_write = get_mut_arcmutex!(pipeline)
+            .get_metadata()
+            .loaded_for_uqff_write;
         if !distributed::is_daemon()
             && is_multi_threaded
+            && !loaded_for_uqff_write
             && matches!(
                 engine_instance.category,
                 ModelCategory::Text | ModelCategory::Multimodal { .. }

@@ -828,6 +828,7 @@ impl Loader for MultimodalLoader {
                 cache_engine,
                 model_metadata: Some(model_metadata),
                 modalities: self.inner.modalities(&config)?,
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             processor,
             prefixer: self.inner.prefixer(&config),
