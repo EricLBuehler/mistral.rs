@@ -9,6 +9,28 @@ function Write-Info { Write-Host "info: $args" -ForegroundColor Blue }
 function Write-Success { Write-Host "success: $args" -ForegroundColor Green }
 function Write-Warn { Write-Host "warning: $args" -ForegroundColor Yellow }
 function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
+# Echo a dependency-install command (rustup, ...) before running it.
+function Show-Cmd($cmd) { Write-Host "  > $cmd" -ForegroundColor DarkGray }
+
+# Format a byte count for humans (e.g. 1234567 -> 1.2 MiB).
+function Format-ByteSize([long]$Bytes) {
+    $units = @("B", "KiB", "MiB", "GiB", "TiB")
+    $value = [double]$Bytes
+    $i = 0
+    while ($value -ge 1024 -and $i -lt ($units.Count - 1)) { $value /= 1024; $i++ }
+    if ($i -eq 0) { return "{0} {1}" -f [long]$value, $units[$i] }
+    return "{0:N1} {1}" -f $value, $units[$i]
+}
+
+# Content-Length of a URL after redirects; $null if it cannot be determined.
+function Get-RemoteDownloadSize($Url) {
+    try {
+        $head = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -ErrorAction Stop
+        $len = @($head.Headers['Content-Length']) | Select-Object -Last 1
+        if ($len) { return [long]$len }
+    } catch {}
+    return $null
+}
 
 # MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
 function Read-Confirm($prompt) {
@@ -505,7 +527,12 @@ function Write-InstallSuccess {
 function Install-Prebuilt {
     $asset = "mistralrs-cpu-x86_64-pc-windows-msvc.zip"
     $tmp = Join-Path $env:TEMP $asset
-    Write-Info "Downloading $asset"
+    $downloadSize = Get-RemoteDownloadSize "$ReleaseBase/$asset"
+    if ($downloadSize) {
+        Write-Info "Downloading $asset ($(Format-ByteSize $downloadSize))"
+    } else {
+        Write-Info "Downloading $asset"
+    }
     try {
         # Start-BitsTransfer shows a native progress bar and is fast; fall back to IWR with its bar.
         try {
@@ -567,6 +594,7 @@ function Main {
         if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
             Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
             Write-Host ""
+            Show-Cmd "rustup update stable"
             $response = Read-Confirm "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
                 Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
@@ -581,6 +609,7 @@ function Main {
     } else {
         Write-Warn "Rust is not installed"
         Write-Host ""
+        Show-Cmd "Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe; .\rustup-init.exe -y"
         $response = Read-Confirm "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
             Write-Err "Rust is required to install mistral.rs"
