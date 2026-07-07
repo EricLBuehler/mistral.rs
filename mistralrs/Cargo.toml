@@ -72,6 +72,10 @@ name = "multimodal_models"
 path = "examples/models/multimodal_models/main.rs"
 
 [[example]]
+name = "paddleocr_vl_recognize"
+path = "examples/models/paddleocr_vl_recognize/main.rs"
+
+[[example]]
 name = "multimodal_multiturn"
 path = "examples/models/multimodal_multiturn/main.rs"
 

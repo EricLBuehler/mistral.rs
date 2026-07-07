@@ -12,8 +12,8 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader,
-    Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, PaddleOcrVlLoader,
+    Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -202,6 +202,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
             Some(MultimodalLoaderType::DiffusionGemma) => Box::new(DiffusionGemmaLoader),
+            Some(MultimodalLoaderType::PaddleOcrVl) => Box::new(PaddleOcrVlLoader),
             None => Box::new(AutoMultimodalLoader),
         };
         Box::new(MultimodalLoader {

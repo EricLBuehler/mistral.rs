@@ -73,6 +73,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.Voxtral` | `'Voxtral'` |
 | `MultimodalArchitecture.Gemma4` | `'Gemma4'` |
 | `MultimodalArchitecture.DiffusionGemma` | `'DiffusionGemma'` |
+| `MultimodalArchitecture.PaddleOcrVl` | `'paddleocr_vl'` |
 
 
 ## `DiffusionArchitecture`

@@ -59,6 +59,10 @@ use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
 use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model, Mistral3Processor};
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
+use crate::vision_models::paddleocr_vl::config::Config as PaddleOcrVlConfig;
+use crate::vision_models::paddleocr_vl::{
+    inputs_processor::PaddleOcrVlProcessor, PaddleOcrVlModel,
+};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
@@ -227,6 +231,8 @@ pub enum MultimodalLoaderType {
     Gemma4,
     #[serde(rename = "diffusiongemma")]
     DiffusionGemma,
+    #[serde(rename = "paddleocr_vl")]
+    PaddleOcrVl,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -253,6 +259,7 @@ impl MultimodalLoaderType {
             | "Gemma4UnifiedForConditionalGeneration"
             | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
             "DiffusionGemmaForBlockDiffusion" => Ok(Self::DiffusionGemma),
+            "PaddleOCRVLForConditionalGeneration" => Ok(Self::PaddleOcrVl),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -287,12 +294,13 @@ impl FromStr for MultimodalLoaderType {
             "gemma3n" => Ok(Self::Gemma3n),
             "gemma4" => Ok(Self::Gemma4),
             "diffusiongemma" => Ok(Self::DiffusionGemma),
+            "paddleocr_vl" => Ok(Self::PaddleOcrVl),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`, `paddleocr_vl`.")),
         }
     }
 }
@@ -322,6 +330,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
             MultimodalLoaderType::DiffusionGemma => "diffusiongemma",
+            MultimodalLoaderType::PaddleOcrVl => "paddleocr_vl",
         };
         write!(f, "{name}")
     }
@@ -382,6 +391,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
             MultimodalLoaderType::DiffusionGemma => Box::new(DiffusionGemmaLoader),
+            MultimodalLoaderType::PaddleOcrVl => Box::new(PaddleOcrVlLoader),
         })
     }
 }
@@ -5615,6 +5625,283 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
     }
 }
 
+// ======================== PaddleOCR-VL Loader
+
+/// [`MultimodalLoader`] for a PaddleOCR-VL-1.5 model (SigLIP/NaViT tower + `mlp_AR` connector +
+/// ERNIE-4.5-0.3B LM).
+///
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+pub struct PaddleOcrVlLoader;
+
+pub struct PaddleOcrVlPrefixer;
+
+impl MultimodalPromptPrefixer for PaddleOcrVlPrefixer {
+    // No-op: with MessagesAction::Keep the chat template emits the image tokens itself, and the
+    // inputs processor expands the single placeholder into the per-patch stream.
+}
+
+impl MultimodalModelLoader for PaddleOcrVlLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        // ponytail: CPU-f32 single-device parity path - the model reads its device from `vb` and does
+        // not shard, so `normal_loading_metadata` (device mapper) and `attention_mechanism` (paged vs
+        // eager) are unused. Thread them through if a device-mapped/paged speed path is added.
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(PaddleOcrVlModel::new(&cfg, vb)?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(PaddleOcrVlProcessor)
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        false
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(PaddleOcrVlPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for PaddleOcrVlLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention (ERNIE LM keys are `model.layers.N.*`, no `language_model` infix, no bias).
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // MLP (SwiGLU)
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for PaddleOcrVlLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        let tcfg = cfg.text_config();
+        let vcfg = cfg.vision_config();
+
+        // grid_t=1 (images); after the connector's 2x2 spatial merge each axis is /patch/merge.
+        let img_seq_len = {
+            let grid_t = 1;
+            let grid_h = (max_image_shape.0 / vcfg.patch_size) / vcfg.spatial_merge_size;
+            let grid_w = (max_image_shape.1 / vcfg.patch_size) / vcfg.spatial_merge_size;
+            grid_t * grid_h * grid_w * max_num_images
+        };
+
+        // Vision embeds are scattered into the token stream, so text attends over image + text tokens.
+        let max_text_attn = {
+            let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+            max_batch_size * tcfg.num_attention_heads * max_seq_len * max_seq_len
+        };
+
+        Ok(max_text_attn)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        let vcfg = cfg.vision_config();
+
+        // Vision self-attention runs over the full patch grid, before the spatial merge.
+        let img_seq_len = {
+            let grid_h = max_image_shape.0 / vcfg.patch_size;
+            let grid_w = max_image_shape.1 / vcfg.patch_size;
+            grid_h * grid_w
+        };
+
+        let max_vision_attn = (max_batch_size * max_num_images)
+            * vcfg.num_attention_heads
+            * img_seq_len
+            * img_seq_len;
+
+        Ok(max_vision_attn)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        let tcfg = cfg.text_config();
+        let vcfg = cfg.vision_config();
+
+        let text_elems = {
+            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            // Untied lm_head (tie_word_embeddings=false), so a separate matrix.
+            let lm_head = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            let norm = tcfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+
+        let connector = {
+            let merged = vcfg.hidden_size * vcfg.spatial_merge_size.pow(2);
+            let pre_norm = vcfg.hidden_size + vcfg.hidden_size; // LayerNorm weight + bias
+            let linear_1 = merged * merged + merged;
+            let linear_2 = merged * tcfg.hidden_size + tcfg.hidden_size;
+            pre_norm + linear_1 + linear_2
+        };
+
+        let patch_embed = {
+            // Conv2d(num_channels -> hidden, k=s=patch): weight + bias.
+            let weight = vcfg.num_channels * vcfg.hidden_size * vcfg.patch_size * vcfg.patch_size;
+            weight + vcfg.hidden_size
+        };
+        let pos_embed = vcfg.num_positions * vcfg.hidden_size;
+        let post_layernorm = vcfg.hidden_size + vcfg.hidden_size;
+
+        let encoder_layer = {
+            let norm1 = vcfg.hidden_size + vcfg.hidden_size;
+            let norm2 = vcfg.hidden_size + vcfg.hidden_size;
+            // q/k/v/out each hidden->hidden with bias.
+            let attn = 4 * (vcfg.hidden_size * vcfg.hidden_size + vcfg.hidden_size);
+            let fc1 = vcfg.hidden_size * vcfg.intermediate_size + vcfg.intermediate_size;
+            let fc2 = vcfg.intermediate_size * vcfg.hidden_size + vcfg.hidden_size;
+            norm1 + norm2 + attn + fc1 + fc2
+        };
+
+        let elems = text_elems
+            + connector
+            + patch_embed
+            + pos_embed
+            + post_layernorm
+            + encoder_layer * vcfg.num_hidden_layers;
+
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        let tcfg = cfg.text_config();
+        let per_layer_elems = {
+            let input_layernorm = tcfg.hidden_size;
+            let post_attention_layernorm = tcfg.hidden_size;
+
+            let size_in = tcfg.hidden_size;
+            let size_q = tcfg.head_dim * tcfg.num_attention_heads;
+            let size_kv = tcfg.head_dim * tcfg.num_key_value_heads;
+            // ERNIE LM projections are bias-free (only `.weight` keys in the checkpoint).
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+
+            let h_size = tcfg.hidden_size;
+            let i_size = tcfg.intermediate_size;
+            let gate_proj = h_size * i_size / weight_pack_factor;
+            let up_proj = h_size * i_size / weight_pack_factor;
+            let down_proj = i_size * h_size / weight_pack_factor;
+
+            input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + gate_proj
+                + up_proj
+                + down_proj
+        };
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            tcfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config().num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
+        let tcfg = cfg.text_config();
+
+        let meta = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: tcfg.num_hidden_layers,
+            hidden_size: tcfg.hidden_size,
+            num_kv_heads: tcfg.num_key_value_heads,
+            num_attn_heads: tcfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: tcfg.head_dim,
+            v_head_dim: tcfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(meta))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+}
+
 // ======================== Qwen3VL Loader
 
 /// [`MultimodalLoader`] for an Qwen3VL model.
@@ -8520,6 +8807,44 @@ mod tests {
                 assert!(matches_any(&regexes, name), "{name} was not matched");
             }
         }
+
+        Ok(())
+    }
+
+    fn paddleocr_vl_config_json() -> String {
+        include_str!("../../vision_models/paddleocr_vl/reference_config.json").to_string()
+    }
+
+    #[test]
+    fn paddleocr_vl_loader_config_and_isq() -> Result<()> {
+        let loader = PaddleOcrVlLoader;
+        let cfg = paddleocr_vl_config_json();
+
+        // Config parses and the LM layer count / attention shape come through unchanged.
+        assert_eq!(loader.num_layers(&cfg)?, 18);
+        let meta = loader.model_config(&cfg)?;
+        assert_eq!(meta.num_layers(), 18);
+        assert_eq!(meta.num_attn_heads(), 16);
+        assert_eq!(meta.num_kv_heads(), 2);
+        assert_eq!(meta.k_head_dim(), 128);
+
+        // ISQ targets the ERNIE LM `model.layers.N.*` projections + `lm_head`, not the norms.
+        let regexes = loader.isq_layer_regexes(&cfg)?;
+        assert_eq!(regexes.len(), 8);
+        assert!(matches_any(
+            &regexes,
+            "model.layers.5.self_attn.q_proj.weight"
+        ));
+        assert!(matches_any(
+            &regexes,
+            "model.layers.17.mlp.down_proj.weight"
+        ));
+        assert!(matches_any(&regexes, "lm_head.weight"));
+        assert!(!matches_any(
+            &regexes,
+            "model.layers.5.input_layernorm.weight"
+        ));
+        assert!(!matches_any(&regexes, "model.embed_tokens.weight"));
 
         Ok(())
     }
