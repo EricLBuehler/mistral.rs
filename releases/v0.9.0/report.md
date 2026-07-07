@@ -131,7 +131,8 @@ All benchmarks are source builds of both engines on the same machine (llama.cpp 
 GGML_NATIVE=ON, mistral.rs with target-cpu=native), which is what the reproducer scripts do.
 Prebuilt installer binaries are portable (runtime-dispatched kernels) and land within ~8% of
 source-built throughput on both architectures; build from source to reproduce the tables
-exactly.
+exactly. Two aarch64 assets ship: the default assumes ARMv8.2 (Graviton2+, Pi 5, 2018+ ARM)
+and a v8.0 compat build covers A72-class boards (Pi 4); the installer picks by cpuinfo probe.
 
 ## Appendix: Full Tables
 

@@ -519,6 +519,14 @@ detect_prebuilt_asset() {
         fi
         return 0
     fi
+    if [ "$triple" = "aarch64-unknown-linux-gnu" ]; then
+        # the default aarch64 asset assumes ARMv8.2 (dotprod); A72-class boards
+        # (Pi 4, Graviton1) get the compat build
+        if ! grep -qw asimddp /proc/cpuinfo 2>/dev/null; then
+            echo "mistralrs-cpu-${triple}-v8_0.tar.gz"
+            return 0
+        fi
+    fi
     echo "mistralrs-cpu-${triple}.tar.gz"
 }
 
