@@ -32,15 +32,6 @@ function Get-RemoteDownloadSize($Url) {
     return $null
 }
 
-# On-disk size of the managed install dir; $null if unavailable.
-function Get-InstalledSize {
-    try {
-        $sum = (Get-ChildItem -LiteralPath $PrebuiltDir -Recurse -File -ErrorAction Stop | Measure-Object Length -Sum).Sum
-        if ($sum) { return Format-ByteSize ([long]$sum) }
-    } catch {}
-    return $null
-}
-
 # MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
 function Read-Confirm($prompt) {
     if ($env:MISTRALRS_INSTALL_YES -eq "1") { return "y" }
@@ -144,9 +135,7 @@ function Install-Rust {
     $rustupInit = "$env:TEMP\rustup-init.exe"
 
     try {
-        Show-Cmd "Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile $rustupInit"
         Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile $rustupInit -UseBasicParsing
-        Show-Cmd "$rustupInit -y"
         & $rustupInit -y
 
         # Add cargo to PATH for current session
@@ -162,7 +151,6 @@ function Install-Rust {
 function Update-Rust {
     Write-Info "Updating Rust to latest version..."
     try {
-        Show-Cmd "rustup update stable"
         & rustup update stable
         Write-Success "Rust updated successfully"
     } catch {
@@ -524,8 +512,6 @@ function Write-InstallSuccess {
     Write-Host "========="
     Write-Host "  binary   $ManagedBin"
     Write-Host "  on PATH  $LauncherPath"
-    $size = Get-InstalledSize
-    if ($size) { Write-Host "  size     $size" }
     Write-Host ""
     if (($env:PATH -split ';') -notcontains $BinDir) {
         Add-UserPath $BinDir
@@ -608,6 +594,7 @@ function Main {
         if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
             Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
             Write-Host ""
+            Show-Cmd "rustup update stable"
             $response = Read-Confirm "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
                 Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
@@ -622,6 +609,7 @@ function Main {
     } else {
         Write-Warn "Rust is not installed"
         Write-Host ""
+        Show-Cmd "Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe; .\rustup-init.exe -y"
         $response = Read-Confirm "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
             Write-Err "Rust is required to install mistral.rs"

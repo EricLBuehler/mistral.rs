@@ -36,7 +36,7 @@ info() { printf "${BLUE}info:${NC} %s\n" "$1" >&2; }
 success() { printf "${GREEN}success:${NC} %s\n" "$1" >&2; }
 warn() { printf "${YELLOW}warning:${NC} %s\n" "$1" >&2; }
 error() { printf "${RED}error:${NC} %s\n" "$1" >&2; exit 1; }
-# Echo a dependency-install command (rustup, brew, apt, ...) before running it.
+# Echo a dependency-install command (rustup, brew, apt, ...) so the user sees it before confirming.
 show_cmd() { printf "${BOLD}  \$ %s${NC}\n" "$1" >&2; }
 
 # Format a byte count for humans (e.g. 1234567 -> 1.2 MiB).
@@ -53,11 +53,6 @@ human_size() {
 remote_download_size() {
     curl --proto '=https' --tlsv1.2 -sfIL "$1" 2>/dev/null \
         | tr -d '\r' | awk 'tolower($1) == "content-length:" { len = $2 } END { if (len) print len }'
-}
-
-# On-disk size of the managed install dir; empty if unavailable.
-installed_size() {
-    du -sh "$PREBUILT_DIR" 2>/dev/null | awk '{print $1}'
 }
 
 # Banner
@@ -90,6 +85,7 @@ detect_os() {
 
 # Minimum required Rust version
 REQUIRED_RUST_VERSION="1.94"
+RUSTUP_INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
 MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
 MISTRALRS_BRANCH="master"
 MISTRALRS_CLI_PACKAGE="mistralrs-cli"
@@ -122,8 +118,7 @@ version_gte() {
 # Install Rust via rustup
 install_rust() {
     info "Installing Rust via rustup..."
-    show_cmd "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    sh -c "$RUSTUP_INSTALL_CMD"
     . "$HOME/.cargo/env"
     success "Rust installed successfully"
 }
@@ -131,7 +126,6 @@ install_rust() {
 # Update Rust to latest version
 update_rust() {
     info "Updating Rust to latest version..."
-    show_cmd "rustup update stable"
     rustup update stable
     success "Rust updated successfully"
 }
@@ -253,6 +247,7 @@ check_xcode_cli_tools() {
     if ! xcrun --version >/dev/null 2>&1; then
         warn "Xcode Command Line Tools are not installed"
         echo ""
+        show_cmd "xcode-select --install"
         printf "Would you like to install them now? [Y/n] "
         read_input
         case "$REPLY" in
@@ -261,7 +256,6 @@ check_xcode_cli_tools() {
                 ;;
         esac
         info "Installing Xcode Command Line Tools..."
-        show_cmd "xcode-select --install"
         xcode-select --install
         echo "Please complete the installation in the dialog, then press Enter to continue..."
         read_input
@@ -275,6 +269,7 @@ check_metal_toolchain() {
     if ! xcrun metal --version >/dev/null 2>&1; then
         warn "Metal Toolchain is not installed"
         echo ""
+        show_cmd "xcodebuild -downloadComponent MetalToolchain"
         printf "Would you like to install it now? [Y/n] "
         read_input
         case "$REPLY" in
@@ -283,7 +278,6 @@ check_metal_toolchain() {
                 ;;
         esac
         info "Installing Metal Toolchain..."
-        show_cmd "xcodebuild -downloadComponent MetalToolchain"
         xcodebuild -downloadComponent MetalToolchain
     fi
 }
@@ -395,38 +389,38 @@ check_ffmpeg() {
     command -v ffmpeg >/dev/null 2>&1 && ffmpeg -version >/dev/null 2>&1
 }
 
-# Install ffmpeg using the system package manager
-install_ffmpeg() {
+# The package-manager command that would install FFmpeg on this system; empty if none was detected.
+ffmpeg_install_cmd() {
     os="$1"
     if [ "$os" = "macos" ]; then
         if command -v brew >/dev/null 2>&1; then
             if brew list ffmpeg >/dev/null 2>&1; then
-                info "Reinstalling FFmpeg via Homebrew..."
-                show_cmd "brew reinstall ffmpeg"
-                brew reinstall ffmpeg
+                echo "brew reinstall ffmpeg"
             else
-                info "Installing FFmpeg via Homebrew..."
-                show_cmd "brew install ffmpeg"
-                brew install ffmpeg
+                echo "brew install ffmpeg"
             fi
-        else
-            warn "Homebrew not found. Install FFmpeg manually: https://ffmpeg.org/download.html"
-            return 1
         fi
-    else
-        if command -v apt-get >/dev/null 2>&1; then
-            info "Installing FFmpeg via apt..."
-            show_cmd "sudo apt-get update && sudo apt-get install -y ffmpeg"
-            sudo apt-get update && sudo apt-get install -y ffmpeg
-        elif command -v dnf >/dev/null 2>&1; then
-            info "Installing FFmpeg via dnf..."
-            show_cmd "sudo dnf install -y ffmpeg"
-            sudo dnf install -y ffmpeg
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo "sudo apt-get update && sudo apt-get install -y ffmpeg"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "sudo dnf install -y ffmpeg"
+    fi
+}
+
+# Install ffmpeg using the system package manager
+install_ffmpeg() {
+    os="$1"
+    cmd=$(ffmpeg_install_cmd "$os")
+    if [ -z "$cmd" ]; then
+        if [ "$os" = "macos" ]; then
+            warn "Homebrew not found. Install FFmpeg manually: https://ffmpeg.org/download.html"
         else
             warn "Could not detect package manager. Install FFmpeg manually: https://ffmpeg.org/download.html"
-            return 1
         fi
+        return 1
     fi
+    info "Installing FFmpeg..."
+    sh -c "$cmd"
 }
 
 # Install mistralrs-cli
@@ -633,6 +627,7 @@ build_from_source() {
         if [ -n "$rust_version" ] && ! version_gte "$rust_version" "$REQUIRED_RUST_VERSION"; then
             warn "Rust $rust_version is below the required version $REQUIRED_RUST_VERSION"
             echo ""
+            show_cmd "rustup update stable"
             printf "Would you like to update Rust now? [Y/n] "
             read_input
             case "$REPLY" in
@@ -649,6 +644,7 @@ build_from_source() {
     else
         warn "Rust is not installed"
         echo ""
+        show_cmd "$RUSTUP_INSTALL_CMD"
         printf "Would you like to install Rust now? [Y/n] "
         read_input
         case "$REPLY" in
@@ -714,6 +710,8 @@ maybe_install_ffmpeg() {
     fi
     echo ""
     printf "${YELLOW}(Optional)${NC} FFmpeg is required for video input support.\n"
+    cmd=$(ffmpeg_install_cmd "$os")
+    [ -n "$cmd" ] && show_cmd "$cmd"
     printf "Would you like to install FFmpeg? [y/N] "
     read_input
     case "$REPLY" in
@@ -876,8 +874,6 @@ print_success() {
         printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
     fi
     printf "  on PATH     %s -> %s\n" "$(tildify "$BIN_DIR/mistralrs")" "$(tildify "$PREBUILT_DIR/mistralrs")"
-    size=$(installed_size)
-    [ -n "$size" ] && printf "  size        %s\n" "$size"
     echo ""
     printf "${BOLD}Quick Start${NC}\n"
     echo "==========="
