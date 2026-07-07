@@ -78,6 +78,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `VoxtralForConditionalGeneration` | Voxtral | <details><summary><code>mistralai/Voxtral-Mini-3B-2507</code></summary><code>mistralrs run -m mistralai/Voxtral-Mini-3B-2507</code></details> |
 | `Gemma4ForConditionalGeneration` | Gemma 4 | <details><summary><code>google/gemma-4-E4B-it</code> (E4B), <code>google/gemma-4-26B-A4B-it</code> (26B-A4B MoE), <code>google/gemma-4-31B-it</code> (31B dense)</summary><code>mistralrs run -m google/gemma-4-E4B-it</code><br><code>mistralrs run -m google/gemma-4-26B-A4B-it</code><br><code>mistralrs run -m google/gemma-4-31B-it</code></details> |
 | `DiffusionGemmaForBlockDiffusion` | DiffusionGemma | <details><summary><code>google/diffusiongemma-26B-A4B-it</code></summary><code>mistralrs run -m google/diffusiongemma-26B-A4B-it</code></details> |
+| `PaddleOCRVLForConditionalGeneration` | PaddleOCR-VL | <details><summary><code>PaddlePaddle/PaddleOCR-VL-1.5</code></summary><code>mistralrs run -m PaddlePaddle/PaddleOCR-VL-1.5</code></details> |
 
 ## Image generation
 

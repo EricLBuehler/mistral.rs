@@ -9,6 +9,7 @@ pub(crate) use idefics2::idefics2_input_processor;
 pub(crate) mod image_processor;
 pub(crate) mod llava;
 pub(crate) mod mllama;
+pub(crate) mod paddleocr_vl;
 pub(crate) mod phi3;
 pub(crate) use phi3::phi3_inputs_processor;
 pub(crate) mod preprocessor_config;

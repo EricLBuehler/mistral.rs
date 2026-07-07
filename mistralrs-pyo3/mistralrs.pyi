@@ -289,6 +289,7 @@ class MultimodalArchitecture(Enum):
     Voxtral = "Voxtral"
     Gemma4 = "Gemma4"
     DiffusionGemma = "DiffusionGemma"
+    PaddleOcrVl = "paddleocr_vl"
 
 @dataclass
 class DiffusionArchitecture(Enum):
