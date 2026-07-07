@@ -148,10 +148,12 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .to_string()
                     .context("Model metadata should have declared an architecture")
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
+                    .map_err(candle_core::Error::msg)?,
             );
         }
-        let arch = arch.expect("GGUF files must specify `general.architecture`");
+        let Some(arch) = arch else {
+            candle_core::bail!("GGUF files must specify `general.architecture`");
+        };
 
         let mut all_metadata = HashMap::new();
         for content in &contents {
@@ -253,5 +255,62 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     /// Get all metadatas
     pub fn get_metadata(&self) -> &HashMap<String, Value> {
         &self.all_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use candle_core::quantized::gguf_file;
+
+    use super::Content;
+
+    fn gguf_with_metadata(metadata: &[(&str, &gguf_file::Value)]) -> Cursor<Vec<u8>> {
+        let mut buf = Cursor::new(Vec::new());
+        gguf_file::write(&mut buf, metadata, &[]).unwrap();
+        buf.set_position(0);
+        buf
+    }
+
+    #[test]
+    fn unknown_architecture_is_an_error() {
+        let arch = gguf_file::Value::String("gemma4".to_string());
+        let mut reader = gguf_with_metadata(&[("general.architecture", &arch)]);
+        let mut readers = [&mut reader];
+        let err = match Content::from_readers(&mut readers) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Unknown GGUF architecture `gemma4`"), "{msg}");
+        assert!(msg.contains("Supported architectures: llama"), "{msg}");
+    }
+
+    #[test]
+    fn unknown_architecture_error_is_safe_to_print() {
+        let hostile = format!("gemma4\x1b[2J\nFAKE LOG LINE{}", "a".repeat(4096));
+        let arch = gguf_file::Value::String(hostile);
+        let mut reader = gguf_with_metadata(&[("general.architecture", &arch)]);
+        let mut readers = [&mut reader];
+        let err = match Content::from_readers(&mut readers) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(!msg.chars().any(char::is_control), "{msg:?}");
+        assert!(msg.len() < 1024, "len {}: {msg:?}", msg.len());
+        assert!(msg.contains("gemma4"), "{msg:?}");
+    }
+
+    #[test]
+    fn missing_architecture_is_an_error() {
+        let mut reader = gguf_with_metadata(&[]);
+        let mut readers = [&mut reader];
+        let err = match Content::from_readers(&mut readers) {
+            Ok(_) => panic!("expected an error"),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("general.architecture"), "{err}");
     }
 }
