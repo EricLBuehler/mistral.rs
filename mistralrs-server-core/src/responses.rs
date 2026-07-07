@@ -728,6 +728,37 @@ struct PendingShellCall {
 
 type PendingShellCalls = HashMap<(usize, String), PendingShellCall>;
 
+#[derive(Clone)]
+struct MessageOutputItemState {
+    id: String,
+}
+
+impl MessageOutputItemState {
+    fn new() -> Self {
+        Self {
+            id: format!("msg_{}", Uuid::new_v4()),
+        }
+    }
+
+    fn added_item(&self) -> OutputItem {
+        OutputItem::message(self.id.clone(), vec![], ItemStatus::InProgress)
+    }
+
+    fn item_with_text(
+        &self,
+        text: String,
+        response_id: &str,
+        files: &[mistralrs_core::File],
+        status: ItemStatus,
+    ) -> OutputItem {
+        OutputItem::message(
+            self.id.clone(),
+            vec![output_text_with_file_annotations(text, response_id, files)],
+            status,
+        )
+    }
+}
+
 fn shell_output_parts(data: &AgenticToolCallData) -> Option<Vec<ShellCallOutputPart>> {
     let AgenticToolCallData::Shell {
         stdout,
@@ -852,6 +883,7 @@ pub struct OpenResponsesStreamer {
     events: Vec<OpenResponsesStreamEvent>,
     /// Request context for echoing back request parameters
     request_context: RequestContext,
+    message_output_item: MessageOutputItemState,
     shell_output_items: Vec<OutputItem>,
     pending_shell_calls: PendingShellCalls,
     files: Vec<mistralrs_core::File>,
@@ -891,6 +923,7 @@ impl OpenResponsesStreamer {
             on_done: None,
             events: Vec::new(),
             request_context,
+            message_output_item: MessageOutputItemState::new(),
             shell_output_items: Vec::new(),
             pending_shell_calls: HashMap::new(),
             files: Vec::new(),
@@ -932,14 +965,10 @@ impl OpenResponsesStreamer {
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
-            let content = vec![output_text_with_file_annotations(
+            let item = self.message_output_item.item_with_text(
                 self.accumulated_text.clone(),
                 &self.streaming_state.response_id,
                 &self.files,
-            )];
-            let item = OutputItem::message(
-                format!("msg_{}", Uuid::new_v4()),
-                content,
                 if status == ResponseStatus::Completed {
                     ItemStatus::Completed
                 } else {
@@ -1112,11 +1141,7 @@ impl futures::Stream for OpenResponsesStreamer {
                             if !self.output_item_added {
                                 self.output_item_added = true;
                                 let seq = self.streaming_state.next_sequence_number();
-                                let item = OutputItem::message(
-                                    format!("msg_{}", Uuid::new_v4()),
-                                    vec![],
-                                    ItemStatus::InProgress,
-                                );
+                                let item = self.message_output_item.added_item();
                                 events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
                                     sequence_number: seq,
                                     output_index: message_output_index,
@@ -1188,14 +1213,10 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit output_item.done
                         if self.output_item_added {
                             let seq = self.streaming_state.next_sequence_number();
-                            let content = vec![output_text_with_file_annotations(
+                            let item = self.message_output_item.item_with_text(
                                 self.accumulated_text.clone(),
                                 &self.streaming_state.response_id,
                                 &self.files,
-                            )];
-                            let item = OutputItem::message(
-                                format!("msg_{}", Uuid::new_v4()),
-                                content,
                                 ItemStatus::Completed,
                             );
                             events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
@@ -2137,4 +2158,36 @@ fn handle_error(
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> OpenResponsesResponder {
     handle_completion_error(state, e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_output_item_reuses_id_across_stream_lifecycle() {
+        let message_item = MessageOutputItemState::new();
+        let added = message_item.added_item();
+        let done = message_item.item_with_text(
+            "hello".to_string(),
+            "resp_test",
+            &[],
+            ItemStatus::Completed,
+        );
+        let mut response = ResponseResource::new("resp_test".to_string(), "model".to_string(), 0);
+        response.output.push(done.clone());
+
+        assert_eq!(added.id(), done.id());
+        assert_eq!(done.id(), response.output[0].id());
+        assert_eq!(added.status(), ItemStatus::InProgress);
+        assert_eq!(done.status(), ItemStatus::Completed);
+
+        let OutputItem::Message { content, .. } = done else {
+            panic!("expected message output item");
+        };
+        let [OutputContent::OutputText { text, .. }] = content.as_slice() else {
+            panic!("expected one output text content part");
+        };
+        assert_eq!(text, "hello");
+    }
 }
