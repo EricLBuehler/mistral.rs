@@ -200,7 +200,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     let mut content_delta = if has_reasoning_parser {
                         seq.get_response_content_delta()
                     } else {
-                        None
+                        Some(delta.clone())
                     };
 
                     let tool_calls = if let Some(state) = seq.tool_call_state.as_mut() {

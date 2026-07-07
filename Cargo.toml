@@ -35,16 +35,13 @@ rust-version = "1.94"
 # candle-nn = { version = "0.11.0" }
 # candle-flash-attn-v3 = { version = "0.11.0" }
 # candle-metal-kernels = { version = "0.11.0" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "78e1d85" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "78e1d85" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "78e1d85" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "78e1d85" }
-# candle-core = { path = "../candle/candle-core", version = "0.11.0" }
-# candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
-# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
-# candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.11.0" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
 
 axum = "0.8.8"
+mimalloc = "0.1"
 anyhow = "1.0.100"
 serde = "1.0.228"
 serde_json = "1.0.149"

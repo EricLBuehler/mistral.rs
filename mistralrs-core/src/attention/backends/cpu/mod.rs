@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+#[cfg(target_arch = "x86_64")]
+mod avx;
 mod elem;
 mod full;
 mod mask;
@@ -16,6 +18,7 @@ use std::iter::Sum;
 
 use crate::attention::SdpaParams;
 
+pub(crate) use elem::fast_exp;
 use elem::ElemOps;
 use mask::MaskInfo;
 
@@ -172,5 +175,48 @@ where
         single_q::run(&ctx)
     } else {
         full::run(&ctx)
+    }
+}
+
+#[cfg(test)]
+mod decode_attn_bench {
+    use super::*;
+    use candle_core::{DType, Device, Tensor};
+
+    #[test]
+    #[ignore]
+    fn single_q_throughput() {
+        let dev = Device::Cpu;
+        let (h, kvh, d) = (32usize, 8usize, 128usize);
+        for kv_len in [512usize, 2048, 8192] {
+            let q = Tensor::rand(-1f32, 1f32, (1, 1, h, d), &dev)
+                .unwrap()
+                .to_dtype(DType::F16)
+                .unwrap();
+            let k = Tensor::rand(-1f32, 1f32, (1, kv_len, kvh, d), &dev)
+                .unwrap()
+                .to_dtype(DType::F16)
+                .unwrap();
+            let v = k.copy().unwrap();
+            let params = crate::attention::SdpaParams {
+                n_kv_groups: h / kvh,
+                softcap: None,
+                softmax_scale: 0.088,
+                sliding_window: None,
+                sinks: None,
+            };
+            let _ = run_flash_attn_cpu::<half::f16>(&q, &k, &v, None, &params).unwrap();
+            let t = std::time::Instant::now();
+            let iters = 200;
+            for _ in 0..iters {
+                let _ = run_flash_attn_cpu::<half::f16>(&q, &k, &v, None, &params).unwrap();
+            }
+            let us = t.elapsed().as_micros() as f64 / iters as f64;
+            let mb = (kv_len * kvh * d * 2 * 2) as f64 / 1e6;
+            println!(
+                "kv={kv_len}: {us:.0} us/call, {:.1} GB/s effective",
+                mb / us * 1000.0
+            );
+        }
     }
 }

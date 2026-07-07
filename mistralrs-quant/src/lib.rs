@@ -85,6 +85,7 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
@@ -1210,8 +1211,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Get the underlying QTensor if this is a GGUF quantized layer.
-    /// Used for direct kernel access in the grouped MoE prefill path.
-    #[cfg(feature = "cuda")]
+    /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
     }
@@ -1294,6 +1294,9 @@ pub fn try_fused_quantized_gate_up(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if gate.has_bias() || up.has_bias() {
         return Ok(None);
     }
@@ -1334,6 +1337,29 @@ pub fn try_fused_quantized_gate_up(
     )?))
 }
 
+/// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
+/// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
+pub fn try_fused_gemv_shared_lhs_cpu(
+    xs: &Tensor,
+    ws: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if !xs.device().is_cpu() || xs.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if ws.iter().any(|w| w.has_bias()) {
+        return Ok(None);
+    }
+    let mut qs = Vec::with_capacity(ws.len());
+    for w in ws {
+        let Some(q) = w.get_qtensor() else {
+            return Ok(None);
+        };
+        qs.push(q);
+    }
+    let refs: Vec<&candle_core::quantized::QTensor> = qs.iter().map(|a| a.as_ref()).collect();
+    candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
+}
+
 #[cfg(feature = "cuda")]
 pub fn try_fused_quantized_qkv(
     xs: &Tensor,
@@ -1341,6 +1367,9 @@ pub fn try_fused_quantized_qkv(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }

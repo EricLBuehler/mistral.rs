@@ -1,4 +1,4 @@
-use candle_core::{DType, IndexOp, Result, Storage, Tensor, D};
+use candle_core::{DType, Result, Storage, Tensor, D};
 use rayon::prelude::*;
 
 use super::cache::GdnLayerCache;
@@ -50,35 +50,85 @@ pub fn gated_delta_rule_recurrence(
     let beta = beta.transpose(1, 2)?.contiguous()?.to_dtype(DType::F32)?;
 
     let seq_len = q.dim(2)?;
-    let mut s = state.to_dtype(DType::F32)?;
-    let mut outputs = Vec::with_capacity(seq_len);
+    let (b_sz, n_heads) = (q.dim(0)?, q.dim(1)?);
+    let k_dim = q.dim(3)?;
+    let v_dim = v.dim(3)?;
 
-    for i in 0..seq_len {
-        let q_t = q.i((.., .., i, ..))?;
-        let k_t = k.i((.., .., i, ..))?;
-        let v_t = v.i((.., .., i, ..))?;
-        let g_t = g.i((.., .., i))?;
-        let beta_t = beta.i((.., .., i))?;
+    // Direct time scan per (batch, head): the per-timestep tensor-op chain costs more in
+    // dispatch and allocation than the math itself at prefill lengths.
+    let qf = q.flatten_all()?.to_vec1::<f32>()?;
+    let kf = k.flatten_all()?.to_vec1::<f32>()?;
+    let vf = v.flatten_all()?.to_vec1::<f32>()?;
+    let gf = g.flatten_all()?.to_vec1::<f32>()?;
+    let betaf = beta.flatten_all()?.to_vec1::<f32>()?;
+    let mut sf = state
+        .to_dtype(DType::F32)?
+        .contiguous()?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
 
-        let decay = g_t.exp()?.unsqueeze(D::Minus1)?.unsqueeze(D::Minus1)?;
-        s = s.broadcast_mul(&decay)?;
+    let mut out = vec![0f32; b_sz * n_heads * seq_len * v_dim];
+    let out_ptr = out.as_mut_ptr() as usize;
+    let s_ptr = sf.as_mut_ptr() as usize;
+    let (qf, kf, vf, gf, betaf) = (
+        qf.as_slice(),
+        kf.as_slice(),
+        vf.as_slice(),
+        gf.as_slice(),
+        betaf.as_slice(),
+    );
 
-        let k_exp = k_t.unsqueeze(D::Minus1)?;
-        let kv_mem = s.broadcast_mul(&k_exp)?.sum(2)?;
-        let beta_exp = beta_t.unsqueeze(D::Minus1)?;
-        let delta = (v_t - kv_mem)?.broadcast_mul(&beta_exp)?;
+    candle_core::utils::barrier_pool().execute_chunked(b_sz * n_heads, |range| {
+        let out_ptr = out_ptr as *mut f32;
+        let s_ptr = s_ptr as *mut f32;
+        let mut kv_mem = vec![0f32; v_dim];
+        let mut delta = vec![0f32; v_dim];
+        for bh in range {
+            let s_head = unsafe {
+                std::slice::from_raw_parts_mut(s_ptr.add(bh * k_dim * v_dim), k_dim * v_dim)
+            };
+            for t in 0..seq_len {
+                let qk_base = (bh * seq_len + t) * k_dim;
+                let v_base = (bh * seq_len + t) * v_dim;
+                let q_t = &qf[qk_base..qk_base + k_dim];
+                let k_t = &kf[qk_base..qk_base + k_dim];
+                let v_t = &vf[v_base..v_base + v_dim];
+                let decay = crate::attention::fast_exp(gf[bh * seq_len + t]);
+                let beta_t = betaf[bh * seq_len + t];
 
-        let outer = k_exp.broadcast_mul(&delta.unsqueeze(2)?)?;
-        s = (s + outer)?;
+                // pass 1: decay the state and read k^T S
+                kv_mem.iter_mut().for_each(|x| *x = 0.0);
+                for d in 0..k_dim {
+                    let row = &mut s_head[d * v_dim..(d + 1) * v_dim];
+                    let kd = k_t[d];
+                    for (rv, mem) in row.iter_mut().zip(kv_mem.iter_mut()) {
+                        *rv *= decay;
+                        *mem += *rv * kd;
+                    }
+                }
+                for ((dl, &vv), &mem) in delta.iter_mut().zip(v_t).zip(kv_mem.iter()) {
+                    *dl = (vv - mem) * beta_t;
+                }
 
-        let q_exp = q_t.unsqueeze(D::Minus1)?;
-        let y_t = s.broadcast_mul(&q_exp)?.sum(2)?;
-        outputs.push(y_t);
-    }
+                // pass 2: rank-1 update and the q readout
+                let y = unsafe { std::slice::from_raw_parts_mut(out_ptr.add(v_base), v_dim) };
+                y.iter_mut().for_each(|x| *x = 0.0);
+                for d in 0..k_dim {
+                    let row = &mut s_head[d * v_dim..(d + 1) * v_dim];
+                    let kd = k_t[d];
+                    let qd = q_t[d];
+                    for ((rv, &dl), yv) in row.iter_mut().zip(delta.iter()).zip(y.iter_mut()) {
+                        *rv += kd * dl;
+                        *yv += *rv * qd;
+                    }
+                }
+            }
+        }
+    });
 
-    *state = s.to_dtype(state.dtype())?;
+    *state = Tensor::from_vec(sf, state.shape(), state.device())?.to_dtype(state.dtype())?;
 
-    Tensor::stack(&outputs, 2)?
+    Tensor::from_vec(out, (b_sz, n_heads, seq_len, v_dim), q.device())?
         .transpose(1, 2)?
         .contiguous()?
         .to_dtype(dtype)
@@ -844,6 +894,11 @@ fn causal_conv1d_full(
     )?;
 
     let weight = conv1d_weight.squeeze(1)?.to_dtype(padded_t.dtype())?;
+
+    if padded_t.device().is_cpu() && padded_t.dtype() == candle_core::DType::F32 {
+        return causal_conv1d_full_cpu_f32(&padded_t, &weight, batch_size, conv_dim, seq_len, dims);
+    }
+
     let mut conv_outputs = Vec::with_capacity(seq_len);
     for i in 0..seq_len {
         let window = padded_t.narrow(2, i, dims.conv_kernel_size)?;
@@ -851,6 +906,47 @@ fn causal_conv1d_full(
         conv_outputs.push(out);
     }
     candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
+}
+
+// Direct depthwise causal conv + silu over the padded [b, c, k-1+seq] rows: one fused pass
+// on the barrier pool instead of a narrow/mul/sum tensor-op chain per timestep.
+fn causal_conv1d_full_cpu_f32(
+    padded_t: &Tensor,
+    weight: &Tensor,
+    batch_size: usize,
+    conv_dim: usize,
+    seq_len: usize,
+    dims: &GdnDims,
+) -> Result<Tensor> {
+    let ksize = dims.conv_kernel_size;
+    let padded = padded_t.contiguous()?;
+    let src = padded.flatten_all()?.to_vec1::<f32>()?;
+    let w = weight.to_vec2::<f32>()?;
+    let padded_len = ksize - 1 + seq_len;
+
+    let mut out = vec![0f32; batch_size * conv_dim * seq_len];
+    let out_ptr = out.as_mut_ptr() as usize;
+    let src = src.as_slice();
+
+    candle_core::utils::barrier_pool().execute_chunked(batch_size * conv_dim, |range| {
+        let out_ptr = out_ptr as *mut f32;
+        for bc in range {
+            let c = bc % conv_dim;
+            let row = &src[bc * padded_len..(bc + 1) * padded_len];
+            let wc = &w[c];
+            let dst = unsafe { std::slice::from_raw_parts_mut(out_ptr.add(bc * seq_len), seq_len) };
+            for (t, d) in dst.iter_mut().enumerate() {
+                let mut acc = 0f32;
+                for (k, &wk) in wc.iter().enumerate() {
+                    acc += wk * row[t + k];
+                }
+                // silu
+                *d = acc / (1.0 + crate::attention::fast_exp(-acc));
+            }
+        }
+    });
+
+    Tensor::from_vec(out, (batch_size, conv_dim, seq_len), padded.device())?.transpose(1, 2)
 }
 
 #[cfg(test)]

@@ -20,6 +20,9 @@ pub struct RotatingCache {
     // max_seq_len is the number of retained tokens in the sliding window.
     pub max_seq_len: usize,
     pub capacity_seq_len: usize,
+    // Buffer index one past the newest token; the retained window ends here and slides
+    // forward through slack capacity so appends avoid shifting the window every token.
+    pub write_pos: usize,
     // The full K/V tensor returned by the last `append()` call.
     // During prefill this may be larger than the internal buffer (retained + new),
     // which is what shared KV layers need for correct attention.
@@ -34,8 +37,22 @@ impl RotatingCache {
             current_seq_len: 0,
             max_seq_len,
             capacity_seq_len: capacity_seq_len.min(max_seq_len),
+            write_pos: 0,
             last_append_result: None,
         }
+    }
+
+    fn retained_len(&self) -> usize {
+        self.current_seq_len.min(self.max_seq_len)
+    }
+
+    fn window_start(&self) -> usize {
+        self.write_pos - self.retained_len()
+    }
+
+    // Slack beyond the window bounds how often the window is relocated to the front.
+    fn max_capacity(&self) -> usize {
+        self.max_seq_len + NormalCache::CACHE_GROW_SIZE
     }
 
     pub fn dim(&self) -> usize {
@@ -57,13 +74,7 @@ impl RotatingCache {
     pub fn current_data(&self) -> Result<Option<Tensor>> {
         let data = match self.all_data.as_ref() {
             None => None,
-            Some(d) => {
-                if self.current_seq_len >= self.max_seq_len {
-                    Some(d.clone())
-                } else {
-                    Some(d.narrow(self.dim, 0, self.current_seq_len)?)
-                }
-            }
+            Some(d) => Some(d.narrow(self.dim, self.window_start(), self.retained_len())?),
         };
         Ok(data)
     }
@@ -159,6 +170,7 @@ impl RotatingCache {
                     current_seq_len: keep_len,
                     max_seq_len: snapshot.max_seq_len,
                     capacity_seq_len: snapshot.capacity_seq_len.min(snapshot.max_seq_len),
+                    write_pos: 0,
                     last_append_result: None,
                 });
             }
@@ -187,6 +199,7 @@ impl RotatingCache {
             current_seq_len: keep_len,
             max_seq_len: snapshot.max_seq_len,
             capacity_seq_len,
+            write_pos: keep,
             last_append_result: None,
         })
     }
@@ -194,10 +207,18 @@ impl RotatingCache {
     pub fn reset(&mut self) {
         self.current_seq_len = 0;
         self.all_data = None;
+        self.write_pos = 0;
         self.last_append_result = None;
     }
 
     pub fn try_set_len(&self, len: usize) -> candle_core::Result<()> {
+        if len > self.current_seq_len {
+            candle_core::bail!(
+                "Sliding KV cache cannot extend via set_len (current {}, requested {})",
+                self.current_seq_len,
+                len,
+            );
+        }
         // Once the retained window has dropped old tokens, rollback would require
         // data that is no longer present.
         if self.current_seq_len > self.max_seq_len && len < self.current_seq_len {
@@ -221,6 +242,9 @@ impl RotatingCache {
 
     pub fn set_len(&mut self, len: usize) -> candle_core::Result<()> {
         self.try_set_len(len)?;
+        if len < self.current_seq_len {
+            self.write_pos -= self.current_seq_len - len;
+        }
         self.current_seq_len = len;
         self.last_append_result = None;
         Ok(())
@@ -234,36 +258,19 @@ impl RotatingCache {
             self.all_data = Some(Tensor::zeros(shape, src.dtype(), src.device())?);
         }
 
-        let retained_len = self.current_seq_len.min(self.max_seq_len);
-        if self.current_seq_len + seq_len > self.capacity_seq_len {
-            let diff = self.current_seq_len + seq_len - self.capacity_seq_len;
-            let n_blocks_needed = diff.div_ceil(NormalCache::CACHE_GROW_SIZE);
-            self.capacity_seq_len += n_blocks_needed * NormalCache::CACHE_GROW_SIZE;
-            self.capacity_seq_len = self.capacity_seq_len.min(self.max_seq_len);
-            let mut shape = src.dims().to_vec();
-            shape[self.dim] = self.capacity_seq_len;
-            let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
-            if retained_len > 0 {
-                let retained = self
-                    .all_data
-                    .as_ref()
-                    .unwrap()
-                    .narrow(self.dim, 0, retained_len)?
-                    .contiguous()?;
-                ad.slice_set(&retained, self.dim, 0)?;
-            }
-            self.all_data = Some(ad);
-        }
-
-        let ad = self.all_data.as_mut().unwrap();
+        let retained_len = self.retained_len();
+        let window_start = self.window_start();
 
         // During prefill (seq_len > 1), if total tokens exceed the sliding window,
         // we need the full K/V (retained + new) for correct attention: different
         // query positions attend to different windows. Read retained BEFORE the
-        // buffer is overwritten below.
+        // buffer is relocated or overwritten below.
         let prefill_full_kv = if seq_len > 1 && (retained_len + seq_len) > self.max_seq_len {
+            let ad = self.all_data.as_ref().unwrap();
             Some(if retained_len > 0 {
-                let retained = ad.narrow(self.dim, 0, retained_len)?.contiguous()?;
+                let retained = ad
+                    .narrow(self.dim, window_start, retained_len)?
+                    .contiguous()?;
                 Tensor::cat(&[&retained, &src.contiguous()?], self.dim)?
             } else {
                 src.clone()
@@ -272,41 +279,60 @@ impl RotatingCache {
             None
         };
 
-        self.current_seq_len += seq_len;
-
-        let result = if seq_len >= self.max_seq_len {
+        if seq_len >= self.max_seq_len {
+            // src alone covers the whole window: overwrite at the front
             let to_copy = src
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
+            let ad = self.all_data.as_mut().unwrap();
             ad.slice_set(&to_copy, self.dim, 0)?;
-            if let Some(full_kv) = prefill_full_kv {
-                full_kv
-            } else {
-                ad.clone()
-            }
+            self.write_pos = self.max_seq_len;
         } else {
-            let keep_from_old = retained_len.min(self.max_seq_len - seq_len);
-            // Only rotate when keep_start > 0 (the cache has reached the sliding window and we actually need to shift entries left).
-            if keep_from_old > 0 {
-                let keep_start = retained_len - keep_from_old;
-                if keep_start > 0 {
-                    let kept = ad
-                        .narrow(self.dim, keep_start, keep_from_old)?
+            if self.write_pos + seq_len > self.capacity_seq_len {
+                let max_capacity = self.max_capacity();
+                if self.capacity_seq_len < max_capacity {
+                    // grow toward window + slack, moving the window to the front
+                    let needed = (retained_len + seq_len).max(self.write_pos + seq_len);
+                    let n_blocks = needed
+                        .div_ceil(NormalCache::CACHE_GROW_SIZE)
+                        .max(self.capacity_seq_len / NormalCache::CACHE_GROW_SIZE + 1);
+                    self.capacity_seq_len =
+                        (n_blocks * NormalCache::CACHE_GROW_SIZE).min(max_capacity);
+                    let mut shape = src.dims().to_vec();
+                    shape[self.dim] = self.capacity_seq_len;
+                    let old = self.all_data.take().unwrap();
+                    let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
+                    if retained_len > 0 {
+                        let retained = old
+                            .narrow(self.dim, window_start, retained_len)?
+                            .contiguous()?;
+                        ad.slice_set(&retained, self.dim, 0)?;
+                    }
+                    self.all_data = Some(ad);
+                } else if retained_len > 0 {
+                    // out of slack: one bulk relocation of the window to the front,
+                    // amortized over the slack length instead of every token
+                    let ad = self.all_data.as_mut().unwrap();
+                    let retained = ad
+                        .narrow(self.dim, window_start, retained_len)?
                         .copy()?
                         .contiguous()?;
-                    ad.slice_set(&kept, self.dim, 0)?;
+                    ad.slice_set(&retained, self.dim, 0)?;
                 }
+                self.write_pos = retained_len;
             }
+            let ad = self.all_data.as_mut().unwrap();
+            ad.slice_set(&src.contiguous()?, self.dim, self.write_pos)?;
+            self.write_pos += seq_len;
+        }
 
-            ad.slice_set(&src.contiguous()?, self.dim, keep_from_old)?;
+        self.current_seq_len += seq_len;
 
-            if let Some(full_kv) = prefill_full_kv {
-                full_kv
-            } else if self.current_seq_len >= self.max_seq_len {
-                ad.clone()
-            } else {
-                ad.narrow(self.dim, 0, self.current_seq_len)?
-            }
+        let result = if let Some(full_kv) = prefill_full_kv {
+            full_kv
+        } else {
+            let ad = self.all_data.as_ref().unwrap();
+            ad.narrow(self.dim, self.window_start(), self.retained_len())?
         };
 
         self.last_append_result = Some(result.clone());

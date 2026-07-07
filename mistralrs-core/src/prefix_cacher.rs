@@ -334,6 +334,22 @@ impl PrefixCacheManagerV2 {
                 continue;
             }
 
+            // The cache holds kv only for forwarded positions; a finished sequence's
+            // final sampled token has no kv row, so clamp the text match to coverage.
+            // Shared layers mirror their owner and always report zero, so skip them.
+            let cache_len = v
+                .cache
+                .iter()
+                .flatten()
+                .filter(|l| !matches!(l, KvCache::Shared { .. }))
+                .map(|l| l.current_seq_len())
+                .min()
+                .unwrap_or(0);
+            let match_len = match_len.min(cache_len);
+            if match_len == 0 {
+                continue;
+            }
+
             // Sliding/rotating caches only retain a fixed tail. If a cache has already
             // truncated older tokens, it can still safely serve an exact extension of the
             // cached prefix, but it cannot be rewound to an earlier logical length. Skip such

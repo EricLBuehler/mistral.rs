@@ -28,6 +28,17 @@ pub(crate) fn sinks_attn(
     let (b_sz, _n_heads, _q_len, _head_dim) = q.dims4()?;
     let window_size = sdpa_params.sliding_window.unwrap_or(0);
 
+    // the cpu kv cache may store f16/bf16 below the activation dtype; this path is tensor-op
+    // based, so bring k/v back up rather than mixing dtypes
+    let (k_conv, v_conv);
+    let (k, v) = if k.dtype() != q.dtype() {
+        k_conv = k.to_dtype(q.dtype())?;
+        v_conv = v.to_dtype(q.dtype())?;
+        (&k_conv, &v_conv)
+    } else {
+        (k, v)
+    };
+
     // Detect varlen: flash_params has cu_seqlens_k AND batch > 1
     let is_varlen = b_sz > 1
         && flash_params.is_some_and(|fp| {

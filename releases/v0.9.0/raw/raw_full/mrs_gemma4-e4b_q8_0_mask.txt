@@ -1,0 +1,100 @@
+# cmd: /home/ericbuehler/mistral.rs/target/release/mistralrs bench --cpu --prompt-len 128,512,2048,4096,8192 --depth 128,512,2048,4096,8192 --gen-len 256 --iterations 2 --warmup 1 -m google/gemma-4-E4B-it --from-uqff /home/ericbuehler/hf_models/bench_v090/gemma4-uqff-q8_0/q8_0-0.uqff
+# env: {'CANDLE_CPU_MASK': '5-9,15-19'}
+# wall_s: 524.9
+# rc: 0
+=== stdout ===
+[2m2026-07-05T08:45:12.936231Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-07-05T08:45:13.907324Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is F32.
+[2m2026-07-05T08:45:14.068868Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: multimodal[max_seq_len: 4096, max_batch_size: 1, max_image_shape: (1024, 1024), max_num_images: 1].
+[2m2026-07-05T08:45:14.068888Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m The following sub-models will not be device mapped and will be loaded on cpu: vision, audio
+[2m2026-07-05T08:45:14.068920Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 42 repeating layers.
+[2m2026-07-05T08:45:14.068927Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-07-05T08:45:14.098745Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-41: cpu (122 GB)
+[2m2026-07-05T08:45:14.128561Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::multimodal[0m[2m:[0m Loading UQFF model weights.
+[2m2026-07-05T08:45:39.129207Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:45:39.129235Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m mistral.rs version: 0.8.23
+[2m2026-07-05T08:45:39.129237Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: 568059fe620c05ab4f1eb9633d25f6b3742b1e1e
+[2m2026-07-05T08:45:39.129342Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video, 🔊 Audio]
+[2m2026-07-05T08:45:39.129346Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-07-05T08:45:39.130072Z[0m [32m INFO[0m [2mmistralrs_core::kv_cache[0m[2m:[0m Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).
+[2m2026-07-05T08:45:41.165176Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:45:41.165192Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-07-05T08:45:42.213825Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-07-05T08:45:42.213845Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 2 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192]...
+[2m2026-07-05T08:45:42.213849Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/2...
+[2m2026-07-05T08:45:44.130480Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 26.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:45:49.130752Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 102.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:45:59.131510Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 410.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:46:29.133426Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 819.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:14.137489Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1665.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:19.137599Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 20.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:24.137709Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 20.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:29.137792Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 10.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:34.137888Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 119.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:39.137992Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:44.138100Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 14.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:47:59.140425Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 426.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:04.140538Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:09.140641Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 14.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:34.142744Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 823.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:39.143104Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:44.143187Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:48:49.143279Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 8.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:49:34.147422Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1639.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:49:39.148421Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 17.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:49:44.149426Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 18.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:49:47.745290Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/2...
+[2m2026-07-05T08:49:49.149530Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 39.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:49:54.149637Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 102.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:50:09.150436Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 410.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:50:34.151694Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 819.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:19.153867Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1638.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:24.155426Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 42.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:29.158428Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 20.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:34.158535Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 13.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:39.158634Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 116.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:44.159504Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 20.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:51:49.159589Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 17.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:04.160586Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 423.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:09.162423Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:14.162529Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 17.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:44.165427Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 837.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:49.165541Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:52:54.165796Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 13.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:53:44.168997Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1651.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:53:49.171420Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:53:54.171513Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 18.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: google/gemma-4-E4B-it
+Iterations: 2
+
+┌─────────────────────────────┬─────────────┬───────────────────────┐
+│ Test                        ┆ T/s         ┆ Latency               │
+╞═════════════════════════════╪═════════════╪═══════════════════════╡
+│ Prefill (128 tokens)        ┆ 125.4 ± 3.2 ┆ 1021.00 ms (prefill)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)        ┆ 158.6 ± 0.8 ┆ 3227.50 ms (prefill)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)       ┆ 173.2 ± 3.0 ┆ 11825.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)       ┆ 156.4 ± 1.5 ┆ 26189.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)       ┆ 171.0 ± 1.0 ┆ 47915.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)  ┆ 20.5 ± 0.1  ┆ 48.76 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)  ┆ 20.2 ± 0.1  ┆ 49.57 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048) ┆ 19.8 ± 0.1  ┆ 50.42 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096) ┆ 19.3 ± 0.1  ┆ 51.78 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192) ┆ 18.5 ± 0.0  ┆ 53.96 ms/T            │
+└─────────────────────────────┴─────────────┴───────────────────────┘
+
+
+=== stderr ===
+

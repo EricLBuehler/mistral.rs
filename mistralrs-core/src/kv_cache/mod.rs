@@ -61,6 +61,27 @@ pub enum KvCacheSnapshot {
     },
 }
 
+pub(crate) fn cpu_kv_f16() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        // only worth it where the native fp16 attention kernels exist; elsewhere f16 KV would
+        // push attention onto the scalar convert fallback and lose to plain f32
+        #[cfg(target_arch = "x86_64")]
+        let fast = std::arch::is_x86_feature_detected!("avx512f")
+            || (std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma")
+                && std::arch::is_x86_feature_detected!("f16c"));
+        #[cfg(not(target_arch = "x86_64"))]
+        let fast = cfg!(target_arch = "aarch64");
+        let on = fast && std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");
+        if on {
+            tracing::info!("Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).");
+        }
+        on
+    })
+}
+
 impl KvCache {
     pub fn new_normal(dim: usize, max_seq_len: usize, capacity_seq_len: usize) -> Self {
         let k = SingleCache::new(dim, max_seq_len, capacity_seq_len);
@@ -142,6 +163,17 @@ impl KvCache {
         }
         let k = k.contiguous()?;
         let v = v.contiguous()?;
+        // f16 KV on CPU halves attention memory traffic; kernels read it with native
+        // fp16 NEON and accumulate in f32. MISTRALRS_CPU_KV_F32=1 restores f32 storage.
+        let (k, v) = if k.device().is_cpu() && k.dtype() == candle_core::DType::F32 && cpu_kv_f16()
+        {
+            (
+                k.to_dtype(candle_core::DType::F16)?,
+                v.to_dtype(candle_core::DType::F16)?,
+            )
+        } else {
+            (k, v)
+        };
         let (out_k, out_v) = match self {
             Self::Normal { k: kc, v: vc } => {
                 kc.append(&k)?;
@@ -558,6 +590,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     let template_cache_csl = old_k.current_seq_len;
                     let template_cache_msl = old_k.max_seq_len;
                     let template_cache_capsl = old_k.capacity_seq_len;
+                    let template_cache_wpos = old_k.write_pos;
 
                     caches.push(KvCache::Rotating {
                         k: RotatingCache {
@@ -566,6 +599,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            write_pos: template_cache_wpos,
                             last_append_result: None,
                         },
                         v: RotatingCache {
@@ -574,6 +608,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: template_cache_csl,
                             max_seq_len: template_cache_msl,
                             capacity_seq_len: template_cache_capsl,
+                            write_pos: template_cache_wpos,
                             last_append_result: None,
                         },
                     });
@@ -663,6 +698,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_k.current_seq_len,
                                 max_seq_len: cache_k.max_seq_len,
                                 capacity_seq_len: cache_k.capacity_seq_len,
+                                write_pos: cache_k.write_pos,
                                 last_append_result: None,
                             },
                             v: RotatingCache {
@@ -671,6 +707,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                                 current_seq_len: cache_v.current_seq_len,
                                 max_seq_len: cache_v.max_seq_len,
                                 capacity_seq_len: cache_v.capacity_seq_len,
+                                write_pos: cache_v.write_pos,
                                 last_append_result: None,
                             },
                         });
@@ -724,6 +761,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            write_pos: 0,
                             last_append_result: None,
                         },
                         v: RotatingCache {
@@ -732,6 +770,7 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                             current_seq_len: 0,
                             max_seq_len: k.max_seq_len,
                             capacity_seq_len: k.capacity_seq_len,
+                            write_pos: 0,
                             last_append_result: None,
                         },
                     };

@@ -89,9 +89,12 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
-          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,
+              # v8.2 floor (Graviton2+, Apple, Pi 5, 2018+ phones): recovers the autovec
+              # perf the runtime-dispatched kernels cannot; ARMv8.0 boards build from source
+              rustflags: "-C target-cpu=generic -C target-feature=+dotprod,+fp16,+fhm" }
     env:
-      RUSTFLAGS: "-C target-cpu=generic"
+      RUSTFLAGS: ${{ matrix.rustflags || '-C target-cpu=generic' }}
     steps:
       - uses: actions/checkout@v4
         with:

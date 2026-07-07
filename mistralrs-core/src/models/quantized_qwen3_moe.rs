@@ -28,6 +28,20 @@ struct Mlp {
     feed_forward_w3: Arc<dyn QuantMethod>,
 }
 
+// candle's QTensor::indexed_moe_forward is cuda-only; other devices take the
+// dequantize-and-gather fallback
+fn experts_moe_forward(
+    w: &QMatMul,
+    xs: &candle_core::Tensor,
+    indices: &candle_core::Tensor,
+) -> candle_core::Result<candle_core::Tensor> {
+    if xs.device().is_cuda() {
+        w.indexed_moe_forward(xs, indices)
+    } else {
+        mistralrs_quant::cpu_indexed_moe_forward(w, xs, indices)
+    }
+}
+
 impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let w1 = self.feed_forward_w1.forward(xs)?;
@@ -71,11 +85,10 @@ impl FusedMoe {
 
         let ys = {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &indices)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &indices)?;
+            let gate = experts_moe_forward(&self.gate_experts, &xs, &indices)?;
+            let up = experts_moe_forward(&self.up_experts, &xs, &indices)?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts
-                .indexed_moe_forward(&activated, &indices)?
+            experts_moe_forward(&self.down_experts, &activated, &indices)?
         };
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?

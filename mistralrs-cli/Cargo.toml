@@ -19,6 +19,7 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+mimalloc = { workspace = true }
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
