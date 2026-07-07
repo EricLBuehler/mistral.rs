@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.23"
+version = "0.9.0"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -190,19 +190,19 @@ cuda-core = "=0.1.0"
 cuda-async = "=0.1.0"
 cuda-bindings = "=0.1.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.23" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.23" }
-mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.8.23" }
-mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.8.23" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.23" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.23" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.23" }
-mistralrs = { path = "mistralrs", version = "0.8.23" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.23" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.23" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.23" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.23" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.23" }
+mistralrs-core = { path = "mistralrs-core", version = "0.9.0" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.0" }
+mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.0" }
+mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.0" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.9.0" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.9.0" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.0" }
+mistralrs = { path = "mistralrs", version = "0.9.0" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.9.0" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.9.0" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.9.0" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.0" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.0" }
 
 [profile.release-with-debug]
 inherits = "release"
