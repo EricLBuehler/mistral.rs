@@ -399,6 +399,7 @@ impl Loader for GGMLLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
         })))
