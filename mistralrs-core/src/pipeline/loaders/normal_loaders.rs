@@ -188,6 +188,8 @@ pub enum NormalLoaderType {
     HunYuanDenseV1,
     #[serde(rename = "hunyuanv1moe")]
     HunYuanMoEV1,
+    #[serde(rename = "hy_v3")]
+    HyV3,
     #[serde(rename = "qwen3next")]
     Qwen3Next,
     #[serde(rename = "lfm2")]
@@ -222,6 +224,7 @@ impl NormalLoaderType {
             "GptOssForCausalLM" => Ok(Self::GptOss),
             "HunYuanDenseV1ForCausalLM" => Ok(Self::HunYuanDenseV1),
             "HunYuanMoEV1ForCausalLM" => Ok(Self::HunYuanMoEV1),
+            "HYV3ForCausalLM" => Ok(Self::HyV3),
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
             "Lfm2ForCausalLM" => Ok(Self::Lfm2),
             "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
@@ -258,10 +261,11 @@ impl FromStr for NormalLoaderType {
             "gpt_oss" => Ok(Self::GptOss),
             "hunyuanv1dense" => Ok(Self::HunYuanDenseV1),
             "hunyuanv1moe" => Ok(Self::HunYuanMoEV1),
+            "hy_v3" | "hyv3" => Ok(Self::HyV3),
             "qwen3next" => Ok(Self::Qwen3Next),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `lfm2`, `lfm2_moe`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `hy_v3`, `qwen3next`, `lfm2`, `lfm2_moe`.")),
         }
     }
 }
@@ -291,6 +295,7 @@ impl Display for NormalLoaderType {
             Self::GptOss => write!(f, "gpt_oss"),
             Self::HunYuanDenseV1 => write!(f, "hunyuanv1dense"),
             Self::HunYuanMoEV1 => write!(f, "hunyuanv1moe"),
+            Self::HyV3 => write!(f, "hy_v3"),
             Self::Qwen3Next => write!(f, "qwen3next"),
             Self::Lfm2 => write!(f, "lfm2"),
             Self::Lfm2Moe => write!(f, "lfm2_moe"),
@@ -352,6 +357,7 @@ impl AutoNormalLoader {
             NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
             NormalLoaderType::HunYuanDenseV1 => Ok(Box::new(HunYuanDenseV1Loader)),
             NormalLoaderType::HunYuanMoEV1 => Ok(Box::new(HunYuanMoEV1Loader)),
+            NormalLoaderType::HyV3 => Ok(Box::new(HyV3Loader)),
             NormalLoaderType::Qwen3Next => Ok(Box::new(Qwen3NextLoader)),
             NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
             NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
@@ -4732,6 +4738,221 @@ impl DeviceMappedModelLoader for Qwen3MoELoader {
             sliding_window: cfg.sliding_window,
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(cfg))
+    }
+}
+
+/// [`NormalLoader`] for a HyV3 model.
+///
+/// [`NormalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.NormalLoader.html
+pub struct HyV3Loader;
+
+impl NormalModelLoader for HyV3Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::hy_v3::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(models::hy_v3::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx(config)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        todo!()
+    }
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::hy_v3::Config = serde_json::from_str(config)?;
+
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for HyV3Loader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            // Attention
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // Dense MLP
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            // MoE router and experts
+            Regex::new(r"layers\.(\d+)\.mlp\.router\.gate\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.expert_bias$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.shared_mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for HyV3Loader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: models::hy_v3::Config = serde_json::from_str(config)?;
+
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: models::hy_v3::Config = serde_json::from_str(config)?;
+        let elems = {
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            } else {
+                0
+            };
+            let norm = cfg.hidden_size;
+            embed_tokens + lm_head + norm
+        };
+        Ok(elems * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: models::hy_v3::Config = serde_json::from_str(config)?;
+        let head_dim = cfg.head_dim();
+
+        let mut layer_sizes = Vec::new();
+        for layer_idx in 0..cfg.num_hidden_layers {
+            let input_layernorm = cfg.hidden_size;
+            let post_attention_layernorm = cfg.hidden_size;
+
+            let size_in = cfg.hidden_size;
+            let size_q = head_dim * cfg.num_attention_heads;
+            let size_kv = head_dim * cfg.num_key_value_heads;
+            let q_proj = size_in * size_q / weight_pack_factor;
+            let k_proj = size_in * size_kv / weight_pack_factor;
+            let v_proj = size_in * size_kv / weight_pack_factor;
+            let o_proj = size_q * size_in / weight_pack_factor;
+            let qk_norm = head_dim * 2;
+
+            let mlp_elems = if layer_idx < cfg.first_k_dense_replace {
+                let gate_proj = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let up_proj = cfg.hidden_size * cfg.intermediate_size / weight_pack_factor;
+                let down_proj = cfg.intermediate_size * cfg.hidden_size / weight_pack_factor;
+                gate_proj + up_proj + down_proj
+            } else {
+                let expert_size = {
+                    let gate_proj =
+                        cfg.hidden_size * cfg.moe_intermediate_size / weight_pack_factor;
+                    let up_proj = cfg.hidden_size * cfg.moe_intermediate_size / weight_pack_factor;
+                    let down_proj =
+                        cfg.moe_intermediate_size * cfg.hidden_size / weight_pack_factor;
+                    gate_proj + up_proj + down_proj
+                };
+                let shared_mlp = expert_size * cfg.num_shared_experts;
+                let experts = expert_size * cfg.num_experts;
+                let router = cfg.hidden_size * cfg.num_experts;
+                let expert_bias = cfg.num_experts;
+                shared_mlp + experts + router + expert_bias
+            };
+
+            let size_elems = input_layernorm
+                + post_attention_layernorm
+                + q_proj
+                + k_proj
+                + v_proj
+                + o_proj
+                + qk_norm
+                + mlp_elems;
+
+            layer_sizes.push(size_elems * dtype.size_in_bytes());
+        }
+
+        Ok(layer_sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: models::hy_v3::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: models::hy_v3::Config = serde_json::from_str(config)?;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: cfg.head_dim(),
+            v_head_dim: cfg.head_dim(),
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 

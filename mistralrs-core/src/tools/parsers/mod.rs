@@ -8,6 +8,7 @@ mod gemma4;
 mod gemma4_strict;
 pub(crate) mod harmony;
 mod hunyuan;
+mod hy_v3;
 mod liquid;
 mod llama;
 mod mistral_nemo;
@@ -32,6 +33,8 @@ pub enum ToolCallFormat {
     MistralNemo,
     /// `<tool_calls>[{"name":"...","arguments":{...}}]</tool_calls>`
     Hunyuan,
+    /// HYV3 `<tool_calls[:suffix]>...<arg_key[:suffix]>...` format.
+    HyV3,
     /// Multi-line with ` ```json` fence and `<｜tool▁call▁end｜>` delimiter
     DeepSeek,
     /// `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>` (non-JSON)
@@ -87,6 +90,7 @@ static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
             Box::new(liquid::LiquidParser),
             Box::new(llama::LlamaParser),
             Box::new(qwen::QwenParser),
+            Box::new(hy_v3::HyV3Parser),
             Box::new(hunyuan::HunyuanParser),
             Box::new(mistral_nemo::MistralNemoParser),
             Box::new(deepseek::DeepSeekParser),
@@ -107,6 +111,22 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
         if parser.could_be_tool_call(text) {
             // DeepSeek: wait until the JSON fence is present so we don't
             // activate grammar before the function name is complete.
+            if parser.format() == ToolCallFormat::DeepSeek && !text.contains("```json\n") {
+                return None;
+            }
+            return Some(parser.tool_call_grammar(tools, text));
+        }
+    }
+    None
+}
+
+pub fn build_tool_call_grammar_for_format(
+    format: ToolCallFormat,
+    text: &str,
+    tools: &[Tool],
+) -> Option<TopLevelGrammar> {
+    for parser in PARSERS.iter() {
+        if parser.format() == format && parser.could_be_tool_call(text) {
             if parser.format() == ToolCallFormat::DeepSeek && !text.contains("```json\n") {
                 return None;
             }
@@ -164,6 +184,7 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
             strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
         }
         ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
+        ToolCallFormat::HyV3 => hy_v3::strip_hy_v3_tool_calls(message),
         ToolCallFormat::Hunyuan => {
             strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
         }

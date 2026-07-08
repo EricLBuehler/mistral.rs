@@ -352,6 +352,12 @@ fn is_liquid_tool_template(template: &str) -> bool {
     template.contains("<|tool_call_start|>") && template.contains("<|tool_call_end|>")
 }
 
+fn is_hy_v3_tool_template(template: &str) -> bool {
+    template.contains("<arg_key")
+        && template.contains("<arg_value")
+        && template.contains("<tool_sep")
+}
+
 fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
     if crate::reasoning_parsers::harmony::is_harmony_template(template) {
         Some(ToolCallFormat::Harmony)
@@ -359,6 +365,8 @@ fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
         Some(ToolCallFormat::Gemma4)
     } else if is_liquid_tool_template(template) {
         Some(ToolCallFormat::Liquid)
+    } else if is_hy_v3_tool_template(template) {
+        Some(ToolCallFormat::HyV3)
     } else if template.contains("<|python_tag|>") {
         Some(ToolCallFormat::Llama)
     } else if template.contains("[TOOL_CALLS]") {
@@ -752,6 +760,14 @@ mod tests {
             (
                 "<tool_calls>{{ tool_calls }}</tool_calls>",
                 ToolCallFormat::Hunyuan,
+            ),
+            (
+                "<tool_calls:opensource><tool_call:opensource>name<tool_sep:opensource><arg_key:opensource>city</arg_key:opensource><arg_value:opensource>Paris</arg_value:opensource>",
+                ToolCallFormat::HyV3,
+            ),
+            (
+                "{%- set toolcalls_begin_token = '<tool_calls{}>'.format(HYTK) %}{%- set toolsep_token = '<tool_sep{}>'.format(HYTK) %}{%- set argkey_begin_token = '<arg_key{}>'.format(HYTK) %}{%- set argvalue_begin_token = '<arg_value{}>'.format(HYTK) %}",
+                ToolCallFormat::HyV3,
             ),
             ("<｜tool▁call▁begin｜>function", ToolCallFormat::DeepSeek),
             ("<tool_call>{{ tool }}</tool_call>", ToolCallFormat::Qwen),
