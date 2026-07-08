@@ -422,6 +422,24 @@ impl Sampler {
         self.temperature.is_none()
     }
 
+    #[cfg(feature = "cuda")]
+    fn can_sample_top1_on_device(
+        &self,
+        return_logprobs: bool,
+        sample_speculative: bool,
+        multiple_sequences: bool,
+    ) -> bool {
+        !return_logprobs
+            && !sample_speculative
+            && !multiple_sequences
+            && (self.temperature.is_none() || self.top_k == 1)
+            && self.logits_processors.is_empty()
+            && self
+                .dry_params
+                .as_ref()
+                .is_none_or(|params| params.multiplier.abs() <= f32::EPSILON)
+    }
+
     fn get_top_logprobs(&self, probs: &[f32]) -> Result<Vec<TopLogprob>> {
         let k = self.top_n_logprobs.min(probs.len());
         if k == 0 {
@@ -743,19 +761,6 @@ impl Sampler {
         temperature: f64,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        if self.top_k == 1 {
-            let packed = {
-                let mut cache = self.top1_cache.lock().unwrap();
-                crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
-            };
-            return Ok(Logprobs {
-                token: packed[1] as u32,
-                logprob: 0.0,
-                top_logprobs: None,
-                bytes: None,
-            });
-        }
-
         let topk =
             crate::ops::cuda_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
         let packed = topk.packed.to_vec1::<f32>()?;
@@ -836,6 +841,27 @@ impl Sampler {
 
         Ok(Logprobs {
             token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes: None,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn sample_top1_on_device(&self, logits: Tensor, context: &[u32]) -> Result<Logprobs> {
+        let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
+        let logits = self.apply_device_logits_bias_if_needed(logits)?;
+        let packed = {
+            let mut cache = self.top1_cache.lock().unwrap();
+            crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
+        };
+        let logprob = if self.temperature.is_none() {
+            packed[0].log(10.0)
+        } else {
+            0.0
+        };
+        Ok(Logprobs {
+            token: packed[1] as u32,
             logprob,
             top_logprobs: None,
             bytes: None,
@@ -1350,6 +1376,18 @@ impl Sampler {
     ) -> Result<Logprobs> {
         #[cfg(feature = "cuda")]
         if logits.device().is_cuda()
+            && logits.dtype() == candle_core::DType::F32
+            && self.can_sample_top1_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+            )
+        {
+            return self.sample_top1_on_device(logits, context);
+        }
+
+        #[cfg(feature = "cuda")]
+        if logits.device().is_cuda()
             && self.can_sample_topk_on_device(
                 return_logprobs,
                 sample_speculative,
@@ -1580,6 +1618,156 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.token, 1);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_cuda_top1_argmax_matches_cpu() -> candle_core::Result<()> {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let cuda = Device::new_cuda(0)?;
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let logits_cpu = Tensor::from_vec(vec![-1.0f32, 2.5, 1.0, 2.0], 4, &Device::Cpu)?;
+        let logits_cuda = logits_cpu.to_device(&cuda)?;
+        let context = [0u32];
+
+        let cpu = sampler.sample(
+            logits_cpu,
+            &context,
+            false,
+            Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+            false,
+            false,
+        )?;
+        let cuda = sampler.sample(
+            logits_cuda,
+            &context,
+            false,
+            Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+            false,
+            false,
+        )?;
+
+        assert_eq!(cuda.token, cpu.token);
+        assert!((cuda.logprob - cpu.logprob).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_cuda_top1_logits_bias_suppresses_argmax_token() -> candle_core::Result<()> {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let cuda = Device::new_cuda(0)?;
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::from([(2, -1.0e9)]),
+            vec![],
+        )
+        .unwrap();
+        let logits =
+            Tensor::from_vec(vec![0.0f32, 1.0, 10.0], 3, &Device::Cpu)?.to_device(&cuda)?;
+        let res = sampler.sample(
+            logits,
+            &[0],
+            false,
+            Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+            false,
+            false,
+        )?;
+
+        assert_eq!(res.token, 1);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_cuda_top1_accepts_effective_top_k_one() {
+        use super::Sampler;
+
+        let argmax = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let sampled_top1 = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let sampled_topk = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            4,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+
+        assert!(argmax.can_sample_top1_on_device(false, false, false));
+        assert!(sampled_top1.can_sample_top1_on_device(false, false, false));
+        assert!(!sampled_topk.can_sample_top1_on_device(false, false, false));
+        assert!(!sampled_top1.can_sample_top1_on_device(true, false, false));
     }
 
     #[test]
