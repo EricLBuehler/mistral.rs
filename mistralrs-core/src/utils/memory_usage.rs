@@ -39,7 +39,9 @@ impl MemoryUsage {
     pub fn query(&self, device: &Device) -> Result<DeviceMemory> {
         match device {
             Device::Cpu => {
-                let sys = System::new_all();
+                // new_all scans every /proc entry; this runs on hot paths (naive_sdpa) and only memory is read
+                let mut sys = System::new();
+                sys.refresh_memory();
                 Ok(DeviceMemory::Discrete {
                     total: usize::try_from(sys.total_memory())?,
                     free: usize::try_from(sys.available_memory())?,
@@ -48,7 +50,8 @@ impl MemoryUsage {
             #[cfg(feature = "cuda")]
             Device::Cuda(dev) => {
                 if super::normal::is_integrated_gpu(device) {
-                    let sys = System::new_all();
+                    let mut sys = System::new();
+                    sys.refresh_memory();
                     let total_bytes = usize::try_from(sys.total_memory())?;
                     let avail_bytes = usize::try_from(sys.available_memory())?;
                     let fraction = igpu_memory_fraction();
@@ -117,7 +120,8 @@ fn igpu_memory_fraction() -> f64 {
 
 #[cfg(feature = "metal")]
 fn metal_sysctl_floor_bytes() -> Result<usize> {
-    let sys = System::new_all();
+    let mut sys = System::new();
+    sys.refresh_memory();
     let system_ram_mb = usize::try_from(sys.total_memory())? / SIZE_IN_MB;
 
     let sysctl_mb = std::process::Command::new("sysctl")
