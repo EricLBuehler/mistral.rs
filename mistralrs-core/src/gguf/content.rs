@@ -290,7 +290,8 @@ mod tests {
         match result {
             Ok(_) => panic!("unsupported GGUF architecture should return an error"),
             Err(err) => assert!(
-                err.to_string().contains("Unknown GGUF architecture `gemma4`"),
+                err.to_string()
+                    .contains("Unknown GGUF architecture `gemma4`"),
                 "unexpected error: {err}"
             ),
         }
