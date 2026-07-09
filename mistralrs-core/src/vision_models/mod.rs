@@ -137,3 +137,53 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
         rope_positions.reshape((1, batch, 1))?.repeat((3, 1, 1))?,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    #[test]
+    fn chunked_mrope_positions_use_sequence_offsets() {
+        let device = Device::Cpu;
+        let position_ids = Tensor::from_vec((0i64..36).collect::<Vec<_>>(), (3, 2, 6), &device)
+            .expect("position tensor must build");
+        let deltas = Tensor::zeros((2, 1), DType::I64, &device)
+            .expect("position deltas must build");
+        let input_ids =
+            Tensor::zeros((2, 2), DType::U32, &device).expect("input tensor must build");
+
+        let got = mrope_position_ids_for_input(&position_ids, &deltas, &input_ids, &[1, 3])
+            .expect("chunked MRoPE position slice must succeed")
+            .to_vec3::<i64>()
+            .expect("position tensor must convert");
+
+        assert_eq!(
+            got,
+            vec![
+                vec![vec![1, 2], vec![9, 10]],
+                vec![vec![13, 14], vec![21, 22]],
+                vec![vec![25, 26], vec![33, 34]],
+            ]
+        );
+    }
+
+    #[test]
+    fn chunked_mrope_positions_reject_batch_offset_mismatch() {
+        let device = Device::Cpu;
+        let position_ids = Tensor::zeros((3, 2, 4), DType::I64, &device)
+            .expect("position tensor must build");
+        let deltas = Tensor::zeros((2, 1), DType::I64, &device)
+            .expect("position deltas must build");
+        let input_ids =
+            Tensor::zeros((2, 2), DType::U32, &device).expect("input tensor must build");
+
+        let err = mrope_position_ids_for_input(&position_ids, &deltas, &input_ids, &[0])
+            .expect_err("batch/offset mismatch must be rejected");
+
+        assert!(
+            err.to_string().contains("incompatible with input shape"),
+            "unexpected error: {err}"
+        );
+    }
+}

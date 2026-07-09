@@ -456,22 +456,17 @@ impl Qwen2VLModel {
         }
         let ropeidx_attn_mask = Tensor::stack(&ropeidx_attn_mask_bs, 0)?;
         let mut ropeidx_attn_mask_indices_bs = Vec::new();
-        for (len, offset) in seqlens.iter().zip(seqlen_offsets) {
+        for len in &seqlens {
             ropeidx_attn_mask_indices_bs.push(Tensor::from_vec(
-                (*offset as i64..(*len as i64 + *offset as i64)).collect(),
+                (0_i64..*len as i64).collect(),
                 (*len,),
                 input_ids.device(),
             )?);
         }
         let ropeidx_attn_mask_indices = Tensor::stack(&ropeidx_attn_mask_indices_bs, 0)?;
 
-        let ropeidx_input_ids = if !matches!(attention_mask, AttentionMask::None) {
-            input_ids
-        } else {
-            input_ids_full
-        };
         let (position_ids, mrope_position_deltas) = self.get_rope_index(
-            ropeidx_input_ids,
+            input_ids_full,
             rope_img_grid_thw.as_ref(),
             rope_vid_grid_thw.as_ref(),
             &AttentionMask::Custom(ropeidx_attn_mask.clone()),
@@ -481,16 +476,12 @@ impl Qwen2VLModel {
             video_nums,
         )?;
 
-        let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            position_ids
-        } else {
-            crate::vision_models::mrope_position_ids_for_input(
-                &position_ids,
-                &mrope_position_deltas,
-                input_ids,
-                seqlen_offsets,
-            )?
-        };
+        let position_ids = crate::vision_models::mrope_position_ids_for_input(
+            &position_ids,
+            &mrope_position_deltas,
+            input_ids,
+            seqlen_offsets,
+        )?;
 
         let out = self
             .text
