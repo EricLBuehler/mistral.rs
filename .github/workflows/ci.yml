@@ -144,6 +144,13 @@ jobs:
             exit 1
           fi
 
+  docker-contract:
+    name: Docker packaging contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/check_docker_mistralrs_copy.sh
+
   # No pinned-MSRV job: CI and release always build with the latest stable toolchain. The MSRV is
   # declared in Cargo.toml (rust-version) and docs, and enforced for source installs by install.sh /
   # install.ps1, which update Rust to meet it.
