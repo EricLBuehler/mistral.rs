@@ -402,7 +402,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
                 let n_expert = self
                     .model
                     .get_metadata()
-                    .get("expert_count")
+                    .get(&format!("{}.expert_count", self.arch))
                     .map(|x| x.to_u64().unwrap() as usize)
                     .unwrap_or(0);
                 let moe_or_mlp = if n_expert <= 1 {
