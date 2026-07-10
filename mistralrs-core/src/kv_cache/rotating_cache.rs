@@ -253,6 +253,14 @@ impl RotatingCache {
     pub fn append(&mut self, src: &Tensor) -> Result<Tensor> {
         let seq_len = src.dim(self.dim)?;
         if self.all_data.is_none() {
+            // A first prefill can already cover or exceed the complete sliding
+            // window. In that case the overwrite branch below copies
+            // `max_seq_len` tokens at once, so the lazily allocated buffer must
+            // be at least that large. The normal grow path only runs in the
+            // `seq_len < max_seq_len` branch.
+            if seq_len >= self.max_seq_len {
+                self.capacity_seq_len = self.max_seq_len;
+            }
             let mut shape = src.dims().to_vec();
             shape[self.dim] = self.capacity_seq_len;
             self.all_data = Some(Tensor::zeros(shape, src.dtype(), src.device())?);
@@ -469,6 +477,30 @@ mod tests {
         assert_eq!(
             decode.flatten_all()?.to_vec1::<f32>()?,
             vec![4., 5., 6., 7.]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn grows_small_initial_capacity_for_large_first_prefill() -> candle_core::Result<()> {
+        // Production caches start in CACHE_GROW_SIZE blocks. Gemma 4 has a
+        // 1,024-token sliding window but therefore starts with 512 slots.
+        let mut cache = RotatingCache::new(2, 4, 2);
+
+        let result = cache.append(&make_src(&[0., 1., 2., 3., 4., 5., 6.])?)?;
+        assert_eq!(
+            result.flatten_all()?.to_vec1::<f32>()?,
+            vec![0., 1., 2., 3., 4., 5., 6.]
+        );
+        assert_eq!(cache.capacity_seq_len, 4);
+        assert_eq!(
+            cache
+                .current_data()?
+                .unwrap()
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            vec![3., 4., 5., 6.]
         );
 
         Ok(())
