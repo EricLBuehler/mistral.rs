@@ -131,23 +131,23 @@ impl SamplingParams {
             self.top_k = Some(1);
             self.top_p = None;
             self.min_p = None;
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            self.temperature = if temperature == 0.0 {
-                None
-            } else {
-                Some(temperature)
-            };
-        }
-        if let Some(top_k) = defaults.top_k {
-            self.top_k = if top_k == 0 { None } else { Some(top_k) };
-        }
-        if let Some(top_p) = defaults.top_p {
-            self.top_p = Some(top_p);
-        }
-        if let Some(min_p) = defaults.min_p {
-            self.min_p = Some(min_p);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                self.temperature = if temperature == 0.0 {
+                    None
+                } else {
+                    Some(temperature)
+                };
+            }
+            if let Some(top_k) = defaults.top_k {
+                self.top_k = if top_k == 0 { None } else { Some(top_k) };
+            }
+            if let Some(top_p) = defaults.top_p {
+                self.top_p = Some(top_p);
+            }
+            if let Some(min_p) = defaults.min_p {
+                self.min_p = Some(min_p);
+            }
         }
         if let Some(repetition_penalty) = defaults.repetition_penalty {
             self.repetition_penalty = Some(repetition_penalty);
@@ -1624,6 +1624,26 @@ mod tests {
         };
         params.apply_model_defaults(&ModelGenerationDefaults {
             do_sample: Some(false),
+            ..Default::default()
+        });
+
+        assert_eq!(params.temperature, None);
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, None);
+        assert_eq!(params.min_p, None);
+    }
+
+    #[test]
+    fn test_apply_model_defaults_do_sample_false_ignores_sampling_defaults() {
+        // generation_config.json commonly carries `do_sample: false` alongside
+        // leftover temperature/top_p; like HF transformers, greedy must win.
+        let mut params = SamplingParams::neutral();
+        params.apply_model_defaults(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.6),
+            top_k: Some(20),
+            top_p: Some(0.9),
+            min_p: Some(0.05),
             ..Default::default()
         });
 
