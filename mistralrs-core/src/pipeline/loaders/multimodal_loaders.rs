@@ -1792,7 +1792,8 @@ impl MultimodalModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+        // MLlamaTextModel requires eager attention (cross-attn has no paged path).
+        false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
