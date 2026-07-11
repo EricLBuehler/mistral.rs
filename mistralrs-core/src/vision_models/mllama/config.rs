@@ -36,7 +36,7 @@ pub(crate) struct MLlamaVisionConfig {
     pub(crate) hidden_act: VisionActivation,
     pub(crate) num_hidden_layers: usize,
     pub(crate) num_global_layers: usize,
-    #[serde(default = "d_attn_heads")]
+    #[serde(alias = "attention_heads", default = "d_attn_heads")]
     pub(crate) num_attention_heads: usize,
     pub(crate) num_channels: usize,
     pub(crate) intermediate_size: usize,
