@@ -275,7 +275,13 @@ impl InputsProcessor for MLlamaImageProcessor {
 
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
-        let (pixel_values, aspect_ratio_ids, aspect_ratio_mask, cross_attn_mask) = if has_images {
+        // Only process image inputs on the prompt step. On decode steps the input has no
+        // `<|image|>` tokens, so the cross-attention mask would collapse to a zero-image
+        // (0-element) tensor and `to_dtype` on it aborts the CUDA stream with
+        // CUDA_ERROR_INVALID_VALUE. Cross-attention is skipped during decode anyway.
+        let (pixel_values, aspect_ratio_ids, aspect_ratio_mask, cross_attn_mask) = if has_images
+            && is_prompt
+        {
             let mut pixel_values_accum = Vec::new();
             let mut aspect_ratio_ids_accum = Vec::new();
             let mut aspect_ratio_mask_accum = Vec::new();
