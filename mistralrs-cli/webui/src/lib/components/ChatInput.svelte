@@ -9,6 +9,15 @@
   let pendingVideos = $state<{ file: File; url: string; uploadedUrl?: string }[]>([]);
   let isDragging = $state(false);
 
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
   function autoResize() {
     if (!textareaEl) return;
     textareaEl.style.height = "auto";
@@ -20,15 +29,15 @@
     const content = inputValue.trim();
     if (!content && !pendingImages.length && !pendingVideos.length) return;
 
-    // Upload pending images
+    // Encode as data URLs; the /v1/chat/completions endpoint only accepts
+    // http/https/data sources, not the server's relative `uploads/...` paths.
     const imageUrls: string[] = [];
     for (const img of pendingImages) {
       if (!img.uploadedUrl) {
         try {
-          const result = await api.uploadImage(img.file);
-          img.uploadedUrl = result.url;
+          img.uploadedUrl = await fileToDataUrl(img.file);
         } catch (e) {
-          console.error("Upload failed:", e);
+          console.error("Failed to read image:", e);
           continue;
         }
       }
@@ -37,15 +46,13 @@
       }
     }
 
-    // Upload pending videos
     const videoUrls: string[] = [];
     for (const vid of pendingVideos) {
       if (!vid.uploadedUrl) {
         try {
-          const result = await api.uploadVideo(vid.file);
-          vid.uploadedUrl = result.url;
+          vid.uploadedUrl = await fileToDataUrl(vid.file);
         } catch (e) {
-          console.error("Video upload failed:", e);
+          console.error("Failed to read video:", e);
           continue;
         }
       }
