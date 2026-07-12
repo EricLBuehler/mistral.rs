@@ -48,7 +48,7 @@ use crate::{
     response::{
         ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
     },
-    sequence::{SequenceRecognizer, SequenceState},
+    sequence::{Sequence, SequenceRecognizer, SequenceState},
     Constraint,
 };
 
@@ -59,6 +59,20 @@ pub(crate) mod agentic_session;
 mod file_tools;
 mod logger;
 mod tool_dispatch;
+
+/// Advance an executed paged-attention prompt while leaving deferred prompts untouched.
+pub(crate) fn transition_executed_paged_prompt(seq: &mut Sequence) {
+    if !seq.is_prompt() {
+        return;
+    }
+
+    match seq.sequence_stepping_type() {
+        SeqStepType::OneShot => {
+            seq.set_state(SequenceState::Done(StopReason::GeneratedImage));
+        }
+        SeqStepType::PromptAndDecode => seq.set_state(SequenceState::RunningCompletion),
+    }
+}
 
 pub enum EngineInstruction {
     Terminate,
@@ -758,6 +772,11 @@ impl Engine {
                         for seq in guards_mut.iter_mut() {
                             if is_prompt {
                                 seq.finish_prompt_timing(step_exec_time);
+                                // Paged-attention prompts can be deferred across scheduler
+                                // passes when their batch shape is incompatible. Transition
+                                // only the prompts that actually ran; deferred prompts retain
+                                // RunningPrompt until they are emitted by the scheduler.
+                                transition_executed_paged_prompt(seq);
                             } else {
                                 seq.finish_completion_timing(step_exec_time);
                             }
