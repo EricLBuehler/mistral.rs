@@ -284,7 +284,7 @@ pub struct MultimodalData {
 }
 
 impl MultimodalData {
-    pub fn new(
+    pub(crate) fn new(
         input_images: Option<Vec<image::DynamicImage>>,
         input_audios: Option<Vec<AudioInput>>,
         input_videos: Option<Vec<VideoInput>>,
@@ -350,7 +350,7 @@ impl MultimodalData {
             .is_some_and(|imgs| !imgs.images().is_empty())
     }
 
-    pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+    pub(crate) fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
         if self.has_changed_prompt {
             if let Some(input_audios) = self.input_audios.as_mut() {
                 let mut audios = Vec::new();
@@ -364,17 +364,13 @@ impl MultimodalData {
         }
     }
 
-    pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
-        self.input_audios.as_ref().map(|a| a.clone_audios())
-    }
-
-    pub fn clone_audios_range(&self, range: Range<usize>) -> Option<Vec<AudioInput>> {
+    pub(crate) fn clone_audios_range(&self, range: Range<usize>) -> Option<Vec<AudioInput>> {
         self.input_audios
             .as_ref()
             .map(|a| a.clone_audios_range(range))
     }
 
-    pub fn audios(&self) -> Option<&[AudioInput]> {
+    pub(crate) fn audios(&self) -> Option<&[AudioInput]> {
         self.input_audios.as_ref().map(|a| a.audios())
     }
 
@@ -1504,18 +1500,14 @@ impl Sequence {
         self.multimodal.has_images()
     }
 
-    pub fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
+    pub(crate) fn take_audios(&mut self) -> Option<Vec<AudioInput>> {
         if let Some(window) = self.active_multimodal_window(MultimodalKind::Audio) {
             return self.multimodal.clone_audios_range(window.item_range);
         }
         self.multimodal.take_audios()
     }
 
-    pub fn clone_audios(&self) -> Option<Vec<AudioInput>> {
-        self.multimodal.clone_audios()
-    }
-
-    pub fn audios(&self) -> Option<&[AudioInput]> {
+    pub(crate) fn audios(&self) -> Option<&[AudioInput]> {
         self.multimodal.audios()
     }
 

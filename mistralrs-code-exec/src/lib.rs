@@ -12,17 +12,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mistralrs_mcp::{
+use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
+use mistralrs_tool_types::{
     CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile,
     ToolOutput,
 };
-use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use protocol::{ExecuteFile, ExecuteOutputSpec};
 use serde::{Deserialize, Serialize};
 use session::PythonSession;
 use tokio::sync::Mutex;
 
-pub use mistralrs_mcp::{CodeExecutionPermission, ShellOptions, ShellSkillMount};
+pub use mistralrs_tool_types::{CodeExecutionPermission, ShellOptions, ShellSkillMount};
 pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
 pub use shell::{ShellConfig, ShellManager};
@@ -459,8 +459,8 @@ impl CodeExecutionManager {
         let sessions = Arc::clone(&self.sessions);
         let ctx = self.spawn_ctx();
 
-        let execute_callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
-            move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
+        let execute_callback: Arc<mistralrs_tool_types::MultimodalToolCallback> = Arc::new(
+            move |func: &CalledFunction, tc: &mistralrs_tool_types::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let ctx = ctx.clone();
 
@@ -526,8 +526,8 @@ impl CodeExecutionManager {
         let sessions = Arc::clone(&self.sessions);
         let ctx = self.spawn_ctx();
 
-        let reset_callback: Arc<mistralrs_mcp::ToolCallback> = Arc::new(
-            move |_func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
+        let reset_callback: Arc<mistralrs_tool_types::ToolCallback> = Arc::new(
+            move |_func: &CalledFunction, tc: &mistralrs_tool_types::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let ctx = ctx.clone();
 
@@ -565,7 +565,7 @@ impl CodeExecutionManager {
         );
 
         // Schemas only. The engine owns the FileStore and dispatches these directly.
-        let read_file_stub: Arc<mistralrs_mcp::ToolCallback> = Arc::new(|_, _| {
+        let read_file_stub: Arc<mistralrs_tool_types::ToolCallback> = Arc::new(|_, _| {
             Err(anyhow::anyhow!(
                 "read_file must be dispatched by the engine"
             ))
@@ -578,7 +578,7 @@ impl CodeExecutionManager {
             },
         );
 
-        let list_files_stub: Arc<mistralrs_mcp::ToolCallback> = Arc::new(|_, _| {
+        let list_files_stub: Arc<mistralrs_tool_types::ToolCallback> = Arc::new(|_, _| {
             Err(anyhow::anyhow!(
                 "list_files must be dispatched by the engine"
             ))
@@ -597,7 +597,7 @@ impl CodeExecutionManager {
 
 fn denied_by_permission(
     ctx: &SpawnCtx,
-    tool_ctx: &mistralrs_mcp::ToolCallContext,
+    tool_ctx: &mistralrs_tool_types::ToolCallContext,
     session_id: &str,
     code: &str,
     outputs: &[String],
@@ -625,7 +625,7 @@ fn denied_by_permission(
                 working_directory: ctx.working_directory.clone(),
             };
             if let Some(notifier) = &tool_ctx.code_execution_approval_notifier {
-                notifier(mistralrs_mcp::CodeExecutionApprovalRequest {
+                notifier(mistralrs_tool_types::CodeExecutionApprovalRequest {
                     approval_id,
                     session_id: approval.session_id.clone(),
                     round: tool_ctx.round.unwrap_or_default(),

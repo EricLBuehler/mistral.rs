@@ -718,7 +718,7 @@ pub async fn sample_sequence(
 
 #[cfg(test)]
 mod tests {
-    use mistralrs_mcp::{Function, Tool, ToolType};
+    use mistralrs_tool_types::{Function, Tool, ToolType};
 
     use super::*;
     use crate::tools::{ToolCallState, ToolChoice};

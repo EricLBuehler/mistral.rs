@@ -69,6 +69,8 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 
 mod amoe;
 mod attention;
+#[cfg(not(feature = "audio"))]
+mod audio_input;
 mod block_diffusion;
 mod diagnostics;
 mod diffusion_models;
@@ -95,6 +97,7 @@ mod sampler;
 mod scheduler;
 mod sequence;
 pub mod speculative;
+#[cfg(feature = "audio")]
 mod speech_models;
 mod toml_selector;
 mod tools;
@@ -117,6 +120,8 @@ pub use agent_approval::{
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler,
 };
 pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
+#[cfg(not(feature = "audio"))]
+pub(crate) use audio_input::AudioInput;
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
@@ -126,23 +131,25 @@ pub use files::{
     WIRE_EMBED_LIMIT_BYTES,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+#[cfg(feature = "audio")]
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_code_exec::{
     CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,
     DEFAULT_CODE_EXEC_TIMEOUT_SECS, DEFAULT_SHELL_TIMEOUT_SECS,
 };
+#[cfg(feature = "mcp")]
 pub use mistralrs_mcp::{
+    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
+};
+pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
+pub use mistralrs_tool_types::{
     AgentPermission, AgentToolApprovalNotifier, AgentToolApprovalRequest, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CalledFunction, CodeExecutionApprovalNotifier,
     CodeExecutionApprovalRequest, CodeExecutionPermission, Function, MultimodalToolCallback,
     ShellOptions, ShellSkillMount, Tool, ToolCallContext, ToolCallback, ToolCallbackKind,
     ToolCallbackWithTool, ToolOutput, ToolType,
 };
-pub use mistralrs_mcp::{
-    McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
-};
-pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
-pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
@@ -161,9 +168,10 @@ pub use pipeline::{
     ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
-    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    Starcoder2Loader, SupportedModality, TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
+#[cfg(feature = "audio")]
+pub use pipeline::{SpeechLoader, SpeechPipeline};
 pub use request::{
     ApproximateUserLocation, CalibrationAction, CalibrationRequest, Constraint,
     DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
@@ -183,6 +191,7 @@ pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
 pub use speculative::{MtpConfig, SpeculativeConfig};
+#[cfg(feature = "audio")]
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -239,6 +248,7 @@ impl Default for EngineConfig {
 #[derive(Clone)]
 pub struct AddModelConfig {
     pub engine_config: EngineConfig,
+    #[cfg(feature = "mcp")]
     pub mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for enabling model unload/reload support.
     /// Without this, models cannot be unloaded and reloaded.
@@ -251,6 +261,7 @@ impl AddModelConfig {
     pub fn new(engine_config: EngineConfig) -> Self {
         Self {
             engine_config,
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
             loader_config: None,
             code_exec_config: None,
@@ -258,6 +269,7 @@ impl AddModelConfig {
         }
     }
 
+    #[cfg(feature = "mcp")]
     pub fn with_mcp_config(mut self, mcp_config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(mcp_config);
         self
@@ -332,6 +344,7 @@ pub struct UnloadedModelState {
     /// Engine configuration
     pub engine_config: EngineConfig,
     /// MCP client configuration
+    #[cfg(feature = "mcp")]
     pub mcp_client_config: Option<McpClientConfig>,
     /// Model category (Text, Multimodal, etc.)
     pub category: ModelCategory,
@@ -425,6 +438,7 @@ struct RebootState {
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacksWithTools,
+    #[cfg(feature = "mcp")]
     mcp_client_config: Option<McpClientConfig>,
     /// Optional loader config for reloading after unload
     loader_config: Option<ModelLoaderConfig>,
@@ -499,6 +513,7 @@ pub struct MistralRsBuilder {
     search_embedding_model: Option<SearchEmbeddingModel>,
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: tools::ToolCallbacksWithTools,
+    #[cfg(feature = "mcp")]
     mcp_client_config: Option<McpClientConfig>,
     loader_config: Option<ModelLoaderConfig>,
     code_exec_config: Option<CodeExecutionConfig>,
@@ -529,6 +544,7 @@ impl MistralRsBuilder {
             search_embedding_model,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
             loader_config: None,
             code_exec_config: None,
@@ -636,6 +652,7 @@ impl MistralRsBuilder {
     }
 
     /// Configure MCP client to connect to external MCP servers.
+    #[cfg(feature = "mcp")]
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
         self
@@ -864,14 +881,16 @@ impl MistralRs {
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] pipeline: &Arc<
             tokio::sync::Mutex<dyn Pipeline>,
         >,
+        #[cfg_attr(not(feature = "mcp"), allow(unused_variables))]
         tool_callbacks: &mut tools::ToolCallbacksWithTools,
-        mcp_client_config: Option<&McpClientConfig>,
+        #[cfg(feature = "mcp")] mcp_client_config: Option<&McpClientConfig>,
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
         code_exec_config: Option<&CodeExecutionConfig>,
         #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))] shell_config: Option<
             &ShellConfig,
         >,
     ) {
+        #[cfg(feature = "mcp")]
         if let Some(config) = mcp_client_config {
             let mut mcp_client = McpClient::new(config.clone());
             let total_servers = config.servers.len();
@@ -1055,6 +1074,7 @@ impl MistralRs {
             search_embedding_model,
             search_callback,
             mut tool_callbacks,
+            #[cfg(feature = "mcp")]
             mcp_client_config,
             loader_config,
             #[cfg_attr(not(feature = "code-execution"), allow(unused_variables))]
@@ -1081,6 +1101,7 @@ impl MistralRs {
         Self::init_external_tool_callbacks(
             &pipeline,
             &mut tool_callbacks,
+            #[cfg(feature = "mcp")]
             mcp_client_config.as_ref(),
             code_exec_config.as_ref(),
             shell_config.as_ref(),
@@ -1098,6 +1119,7 @@ impl MistralRs {
             search_embedding_model,
             search_callback: search_callback.clone(),
             tool_callbacks: tool_callbacks.clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: mcp_client_config.clone(),
             loader_config,
         };
@@ -1776,6 +1798,7 @@ impl MistralRs {
         Self::init_external_tool_callbacks(
             &pipeline,
             &mut engine_config.tool_callbacks,
+            #[cfg(feature = "mcp")]
             config.mcp_client_config.as_ref(),
             config.code_exec_config.as_ref(),
             config.shell_config.as_ref(),
@@ -1793,6 +1816,7 @@ impl MistralRs {
             search_embedding_model: engine_config.search_embedding_model,
             search_callback: engine_config.search_callback.clone(),
             tool_callbacks: engine_config.tool_callbacks.clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: config.mcp_client_config.clone(),
             loader_config: config.loader_config.clone(),
         };
@@ -2059,7 +2083,15 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.reboot_state.mcp_client_config.is_some())
+            #[cfg(feature = "mcp")]
+            {
+                Ok(engine_instance.reboot_state.mcp_client_config.is_some())
+            }
+            #[cfg(not(feature = "mcp"))]
+            {
+                let _ = engine_instance;
+                Ok(false)
+            }
         } else {
             Err(format!("Model {resolved_model_id} not found"))
         }
@@ -2134,6 +2166,7 @@ impl MistralRs {
                 search_callback: engine_instance.reboot_state.search_callback.clone(),
                 tool_callbacks: engine_instance.reboot_state.tool_callbacks.clone(),
             },
+            #[cfg(feature = "mcp")]
             mcp_client_config: engine_instance.reboot_state.mcp_client_config.clone(),
             category: engine_instance.category.clone(),
             mistralrs_config: engine_instance.config.clone(),
@@ -2280,6 +2313,7 @@ impl MistralRs {
             search_embedding_model: unloaded_state.engine_config.search_embedding_model,
             search_callback: unloaded_state.engine_config.search_callback.clone(),
             tool_callbacks: unloaded_state.engine_config.tool_callbacks.clone(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: unloaded_state.mcp_client_config.clone(),
             loader_config: Some(unloaded_state.loader_config.clone()),
         };

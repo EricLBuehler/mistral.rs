@@ -327,6 +327,105 @@ impl std::fmt::Display for MultimodalLoaderType {
     }
 }
 
+#[cfg(test)]
+mod modular_feature_tests {
+    #[cfg(not(feature = "audio"))]
+    use super::AutoMultimodalLoader;
+    use super::MultimodalLoaderType;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::preprocessor_config::PreProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::vision_models::processor_config::ProcessorConfig;
+    #[cfg(not(feature = "audio"))]
+    use crate::SupportedModality;
+
+    #[test]
+    fn phi4mm_arch_string_parses() {
+        let parsed = "phi4mm".parse::<MultimodalLoaderType>().unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Phi4MM);
+    }
+
+    #[test]
+    fn gemma3n_arch_string_parses() {
+        let parsed = "gemma3n".parse::<MultimodalLoaderType>().unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Gemma3n);
+    }
+
+    #[test]
+    fn phi4mm_hf_arch_parses() {
+        let parsed = MultimodalLoaderType::from_causal_lm_name("Phi4MMForCausalLM").unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Phi4MM);
+    }
+
+    #[test]
+    fn gemma3n_hf_arch_parses() {
+        let parsed =
+            MultimodalLoaderType::from_causal_lm_name("Gemma3nForConditionalGeneration").unwrap();
+        assert_eq!(parsed, MultimodalLoaderType::Gemma3n);
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_loader_selects_without_audio_feature() {
+        AutoMultimodalLoader::get_loader(r#"{"architectures":["Phi4MMForCausalLM"]}"#)
+            .expect("phi4mm loader should be selectable without audio feature");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_loader_selects_without_audio_feature() {
+        AutoMultimodalLoader::get_loader(
+            r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#,
+        )
+        .expect("gemma3n loader should be selectable without audio feature");
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn phi4mm_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Phi4MMForCausalLM"]}"#;
+        let loader = AutoMultimodalLoader::get_loader(config)
+            .expect("phi4mm loader should be selectable without audio feature");
+
+        let modalities = loader
+            .modalities(config)
+            .expect("phi4mm modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "phi4mm should not report audio modality when audio feature is disabled"
+        );
+        let preproc_cfg = PreProcessorConfig {
+            audio_compression_rate: Some(8),
+            audio_downsample_rate: Some(8),
+            audio_feat_stride: Some(2),
+            ..Default::default()
+        };
+        let _ = loader.get_processor(config, Some(ProcessorConfig::default()), preproc_cfg, None);
+    }
+
+    #[cfg(not(feature = "audio"))]
+    #[test]
+    fn gemma3n_no_audio_smoke_paths() {
+        let config = r#"{"architectures":["Gemma3nForConditionalGeneration"]}"#;
+        let loader = AutoMultimodalLoader::get_loader(config)
+            .expect("gemma3n loader should be selectable without audio feature");
+
+        let modalities = loader
+            .modalities(config)
+            .expect("gemma3n modalities should be available without audio feature");
+        assert!(
+            !modalities.input.contains(&SupportedModality::Audio),
+            "gemma3n should not report audio modality when audio feature is disabled"
+        );
+        let _ = loader.get_processor(
+            config,
+            Some(ProcessorConfig::default()),
+            PreProcessorConfig::default(),
+            None,
+        );
+    }
+}
+
 #[derive(Deserialize)]
 struct AutoMultimodalLoaderConfig {
     #[serde(default)]
@@ -3104,12 +3203,12 @@ impl MultimodalModelLoader for Phi4MMLoader {
         Arc::new(Phi4MMPrefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if cfg!(feature = "audio") {
+            input.push(SupportedModality::Audio);
+        }
         Ok(Modalities {
-            input: vec![
-                SupportedModality::Text,
-                SupportedModality::Vision,
-                SupportedModality::Audio,
-            ],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
@@ -4789,7 +4888,7 @@ impl MultimodalModelLoader for Gemma3nLoader {
         // Handle the Gemma 3 1b case here
         Arc::new(Gemma3nProcessor::new(
             processor_config.unwrap_or_default(),
-            true,
+            cfg!(feature = "audio"),
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
@@ -4802,12 +4901,12 @@ impl MultimodalModelLoader for Gemma3nLoader {
         Arc::new(Gemma3Prefixer)
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if cfg!(feature = "audio") {
+            input.push(SupportedModality::Audio);
+        }
         Ok(Modalities {
-            input: vec![
-                SupportedModality::Text,
-                SupportedModality::Vision,
-                SupportedModality::Audio,
-            ],
+            input,
             output: vec![SupportedModality::Text],
         })
     }
@@ -7392,7 +7491,7 @@ impl MultimodalModelLoader for Gemma4Loader {
             pooling_kernel_size,
             default_output_length,
             supports_images,
-            supports_audio: cfg.audio_config.is_some(),
+            supports_audio: cfg!(feature = "audio") && cfg.audio_config.is_some(),
             raw_audio_frame_size,
             is_unified: cfg.is_unified(),
             decode_window: None,
@@ -7414,7 +7513,7 @@ impl MultimodalModelLoader for Gemma4Loader {
             input.push(SupportedModality::Vision);
             input.push(SupportedModality::Video);
         }
-        if cfg.audio_config.is_some() {
+        if cfg!(feature = "audio") && cfg.audio_config.is_some() {
             input.push(SupportedModality::Audio);
         }
         Ok(Modalities {

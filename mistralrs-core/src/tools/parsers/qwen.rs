@@ -271,7 +271,7 @@ fn lark_string(value: &str) -> String {
 mod tests {
     use super::{parse_qwen_tool_calls, QwenParser};
     use crate::tools::parsers::ToolFormatParser;
-    use mistralrs_mcp::{Function, ToolType};
+    use mistralrs_tool_types::{Function, ToolType};
     use serde_json::json;
     use serde_json::Value;
     use std::collections::HashMap;

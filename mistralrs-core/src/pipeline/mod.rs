@@ -22,6 +22,7 @@ mod processing;
 mod prompt_chunks;
 mod response;
 pub(crate) mod sampling;
+#[cfg(feature = "audio")]
 mod speech;
 
 pub use super::diffusion_models::DiffusionGenerationParams;
@@ -100,6 +101,7 @@ pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
 use rand_isaac::Isaac64Rng;
+#[cfg(feature = "audio")]
 pub use speech::{SpeechLoader, SpeechPipeline};
 use std::any::Any;
 use std::collections::HashMap;

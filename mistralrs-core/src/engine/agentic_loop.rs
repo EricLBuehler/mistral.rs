@@ -230,6 +230,7 @@ pub(super) fn upgrade_to_multimodal(request: &mut NormalRequest) {
             reasoning_effort,
         } => RequestMessage::MultimodalChat {
             images: Vec::new(),
+            #[cfg(feature = "audio")]
             audios: Vec::new(),
             videos: Vec::new(),
             messages,
@@ -646,7 +647,7 @@ async fn approve_agent_tool(
                 arguments: tool_arguments(tc),
             };
             if let Some(notifier) = &ctx.tool_call_ctx.agent_approval_notifier {
-                notifier(mistralrs_mcp::AgentToolApprovalRequest {
+                notifier(mistralrs_tool_types::AgentToolApprovalRequest {
                     approval_id: approval.approval_id.clone(),
                     session_id: approval.session_id.clone(),
                     round: approval.round,
@@ -793,7 +794,7 @@ struct DispatchCtx<'a> {
     dispatch_url: Option<&'a str>,
     supports_vision: bool,
     supports_video: bool,
-    tool_call_ctx: &'a mistralrs_mcp::ToolCallContext,
+    tool_call_ctx: &'a mistralrs_tool_types::ToolCallContext,
     run_id: &'a str,
     turn: usize,
     session_id: &'a str,
@@ -1223,7 +1224,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     let this_clone = this.clone();
     let handle = tokio::spawn(async move {
-        let tool_call_ctx = mistralrs_mcp::ToolCallContext {
+        let tool_call_ctx = mistralrs_tool_types::ToolCallContext {
             session_id: Some(session_id.clone()),
             round: None,
             tool_name: None,

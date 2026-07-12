@@ -26,7 +26,7 @@ pub(super) struct ToolResult {
     pub content: String,
     pub images: Vec<DynamicImage>,
     pub video_frames: Vec<DynamicImage>,
-    pub files: Vec<mistralrs_mcp::ToolFile>,
+    pub files: Vec<mistralrs_tool_types::ToolFile>,
 }
 
 fn token_budget(opts: &WebSearchOptions) -> usize {
@@ -358,7 +358,7 @@ pub(super) async fn execute_extraction(
 pub(super) fn execute_custom_tool(
     engine: &Engine,
     tc: &ToolCallResponse,
-    ctx: &mistralrs_mcp::ToolCallContext,
+    ctx: &mistralrs_tool_types::ToolCallContext,
 ) -> ToolResult {
     let name = &tc.function.name;
 

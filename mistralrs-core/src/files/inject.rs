@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use mistralrs_mcp::ToolFile;
-use mistralrs_mcp::ToolInputFile;
+use mistralrs_tool_types::ToolFile;
+use mistralrs_tool_types::ToolInputFile;
 use serde_json::Value;
 
 use crate::tools::ToolCallResponse;
