@@ -1,11 +1,9 @@
 ---
 title: MCP configuration schema
 description: JSON schema for mistralrs MCP client configuration files.
-sidebar:
-  order: 8
 ---
 
-When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/guides/agents/connect-mcp-server/)), it reads a JSON config describing servers to connect to.
+When mistral.rs acts as an [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client, it reads a JSON config describing servers to connect to.
 
 ## Top-level fields
 
@@ -21,7 +19,7 @@ When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/g
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `servers` | array | required | List of MCP servers. |
-| `auto_register_tools` | bool | `true` | Expose every tool from every connected server to the model. |
+| `auto_register_tools` | bool | required | Expose every tool from every connected server to the model. Has no serde default; omitting it is a parse error, so always set it (use `true`). |
 | `tool_timeout_secs` | int | 30 | Per-tool-call timeout. |
 | `max_concurrent_calls` | int | 10 | Cap on concurrent MCP calls. |
 
@@ -33,19 +31,21 @@ When mistral.rs acts as an MCP client (see [connect to MCP server](/mistral.rs/g
   "source": { ... },
   "enabled": true,
   "tool_prefix": "fs",
-  "bearer_token": "..."
+  "bearer_token": "...",
+  "id": "fs-1",
+  "resources": ["file://**"]
 }
 ```
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `id` | string | no (auto UUID) | Stable identifier for the server. |
-| `name` | string | yes | Server name. |
-| `source` | object | yes | Transport configuration. |
+| `name` | string | effectively yes | Server name. No validation rejects omission (it defaults to an empty string), but the entry is unusable without it. |
+| `source` | object | effectively yes | Transport configuration. Omission defaults to an empty-URL `Http` source, which will not connect. |
 | `enabled` | bool | no (default `true`) | Disable a server without removing the entry. |
 | `tool_prefix` | string | no (auto-generated `mcp_<uuid>`) | Prefix applied to tool names. |
-| `resources` | array | no | Optional resource list. |
 | `bearer_token` | string | no | Optional bearer token. |
+| `id` | string | no (auto UUID) | Stable identifier for the server. |
+| `resources` | array | no | Resource URI patterns the server exposes, e.g. `["file://**"]`, used for resource discovery and subscription. |
 
 ## Transports, `source` object
 

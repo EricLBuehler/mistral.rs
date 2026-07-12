@@ -2,8 +2,9 @@
 
 use candle_core::Device;
 use mistralrs_core::{
-    AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType, Pipeline, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, ToolCallbackWithTool,
+    plan_paged_kv, AddModelConfig, DefaultSchedulerMethod, EngineConfig, IsqType,
+    PagedAttentionConfig, PagedKvModelRequest, Pipeline, SchedulerConfig, SearchCallback,
+    SearchEmbeddingModel, ToolCallbackWithTool,
 };
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -55,6 +56,43 @@ impl AnyModelBuilder {
             AnyModelBuilder::Speech(b) => build_speech_pipeline(b).await,
             AnyModelBuilder::Embedding(b) => build_embedding_pipeline(b).await,
         }
+    }
+
+    fn paged_attn_cfg(&self) -> Option<PagedAttentionConfig> {
+        match self {
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => None,
+        }
+    }
+
+    fn max_num_seqs(&self) -> usize {
+        match self {
+            AnyModelBuilder::Text(b) => b.max_num_seqs,
+            AnyModelBuilder::Multimodal(b) => b.max_num_seqs,
+            AnyModelBuilder::Auto(b) => b.max_num_seqs,
+            AnyModelBuilder::Gguf(b) => b.max_num_seqs,
+            AnyModelBuilder::Diffusion(b) => b.max_num_seqs,
+            AnyModelBuilder::Speech(b) => b.max_num_seqs,
+            AnyModelBuilder::Embedding(b) => b.max_num_seqs,
+        }
+    }
+
+    fn with_paged_attn_cfg(mut self, paged_attn_cfg: Option<PagedAttentionConfig>) -> Self {
+        match &mut self {
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg = paged_attn_cfg,
+            AnyModelBuilder::Diffusion(_)
+            | AnyModelBuilder::Speech(_)
+            | AnyModelBuilder::Embedding(_) => {}
+        }
+        self
     }
 }
 
@@ -161,8 +199,30 @@ impl MultiModelBuilder {
             anyhow::bail!("MultiModelBuilder requires at least one model to be added");
         }
 
+        mistralrs_core::distributed::begin_tensor_parallel_session(self.builders.len())?;
+
+        let entries = self.builders;
+        let paged_kv_plan = plan_paged_kv(
+            &entries
+                .iter()
+                .map(|entry| PagedKvModelRequest {
+                    paged_attn: entry.builder.paged_attn_cfg(),
+                    max_num_seqs: entry.builder.max_num_seqs(),
+                })
+                .collect::<Vec<_>>(),
+            Default::default(),
+        )?;
+        let entries = entries
+            .into_iter()
+            .zip(paged_kv_plan.paged_attn)
+            .map(|(entry, paged_attn_cfg)| MultiModelEntry {
+                builder: entry.builder.with_paged_attn_cfg(paged_attn_cfg),
+                alias: entry.alias,
+            })
+            .collect::<Vec<_>>();
+
         // Build the first model to create the initial MistralRs instance
-        let mut builders_iter = self.builders.into_iter();
+        let mut builders_iter = entries.into_iter();
         let first_entry = builders_iter.next().unwrap();
 
         let (pipeline, scheduler_config, add_model_config) =
@@ -204,11 +264,15 @@ impl MultiModelBuilder {
         if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
             runner_builder = runner_builder.with_code_execution(code_exec_config);
         }
+        if let Some(shell_config) = add_model_config.shell_config.clone() {
+            runner_builder = runner_builder.with_shell_execution(shell_config);
+        }
 
         runner_builder = runner_builder
             .with_no_kv_cache(add_model_config.engine_config.no_kv_cache)
             .with_no_prefix_cache(add_model_config.engine_config.no_prefix_cache)
-            .with_prefix_cache_n(add_model_config.engine_config.prefix_cache_n);
+            .with_prefix_cache_n(add_model_config.engine_config.prefix_cache_n)
+            .with_deferred_daemon_start(true);
 
         let mistralrs = runner_builder.build().await;
 
@@ -252,6 +316,10 @@ impl MultiModelBuilder {
                 .map_err(|e| anyhow::anyhow!(e))?;
         }
         // Otherwise, the first model is already the default (set by MistralRs::new)
+
+        if mistralrs_core::distributed::is_daemon() {
+            mistralrs.run_daemon_replicator_forever();
+        }
 
         Ok(Model::new(mistralrs))
     }
@@ -379,6 +447,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -389,6 +463,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         mcp_client_config,
         loader_config: None,
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -435,6 +510,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         mcp_client_config: None,
         loader_config: None,
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -473,6 +549,9 @@ pub async fn build_model_from_pipeline(
 
     if let Some(code_exec_config) = add_model_config.code_exec_config.clone() {
         runner_builder = runner_builder.with_code_execution(code_exec_config);
+    }
+    if let Some(shell_config) = add_model_config.shell_config.clone() {
+        runner_builder = runner_builder.with_shell_execution(shell_config);
     }
 
     runner_builder = runner_builder
@@ -530,6 +609,12 @@ pub async fn build_text_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -584,6 +669,7 @@ pub async fn build_text_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -591,6 +677,7 @@ pub async fn build_text_pipeline(
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -645,6 +732,12 @@ pub async fn build_multimodal_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -704,6 +797,7 @@ pub async fn build_multimodal_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -711,6 +805,7 @@ pub async fn build_multimodal_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -797,6 +892,7 @@ pub async fn build_gguf_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -804,6 +900,7 @@ pub async fn build_gguf_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -855,6 +952,7 @@ pub async fn build_diffusion_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -862,6 +960,7 @@ pub async fn build_diffusion_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -917,6 +1016,7 @@ pub async fn build_speech_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -924,6 +1024,7 @@ pub async fn build_speech_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -940,6 +1041,8 @@ pub async fn build_embedding_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -994,6 +1097,8 @@ pub async fn build_embedding_pipeline(
             topology: builder.topology_path.clone(),
             write_uqff: builder.write_uqff.clone(),
             from_uqff: from_uqff_str,
+            imatrix: None,
+            calibration_file: None,
             hf_cache_path: builder.hf_cache_path.clone(),
         },
         token_source: builder.token_source.clone(),
@@ -1006,6 +1111,7 @@ pub async fn build_embedding_pipeline(
         silent: !builder.with_logging,
         chat_template: None,
         jinja_explicit: None,
+        mtp_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1013,6 +1119,7 @@ pub async fn build_embedding_pipeline(
         mcp_client_config: None,
         loader_config: Some(loader_config),
         code_exec_config: None,
+        shell_config: None,
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
@@ -1055,6 +1162,8 @@ pub async fn build_auto_pipeline(
         topology: builder.topology.clone(),
         write_uqff: builder.write_uqff.clone(),
         from_uqff: builder.from_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         hf_cache_path: builder.hf_cache_path.clone(),
     };
 
@@ -1093,6 +1202,12 @@ pub async fn build_auto_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -1149,6 +1264,7 @@ pub async fn build_auto_pipeline(
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -1156,6 +1272,7 @@ pub async fn build_auto_pipeline(
         mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
         code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))

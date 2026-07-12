@@ -22,9 +22,10 @@ use image::{AnimationDecoder, DynamicImage};
 use mistralrs_core::{sample_frame_indices, VideoInput};
 use std::io::Cursor;
 use std::path::Path;
-use tokio::{
-    fs::{self, File},
-    io::AsyncReadExt,
+use tokio::fs;
+
+use crate::media_source::{
+    load_media_source, LoadedMedia, MediaSourcePolicy, SERVER_VIDEO_FRAME_LIMIT,
 };
 
 /// Default frames-per-second assumed when metadata is unavailable (e.g. GIF).
@@ -49,54 +50,44 @@ See https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/ for det
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
 pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        bail!(
-            "Invalid video source '{}': not a valid URL (http/https/data) and file not found. \
-             Use a full URL, a data URL, or an absolute file path.",
-            url_unparsed
-        )
-    };
+    parse_video_url_with_policy(url_unparsed, num_frames, MediaSourcePolicy::Local).await
+}
 
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        let resp = reqwest::get(url.clone())
-            .await
-            .context(format!("Failed to fetch video: {url}"))?;
-        resp.bytes().await?.to_vec()
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Invalid file path: {}", url))?;
-        let mut f = File::open(&path)
-            .await
-            .context(format!("Could not open video file: {}", path.display()))?;
-        let metadata = fs::metadata(&path).await?;
-        let mut buffer = vec![0; metadata.len() as usize];
-        f.read_exact(&mut buffer).await?;
-        buffer
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
-    } else {
-        bail!("Unsupported URL scheme for video: {}", url.scheme());
-    };
+pub(crate) async fn parse_video_url_for_server(
+    url_unparsed: &str,
+    num_frames: Option<usize>,
+) -> Result<VideoInput> {
+    parse_video_url_with_policy(
+        url_unparsed,
+        num_frames.or(Some(SERVER_VIDEO_FRAME_LIMIT)),
+        MediaSourcePolicy::ServerRequest,
+    )
+    .await
+}
 
-    // Detect format
-    let lower = url_unparsed.to_lowercase();
-    let is_gif = lower.ends_with(".gif")
-        || lower.contains("image/gif")
-        || (bytes.len() >= 6 && &bytes[..6] == b"GIF89a")
-        || (bytes.len() >= 6 && &bytes[..6] == b"GIF87a");
+async fn parse_video_url_with_policy(
+    url_unparsed: &str,
+    num_frames: Option<usize>,
+    policy: MediaSourcePolicy,
+) -> Result<VideoInput> {
+    let media = load_media_source(url_unparsed, policy, "video").await?;
 
-    if is_gif {
-        decode_gif_frames(&bytes, num_frames)
+    if is_gif_source(url_unparsed, &media) {
+        decode_gif_frames(&media.bytes, num_frames)
     } else {
-        decode_video_ffmpeg(&bytes, num_frames, url_unparsed).await
+        decode_video_ffmpeg(&media.bytes, num_frames, url_unparsed).await
     }
+}
+
+fn is_gif_source(source: &str, media: &LoadedMedia) -> bool {
+    let lower = source.to_lowercase();
+    lower.ends_with(".gif")
+        || media
+            .mime_type
+            .as_deref()
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("image/gif"))
+        || media.bytes.starts_with(b"GIF89a")
+        || media.bytes.starts_with(b"GIF87a")
 }
 
 /// Decode a GIF into frames using the `image` crate.
@@ -376,5 +367,14 @@ mod tests {
         assert!((parse_fps_fraction("24/1").unwrap() - 24.0).abs() < 0.01);
         assert!(parse_fps_fraction("").is_none());
         assert!(parse_fps_fraction("abc").is_none());
+    }
+
+    #[tokio::test]
+    async fn server_video_rejects_local_sources() {
+        assert!(
+            parse_video_url_for_server("resources/rust-logo-32x32.png", None)
+                .await
+                .is_err()
+        );
     }
 }

@@ -87,22 +87,20 @@ impl LayerWeights {
             (q, k, v)
         };
 
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
         let (q, k) = match (&self.q_norm, &self.k_norm) {
-            (Some(q_norm), Some(k_norm)) => {
-                //Per‑head RMSNorm in qwen3
-                let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
-                let k_flat = k.flatten(0, 2)?;
-                //q_norm and k_norm weights stored in f32 format in qwen3 gguf
-                let q_flat = q_norm.forward(&q_flat)?;
-                let k_flat = k_norm.forward(&k_flat)?;
-                let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-                let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-                (q, k)
-            }
-            _ => (q, k),
+            (Some(q_norm), Some(k_norm)) => self.rotary.forward_qk_norm(
+                &q,
+                &k,
+                q_norm.weight(),
+                k_norm.weight(),
+                q_norm.eps(),
+                k_norm.eps(),
+                &positions,
+            )?,
+            _ => self.rotary.forward(&q, &k, &positions)?,
         };
-
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,

@@ -1,0 +1,45 @@
+//! Shell execution example.
+//!
+//! The model is given a shell tool and can run commands in a per-session
+//! working directory.
+//!
+//! Run with: `cargo run --release --features code-execution --example shell -p mistralrs`
+
+use anyhow::Result;
+use mistralrs::{
+    IsqBits, ModelBuilder, NetworkMode, RequestBuilder, SandboxPolicy, ShellConfig,
+    TextMessageRole, TextMessages,
+};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let sandbox = SandboxPolicy {
+        max_memory_mb: 1024,
+        network: NetworkMode::Loopback,
+        ..SandboxPolicy::default()
+    };
+
+    let model = ModelBuilder::new("google/gemma-4-E4B-it")
+        .with_auto_isq(IsqBits::Four)
+        .with_logging()
+        .with_shell_execution(ShellConfig {
+            sandbox_policy: Some(sandbox),
+            ..ShellConfig::default()
+        })
+        .build()
+        .await?;
+
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Use the shell to print the current directory and list its files.",
+    );
+    let request = RequestBuilder::from(messages)
+        .with_shell_execution()
+        .with_max_tool_rounds(4);
+
+    let response = model.send_chat_request(request).await?;
+
+    println!("{}", response.choices[0].message.content.as_ref().unwrap());
+
+    Ok(())
+}

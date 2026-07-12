@@ -6,10 +6,11 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, AutoDeviceMapParams, DefaultSchedulerMethod, DeviceLayerMapMetadata,
-    DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder, McpClientConfig, MemoryGpuConfig,
-    MistralRsBuilder, ModelLoaderConfig, ModelSelected, PagedAttentionConfig, PagedCacheType,
-    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, plan_paged_kv, AutoDeviceMapParams, DefaultSchedulerMethod,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
+    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig, ModelSelected,
+    MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest, SchedulerConfig,
+    SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -109,6 +110,7 @@ pub mod defaults {
     pub const TOKEN_SOURCE: mistralrs_core::TokenSource = mistralrs_core::TokenSource::CacheToken;
     pub const SEARCH_CALLBACK: Option<Arc<mistralrs_core::SearchCallback>> = None;
     pub const PAGED_CACHE_TYPE: PagedCacheType = PagedCacheType::Auto;
+    pub const MTP_CONFIG: Option<mistralrs_core::MtpConfig> = None;
 }
 
 /// A builder for creating a mistral.rs instance with configured options for the mistral.rs server.
@@ -220,7 +222,7 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Enables or disables PagedAttention. By default, PagedAttention will be enabled for CUDA and disabled for Metal (and is not supported for CPU). Use this to override the default behavior.
+    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
     /// Use CPU only
@@ -241,11 +243,16 @@ pub struct MistralRsForServerBuilder {
     /// PagedAttention KV cache type
     paged_cache_type: PagedCacheType,
 
+    /// Optional MTP assistant configuration.
+    mtp_config: Option<MtpConfig>,
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
 
     /// Python code execution configuration
     code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
+    /// Shell execution configuration
+    shell_config: Option<mistralrs_core::ShellConfig>,
 }
 
 impl Default for MistralRsForServerBuilder {
@@ -279,8 +286,10 @@ impl Default for MistralRsForServerBuilder {
             search_callback: defaults::SEARCH_CALLBACK,
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
+            mtp_config: defaults::MTP_CONFIG,
             disable_eos_stop: false,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 }
@@ -557,6 +566,20 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    /// Attach an MTP assistant after the target model loads.
+    pub fn with_mtp_config(mut self, config: MtpConfig) -> Self {
+        self.mtp_config = Some(config);
+        self
+    }
+
+    /// Attach an MTP assistant if provided.
+    pub fn with_mtp_config_optional(mut self, config: Option<MtpConfig>) -> Self {
+        if let Some(config) = config {
+            self = self.with_mtp_config(config);
+        }
+        self
+    }
+
     /// Disable EOS token stopping (generate until max_len regardless of EOS).
     pub fn with_disable_eos_stop(mut self, disable: bool) -> Self {
         self.disable_eos_stop = disable;
@@ -630,6 +653,19 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_shell_config(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
+        self
+    }
+
+    pub fn with_shell_config_optional(
+        mut self,
+        config: Option<mistralrs_core::ShellConfig>,
+    ) -> Self {
+        self.shell_config = config;
+        self
+    }
+
     /// Builds the configured mistral.rs instance.
     ///
     /// ### Examples
@@ -645,6 +681,7 @@ impl MistralRsForServerBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<SharedMistralRsState> {
+        candle_core::utils::init_global_threadpool();
         // Determine if we're in single-model or multi-model mode
         if !self.models.is_empty() {
             self.build_multi_model().await
@@ -717,6 +754,13 @@ impl MistralRsForServerBuilder {
         )?;
         info!("Model loaded.");
 
+        if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+        }
+
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
 
         let search_embedding_model =
@@ -735,6 +779,7 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
+            mtp_config: self.mtp_config.clone(),
         };
 
         let mut builder = MistralRsBuilder::new(
@@ -761,6 +806,9 @@ impl MistralRsForServerBuilder {
         if let Some(code_exec_config) = self.code_exec_config {
             builder = builder.with_code_execution(code_exec_config);
         }
+        if let Some(shell_config) = self.shell_config {
+            builder = builder.with_shell_execution(shell_config);
+        }
 
         let mistralrs = builder.build().await;
 
@@ -772,6 +820,8 @@ impl MistralRsForServerBuilder {
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
+
+        mistralrs_core::distributed::begin_tensor_parallel_session(self.models.len())?;
 
         // Use the first model as the base configuration
         let first_model = &self.models[0];
@@ -819,7 +869,7 @@ impl MistralRsForServerBuilder {
         );
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = init_cache_config(
+        let requested_cache_config = init_cache_config(
             self.paged_attn_block_size,
             self.paged_attn_gpu_mem,
             self.paged_attn_gpu_mem_usage,
@@ -827,6 +877,18 @@ impl MistralRsForServerBuilder {
             self.paged_cache_type,
             !paged_attn,
         )?;
+        let paged_kv_plan = plan_paged_kv(
+            &self
+                .models
+                .iter()
+                .map(|_| PagedKvModelRequest {
+                    paged_attn: requested_cache_config,
+                    max_num_seqs: self.max_seqs,
+                })
+                .collect::<Vec<_>>(),
+            Default::default(),
+        )?;
+        let first_cache_config = paged_kv_plan.paged_attn[0];
 
         let isq = first_model
             .in_situ_quant
@@ -846,8 +908,14 @@ impl MistralRsForServerBuilder {
             false,
             mapper,
             isq,
-            cache_config,
+            first_cache_config,
         )?;
+        if let Some(mtp_config) = self.mtp_config.clone() {
+            pipeline
+                .lock()
+                .await
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+        }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model
             .alias
@@ -875,7 +943,8 @@ impl MistralRsForServerBuilder {
         }
         loaded_model_ids.push(first_primary_id.clone());
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config =
+            init_scheduler_config(&first_cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
 
@@ -889,7 +958,8 @@ impl MistralRsForServerBuilder {
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
-        .with_disable_eos_stop(self.disable_eos_stop);
+        .with_disable_eos_stop(self.disable_eos_stop)
+        .with_deferred_daemon_start(true);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }
@@ -901,6 +971,9 @@ impl MistralRsForServerBuilder {
 
         if let Some(code_exec_config) = self.code_exec_config.clone() {
             builder = builder.with_code_execution(code_exec_config);
+        }
+        if let Some(shell_config) = self.shell_config.clone() {
+            builder = builder.with_shell_execution(shell_config);
         }
 
         let mistralrs = builder.build().await;
@@ -914,7 +987,7 @@ impl MistralRsForServerBuilder {
         }
 
         // Load additional models
-        for model_config in self.models.iter().skip(1) {
+        for (model_index, model_config) in self.models.iter().enumerate().skip(1) {
             info!(
                 "Loading additional model from config key: {}",
                 model_config.model_id
@@ -963,8 +1036,16 @@ impl MistralRsForServerBuilder {
                 false,
                 mapper,
                 isq,
-                cache_config,
+                paged_kv_plan.paged_attn[model_index],
             )?;
+
+            // Each model gets its own scheduler
+            let scheduler_config = init_scheduler_config(
+                &paged_kv_plan.paged_attn[model_index],
+                &pipeline,
+                self.max_seqs,
+            )
+            .await;
 
             // Use the pipeline's name() as the canonical ID, but allow an alias.
             let pipeline_name = pipeline.lock().await.name();
@@ -999,6 +1080,9 @@ impl MistralRsForServerBuilder {
             }
             if let Some(code_exec_config) = self.code_exec_config.clone() {
                 add_model_config = add_model_config.with_code_execution(code_exec_config);
+            }
+            if let Some(shell_config) = self.shell_config.clone() {
+                add_model_config = add_model_config.with_shell_execution(shell_config);
             }
 
             mistralrs
@@ -1052,6 +1136,11 @@ impl MistralRsForServerBuilder {
                 loaded_model_ids[0], self.models[0].model_id
             );
         }
+
+        if mistralrs_core::distributed::is_daemon() {
+            mistralrs.run_daemon_replicator_forever();
+        }
+
         Ok(mistralrs)
     }
 }
@@ -1140,13 +1229,15 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
 
 /// Determines whether paged attention should be enabled based on device type and preferences.
 fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if device.is_cpu() {
+    if mistralrs_core::distributed::use_nccl() {
+        paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
+    } else if device.is_cpu() {
         if paged_attn == Some(true) {
             warn!("Paged attention is not supported on CPU.");
         }
 
         defaults::PAGED_ATTN_CPU
-    } else if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
+    } else if device.is_cuda() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
     } else if device.is_metal() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)

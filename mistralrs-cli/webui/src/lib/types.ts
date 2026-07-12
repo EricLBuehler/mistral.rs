@@ -56,7 +56,7 @@ export interface AgenticToolCallProgress {
 
 export interface AgentToolMetadata {
   source: "built_in" | "user" | "mcp" | "external";
-  kind: "code_execution" | "web_search" | "file" | "custom" | "external";
+  kind: "code_execution" | "web_search" | "shell" | "file" | "custom" | "external";
   label: string;
 }
 
@@ -87,6 +87,7 @@ export type AgentPermission = "auto" | "ask" | "deny";
 
 export type AgenticToolCallData =
   | CodeExecutionData
+  | ShellData
   | WebSearchData
   | CustomToolData;
 
@@ -107,6 +108,17 @@ export interface WebSearchData {
   tool_type: "web_search";
   query?: string;
   results_count?: number;
+}
+
+export interface ShellData {
+  tool_type: "shell";
+  commands: string[];
+  stdout?: string;
+  stderr?: string;
+  exit_code?: number;
+  status?: string;
+  working_directory?: string;
+  timed_out?: boolean;
 }
 
 export interface CustomToolData {
@@ -194,6 +206,7 @@ export interface ChatMessageRecord {
 export interface Capabilities {
   search_enabled: boolean;
   code_execution_enabled: boolean;
+  shell_enabled: boolean;
   tool_dispatch_url: string | null;
 }
 
@@ -242,6 +255,7 @@ export interface StreamOptions {
   enable_thinking?: boolean;
   web_search_options?: WebSearchOptions;
   enable_code_execution?: boolean;
+  enable_shell?: boolean;
   agent_permission?: AgentPermission;
   /** If set, server reuses the agentic session (tool history, code execution state). */
   session_id?: string;

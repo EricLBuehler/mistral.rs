@@ -2,11 +2,24 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use llguidance::{api::TopLevelGrammar, ParserFactory};
-use tokenizers::Tokenizer;
+use tokenizers::{decoders::DecoderWrapper, Tokenizer};
 
 use crate::Constraint;
 
-pub fn build_llg_factory(tokenizer: Tokenizer) -> Result<Arc<ParserFactory>> {
+pub fn build_llg_factory(mut tokenizer: Tokenizer) -> Result<Arc<ParserFactory>> {
+    let decoder = match tokenizer.get_decoder() {
+        Some(DecoderWrapper::Sequence(sequence)) if sequence.get_decoders().len() == 1 => {
+            match &sequence.get_decoders()[0] {
+                DecoderWrapper::ByteLevel(decoder) => Some(DecoderWrapper::ByteLevel(*decoder)),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    if let Some(decoder) = decoder {
+        tokenizer.with_decoder(Some(decoder));
+    }
+
     // Collect special token info before from_tokenizer() consumes the tokenizer.
     let added_special: Vec<(u32, String)> = tokenizer
         .get_added_tokens_decoder()

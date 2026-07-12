@@ -8,8 +8,8 @@ use tokio::sync::Mutex;
 use crate::{
     engine::IntervalLogger,
     paged_attention::{
-        CacheConfig, KVCacheManager, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
-        PagedAttentionSchedulerOutput,
+        block_hash::BlockHash, CacheConfig, KVCacheManager, PagedAttentionScheduler,
+        PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
 };
@@ -51,8 +51,22 @@ pub enum SchedulerOutput<'a> {
     },
 }
 
+pub trait PagedPrefixCacheValidator {
+    fn validate_prefix_cache_hit(
+        &mut self,
+        seq: &mut Sequence,
+        block_hashes: &[BlockHash],
+        cached_tokens: usize,
+        block_size: usize,
+    ) -> usize;
+}
+
 pub trait Scheduler: Send + Sync {
-    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_>;
+    fn schedule(
+        &mut self,
+        logger: &IntervalLogger,
+        prefix_validator: Option<&mut dyn PagedPrefixCacheValidator>,
+    ) -> SchedulerOutput<'_>;
     fn waiting_len(&self) -> usize;
     fn running_len(&self) -> usize;
     fn add_seq(&mut self, seq: Sequence);

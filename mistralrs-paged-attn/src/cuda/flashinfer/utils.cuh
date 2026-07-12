@@ -24,7 +24,9 @@
 #include <atomic>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include "exception.h"
@@ -63,6 +65,37 @@
     FLASHINFER_CHECK(e == cudaSuccess, "CUDA Error: ", cudaGetErrorString(e), " (", int(e), \
                      ") at ", __FILE__, ":", __LINE__, " in ", STR(func));                  \
   } while (0)
+
+namespace flashinfer {
+inline cudaError_t SetMaxDynamicSmemOnce(const void* kernel, size_t smem_size) {
+  static std::mutex mutex;
+  static std::unordered_set<uint64_t> seen;
+  const auto key =
+      (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(kernel)) >> 4) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(smem_size)) << 32) ^
+      static_cast<uint64_t>(static_cast<uint32_t>(smem_size));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (seen.find(key) != seen.end()) {
+      return cudaSuccess;
+    }
+  }
+  const auto result =
+      cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
+  if (result == cudaSuccess) {
+    std::lock_guard<std::mutex> lock(mutex);
+    seen.insert(key);
+  }
+  return result;
+}
+}  // namespace flashinfer
+
+#define FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream)                              \
+  {                                                                                             \
+    (void)(stream);                                                                              \
+    FLASHINFER_CUDA_CALL(                                                                        \
+        ::flashinfer::SetMaxDynamicSmemOnce((const void*)(kernel), smem_size));                  \
+  }
 
 #define DISPATCH_USE_FP16_QK_REDUCTION(use_fp16_qk_reduction, USE_FP16_QK_REDUCTION, ...) \
   if (use_fp16_qk_reduction) {                                                            \
@@ -143,6 +176,9 @@
     __VA_ARGS__                                              \
   } else if (group_size == 8) {                              \
     constexpr size_t GROUP_SIZE = 8;                         \
+    __VA_ARGS__                                              \
+  } else if (group_size == 16) {                             \
+    constexpr size_t GROUP_SIZE = 16;                        \
     __VA_ARGS__                                              \
   } else {                                                   \
     std::ostringstream err_msg;                              \
@@ -340,12 +376,15 @@ __forceinline__ __device__ __host__ constexpr T1 round_down(const T1 x, const T2
 }
 
 inline std::pair<int, int> GetCudaComputeCapability() {
-  int device_id = 0;
-  cudaGetDevice(&device_id);
-  int major = 0, minor = 0;
-  cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device_id);
-  cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device_id);
-  return std::make_pair(major, minor);
+  static const std::pair<int, int> capability = []() {
+    int device_id = 0;
+    cudaGetDevice(&device_id);
+    int major = 0, minor = 0;
+    cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device_id);
+    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device_id);
+    return std::make_pair(major, minor);
+  }();
+  return capability;
 }
 
 // This function is thread-safe and cached the sm_count.

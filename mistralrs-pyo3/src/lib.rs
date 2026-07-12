@@ -6,7 +6,7 @@ use code_execution::{
     build_agent_approval_callback, AgentPermissionPy, AgentToolApprovalDecisionKindPy,
     AgentToolApprovalDecisionPy, AgentToolApprovalPy, AgentToolKindPy, AgentToolMetadataPy,
     AgentToolSourcePy, CodeExecutionConfig, CodeExecutionPermissionPy, NetworkModePy,
-    SandboxPolicy,
+    SandboxPolicy, ShellConfig, ShellSkillMount,
 };
 use either::Either;
 use indexmap::IndexMap;
@@ -42,8 +42,8 @@ use mistralrs_core::{
     MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
     NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
-    SearchEmbeddingModel, SpeculativeConfig, SpeculativeLoader, SpeechLoader, StopTokens,
-    TokenSource, TokenizationRequest, Tool, Topology,
+    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
+    TokenizationRequest, Tool, Topology, UqffWriteConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -207,7 +207,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.map(Into::into).unwrap_or(Default::default()),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -236,16 +236,20 @@ fn parse_which(
             from_uqff,
             dtype: _,
             hf_cache_path,
+            imatrix,
+            calibration_file,
         } => EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
                         .map(|path| PathBuf::from_str(path).unwrap())
                         .collect::<Vec<_>>()
                 }),
+                imatrix,
+                calibration_file,
                 hf_cache_path,
             },
             tokenizer_json,
@@ -269,7 +273,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -313,7 +317,7 @@ fn parse_which(
             NormalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -521,7 +525,7 @@ fn parse_which(
         } => MultimodalLoaderBuilder::new(
             MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
-                write_uqff,
+                write_uqff: write_uqff.map(UqffWriteConfig::from_output),
                 from_uqff: from_uqff.map(|x| {
                     x.right_or_else(|l| vec![l])
                         .iter()
@@ -604,8 +608,8 @@ impl Runner {
         no_kv_cache = false,
         prefix_cache_n = 16,
         token_source = "cache",
-        speculative_gamma = 32,
-        which_draft = None,
+        mtp_model = None,
+        mtp_n_predict = None,
         chat_template = None,
         jinja_explicit = None,
         num_device_layers = None,
@@ -625,6 +629,7 @@ impl Runner {
         tool_callbacks = None,
         mcp_client_config = None,
         code_execution_config = None,
+        shell_config = None,
     ))]
     fn new(
         which: Which,
@@ -632,8 +637,8 @@ impl Runner {
         no_kv_cache: bool,
         prefix_cache_n: usize,
         token_source: &str,
-        speculative_gamma: usize,
-        which_draft: Option<Which>,
+        mtp_model: Option<String>,
+        mtp_n_predict: Option<usize>,
         chat_template: Option<String>,
         jinja_explicit: Option<String>,
         num_device_layers: Option<Vec<String>>,
@@ -653,6 +658,7 @@ impl Runner {
         tool_callbacks: Option<PyObject>,
         mcp_client_config: Option<McpClientConfigPy>,
         code_execution_config: Option<CodeExecutionConfig>,
+        shell_config: Option<ShellConfig>,
     ) -> PyApiResult<Self> {
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -757,18 +763,6 @@ impl Runner {
             chat_template.clone(),
             jinja_explicit.clone(),
         )?;
-        let loader = if let Some(draft_which) = which_draft {
-            let draft = parse_which(draft_which, no_kv_cache, chat_template, jinja_explicit)?;
-            Box::new(SpeculativeLoader {
-                target: loader,
-                draft,
-                config: SpeculativeConfig {
-                    gamma: speculative_gamma,
-                },
-            })
-        } else {
-            loader
-        };
         let loader = if let Some(amoe_conf) = anymoe_config {
             Box::new(AnyMoeLoader {
                 target: loader,
@@ -906,6 +900,16 @@ impl Runner {
             )
             .map_err(PyApiErr::from)?;
 
+        if let Some(mtp_model) = mtp_model {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
+                    mtp_model,
+                    mtp_n_predict,
+                )))
+                .map_err(|e| PyApiErr::from(&e))?;
+        }
+
         let scheduler_config = if cache_config.is_some() {
             // Handle case where we may have device mapping
             if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
@@ -969,6 +973,19 @@ impl Runner {
                 let _ = code_exec;
                 return Err(util::PyApiErr(PyValueError::new_err(
                     "code_execution_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
+                )));
+            }
+        }
+        if let Some(shell_config) = shell_config {
+            #[cfg(feature = "code-execution")]
+            {
+                builder = builder.with_shell_execution(shell_config.into());
+            }
+            #[cfg(not(feature = "code-execution"))]
+            {
+                let _ = shell_config;
+                return Err(util::PyApiErr(PyValueError::new_err(
+                    "shell_config requires the 'code-execution' feature; rebuild mistralrs with `--features code-execution`",
                 )));
             }
         }
@@ -1313,6 +1330,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 enable_code_execution: request.enable_code_execution,
+                enable_shell: request.enable_shell,
+                shell_options: request.shell_options(),
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
                 agent_permission: request.agent_permission,
@@ -1328,6 +1347,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                input_files: request.input_files(),
             }));
 
             let is_streaming = request.stream;
@@ -1406,6 +1426,8 @@ impl Runner {
                         return_raw_logits: false,
                         web_search_options: None,
                         enable_code_execution: false,
+                        enable_shell: false,
+                        shell_options: None,
                         code_execution_permission: None,
                         code_execution_approval_notifier: None,
                         agent_permission: None,
@@ -1417,6 +1439,7 @@ impl Runner {
                         truncate_sequence,
                         session_id: None,
                         files: None,
+                        input_files: Vec::new(),
                     }));
 
                     sender
@@ -1531,6 +1554,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: None,
                 enable_code_execution: false,
+                enable_shell: false,
+                shell_options: None,
                 code_execution_permission: None,
                 code_execution_approval_notifier: None,
                 agent_permission: None,
@@ -1542,6 +1567,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                input_files: Vec::new(),
             }));
 
             let debug_repr = format!("{request:?}");
@@ -1599,6 +1625,8 @@ impl Runner {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -1610,6 +1638,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let runner = self.runner.clone();
@@ -1659,6 +1688,8 @@ impl Runner {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -1670,6 +1701,7 @@ impl Runner {
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let runner = self.runner.clone();
@@ -1719,6 +1751,46 @@ impl Runner {
                 .map_err(|e| e.to_string())
         })
         .map_err(PyApiErr::from)
+    }
+
+    /// Begin online calibration: collect activation statistics from live traffic on every
+    /// ISQ-tracked layer. The model must have been loaded with ISQ.
+    #[pyo3(signature = (model_id = None))]
+    fn begin_calibration(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Start, model_id)
+    }
+
+    /// Report per-layer calibration collection progress.
+    #[pyo3(signature = (model_id = None))]
+    fn calibration_status(
+        &self,
+        py: Python<'_>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(py, mistralrs_core::CalibrationAction::Status, model_id)
+    }
+
+    /// Requantize from the source weights with the collected statistics and hot-swap the
+    /// layers into the live model. Returns the pre-apply status. `save_cimatrix` optionally
+    /// writes the collected importance matrix to a `.cimatrix` file for reuse.
+    #[pyo3(signature = (save_cimatrix = None, model_id = None))]
+    fn apply_calibration(
+        &self,
+        py: Python<'_>,
+        save_cimatrix: Option<String>,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        self.send_calibration(
+            py,
+            mistralrs_core::CalibrationAction::Apply {
+                save_cimatrix: save_cimatrix.map(Into::into),
+            },
+            model_id,
+        )
     }
 
     /// Tokenize some text, returning raw tokens.
@@ -2203,6 +2275,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: request.web_search_options.clone(),
                 enable_code_execution: request.enable_code_execution,
+                enable_shell: request.enable_shell,
+                shell_options: request.shell_options(),
                 code_execution_permission: request.code_execution_permission,
                 code_execution_approval_notifier: None,
                 agent_permission: request.agent_permission,
@@ -2218,6 +2292,7 @@ impl Runner {
                     .files
                     .clone()
                     .map(|fs| fs.into_iter().map(Into::into).collect()),
+                input_files: request.input_files(),
             }));
 
             let is_streaming = request.stream;
@@ -2320,6 +2395,8 @@ impl Runner {
                 return_raw_logits: false,
                 web_search_options: None,
                 enable_code_execution: false,
+                enable_shell: false,
+                shell_options: None,
                 code_execution_permission: None,
                 code_execution_approval_notifier: None,
                 agent_permission: None,
@@ -2331,6 +2408,7 @@ impl Runner {
                 truncate_sequence: request.truncate_sequence,
                 session_id: None,
                 files: None,
+                input_files: Vec::new(),
             }));
 
             let debug_repr = format!("{request:?}");
@@ -2395,6 +2473,66 @@ impl Runner {
 }
 
 /// MCP server source configuration for different transport types
+impl Runner {
+    fn send_calibration(
+        &self,
+        py: Python<'_>,
+        action: mistralrs_core::CalibrationAction,
+        model_id: Option<String>,
+    ) -> PyApiResult<CalibrationStatusPy> {
+        let (tx, mut rx) = channel(1);
+        let request = _Request::Calibration(mistralrs_core::CalibrationRequest {
+            action,
+            response: tx,
+        });
+        let runner = self.runner.clone();
+        py.allow_threads(
+            move || -> std::result::Result<anyhow::Result<mistralrs_core::CalibrationStatus>, String> {
+                runner
+                    .get_sender(model_id.as_deref())
+                    .map_err(|e| e.to_string())?
+                    .blocking_send(request)
+                    .map_err(|e| e.to_string())?;
+                rx.blocking_recv()
+                    .ok_or_else(|| "Channel was erroneously closed!".to_string())
+            },
+        )
+        .map_err(PyApiErr::from)?
+        .map(CalibrationStatusPy::from)
+        .map_err(PyApiErr::from)
+    }
+}
+
+#[pyclass(name = "CalibrationStatus")]
+#[derive(Debug, Clone)]
+pub struct CalibrationStatusPy {
+    #[pyo3(get)]
+    pub collecting: bool,
+    #[pyo3(get)]
+    pub layers: usize,
+    #[pyo3(get)]
+    pub layers_tracking: usize,
+    #[pyo3(get)]
+    pub total_rows: usize,
+    #[pyo3(get)]
+    pub min_rows: usize,
+    #[pyo3(get)]
+    pub max_rows: usize,
+}
+
+impl From<mistralrs_core::CalibrationStatus> for CalibrationStatusPy {
+    fn from(s: mistralrs_core::CalibrationStatus) -> Self {
+        Self {
+            collecting: s.collecting,
+            layers: s.layers,
+            layers_tracking: s.layers_tracking,
+            total_rows: s.total_rows,
+            min_rows: s.min_rows,
+            max_rows: s.max_rows,
+        }
+    }
+}
+
 #[pyclass]
 #[derive(Debug, Clone)]
 pub enum McpServerSourcePy {
@@ -2566,6 +2704,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     initialize_logging();
 
     m.add_class::<Runner>()?;
+    m.add_class::<CalibrationStatusPy>()?;
     m.add_class::<Which>()?;
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
@@ -2577,6 +2716,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;
+    m.add_class::<ShellConfig>()?;
+    m.add_class::<ShellSkillMount>()?;
     m.add_class::<SandboxPolicy>()?;
     m.add_class::<NetworkModePy>()?;
     m.add_class::<CodeExecutionPermissionPy>()?;
@@ -2588,6 +2729,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AgentToolApprovalDecisionKindPy>()?;
     m.add_class::<AgentToolApprovalDecisionPy>()?;
     m.add_class::<files::RequestedFile>()?;
+    m.add_class::<files::InputFile>()?;
     m.add_class::<mistralrs_core::File>()?;
     m.add_class::<mistralrs_core::FileSource>()?;
     m.add_class::<ToolChoice>()?;

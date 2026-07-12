@@ -1,0 +1,196 @@
+use candle_core::{DType, Device};
+#[cfg(feature = "cuda")]
+use mistralrs_quant::log::once_log_info;
+use mistralrs_quant::QuantizedConfig;
+
+use crate::layers::Activation;
+
+/// Configuration for [`super::MoEExperts`].
+pub struct MoEExpertsConfig {
+    pub num_experts: usize,
+    pub num_experts_per_tok: usize,
+    pub hidden_size: usize,
+    pub moe_intermediate_size: usize,
+}
+
+/// One of the three expert projections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExpertProj {
+    Gate,
+    Up,
+    Down,
+}
+
+impl ExpertProj {
+    /// Inverse of `UqffExpertKeys::new`: canonical tracked key -> (experts prefix, projection).
+    pub(crate) fn split_canonical_key(key: &str) -> Option<(&str, Self)> {
+        if let Some(prefix) = key.strip_suffix(".gate_proj") {
+            Some((prefix, Self::Gate))
+        } else if let Some(prefix) = key.strip_suffix(".up_proj") {
+            Some((prefix, Self::Up))
+        } else if let Some(prefix) = key.strip_suffix(".down_proj") {
+            Some((prefix, Self::Down))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn name_in(self, names: &ExpertProjNames) -> &'static str {
+        match self {
+            Self::Gate => names.gate,
+            Self::Up => names.up,
+            Self::Down => names.down,
+        }
+    }
+}
+
+/// Per-expert projection tensor names; mixtral-style checkpoints use `w1`/`w3`/`w2`.
+#[derive(Clone, Copy)]
+pub struct ExpertProjNames {
+    pub gate: &'static str,
+    pub up: &'static str,
+    pub down: &'static str,
+}
+
+impl ExpertProjNames {
+    pub const MIXTRAL: Self = Self {
+        gate: "w1",
+        up: "w3",
+        down: "w2",
+    };
+    pub const DEFAULT: Self = Self {
+        gate: "gate_proj",
+        up: "up_proj",
+        down: "down_proj",
+    };
+    /// Every naming family any model uses; source-weight probing tries each.
+    pub const KNOWN: [Self; 2] = [Self::DEFAULT, Self::MIXTRAL];
+}
+
+/// Which expert kernel runs the forward.
+#[derive(Clone, Copy)]
+pub(super) enum MoEExpertsBackend {
+    /// Fused CUDA kernels over raw ENK tensors.
+    Fused,
+    /// cuTile JIT grouped GEMM over raw ENK tensors (CUDA bf16, GeLU).
+    #[cfg(feature = "cutile")]
+    Cutile,
+    /// CUTLASS grouped GEMM over raw ENK tensors (CUDA bf16, GeLU); universal sm_80+ fallback.
+    #[cfg(feature = "cuda")]
+    Cutlass,
+    /// Gather-based (Metal, CPU, ISQ, pre-quantized).
+    Fast,
+}
+
+/// Everything backend selection depends on, gathered once per layer load.
+pub(super) struct BackendChoice {
+    pub device: Device,
+    #[cfg_attr(not(feature = "cutile"), allow(dead_code))]
+    pub dtype: DType,
+    pub loading_isq: bool,
+    pub quantized: bool,
+    pub immediate_isq: bool,
+    #[cfg_attr(not(feature = "cutile"), allow(dead_code))]
+    pub act: Activation,
+}
+
+impl BackendChoice {
+    pub(super) fn new(
+        device: Device,
+        dtype: DType,
+        loading_isq: bool,
+        quantization_config: &Option<QuantizedConfig>,
+        act: Activation,
+    ) -> Self {
+        Self {
+            device,
+            dtype,
+            loading_isq,
+            quantized: quantization_config.is_some(),
+            immediate_isq: mistralrs_quant::get_immediate_isq().is_some(),
+            act,
+        }
+    }
+}
+
+/// Resolve and log the MoE backend choice up front so the one-time INFO line lands before
+/// any loading progress bar starts instead of splitting it.
+pub fn prelog_moe_backend(
+    device: Device,
+    dtype: DType,
+    loading_isq: bool,
+    quantization_config: &Option<QuantizedConfig>,
+    act: Activation,
+) {
+    let _ = MoEExpertsBackend::resolve(&BackendChoice::new(
+        device,
+        dtype,
+        loading_isq,
+        quantization_config,
+        act,
+    ));
+}
+
+impl MoEExpertsBackend {
+    fn from_env() -> Option<Self> {
+        let force = std::env::var("MISTRALRS_MOE_BACKEND").ok()?;
+        Some(match force.as_str() {
+            "fused" | "native" | "legacy" | "wmma" => Self::Fused,
+            "fast" => Self::Fast,
+            #[cfg(feature = "cutile")]
+            "cutile" => Self::Cutile,
+            #[cfg(feature = "cuda")]
+            "cutlass" => Self::Cutlass,
+            _ => return None,
+        })
+    }
+
+    /// Single source of truth for the backend: env override, then raw CUDA kernels (cuTile when
+    /// eligible, else Fused) for unquantized bf16, else gather-based Fast.
+    pub(super) fn resolve(c: &BackendChoice) -> Self {
+        if let Some(forced) = Self::from_env() {
+            return forced;
+        }
+        if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
+            #[cfg(feature = "cuda")]
+            let bf16_gated = c.dtype == DType::BF16
+                && matches!(
+                    c.act,
+                    Activation::NewGelu | Activation::GeluPytorchTanh | Activation::Silu
+                );
+            #[cfg(feature = "cutile")]
+            if bf16_gated && cutile_arch_supported(&c.device) {
+                if mistralrs_quant::cutile::jit_available() {
+                    return Self::Cutile;
+                }
+                once_log_info(
+                    "cuTile JIT assembler (tileiras) not found at runtime; using CUTLASS MoE kernels",
+                );
+            }
+            #[cfg(feature = "cuda")]
+            if bf16_gated && cutlass_moe_supported(&c.device) {
+                once_log_info("MoE experts backend: CUTLASS grouped GEMM");
+                return Self::Cutlass;
+            }
+            return Self::Fused;
+        }
+        Self::Fast
+    }
+}
+
+/// cuTile only on archs its JIT supports (Ampere or Blackwell+, not Hopper); otherwise fall back to Fused.
+#[cfg(feature = "cutile")]
+fn cutile_arch_supported(device: &Device) -> bool {
+    match device {
+        Device::Cuda(dev) => mistralrs_quant::cutile::device_supported(dev),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cutlass_moe_supported(device: &Device) -> bool {
+    match device {
+        Device::Cuda(dev) => mistralrs_quant::moe::cutlass_moe_available(dev),
+        _ => false,
+    }
+}

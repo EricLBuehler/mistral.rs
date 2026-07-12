@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
@@ -286,7 +287,9 @@ impl InputsProcessor for Llama4ImageProcessor {
                         ) {
                             let ranges = find_image_delimited_ranges(&ids, start_id, end_id);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }
@@ -380,6 +383,11 @@ impl InputsProcessor for Llama4ImageProcessor {
             model_specific_args: Box::new(Llama4ModelSpecificArgs { image_hashes }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,

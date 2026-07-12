@@ -1,17 +1,19 @@
-use super::hf::{hf_access_error, remote_issue_from_api_error, RemoteAccessIssue};
+use super::hf::{
+    build_api_with_cache, hf_access_error, remote_issue_from_api_error, RemoteAccessIssue,
+};
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, MultimodalLoaderBuilder,
     MultimodalLoaderType, MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType,
     NormalSpecificConfig, SpeechLoader, TokenSource,
 };
-use crate::utils::{progress::ProgressScopeGuard, tokens::get_token};
+use crate::utils::progress::ProgressScopeGuard;
 use crate::Ordering;
 use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::Device;
 use hf_hub::{
-    api::sync::{ApiBuilder, ApiError, ApiRepo},
+    api::sync::{ApiError, ApiRepo},
     Cache, Repo, RepoType,
 };
 use serde::Deserialize;
@@ -263,13 +265,7 @@ impl AutoLoader {
             .clone()
             .map(Cache::new)
             .unwrap_or_default();
-        let mut api = ApiBuilder::from_cache(cache)
-            .with_progress(!silent)
-            .with_token(get_token(token_source)?);
-        if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-            api = api.with_cache_dir(cache_dir);
-        }
-        let api = api.build()?;
+        let api = build_api_with_cache(token_source, !silent, Some(cache))?;
         let revision = revision.unwrap_or_else(|| "main".to_string());
         let api = api.repo(Repo::with_revision(
             self.model_id.clone(),
@@ -282,7 +278,8 @@ impl AutoLoader {
             Ok(Some(path)) => Some(std::fs::read_to_string(&path)?),
             Ok(None) => None,
             Err(err) => {
-                let issue = remote_issue_from_api_error(model_id, Some("config.json"), &err);
+                let issue =
+                    remote_issue_from_api_error(model_id, Some("config.json"), &revision, &err);
                 warn!(
                     "Auto loader could not fetch `config.json` for `{}`: {}",
                     self.model_id, issue.message

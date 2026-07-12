@@ -1,13 +1,16 @@
-//! Helpers for surfacing `File`s to the model and adding the required-files contract to the code-exec tool.
+//! Helpers for surfacing `File`s to the model and adding the required-files contract to agentic tools.
+
+use std::collections::HashMap;
 
 use mistralrs_mcp::ToolFile;
+use mistralrs_mcp::ToolInputFile;
 use serde_json::Value;
 
 use crate::tools::ToolCallResponse;
 
 use super::{
     format_from_name, mime_for_format, File, FileContent, FileSource, RequestedFile,
-    MODEL_INLINE_BYTES,
+    FILE_PURPOSE_AGENT_OUTPUT, INPUT_FILES_TOTAL_PREVIEW_CHARS, MODEL_INLINE_BYTES,
 };
 
 /// Convert a `ToolFile` to a `File` with full body. Elision happens later via `File::elide_for_wire`.
@@ -46,6 +49,7 @@ pub fn tool_file_to_file(
             mime_type: Some(mime),
             bytes: 0,
             created_at,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source,
             content: FileContent::Error {
                 code: "not_produced".to_string(),
@@ -74,8 +78,87 @@ pub fn tool_file_to_file(
         mime_type: Some(mime),
         bytes: tf.size_bytes,
         created_at,
+        purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
         source,
         content,
+    }
+}
+
+pub fn input_files_message(files: &[File]) -> Option<String> {
+    if files.is_empty() {
+        return None;
+    }
+    let mut remaining = INPUT_FILES_TOTAL_PREVIEW_CHARS;
+    let mounted_paths = mounted_input_file_paths(files);
+    let mut out = String::from("User-provided input files are available in this session.\n");
+    if !mounted_paths.is_empty() {
+        out.push_str(
+            "\nFor shell/code tools, use these filesystem paths from the tool working directory. \
+             Do not use file ids as shell paths:\n",
+        );
+        for f in files {
+            if let Some(path) = mounted_paths.get(&f.id) {
+                out.push_str(&format!("- {} -> ./{}\n", f.name, path));
+            }
+        }
+    }
+    out.push_str(
+        "\nFor mistralrs_read_file, use file ids. mistralrs_read_file reads the internal file \
+         store by id; it does not read shell filesystem paths.\n\nInput files:\n",
+    );
+    for f in files {
+        let mime = f.mime_type.as_deref().unwrap_or("application/octet-stream");
+        out.push_str(&format!(
+            "- {} (id={}, mime={}, bytes={})",
+            f.name, f.id, mime, f.bytes
+        ));
+        if remaining > 0 {
+            if let Some(preview) = f.preview_str() {
+                let preview = File::truncate_chars(preview, remaining);
+                let used = preview.chars().count();
+                remaining = remaining.saturating_sub(used);
+                out.push_str("\n  Preview:\n");
+                out.push_str(&preview);
+                if f.as_text()
+                    .is_some_and(|text| text.chars().count() > preview.chars().count())
+                {
+                    out.push_str(&format!(
+                        "\n  Preview truncated. Use mistralrs_read_file(file_id=\"{}\", start={}) to continue.",
+                        f.id, used
+                    ));
+                }
+            }
+        }
+        out.push('\n');
+    }
+    Some(out)
+}
+
+#[cfg(feature = "code-execution")]
+fn mounted_input_file_paths(files: &[File]) -> HashMap<String, String> {
+    let tool_files = files
+        .iter()
+        .map(file_to_tool_input_file)
+        .collect::<Vec<_>>();
+    mistralrs_code_exec::mounted_input_files(&tool_files)
+        .into_iter()
+        .map(|f| (f.id, f.relative_path))
+        .collect()
+}
+
+#[cfg(not(feature = "code-execution"))]
+fn mounted_input_file_paths(_files: &[File]) -> HashMap<String, String> {
+    HashMap::new()
+}
+
+pub fn file_to_tool_input_file(file: &File) -> ToolInputFile {
+    ToolInputFile {
+        id: file.id.clone(),
+        name: file.name.clone(),
+        mime_type: file.mime_type.clone(),
+        text: file.as_text().map(ToString::to_string),
+        data_base64: file.binary_data().map(ToString::to_string),
+        size_bytes: file.bytes,
     }
 }
 
@@ -115,14 +198,17 @@ pub fn compose_tool_response_with_files(raw: &str, files: &[File]) -> String {
     out
 }
 
-/// Text appended to the code-execution tool's `description` so the model sees the required-files contract. `None` if no required files.
+/// Text appended to tool descriptions so the model sees the required-files contract. `None` if no required files.
 pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<String> {
     if req_files.is_empty() {
         return None;
     }
     let mut s = String::from(
         "\n\nThe runtime requires these output files for this request. Write each one to the \
-         working directory and list it in the `outputs` parameter.\n\nRequired outputs:\n",
+         working directory. New or modified files are auto-discovered, but list required files in \
+         the top-level `outputs` parameter so missing outputs are reported explicitly. For shell \
+         workflows, call `mistralrs_surface_outputs` before the final answer if a required file \
+         existed before the current shell call.\n\nRequired outputs:\n",
     );
     for r in req_files {
         let fmt = r
@@ -135,14 +221,10 @@ pub fn required_files_tool_addendum(req_files: &[RequestedFile]) -> Option<Strin
             None => s.push_str(&format!("- {} ({})\n", r.name, fmt)),
         }
     }
-    s.push_str(
-        "\nFiles you produce but do NOT list in `outputs` remain in the working directory \
-         and are NOT surfaced to the user.",
-    );
     Some(s)
 }
 
-/// Merge required files into the tool call's `outputs` arg so the executor reads them even if the model omitted them.
+/// Merge required files into the tool call's `outputs` arg so the tool surfaces them even if the model omitted them.
 pub fn merge_required_outputs_into_args(
     tc: &ToolCallResponse,
     required: &[RequestedFile],
@@ -191,6 +273,7 @@ mod tests {
             mime_type: Some("text/plain".into()),
             bytes: body.len() as u64,
             created_at: 0,
+            purpose: FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,

@@ -15,8 +15,8 @@ __init__(
     no_kv_cache: bool = False,
     prefix_cache_n: int = 16,
     token_source: str = 'cache',
-    speculative_gamma: int = 32,
-    which_draft: Which | None = None,
+    mtp_model: str | None = None,
+    mtp_n_predict: int | None = None,
     chat_template: str | None = None,
     jinja_explicit: str | None = None,
     num_device_layers: list[str] | None = None,
@@ -36,21 +36,20 @@ __init__(
     tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
     mcp_client_config: McpClientConfigPy | None = None,
     code_execution_config: CodeExecutionConfig | None = None,
+    shell_config: ShellConfig | None = None,
 ) -> None
 ```
 
 Load a model.
 
-- `which` specifies which model to load or the target model to load in the case of speculative decoding.
+- `which` specifies which model to load.
 - `max_seqs` specifies how many sequences may be running at any time.
 - `no_kv_cache` disables the KV cache.
-- `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
+- `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
 - `token_source` specifies where to load the HF token from.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-- `speculative_gamma` specifies the `gamma` parameter for speculative decoding, the ratio of draft tokens to generate before calling
-    the target model. If `which_draft` is not specified, this is ignored.
-- `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
-    with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
+- `mtp_model` attaches an MTP assistant from a model id or path.
+- `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
 - `chat_template` specifies an optional JINJA chat template as a JSON file.
     This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
     It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
@@ -82,6 +81,7 @@ Load a model.
 - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
 - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
 - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+- `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
 
 ### `Runner.send_chat_completion_request`
 
@@ -196,6 +196,54 @@ Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then
 | --- | --- | --- | --- |
 | `dtype` | `str` | required | The ISQ dtype (e.g., "Q4K", "Q8_0"). |
 | `model_id` | `str \| None` | `None` | Optional model ID to re-ISQ. If None, uses the default model. |
+
+### `Runner.begin_calibration`
+
+```text
+begin_calibration(model_id: str | None = None) -> CalibrationStatus
+```
+
+Begin online calibration: collect activation statistics from live traffic on every
+ISQ-tracked layer. The model must have been loaded with ISQ.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
+
+### `Runner.calibration_status`
+
+```text
+calibration_status(model_id: str | None = None) -> CalibrationStatus
+```
+
+Report per-layer calibration collection progress.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
+
+### `Runner.apply_calibration`
+
+```text
+apply_calibration(
+    save_cimatrix: str | None = None,
+    model_id: str | None = None,
+) -> CalibrationStatus
+```
+
+Requantize from the source weights with the collected statistics and hot-swap the
+layers into the live model. Returns the pre-apply status.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `save_cimatrix` | `str \| None` | `None` | Optional `.cimatrix` path to save the collected importance matrix. |
+| `model_id` | `str \| None` | `None` | Optional model ID. If None, uses the default model. |
 
 ### `Runner.tokenize_text`
 
@@ -447,6 +495,18 @@ find_file(file_id: str) -> File | None
 
 Look up a produced file by id. Returns the full body even if the
 file was wire-truncated in the response payload.
+
+
+## `CalibrationStatus`
+
+| Field | Type |
+| --- | --- |
+| `collecting` | `bool` |
+| `layers` | `int` |
+| `layers_tracking` | `int` |
+| `total_rows` | `int` |
+| `min_rows` | `int` |
+| `max_rows` | `int` |
 
 ---
 

@@ -89,15 +89,17 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        // Per-head RMSNorm in Qwen3
-        let q_flat = q.flatten(0, 2)?;
-        let k_flat = k.flatten(0, 2)?;
-        let q_flat = self.q_norm.forward(&q_flat)?;
-        let k_flat = self.k_norm.forward(&k_flat)?;
-        let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-        let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
+        let (q, k) = self.rotary.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            &positions,
+        )?;
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,

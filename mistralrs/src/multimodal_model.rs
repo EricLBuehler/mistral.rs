@@ -20,7 +20,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,
@@ -33,6 +33,8 @@ pub struct MultimodalModelBuilder {
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) mtp_config: Option<MtpConfig>,
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
@@ -88,6 +90,8 @@ impl MultimodalModelBuilder {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            shell_config: None,
+            mtp_config: None,
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
@@ -98,6 +102,12 @@ impl MultimodalModelBuilder {
 
     // Shared methods from builder_macros.rs
     common_builder_methods!();
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
+        self
+    }
 
     /// Manually set the model loader type. Otherwise, it will attempt to automatically
     /// determine the loader type.

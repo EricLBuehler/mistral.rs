@@ -214,6 +214,14 @@
         Code
       </span>
     {/if}
+    {#if settingsStore.enableShell && modelStore.capabilities.shell_enabled}
+      <span class="flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="Shell active">
+        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l6-6-6-6M12 19h8" />
+        </svg>
+        Shell
+      </span>
+    {/if}
     <span class="hidden items-center gap-1.5 rounded-full border border-gray-200 px-2 py-0.5 font-mono text-[11px] text-gray-500 md:inline-flex dark:border-gray-700 dark:text-gray-400" title="Server endpoint">
       <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
       {connection}

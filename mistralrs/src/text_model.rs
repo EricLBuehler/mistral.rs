@@ -20,7 +20,7 @@ pub struct TextModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) imatrix: Option<PathBuf>,
     pub(crate) calibration_file: Option<PathBuf>,
@@ -34,6 +34,8 @@ pub struct TextModelBuilder {
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) mtp_config: Option<MtpConfig>,
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
@@ -149,6 +151,8 @@ impl TextModelBuilder {
             tool_callbacks: HashMap::new(),
             mcp_client_config: None,
             code_exec_config: None,
+            shell_config: None,
+            mtp_config: None,
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
@@ -168,6 +172,12 @@ impl TextModelBuilder {
     /// Enable Python code execution.
     pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
+        self
+    }
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 

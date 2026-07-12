@@ -4,19 +4,17 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma3nConfig;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -120,10 +118,7 @@ impl Gemma3nModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
         image_hashes: &[u64],
@@ -386,63 +381,14 @@ impl Gemma3nModel {
             input_ids.lt(self.cfg.text_config.vocab_size_per_layer_input as f64)?;
         let ple_input_ids = ple_inputs_mask.where_cond(input_ids, &input_ids.zeros_like()?)?;
 
-        let res = self.language_model.forward_embeds(
-            input_ids,
-            &ple_input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            flash_params,
-        )?;
+        let res =
+            self.language_model
+                .forward_embeds(input_ids, &ple_input_ids, input_embeds, ctx)?;
         Ok(res)
     }
 }
 
 impl IsqModel for Gemma3nModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut tensors, mapper) = self.language_model.get_layers();
-
-        // Add audio tower layers
-        for (i, block) in self.audio_tower.conformer.iter_mut().enumerate() {
-            // Attention layers
-            tensors.push((&mut block.attention.attn.q_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.k_proj, Some(i)));
-            tensors.push((&mut block.attention.attn.v_proj, Some(i)));
-            tensors.push((
-                &mut block.attention.attn.relative_position_embedding.pos_proj,
-                Some(i),
-            ));
-            tensors.push((&mut block.attention.post, Some(i)));
-
-            // FFW layers
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_2, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_1, Some(i)));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_2, Some(i)));
-
-            // Conv1d layers
-            tensors.push((&mut block.lconv1d.linear_start, Some(i)));
-            tensors.push((&mut block.lconv1d.linear_end, Some(i)));
-        }
-
-        // Add audio subsample conv projection
-        tensors.push((
-            &mut self.audio_tower.subsample_conv_projection.input_proj_linear,
-            None,
-        ));
-
-        // Add multimodal embedder layers
-        tensors.push((&mut self.embed_vision.embedding_projection, None));
-        tensors.push((&mut self.embed_audio.embedding_projection, None));
-
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_model = uvb.pp("model");
@@ -491,10 +437,6 @@ impl IsqModel for Gemma3nModel {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
-    }
 }
 
 #[derive(Default)]
@@ -505,17 +447,17 @@ pub struct Gemma3nSpecificArgs {
     pub audio_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Gemma3nModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma3nModel {}
+
 impl MultimodalModel for Gemma3nModel {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma3nSpecificArgs>()
@@ -524,10 +466,7 @@ impl MultimodalModel for Gemma3nModel {
         self.forward(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
             &args.image_hashes,
@@ -540,9 +479,6 @@ impl MultimodalModel for Gemma3nModel {
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
-    }
     fn device(&self) -> &Device {
         self.language_model.device()
     }
@@ -551,6 +487,9 @@ impl MultimodalModel for Gemma3nModel {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        self.language_model.model_config_like()
     }
     fn encoder_cache_counters(
         &self,

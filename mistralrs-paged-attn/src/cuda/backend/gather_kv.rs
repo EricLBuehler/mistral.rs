@@ -1,3 +1,4 @@
+use crate::cuda::backend::flashinfer::{gather_kv_cache_flashinfer, is_flashinfer_cache};
 use crate::cuda::backend::slice_ptr;
 use crate::cuda::ffi::gather_kv_cache as ffi_gather_kv_cache;
 use candle_core::backend::BackendStorage;
@@ -13,6 +14,16 @@ pub fn gather_kv_cache(
     cu_seq_lens: &Tensor, // [batch + 1]
     out_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
+    if is_flashinfer_cache(key_cache, value_cache) {
+        return gather_kv_cache_flashinfer(
+            key_cache,
+            value_cache,
+            block_table,
+            cu_seq_lens,
+            out_dtype,
+        );
+    }
+
     let cache_dtype = key_cache.dtype();
     if value_cache.dtype() != cache_dtype {
         candle_core::bail!(

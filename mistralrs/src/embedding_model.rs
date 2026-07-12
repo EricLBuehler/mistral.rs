@@ -17,7 +17,7 @@ pub struct EmbeddingModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
@@ -31,6 +31,8 @@ pub struct EmbeddingModelBuilder {
     pub(crate) dtype: ModelDType,
     pub(crate) force_cpu: bool,
     pub(crate) isq: Option<IsqSetting>,
+    pub(crate) imatrix: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -57,6 +59,8 @@ impl EmbeddingModelBuilder {
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             isq: None,
+            imatrix: None,
+            calibration_file: None,
             max_num_seqs: 32,
             with_logging: false,
             device_mapping: None,
@@ -133,6 +137,18 @@ impl EmbeddingModelBuilder {
         self
     }
 
+    /// Utilise this imatrix file during ISQ. Incompatible with specifying a calibration file.
+    pub fn with_imatrix(mut self, path: PathBuf) -> Self {
+        self.imatrix = Some(path);
+        self
+    }
+
+    /// Utilise this calibration file to collect an imatrix. Incompatible with specifying an imatrix file.
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
+        self
+    }
+
     /// Automatically select the best ISQ quantization type for the given bit
     /// width based on the target platform.
     ///
@@ -178,7 +194,7 @@ impl EmbeddingModelBuilder {
         self
     }
 
-    /// Path to write a `.uqff` file to and serialize the other necessary files.
+    /// UQFF output config, or a path to write a `.uqff` file to.
     ///
     /// The parent (part of the path excluding the filename) will determine where any other files
     /// serialized are written to.
@@ -188,8 +204,8 @@ impl EmbeddingModelBuilder {
     /// - `tokenizer.json`
     /// - `config.json`
     /// - More depending on the model
-    pub fn write_uqff(mut self, path: PathBuf) -> Self {
-        self.write_uqff = Some(path);
+    pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
+        self.write_uqff = Some(config.into());
         self
     }
 

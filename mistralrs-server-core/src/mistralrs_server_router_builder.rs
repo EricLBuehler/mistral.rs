@@ -3,7 +3,8 @@
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
-    http::{self, Method},
+    http::{self, header::HeaderName, Method},
+    middleware,
     routing::{get, post},
     Extension, Router,
 };
@@ -14,17 +15,34 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
+    anthropic::{anthropic_count_tokens, anthropic_messages},
     approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
     embeddings::embeddings,
-    files::{delete_file, get_file, get_file_content, list_files},
+    files::{
+        delete_file, get_container_file, get_container_file_content, get_file, get_file_content,
+        list_container_files, list_files, upload_file,
+    },
     handlers::{
-        delete_session, get_model_status, get_session, health, models, put_session, re_isq,
-        reload_model, system_doctor, system_info, tune_model, unload_model,
+        calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
+        get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
+        tune_model, unload_model,
     },
     image_generation::image_generation,
+    metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig, ObservabilityState},
     responses::{cancel_response, create_response, delete_response, get_response},
+    route_registry::{
+        AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
+        CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
+        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
+        CONTAINER_FILE_CONTENT_ROUTE, CONTAINER_FILE_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
+        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, MODELS_ROUTE,
+        MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE,
+        ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
+        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+    },
+    skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
     types::SharedMistralRsState,
 };
@@ -88,6 +106,8 @@ pub struct MistralRsServerRouterBuilder {
     max_body_limit: Option<usize>,
     /// Server-level agentic defaults
     agentic_defaults: AgenticDefaults,
+    skills_dir: Option<std::path::PathBuf>,
+    observability: ObservabilityConfig,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -102,6 +122,8 @@ impl Default for MistralRsServerRouterBuilder {
             allowed_origins: None,
             max_body_limit: None,
             agentic_defaults: AgenticDefaults::default(),
+            skills_dir: None,
+            observability: ObservabilityConfig::default(),
         }
     }
 }
@@ -210,6 +232,24 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    pub fn with_skills_dir(mut self, skills_dir: impl Into<std::path::PathBuf>) -> Self {
+        self.skills_dir = Some(skills_dir.into());
+        self
+    }
+
+    pub fn with_skills_dir_optional(mut self, skills_dir: Option<std::path::PathBuf>) -> Self {
+        if let Some(skills_dir) = skills_dir {
+            self = self.with_skills_dir(skills_dir);
+        }
+        self
+    }
+
+    /// Sets server observability options.
+    pub fn with_observability_config(mut self, observability: ObservabilityConfig) -> Self {
+        self.observability = observability;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -223,16 +263,27 @@ impl MistralRsServerRouterBuilder {
     ///     .await?;
     /// ```
     pub async fn build(self) -> Result<Router> {
+        if self.observability.metrics {
+            crate::metrics::install_prometheus_recorder();
+        }
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
+        let router_max_body_limit = self.max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+        let observability = ObservabilityState::with_max_body_bytes(
+            self.observability.clone(),
+            mistralrs.clone(),
+            router_max_body_limit,
+        );
 
         #[allow(unused_mut)]
         let mut router = init_router(
             mistralrs,
             self.allowed_origins,
-            self.max_body_limit,
+            router_max_body_limit,
             self.agentic_defaults,
+            self.skills_dir,
+            self.observability,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -245,6 +296,8 @@ impl MistralRsServerRouterBuilder {
             );
         }
 
+        router = router.layer(middleware::from_fn_with_state(observability, observe_http));
+
         Ok(router)
     }
 }
@@ -256,8 +309,10 @@ impl MistralRsServerRouterBuilder {
 fn init_router(
     state: SharedMistralRsState,
     allowed_origins: Option<Vec<String>>,
-    max_body_limit: Option<usize>,
+    router_max_body_limit: usize,
     agentic_defaults: AgenticDefaults,
+    skills_dir: Option<std::path::PathBuf>,
+    observability: ObservabilityConfig,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -270,49 +325,85 @@ fn init_router(
         AllowOrigin::any()
     };
 
-    let router_max_body_limit = max_body_limit.unwrap_or(DEFAULT_MAX_BODY_LIMIT);
+    let skill_store = std::sync::Arc::new(SkillStore::new(
+        skills_dir.unwrap_or_else(SkillStore::default_root),
+    )?);
+    let metrics_route = if observability.metrics {
+        get(metrics)
+    } else {
+        get(metrics_disabled)
+    };
 
     let cors_layer = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-        .allow_headers([http::header::CONTENT_TYPE, http::header::AUTHORIZATION])
+        .allow_headers([
+            http::header::CONTENT_TYPE,
+            http::header::AUTHORIZATION,
+            HeaderName::from_static("x-api-key"),
+            HeaderName::from_static("anthropic-version"),
+            HeaderName::from_static("anthropic-beta"),
+            HeaderName::from_static("x-request-id"),
+        ])
+        .expose_headers([HeaderName::from_static("x-request-id")])
         .allow_origin(allow_origin);
 
     let router = Router::new()
-        .route("/v1/chat/completions", post(chatcompletions))
-        .route("/v1/completions", post(completions))
-        .route("/v1/embeddings", post(embeddings))
-        .route("/v1/models", get(models))
-        .route("/v1/models/unload", post(unload_model))
-        .route("/v1/models/reload", post(reload_model))
-        .route("/v1/models/status", post(get_model_status))
-        .route("/v1/models/tune", post(tune_model))
-        .route("/v1/system/info", get(system_info))
-        .route("/v1/system/doctor", post(system_doctor))
-        .route("/health", get(health))
-        .route("/", get(health))
-        .route("/re_isq", post(re_isq))
-        .route("/v1/images/generations", post(image_generation))
-        .route("/v1/files", get(list_files))
-        .route("/v1/files/{id}", get(get_file).delete(delete_file))
-        .route("/v1/files/{id}/content", get(get_file_content))
-        .route("/v1/audio/speech", post(speech_generation))
+        .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
+        .route(ANTHROPIC_MESSAGES_ROUTE.path, post(anthropic_messages))
         .route(
-            "/v1/agent/approvals/{approval_id}",
-            post(resolve_agent_approval),
+            ANTHROPIC_COUNT_TOKENS_ROUTE.path,
+            post(anthropic_count_tokens),
         )
-        .route("/v1/responses", post(create_response))
+        .route(COMPLETIONS_ROUTE.path, post(completions))
+        .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(MODELS_ROUTE.path, get(models))
+        .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
+        .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
+        .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
+        .route(TUNE_MODEL_ROUTE.path, post(tune_model))
+        .route(SYSTEM_INFO_ROUTE.path, get(system_info))
+        .route(SYSTEM_DOCTOR_ROUTE.path, post(system_doctor))
+        .route(HEALTH_ROUTE.path, get(health))
+        .route("/metrics", metrics_route)
+        .route(ROOT_ROUTE.path, get(health))
+        .route(RE_ISQ_ROUTE.path, post(re_isq))
+        .route(CALIBRATION_START_ROUTE.path, post(calibration_start))
         .route(
-            "/v1/responses/{response_id}",
+            CALIBRATION_STATUS_ROUTE.path,
+            axum::routing::get(calibration_status),
+        )
+        .route(CALIBRATION_APPLY_ROUTE.path, post(calibration_apply))
+        .route(IMAGE_GENERATION_ROUTE.path, post(image_generation))
+        .route(FILES_ROUTE.path, get(list_files).post(upload_file))
+        .route(FILE_ROUTE.path, get(get_file).delete(delete_file))
+        .route(FILE_CONTENT_ROUTE.path, get(get_file_content))
+        .route(CONTAINER_FILES_ROUTE.path, get(list_container_files))
+        .route(CONTAINER_FILE_ROUTE.path, get(get_container_file))
+        .route(
+            CONTAINER_FILE_CONTENT_ROUTE.path,
+            get(get_container_file_content),
+        )
+        .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
+        .route(RESPONSES_ROUTE.path, post(create_response))
+        .route(SKILLS_ROUTE.path, get(list_skills).post(upload_skill))
+        .route(
+            SKILL_VERSIONS_ROUTE.path,
+            get(list_skill_versions).post(upload_skill_version),
+        )
+        .route(
+            RESPONSE_ROUTE.path,
             get(get_response).delete(delete_response),
         )
-        .route("/v1/responses/{response_id}/cancel", post(cancel_response))
+        .route(CANCEL_RESPONSE_ROUTE.path, post(cancel_response))
         .route(
-            "/v1/sessions/{session_id}",
+            SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
         )
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
+        .layer(Extension(skill_store))
         .layer(Extension(agentic_defaults))
         .with_state(state);
 

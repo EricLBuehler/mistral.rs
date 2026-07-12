@@ -1,17 +1,16 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::compute_block_hashes,
+    paged_attention::block_hash::{compute_block_hashes, BlockHash},
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
         CacheBackendMetadata, CacheInstruction,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    response::CompletionChoice,
-    scheduler::{Scheduler, SchedulerOutput},
+    scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
-    tools, CompletionResponse, SchedulerConfig, DEBUG,
+    tools, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
@@ -31,7 +30,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, LazyLock,
     },
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 use tokio::{
     select,
@@ -46,7 +45,9 @@ use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
     pipeline::{ModelCategory, Pipeline},
     request::Request,
-    response::{ChatCompletionResponse, Choice, ResponseMessage},
+    response::{
+        ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
+    },
     sequence::{SequenceRecognizer, SequenceState},
     Constraint,
 };
@@ -178,6 +179,49 @@ pub struct Engine {
     pub(crate) file_store: crate::files::FileStore,
 }
 
+struct HybridPagedPrefixValidator {
+    pipeline: Arc<Mutex<dyn Pipeline>>,
+    prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
+}
+
+impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
+    fn validate_prefix_cache_hit(
+        &mut self,
+        seq: &mut crate::sequence::Sequence,
+        block_hashes: &[BlockHash],
+        cached_tokens: usize,
+        block_size: usize,
+    ) -> usize {
+        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
+            return 0;
+        }
+
+        let Some(slot_idx) = seq.recurrent_state_idx() else {
+            return 0;
+        };
+        let max_blocks = cached_tokens / block_size;
+        let Some((n_blocks, snapshots)) = get_mut_arcmutex!(self.prefix_cacher)
+            .get_longest_paged_recurrent_prefix(block_hashes, max_blocks)
+        else {
+            return 0;
+        };
+
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        if !pipeline.cache().is_hybrid() {
+            return cached_tokens;
+        }
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        if hybrid_cache
+            .restore_recurrent_state(slot_idx, &snapshots)
+            .is_ok()
+        {
+            n_blocks * block_size
+        } else {
+            0
+        }
+    }
+}
+
 impl Drop for Engine {
     fn drop(&mut self) {
         for handle in &*get_mut_arcmutex!(self.handles) {
@@ -218,6 +262,19 @@ impl Engine {
                 &get_mut_arcmutex!(pipeline).device(),
             )?),
             None => None,
+        };
+
+        let config = if no_kv_cache {
+            match config {
+                SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => {
+                    SchedulerConfig::DefaultScheduler {
+                        method: DefaultSchedulerMethod::Fixed(max_num_seqs.try_into().unwrap()),
+                    }
+                }
+                config => config,
+            }
+        } else {
+            config
         };
 
         let scheduler = config.into_scheduler();
@@ -265,6 +322,20 @@ impl Engine {
         } else {
             Some(pipeline.get_metadata().max_seq_len)
         }
+    }
+
+    fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
+        let recurrent_indices = scheduler.get_finished_recurrent_indices();
+        if !recurrent_indices.is_empty() {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                let mut hybrid_cache = pipeline.cache().hybrid();
+                for idx in recurrent_indices {
+                    hybrid_cache.free_seq(idx);
+                }
+            }
+        }
+        scheduler.free_finished_sequence_groups();
     }
 
     pub async fn run(self: Arc<Self>) {
@@ -366,8 +437,21 @@ impl Engine {
             }
 
             let run_start = Instant::now();
+            let use_hybrid_prefix_validator = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                !self.no_kv_cache && pipeline.cache().is_hybrid()
+            };
+            let mut hybrid_prefix_validator =
+                use_hybrid_prefix_validator.then(|| HybridPagedPrefixValidator {
+                    pipeline: self.pipeline.clone(),
+                    prefix_cacher: self.prefix_cacher.clone(),
+                });
+            let prefix_validator = hybrid_prefix_validator
+                .as_mut()
+                .map(|v| v as &mut dyn PagedPrefixCacheValidator);
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
-            let scheduled = scheduler.schedule(&self.logger);
+            self.free_finished_scheduler_sequences(&mut *scheduler);
+            let scheduled = scheduler.schedule(&self.logger, prefix_validator);
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {
@@ -376,6 +460,9 @@ impl Engine {
                     if !scheduled.completion.is_empty() {
                         let current_completion_ids: Vec<usize> =
                             scheduled.completion.iter().map(|seq| *seq.id()).collect();
+                        for seq in scheduled.completion.iter_mut() {
+                            seq.start_completion_timing();
+                        }
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
                             let pre_op = if !self.no_kv_cache
@@ -416,7 +503,7 @@ impl Engine {
                                 .await
                         };
 
-                        handle_pipeline_forward_error!(
+                        let completion_exec_time = handle_pipeline_forward_error!(
                             "completion step",
                             res,
                             &mut scheduled.completion,
@@ -424,6 +511,9 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        for seq in scheduled.completion.iter_mut() {
+                            seq.finish_completion_timing(completion_exec_time);
+                        }
 
                         self.logger.add_tokens_processed(scheduled.completion.len());
 
@@ -431,6 +521,10 @@ impl Engine {
                     }
 
                     if !scheduled.prompt.is_empty() {
+                        for seq in scheduled.prompt.iter_mut() {
+                            seq.start_prompt_timing();
+                        }
+
                         let prompt_exec_time = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
@@ -502,17 +596,7 @@ impl Engine {
                                     seq.set_state(SequenceState::RunningCompletion)
                                 }
                             }
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            #[allow(clippy::cast_precision_loss)]
-                            let prompt_tok_per_sec =
-                                seq.len() as f32 / prompt_exec_time.as_secs_f32();
-                            seq.prompt_tok_per_sec = prompt_tok_per_sec;
-                            seq.prompt_timestamp = Some(now);
-                            seq.total_prompt_time = Some(prompt_exec_time.as_millis());
-                            seq.step_start_instant = None;
+                            seq.finish_prompt_timing(prompt_exec_time);
                         }
                         last_completion_ids = vec![];
                     }
@@ -548,17 +632,12 @@ impl Engine {
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
-                        // Record prompt timing BEFORE step() so it's available if response is sent inside step()
-                        if is_prompt {
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .expect("Time travel has occurred!")
-                                .as_millis();
-                            for seq in output.scheduled.iter() {
-                                let mut seq_guard = get_mut_arcmutex!(seq);
-                                seq_guard.prompt_timestamp = Some(now);
-                                // Start the timer using Instant for accurate duration measurement
-                                seq_guard.set_step_start_instant();
+                        for seq in output.scheduled.iter() {
+                            let mut seq_guard = get_mut_arcmutex!(seq);
+                            if is_prompt {
+                                seq_guard.start_prompt_timing();
+                            } else {
+                                seq_guard.start_completion_timing();
                             }
                         }
 
@@ -571,111 +650,70 @@ impl Engine {
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
 
+                        let staged_width =
+                            crate::speculative::staging::staged_batch_width(&guards_mut);
+                        let num_computed_before_step = guards_mut
+                            .iter()
+                            .map(|seq| seq.num_computed_tokens())
+                            .collect::<Vec<_>>();
+                        let scheduled_token_counts = guards_mut
+                            .iter()
+                            .map(|seq| {
+                                let staged = staged_width
+                                    .map(|_| seq.active_staged_speculative_len())
+                                    .unwrap_or_default();
+                                seq.num_uncomputed_tokens().saturating_add(staged)
+                            })
+                            .collect::<Vec<_>>();
+
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                             let block_size = scheduler.block_size().unwrap();
 
-                            // For hybrid models under paged attention, restore recurrent state
-                            // from block-hash keyed prefix snapshots before prompt prefill.
-                            if is_prompt && pipeline.cache().is_hybrid() {
-                                let mut hybrid_cache = pipeline.cache().hybrid();
-                                let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
-                                let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
-
-                                for seq in guards_mut.iter_mut() {
-                                    let cached_prefix_len = seq.prefix_cache_len();
-                                    if cached_prefix_len == 0 {
-                                        continue;
-                                    }
-
-                                    let mut fallback_to_full_prompt = false;
-
-                                    let slot_idx = match seq.recurrent_state_idx() {
-                                        Some(idx) => idx,
-                                        None => {
-                                            tracing::warn!("Sequence {} has paged prefix hit but no recurrent_state_idx; recomputing full prompt.", seq.id());
-                                            fallback_to_full_prompt = true;
-                                            // Dummy value, unused in fallback path.
-                                            0usize
-                                        }
-                                    };
-
-                                    if !fallback_to_full_prompt {
-                                        if cached_prefix_len % block_size != 0 {
-                                            tracing::warn!(
-                                                "Sequence {} has non-aligned paged prefix len {}; recomputing full prompt.",
-                                                seq.id(),
-                                                cached_prefix_len
-                                            );
-                                            fallback_to_full_prompt = true;
-                                        } else {
-                                            let num_prefix_blocks = cached_prefix_len / block_size;
-                                            let block_hashes = compute_block_hashes(
-                                                seq.get_toks(),
-                                                block_size,
-                                                seq.mm_features(),
-                                                &[],
-                                            );
-                                            if block_hashes.len() < num_prefix_blocks {
-                                                fallback_to_full_prompt = true;
-                                            } else if let Some(snapshots) = prefix_cacher
-                                                .get_paged_recurrent_prefix(
-                                                    &block_hashes[..num_prefix_blocks],
-                                                )
-                                            {
-                                                if let Err(e) = hybrid_cache
-                                                    .restore_recurrent_state(slot_idx, &snapshots)
-                                                {
-                                                    tracing::warn!(
-                                                        "Failed restoring paged recurrent prefix state for sequence {}: {e}",
-                                                        seq.id()
-                                                    );
-                                                    fallback_to_full_prompt = true;
-                                                }
-                                            } else {
-                                                tracing::warn!(
-                                                    "No recurrent prefix snapshot for sequence {} at cached prefix length {}; recomputing full prompt.",
-                                                    seq.id(),
-                                                    cached_prefix_len
-                                                );
-                                                fallback_to_full_prompt = true;
-                                            }
-                                        }
-                                    }
-
-                                    if fallback_to_full_prompt {
-                                        let seq_id = *seq.id();
-                                        let num_tokens = seq.get_toks().len();
-                                        let mut kv_mgr = get_mut_arcmutex!(kv_cache_manager);
-                                        kv_mgr.free(seq_id);
-                                        let realloc_ok = kv_mgr
-                                            .allocate_slots(seq_id, num_tokens, &[])
-                                            .is_some();
-                                        drop(kv_mgr);
-
-                                        if !realloc_ok {
-                                            tracing::warn!(
-                                                "Failed to reallocate fresh paged KV blocks for sequence {} after recurrent-prefix fallback.",
-                                                seq_id
-                                            );
-                                            seq.set_state(SequenceState::FinishedIgnored);
-                                        }
-                                        seq.set_prefix_cache_len(0);
-                                    }
-                                }
-
-                                // Drop sequences that were canceled due fallback allocation failures.
-                                guards_mut.retain(|seq| !seq.is_finished_paged_attn());
-                            }
-
                             if guards_mut.is_empty() {
                                 Ok(Duration::ZERO)
                             } else {
+                                let pipeline_metadata = pipeline.get_metadata();
+                                let model_metadata = pipeline_metadata.model_metadata.as_ref();
+                                let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
+                                let max_paged_context_len = {
+                                    let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
+                                    kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
+                                };
                                 let metadata = PagedAttentionMeta {
                                     block_size,
-                                    sliding_window: pipeline.get_metadata().sliding_window,
-                                    kv_cache_manager: scheduler.kv_cache_manager().unwrap(),
+                                    max_paged_context_len,
+                                    sliding_window: pipeline_metadata.sliding_window,
+                                    attention_backend: model_metadata
+                                        .map(|metadata| metadata.attention_backend_kind())
+                                        .unwrap_or(
+                                            crate::paged_attention::AttentionBackendKind::Standard,
+                                        ),
+                                    has_flashinfer_decode_layers: model_metadata
+                                        .is_some_and(|metadata| {
+                                            (0..metadata.num_layers()).any(|layer_idx| {
+                                                metadata.attention_backend_kind_for_layer(layer_idx)
+                                                    == crate::paged_attention::AttentionBackendKind::FlashInfer
+                                            })
+                                        }),
+                                    prefill_attention_heads: model_metadata
+                                        .map(|metadata| metadata.num_attn_heads())
+                                        .unwrap_or(1)
+                                        .max(1),
+                                    prefill_key_value_heads: model_metadata
+                                        .map(|metadata| metadata.num_kv_heads())
+                                        .unwrap_or(1)
+                                        .max(1),
+                                    prefill_head_dim: model_metadata
+                                        .map(|metadata| metadata.k_head_dim())
+                                        .unwrap_or(1)
+                                        .max(1),
+                                    kv_cache_manager,
+                                    prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                                    has_noncausal_mm_context: false,
+                                    mm_prefix_ranges_by_seq_id: HashMap::new(),
+                                    is_final_prompt_chunk: true,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -700,7 +738,7 @@ impl Engine {
                             }
                         };
 
-                        handle_pipeline_forward_error!(
+                        let step_exec_time = handle_pipeline_forward_error!(
                             "step",
                             res,
                             &mut guards_mut,
@@ -708,17 +746,24 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        for ((seq, before), scheduled) in guards_mut
+                            .iter_mut()
+                            .zip(num_computed_before_step)
+                            .zip(scheduled_token_counts.iter().copied())
+                        {
+                            if seq.num_computed_tokens() == before {
+                                seq.advance_num_computed_tokens(scheduled);
+                            }
+                        }
+                        for seq in guards_mut.iter_mut() {
+                            if is_prompt {
+                                seq.finish_prompt_timing(step_exec_time);
+                            } else {
+                                seq.finish_completion_timing(step_exec_time);
+                            }
+                        }
 
-                        let total_processed_tokens: usize = guards_mut
-                            .iter()
-                            .map(|seq| {
-                                if seq.is_prompt() {
-                                    seq.get_toks().len()
-                                } else {
-                                    1
-                                }
-                            })
-                            .sum();
+                        let total_processed_tokens: usize = scheduled_token_counts.iter().sum();
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         // Capture recurrent states at full-block boundaries so hybrid models can
@@ -731,8 +776,8 @@ impl Engine {
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
 
                                 for seq in guards_mut.iter() {
-                                    let seq_len = seq.get_toks().len();
-                                    if seq_len == 0 || seq_len % block_size != 0 {
+                                    let encoded_len = seq.num_computed_tokens();
+                                    if encoded_len == 0 || encoded_len % block_size != 0 {
                                         continue;
                                     }
 
@@ -756,7 +801,7 @@ impl Engine {
                                         continue;
                                     }
 
-                                    let num_blocks = seq_len / block_size;
+                                    let num_blocks = encoded_len / block_size;
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
@@ -798,43 +843,11 @@ impl Engine {
                                 );
                             }
                         }
-
-                        if is_prompt {
-                            #[allow(clippy::cast_precision_loss)]
-                            for mut seq in guards {
-                                // Use Instant duration for accurate prompt timing
-                                if let Some(start) = seq.step_start_instant {
-                                    let duration = start.elapsed();
-                                    seq.prompt_tok_per_sec =
-                                        seq.len() as f32 / duration.as_secs_f32();
-                                    seq.total_prompt_time = Some(duration.as_millis());
-                                    seq.step_start_instant = None;
-                                }
-                                let now = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .expect("Time travel has occurred!")
-                                    .as_millis();
-                                seq.prompt_timestamp = Some(now);
-                            }
-                        }
                     }
                 }
             }
 
-            // Free recurrent state pool slots for finished sequences (hybrid models)
-            {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
-                    let recurrent_indices = scheduler.get_finished_recurrent_indices();
-                    if !recurrent_indices.is_empty() {
-                        let mut hybrid_cache = pipeline.cache().hybrid();
-                        for idx in recurrent_indices {
-                            hybrid_cache.free_seq(idx);
-                        }
-                    }
-                }
-            }
-            scheduler.free_finished_sequence_groups();
+            self.free_finished_scheduler_sequences(&mut *scheduler);
         }
     }
 

@@ -43,6 +43,8 @@ Usage:
 | `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `hf_cache_path` | `str \| None` | `None` |
+| `imatrix` | `str \| None` | `None` |
+| `calibration_file` | `str \| None` | `None` |
 
 ### `Which.XLora`
 

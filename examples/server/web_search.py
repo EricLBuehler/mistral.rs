@@ -1,3 +1,13 @@
+"""
+Chat Completions web search with the HTTP API.
+
+Start the server:
+    mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+
+Then run this script:
+    python examples/server/web_search.py
+"""
+
 from openai import OpenAI
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")

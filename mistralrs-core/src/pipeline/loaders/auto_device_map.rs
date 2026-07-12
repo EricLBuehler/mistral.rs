@@ -228,7 +228,11 @@ pub fn get_device_layers(
             // below stays consistent. Utilization and ContextSize pass through
             // to calculate_cache_config which handles model weight subtraction.
             let effective_mem_gpu = match cfg.mem_gpu {
-                MemoryGpuConfig::MbAmount(user_mb) => {
+                MemoryGpuConfig::MbAmount(user_mb)
+                | MemoryGpuConfig::BestEffortMbAmount {
+                    target_mb: user_mb,
+                    min_mb: _,
+                } => {
                     // Clamp user's KV budget to available memory.
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();

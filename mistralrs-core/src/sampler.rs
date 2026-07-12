@@ -5,8 +5,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use candle_core::{DType, Device, Error, Result, Tensor, D};
-use mistralrs_quant::{CumSumOp, SortOp};
+use candle_core::{Device, Error, Result, Tensor};
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -18,6 +17,7 @@ use tokenizers::Tokenizer;
 
 static DRY_SEQUENCE_BREAKERS: LazyLock<Vec<String>> =
     LazyLock::new(|| ["\n", ":", "\"", "*"].map(String::from).to_vec());
+const SUPPRESS_TOKEN_LOGIT_BIAS: f32 = -1.0e9;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 /// Optional generation defaults parsed from a model's `generation_config.json`.
@@ -33,6 +33,7 @@ pub struct ModelGenerationDefaults {
     pub repetition_penalty: Option<f32>,
     pub max_new_tokens: Option<usize>,
     pub max_length: Option<usize>,
+    pub suppress_tokens: Option<Vec<u32>>,
 }
 
 impl ModelGenerationDefaults {
@@ -45,6 +46,7 @@ impl ModelGenerationDefaults {
             && self.repetition_penalty.is_none()
             && self.max_new_tokens.is_none()
             && self.max_length.is_none()
+            && self.suppress_tokens.is_none()
     }
 }
 
@@ -152,6 +154,14 @@ impl SamplingParams {
         }
         if let Some(max_new_tokens) = defaults.max_new_tokens {
             self.max_len = Some(max_new_tokens);
+        }
+        if let Some(suppress_tokens) = &defaults.suppress_tokens {
+            let logits_bias = self.logits_bias.get_or_insert_with(HashMap::new);
+            for token in suppress_tokens {
+                logits_bias
+                    .entry(*token)
+                    .or_insert(SUPPRESS_TOKEN_LOGIT_BIAS);
+            }
         }
     }
 }
@@ -280,9 +290,10 @@ pub struct Sampler {
     top_k: i64,
     top_p: f64,
     min_p: f64,
+    logits_bias: HashMap<u32, f32>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
-    /// Cached Gumbel noise tensor to avoid reallocating it.
-    gumbel_cache: Arc<Mutex<Option<Tensor>>>,
+    #[cfg(feature = "cuda")]
+    top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
@@ -372,6 +383,7 @@ impl Sampler {
         top_k: i64,
         top_p: f64,
         min_p: f64,
+        logits_bias: HashMap<u32, f32>,
         logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
     ) -> anyhow::Result<Self> {
         let temperature = if temperature.is_none_or(|v| v < 1e-7) {
@@ -399,9 +411,15 @@ impl Sampler {
             top_k,
             top_p,
             min_p,
+            logits_bias,
             logits_processors,
-            gumbel_cache: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "cuda")]
+            top1_cache: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn is_argmax(&self) -> bool {
+        self.temperature.is_none()
     }
 
     fn get_top_logprobs(&self, probs: &[f32]) -> Result<Vec<TopLogprob>> {
@@ -468,192 +486,6 @@ impl Sampler {
         })
     }
 
-    #[allow(unused)]
-    fn sample_fast(
-        &self,
-        logits: Tensor,
-        context: &[u32],
-        return_logprobs: bool,
-        top_k: i64,
-        top_p: f64,
-        min_p: f64,
-    ) -> Result<Logprobs> {
-        let mut probs = logits.to_dtype(DType::F32)?;
-
-        for processor in &self.logits_processors {
-            probs = processor.apply(&probs, context)?;
-        }
-
-        let context = Tensor::new(context, logits.device())?;
-        let mut counts = logits.zeros_like()?;
-        counts = counts.scatter_add(
-            &context,
-            &context.ones_like()?.to_dtype(counts.dtype())?,
-            D::Minus1,
-        )?;
-
-        let presence = counts
-            .gt(0.)?
-            .where_cond(&counts.ones_like()?, &counts.zeros_like()?)?;
-
-        match self.frequency_penalty {
-            Some(freq_penalty) if freq_penalty != 0. => {
-                probs = (probs - (freq_penalty as f64 * counts)?)?;
-            }
-            _ => (),
-        }
-
-        match self.presence_penalty {
-            Some(pres_penalty) if pres_penalty != 0. => {
-                probs = (probs - (pres_penalty as f64 * &presence)?)?;
-            }
-            _ => (),
-        }
-
-        match self.repetition_penalty {
-            Some(rep_penalty) if rep_penalty != 1. => {
-                let pos_mask = probs.gt(0.)?;
-                let scaled_pos = (&probs / (rep_penalty as f64))?;
-                let scaled_neg = (&probs * (rep_penalty as f64))?;
-                let modified = pos_mask.where_cond(&scaled_pos, &scaled_neg)?;
-
-                let pres_mask = presence.gt(0.)?;
-                probs = pres_mask.where_cond(&modified, &probs)?;
-            }
-            _ => (),
-        }
-
-        probs = candle_nn::ops::softmax_last_dim(&(probs / self.temperature.unwrap_or(1.))?)?;
-
-        // Top-K
-        if top_k > 0 {
-            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
-            let topk_values = sorted_values.narrow(
-                D::Minus1,
-                sorted_values.dim(D::Minus1)? - top_k as usize,
-                top_k as usize,
-            )?;
-
-            // select the kth largest value as threshold
-            let threshold = topk_values.get_on_dim(D::Minus1, 0)?.unsqueeze(0)?;
-            let mask_topk = probs.broadcast_ge(&threshold)?;
-            probs = mask_topk.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Top-P (nucleus)
-        if top_p > 0.0 && top_p < 1.0 {
-            let sorted_probs = probs.fast_sort_asc(D::Minus1)?;
-
-            let cumsum = sorted_probs.fast_cumsum(D::Minus1)?;
-
-            let mask_topp = cumsum.le(top_p)?;
-
-            let masked_sorted =
-                mask_topp.where_cond(&sorted_probs, &Tensor::zeros_like(&sorted_probs)?)?;
-
-            let threshold = masked_sorted.max(D::Minus1)?;
-            let threshold = threshold.unsqueeze(D::Minus1)?;
-            let mask_full = probs.broadcast_ge(&threshold)?;
-            probs = mask_full.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Min-P
-        if min_p > 0.0 && min_p < 1.0 {
-            let max_vals = probs.max(D::Minus1)?;
-            let threshold_min = (max_vals.unsqueeze(D::Minus1)? * min_p)?;
-            let mask_minp = probs.broadcast_gt(&threshold_min)?;
-            probs = mask_minp.where_cond(&probs, &Tensor::zeros_like(&probs)?)?;
-        }
-
-        // Sample using the Gumbel-max trick fully on-device.
-        let log_probs = probs.log()?;
-        // Generate cached Gumbel noise (-log(-log(u))) once.
-        let gumbel = {
-            let mut guard = self.gumbel_cache.lock().unwrap();
-            if guard.is_none() {
-                let uniform = Tensor::rand(0f32, 1f32, log_probs.shape(), log_probs.device())?;
-                let noise = uniform
-                    .clamp(1e-20, 1.0)?
-                    .log()? // ln(u)
-                    .neg()? // -ln(u)
-                    .log()? // ln(-ln(u))
-                    .neg()?; // -ln(-ln(u))
-                *guard = Some(noise);
-            }
-            guard.as_ref().unwrap().clone()
-        };
-
-        let gumbel_logits = (&log_probs + &gumbel)?;
-        let next_token = gumbel_logits.argmax(D::Minus1)?.to_scalar::<u32>()?;
-
-        // Extract the top‑n log‑probs if the caller asked for them.
-        let (top_logprobs, logprob) = if return_logprobs {
-            let k = self.top_n_logprobs;
-
-            let sorted_values = probs.fast_sort_asc(D::Minus1)?;
-            let topk_values = sorted_values
-                .narrow(
-                    D::Minus1,
-                    sorted_values.dim(D::Minus1)? - top_k as usize,
-                    top_k as usize,
-                )?
-                .to_vec1::<f32>()?;
-
-            let sorted_idxs = probs.fast_argsort_asc(D::Minus1)?;
-            let topk_idxs = sorted_idxs
-                .narrow(
-                    D::Minus1,
-                    sorted_values.dim(D::Minus1)? - top_k as usize,
-                    top_k as usize,
-                )?
-                .to_vec1::<u32>()?;
-
-            let mut result = Vec::with_capacity(k);
-            if let Some(tokenizer) = &self.tokenizer {
-                for (prob, token) in topk_values.iter().zip(topk_idxs) {
-                    let decoded = tokenizer
-                        .decode(&[token], false)
-                        .map_err(|e| Error::Msg(e.to_string()))?;
-                    result.push(TopLogprob {
-                        token,
-                        logprob: prob.log(10.0),
-                        bytes: Some(decoded),
-                    });
-                }
-            } else {
-                for (prob, token) in topk_values.iter().zip(topk_idxs) {
-                    result.push(TopLogprob {
-                        token,
-                        logprob: prob.log(10.0),
-                        bytes: None,
-                    });
-                }
-            }
-
-            let logprob = result.last().map(|res| res.logprob).unwrap_or(1.);
-
-            (Some(result), logprob)
-        } else {
-            (None, 1.)
-        };
-
-        let bytes = if let Some(tokenizer) = &self.tokenizer {
-            Some(
-                tokenizer
-                    .decode(&[next_token], false)
-                    .map_err(|x| Error::Msg(x.to_string()))?,
-            )
-        } else {
-            None
-        };
-
-        Ok(Logprobs {
-            token: next_token,
-            logprob,
-            top_logprobs,
-            bytes,
-        })
-    }
     fn sample_speculative_top_kp_min_p(
         &self,
         logits: Tensor,
@@ -799,6 +631,497 @@ impl Sampler {
         })
     }
 
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    fn can_sample_topk_on_device(
+        &self,
+        return_logprobs: bool,
+        sample_speculative: bool,
+        multiple_sequences: bool,
+        supports_logits_bias: bool,
+    ) -> bool {
+        const MAX_DEVICE_TOP_K: i64 = 128;
+
+        !return_logprobs
+            && !sample_speculative
+            && !multiple_sequences
+            && self.temperature.is_some()
+            && self.top_k > 0
+            && self.top_k <= MAX_DEVICE_TOP_K
+            && (supports_logits_bias || self.logits_bias.is_empty())
+            && self.logits_processors.is_empty()
+            && self
+                .dry_params
+                .as_ref()
+                .is_none_or(|params| params.multiplier.abs() <= f32::EPSILON)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn apply_device_sparse_penalties_if_needed(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Tensor> {
+        let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
+        let presence_penalty = self.presence_penalty.unwrap_or(0.0);
+        let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
+        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
+            || presence_penalty.abs() > f32::EPSILON
+            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+
+        if !needs_penalty {
+            return Ok(logits);
+        }
+        if context.is_empty() {
+            candle_core::bail!("Penalty context is empty, this should not happen.");
+        }
+
+        let vocab_size = logits.elem_count();
+        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+        for &token_id in context {
+            if token_id as usize >= vocab_size {
+                continue;
+            }
+            *counts.entry(token_id).or_insert(0.0) += 1.0;
+        }
+
+        if counts.is_empty() {
+            return Ok(logits);
+        }
+
+        let n_tokens = counts.len();
+        let mut token_ids = Vec::with_capacity(n_tokens);
+        let mut token_counts = Vec::with_capacity(n_tokens);
+        for (token_id, count) in counts {
+            token_ids.push(token_id);
+            token_counts.push(count);
+        }
+
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
+        crate::ops::cuda_apply_sparse_penalties_f32(
+            &logits,
+            &token_ids,
+            &token_counts,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn apply_device_logits_bias_if_needed(&self, logits: Tensor) -> Result<Tensor> {
+        if self.logits_bias.is_empty() {
+            return Ok(logits);
+        }
+
+        let vocab_size = logits.elem_count();
+        let mut token_ids = Vec::with_capacity(self.logits_bias.len());
+        let mut biases = Vec::with_capacity(self.logits_bias.len());
+        for (&token_id, &bias) in &self.logits_bias {
+            if token_id as usize >= vocab_size || bias == 0.0 {
+                continue;
+            }
+            token_ids.push(token_id);
+            biases.push(bias);
+        }
+        if token_ids.is_empty() {
+            return Ok(logits);
+        }
+
+        let n_tokens = token_ids.len();
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let biases = Tensor::from_vec(biases, n_tokens, device)?;
+        crate::ops::cuda_apply_sparse_logits_bias_f32(&logits, &token_ids, &biases)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn sample_topk_on_device(
+        &self,
+        logits: Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        if self.top_k == 1 {
+            let packed = {
+                let mut cache = self.top1_cache.lock().unwrap();
+                crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
+            };
+            return Ok(Logprobs {
+                token: packed[1] as u32,
+                logprob: 0.0,
+                top_logprobs: None,
+                bytes: None,
+            });
+        }
+
+        let topk =
+            crate::ops::cuda_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
+        let packed = topk.packed.to_vec1::<f32>()?;
+        let k = topk.k;
+        if packed.len() != 2 * k + 2 {
+            candle_core::bail!(
+                "invalid CUDA top-k packed output length {}, expected {}",
+                packed.len(),
+                2 * k + 2
+            );
+        }
+        let top_values = &packed[..k];
+        let top_indices = packed[k..2 * k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let softmax_info = &packed[2 * k..2 * k + 2];
+
+        let denom = softmax_info[0];
+        let global_max = softmax_info[1];
+        if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
+            candle_core::bail!("invalid CUDA top-k softmax normalizer");
+        }
+
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut probs = top_values
+            .iter()
+            .map(|value| ((*value * inv_temperature - global_max).exp()) / denom)
+            .collect::<Vec<_>>();
+
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for prob in &mut probs {
+                if cumsum >= self.top_p as f32 {
+                    *prob = 0.0;
+                } else {
+                    cumsum += *prob;
+                }
+            }
+
+            if self.min_p > 0.0 && self.min_p < 1.0 {
+                let max_p = probs.first().copied().unwrap_or(0.0);
+                let min_p_threshold = max_p * self.min_p as f32;
+                for prob in &mut probs {
+                    if min_p_threshold >= *prob {
+                        *prob = 0.0;
+                    }
+                }
+            }
+        }
+
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after CUDA top-k filtering."
+                            .to_string(),
+                    ));
+                }
+
+                return Err(Error::Msg(format!(
+                    "Failed to construct CUDA top-k multinomial sampler: {e}"
+                )));
+            }
+        };
+
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let selected = distr.sample(&mut mut_ref_rng);
+        let next_token = top_indices[selected];
+        let logprob = probs[selected].log(10.0);
+
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes: None,
+        })
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_device_sparse_penalties_if_needed_metal(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Tensor> {
+        let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
+        let presence_penalty = self.presence_penalty.unwrap_or(0.0);
+        let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
+        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
+            || presence_penalty.abs() > f32::EPSILON
+            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+        if !needs_penalty || context.is_empty() {
+            return Ok(logits);
+        }
+        let vocab_size = logits.elem_count();
+        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+        for &tid in context {
+            if (tid as usize) >= vocab_size {
+                continue;
+            }
+            *counts.entry(tid).or_insert(0.0) += 1.0;
+        }
+        if counts.is_empty() {
+            return Ok(logits);
+        }
+        let n_tokens = counts.len();
+        let mut token_ids = Vec::with_capacity(n_tokens);
+        let mut token_counts = Vec::with_capacity(n_tokens);
+        for (tid, c) in counts {
+            token_ids.push(tid);
+            token_counts.push(c);
+        }
+        let device = logits.device();
+        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
+        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
+        crate::ops::metal_apply_sparse_penalties(
+            &logits,
+            &token_ids,
+            &token_counts,
+            frequency_penalty,
+            presence_penalty,
+            repetition_penalty,
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    fn sample_topk_on_device_metal(
+        &self,
+        logits: Tensor,
+        temperature: f64,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let topk = crate::ops::metal_topk_logits_packed(&logits, self.top_k as usize, temperature)?;
+        let packed = topk.packed.to_vec1::<f32>()?;
+        let k = topk.k;
+        if packed.len() != 2 * k + 2 {
+            candle_core::bail!(
+                "invalid Metal top-k packed output length {}, expected {}",
+                packed.len(),
+                2 * k + 2
+            );
+        }
+        let top_values = &packed[..k];
+        let top_indices = packed[k..2 * k]
+            .iter()
+            .map(|idx| *idx as u32)
+            .collect::<Vec<_>>();
+        let softmax_info = &packed[2 * k..2 * k + 2];
+        let denom = softmax_info[0];
+        let global_max = softmax_info[1];
+        if denom <= 0.0 || !denom.is_finite() || !global_max.is_finite() {
+            candle_core::bail!("invalid Metal top-k softmax normalizer");
+        }
+
+        let inv_temperature = (1.0 / temperature) as f32;
+        let mut probs = top_values
+            .iter()
+            .map(|value| ((*value * inv_temperature - global_max).exp()) / denom)
+            .collect::<Vec<_>>();
+
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for prob in &mut probs {
+                if cumsum >= self.top_p as f32 {
+                    *prob = 0.0;
+                } else {
+                    cumsum += *prob;
+                }
+            }
+            if self.min_p > 0.0 && self.min_p < 1.0 {
+                let max_p = probs.first().copied().unwrap_or(0.0);
+                let min_p_threshold = max_p * self.min_p as f32;
+                for prob in &mut probs {
+                    if min_p_threshold >= *prob {
+                        *prob = 0.0;
+                    }
+                }
+            }
+        }
+
+        let distr = match WeightedIndex::new(&probs) {
+            Ok(distr) => distr,
+            Err(e) => {
+                let positive_weight_sum: f64 = probs
+                    .iter()
+                    .copied()
+                    .filter(|prob| prob.is_finite() && *prob > 0.0)
+                    .map(f64::from)
+                    .sum();
+                if positive_weight_sum == 0.0 {
+                    return Err(Error::Msg(
+                        "All sampling probabilities are zero after Metal top-k filtering."
+                            .to_string(),
+                    ));
+                }
+                return Err(Error::Msg(format!(
+                    "Failed to construct Metal top-k multinomial sampler: {e}"
+                )));
+            }
+        };
+
+        let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
+        let selected = distr.sample(&mut mut_ref_rng);
+        let next_token = top_indices[selected];
+        let logprob = probs[selected].log(10.0);
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[next_token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Logprobs {
+            token: next_token,
+            logprob,
+            top_logprobs: None,
+            bytes,
+        })
+    }
+
+    fn filter_top_kp_min_p(&self, probs: &mut [f32]) {
+        let k = if self.top_k > 0 {
+            self.top_k as usize
+        } else {
+            probs.len()
+        };
+
+        let idx_probs = partial_sort_top_k(probs, k, true);
+
+        if self.top_p <= 0.0 || self.top_p >= 1.0 {
+            return;
+        }
+
+        let mut cumsum = 0.0f32;
+        for (index, prob) in &idx_probs {
+            if cumsum >= self.top_p as f32 {
+                probs[*index as usize] = 0.0;
+            } else {
+                cumsum += prob;
+            }
+        }
+
+        if self.min_p <= 0.0 || self.min_p >= 1.0 {
+            return;
+        }
+
+        let max_p = idx_probs.first().map(|(_, p)| *p).unwrap_or(0.0);
+        let min_p_threshold = max_p * self.min_p as f32;
+        for (index, prob) in &idx_probs {
+            if min_p_threshold >= *prob {
+                probs[*index as usize] = 0.0;
+            }
+        }
+    }
+
+    fn normalize_probs(probs: &mut [f32]) -> Result<()> {
+        let sum: f32 = probs
+            .iter()
+            .copied()
+            .filter(|prob| prob.is_finite() && *prob > 0.0)
+            .sum();
+        if sum <= 0.0 {
+            candle_core::bail!("all probabilities are zero in speculative sampling");
+        }
+        for prob in probs.iter_mut() {
+            if prob.is_finite() && *prob > 0.0 {
+                *prob /= sum;
+            } else {
+                *prob = 0.0;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn speculative_target_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    pub(crate) fn speculative_candidate_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+    ) -> Result<Vec<f32>> {
+        self.speculative_probs(logits, context)
+    }
+
+    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<Vec<f32>> {
+        let logits = logits.to_vec1()?;
+        let mut logits = self.apply_penalties(logits, context)?;
+        for processor in &self.logits_processors {
+            logits = processor.apply(&logits, context)?;
+        }
+
+        let mut probs = match self.temperature {
+            None => {
+                let logits = logits.to_vec1::<f32>()?;
+                let mut probs = vec![0.0; logits.len()];
+                probs[argmax_f32(&logits) as usize] = 1.0;
+                probs
+            }
+            Some(temperature) => {
+                let logits = (&logits / temperature)?;
+                candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?
+            }
+        };
+        self.filter_top_kp_min_p(&mut probs);
+        Self::normalize_probs(&mut probs)?;
+        Ok(probs)
+    }
+
+    pub(crate) fn logprobs_from_probs(
+        &self,
+        token: u32,
+        probs: &[f32],
+        return_logprobs: bool,
+    ) -> Result<Logprobs> {
+        let prob = probs.get(token as usize).copied().unwrap_or(0.0);
+        let logprob = if prob > 0.0 {
+            prob.log(10.0)
+        } else {
+            f32::NEG_INFINITY
+        };
+        let top_logprobs = if return_logprobs {
+            Some(self.get_top_logprobs(probs)?)
+        } else {
+            None
+        };
+        let bytes = if let Some(tokenizer) = &self.tokenizer {
+            Some(
+                tokenizer
+                    .decode(&[token], false)
+                    .map_err(|x| Error::Msg(x.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Logprobs {
+            token,
+            logprob,
+            top_logprobs,
+            bytes,
+        })
+    }
+
+    pub(crate) fn sample_from_probs(
+        &self,
+        probs: &[f32],
+        return_logprobs: bool,
+        rng: Arc<Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        self.sample_multinomial(probs, return_logprobs, rng)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sample_top_kp_min_p(
         &self,
@@ -868,14 +1191,20 @@ impl Sampler {
             candle_core::bail!("Penalty context is empty, this should not happen.");
         }
 
-        // Dry penalty
         self.apply_dry_penalty(&mut logits, context)?;
-
-        // Frequency, presence, repetition penalty
         self.apply_freq_pres_rep_penalty(&mut logits, context)?;
+        self.apply_logits_bias(&mut logits);
 
         let vocab_size = logits.len();
         Tensor::from_vec(logits, vocab_size, &Device::Cpu)
+    }
+
+    fn apply_logits_bias(&self, logits: &mut [f32]) {
+        for (&token_id, &bias) in &self.logits_bias {
+            if let Some(logit) = logits.get_mut(token_id as usize) {
+                *logit += bias;
+            }
+        }
     }
 
     fn apply_freq_pres_rep_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
@@ -1019,16 +1348,36 @@ impl Sampler {
         sample_speculative: bool,
         multiple_sequences: bool,
     ) -> Result<Logprobs> {
-        // if cfg!(feature = "metal") && !multiple_sequences {
-        //     return self.sample_fast(
-        //         logits,
-        //         context,
-        //         return_logprobs,
-        //         self.top_k,
-        //         self.top_p,
-        //         self.min_p,
-        //     );
-        // }
+        #[cfg(feature = "cuda")]
+        if logits.device().is_cuda()
+            && self.can_sample_topk_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+                true,
+            )
+        {
+            if let Some(temperature) = self.temperature {
+                let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
+                let logits = self.apply_device_logits_bias_if_needed(logits)?;
+                return self.sample_topk_on_device(logits, temperature, rng);
+            }
+        }
+
+        #[cfg(feature = "metal")]
+        if logits.device().is_metal()
+            && self.can_sample_topk_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+                false,
+            )
+        {
+            if let Some(temperature) = self.temperature {
+                let logits = self.apply_device_sparse_penalties_if_needed_metal(logits, context)?;
+                return self.sample_topk_on_device_metal(logits, temperature, rng);
+            }
+        }
 
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
@@ -1083,6 +1432,7 @@ impl Sampler {
 #[cfg(test)]
 mod tests {
     use super::{ModelGenerationDefaults, SamplingParams};
+    use std::collections::HashMap;
 
     #[test]
     fn test_argmax() {
@@ -1104,6 +1454,7 @@ mod tests {
             32,
             0.1,
             0.05,
+            HashMap::new(),
             vec![],
         )
         .unwrap();
@@ -1144,6 +1495,7 @@ mod tests {
             32,
             0.1,
             0.05,
+            HashMap::new(),
             vec![],
         )
         .unwrap();
@@ -1165,6 +1517,72 @@ mod tests {
     }
 
     #[test]
+    fn test_speculative_candidate_probs_use_sampling_filters() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(1.0),
+            10,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
+        let context = [0u32];
+        let target_probs = sampler
+            .speculative_target_probs(logits.clone(), &context)
+            .unwrap();
+        let candidate_probs = sampler
+            .speculative_candidate_probs(logits, &context)
+            .unwrap();
+
+        assert_eq!(candidate_probs, target_probs);
+        assert_eq!(candidate_probs, vec![0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn test_logits_bias_suppresses_argmax_token() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            -1,
+            1.0,
+            0.0,
+            HashMap::from([(2, -1.0e9)]),
+            vec![],
+        )
+        .unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 10.0], 3, &Device::Cpu).unwrap();
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
+        let res = sampler
+            .sample(logits, &[0], false, rng, false, false)
+            .unwrap();
+
+        assert_eq!(res.token, 1);
+    }
+
+    #[test]
     fn test_apply_model_defaults() {
         let mut params = SamplingParams::neutral();
         params.apply_model_defaults(&ModelGenerationDefaults {
@@ -1176,6 +1594,7 @@ mod tests {
             repetition_penalty: Some(1.1),
             max_new_tokens: Some(256),
             max_length: None,
+            suppress_tokens: Some(vec![258882, 258883]),
         });
 
         assert_eq!(params.temperature, Some(1.0));
@@ -1184,6 +1603,14 @@ mod tests {
         assert_eq!(params.min_p, Some(0.05));
         assert_eq!(params.repetition_penalty, Some(1.1));
         assert_eq!(params.max_len, Some(256));
+        assert_eq!(
+            params.logits_bias.as_ref().unwrap().get(&258882),
+            Some(&-1.0e9)
+        );
+        assert_eq!(
+            params.logits_bias.as_ref().unwrap().get(&258883),
+            Some(&-1.0e9)
+        );
     }
 
     #[test]

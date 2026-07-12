@@ -2,6 +2,14 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterator, Mapping, Optional, Callable
 
+class CalibrationStatus:
+    collecting: bool
+    layers: int
+    layers_tracking: int
+    total_rows: int
+    min_rows: int
+    max_rows: int
+
 class SearchContextSize(Enum):
     Low = "low"
     Medium = "medium"
@@ -31,6 +39,7 @@ class AgentToolSource(Enum):
 class AgentToolKind(Enum):
     CodeExecution = "code_execution"
     WebSearch = "web_search"
+    Shell = "shell"
     File = "file"
     Custom = "custom"
     External = "external"
@@ -48,7 +57,9 @@ class ApproximateUserLocation:
 
 class WebSearchUserLocation:
     @staticmethod
-    def approximate(approximate: ApproximateUserLocation) -> "WebSearchUserLocation": ...
+    def approximate(
+        approximate: ApproximateUserLocation,
+    ) -> "WebSearchUserLocation": ...
 
 @dataclass
 class WebSearchOptions:
@@ -99,7 +110,6 @@ class AgentToolApprovalDecision:
 
     @staticmethod
     def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
-
     @staticmethod
     def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
 
@@ -114,13 +124,13 @@ class ChatCompletionRequest:
     Agent permission fields:
 
     - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
-      agent actions such as code execution, web search, file tools, callbacks,
+      agent actions such as code execution, shell, web search, file tools, callbacks,
       and external tool dispatch.
     - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
       `AgentToolApproval`. Return `True`, `False`, or
       `AgentToolApprovalDecision`.
 
-    See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+    See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
     for the shared CLI, HTTP, Python, and Rust behavior.
     """
 
@@ -157,13 +167,16 @@ class ChatCompletionRequest:
     max_tool_rounds: int | None = None
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
+    enable_shell: bool = False
+    shell_skills: list[ShellSkillMount] | None = None
     agent_permission: AgentPermission | None = None
-    agent_approval_callback: Callable[
-        [AgentToolApproval], bool | AgentToolApprovalDecision
-    ] | None = None
+    agent_approval_callback: (
+        Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
+    ) = None
     code_execution_permission: CodeExecutionPermission | None = None
     session_id: str | None = None
     files: list[RequestedFile] | None = None
+    input_files: list[InputFile] | None = None
 
 @dataclass
 class CompletionRequest:
@@ -230,6 +243,8 @@ class Architecture(Enum):
     GraniteMoeHybrid = "granitemoehybrid"
     GptOss = "gptoss"
     Qwen3Next = "qwen3next"
+    Lfm2 = "lfm2"
+    Lfm2Moe = "lfm2_moe"
 
 @dataclass
 class EmbeddingArchitecture(Enum):
@@ -242,6 +257,7 @@ class MultimodalArchitecture(Enum):
     Idefics2 = "idefics2"
     LLaVANext = "llava-next"
     LLaVA = "llava"
+    Lfm2Vl = "lfm2vl"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
@@ -258,6 +274,7 @@ class MultimodalArchitecture(Enum):
     Qwen3_5Moe = "Qwen3_5Moe"
     Voxtral = "Voxtral"
     Gemma4 = "Gemma4"
+    DiffusionGemma = "DiffusionGemma"
 
 @dataclass
 class DiffusionArchitecture(Enum):
@@ -319,15 +336,17 @@ class MultimodalAutoMapParams:
 
 class SandboxPolicy:
     """
-    OS-level sandbox applied to the code-execution subprocess on Linux/macOS.
+    OS-level sandbox applied to code-execution and shell subprocesses on Linux/macOS.
 
-    Pass to `CodeExecutionConfig(sandbox_policy=...)` to enable the sandbox;
-    omit (or pass `None`) to disable it. See the sandbox reference for the
-    layered defenses: env scrub, namespaces, Landlock FS allowlist, rlimits,
-    seccomp deny-list, and optional cgroup v2 on Linux.
+    Pass to `CodeExecutionConfig(sandbox_policy=...)` or
+    `ShellConfig(sandbox_policy=...)` to enable the sandbox; omit (or pass
+    `None`) to disable it. See the sandbox reference for the layered defenses:
+    env scrub, namespaces, Landlock FS allowlist, rlimits, seccomp deny-list,
+    and optional cgroup v2 on Linux.
 
     - `max_memory_mb`: per-session memory cap (default 2048).
-    - `max_cpu_secs`: per-session CPU time cap (default 300).
+    - `max_cpu_secs`: per-session CPU time cap (default 300). When rlimits
+      apply, this is raised to at least the configured tool timeout.
     - `max_procs`: per-session process/thread cap (default 64).
     - `max_open_fds`: per-session open-fd cap (default 1024).
     - `max_file_sz_mb`: per-session max written-file size (default 256).
@@ -364,7 +383,7 @@ class CodeExecutionConfig:
 
     - `python_path`: interpreter to run. Defaults to `python` on Windows,
       `python3` elsewhere.
-    - `timeout_secs`: per-call timeout. Defaults to 30.
+    - `timeout_secs`: per-call timeout. Defaults to 60.
     - `working_directory`: shared working directory. Defaults to a per-session
       temp directory.
     - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
@@ -385,6 +404,52 @@ class CodeExecutionConfig:
         sandbox_policy: SandboxPolicy | None = None,
         permission: CodeExecutionPermission | None = None,
         approval_callback: Callable[[dict[str, object]], bool] | None = None,
+    ) -> None: ...
+
+class ShellConfig:
+    """
+    Configuration for the built-in shell execution tool.
+
+    Pass to `Runner(shell_config=...)` to enable the shell tool. Per-request,
+    set `ChatCompletionRequest.enable_shell=True` or provide
+    `ChatCompletionRequest.shell_skills`.
+
+    All fields are optional:
+
+    - `shell_path`: shell executable. Defaults to `cmd` on Windows, `/bin/sh`
+      elsewhere.
+    - `timeout_secs`: per-call timeout. Defaults to 600.
+    - `working_directory`: shared working directory. Defaults to a per-session
+      temp directory.
+    - `sandbox_policy`: an OS-level sandbox to apply to the spawned shell on
+      Linux/macOS. `None` (default) disables the sandbox; passing a
+      `SandboxPolicy` enables it with the configured limits.
+    - `permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. For per-request
+      control, prefer `ChatCompletionRequest.agent_permission`.
+    """
+
+    def __init__(
+        self,
+        shell_path: str | None = None,
+        timeout_secs: int | None = None,
+        working_directory: str | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
+        permission: AgentPermission | None = None,
+    ) -> None: ...
+
+class ShellSkillMount:
+    """
+    Local skill directory mount using the OpenAI-compatible Skill directory shape.
+
+    Pass instances in `ChatCompletionRequest.shell_skills` for in-process
+    requests. Server users normally upload Skills through `/v1/skills`.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        source_path: str,
     ) -> None: ...
 
 class Which(Enum):
@@ -422,6 +487,8 @@ class Which(Enum):
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
         hf_cache_path: str | None = None
+        imatrix: str | None = None
+        calibration_file: str | None = None
 
     @dataclass
     class XLora:
@@ -564,8 +631,8 @@ class Runner:
         no_kv_cache: bool = False,
         prefix_cache_n: int = 16,
         token_source: str = "cache",
-        speculative_gamma: int = 32,
-        which_draft: Which | None = None,
+        mtp_model: str | None = None,
+        mtp_n_predict: int | None = None,
         chat_template: str | None = None,
         jinja_explicit: str | None = None,
         num_device_layers: list[str] | None = None,
@@ -585,20 +652,19 @@ class Runner:
         tool_callbacks: Mapping[str, Callable[[str, dict], str]] | None = None,
         mcp_client_config: McpClientConfigPy | None = None,
         code_execution_config: CodeExecutionConfig | None = None,
+        shell_config: ShellConfig | None = None,
     ) -> None:
         """
         Load a model.
 
-        - `which` specifies which model to load or the target model to load in the case of speculative decoding.
+        - `which` specifies which model to load.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
-        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache, others will be evicted to CPU.
+        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-        - `speculative_gamma` specifies the `gamma` parameter for speculative decoding, the ratio of draft tokens to generate before calling
-            the target model. If `which_draft` is not specified, this is ignored.
-        - `which_draft` specifies which draft model to load. Setting this parameter will cause a speculative decoding model to be loaded,
-            with `which` as the target (higher quality) model and `which_draft` as the draft (lower quality) model.
+        - `mtp_model` attaches an MTP assistant from a model id or path.
+        - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
         - `chat_template` specifies an optional JINJA chat template as a JSON file.
             This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
             It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
@@ -630,6 +696,7 @@ class Runner:
         - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
         - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
         - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
+        - `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
         """
         ...
 
@@ -706,6 +773,35 @@ class Runner:
         Args:
             dtype: The ISQ dtype (e.g., "Q4K", "Q8_0").
             model_id: Optional model ID to re-ISQ. If None, uses the default model.
+        """
+
+    def begin_calibration(self, model_id: str | None = None) -> CalibrationStatus:
+        """
+        Begin online calibration: collect activation statistics from live traffic on every
+        ISQ-tracked layer. The model must have been loaded with ISQ.
+
+        Args:
+            model_id: Optional model ID. If None, uses the default model.
+        """
+
+    def calibration_status(self, model_id: str | None = None) -> CalibrationStatus:
+        """
+        Report per-layer calibration collection progress.
+
+        Args:
+            model_id: Optional model ID. If None, uses the default model.
+        """
+
+    def apply_calibration(
+        self, save_cimatrix: str | None = None, model_id: str | None = None
+    ) -> CalibrationStatus:
+        """
+        Requantize from the source weights with the collected statistics and hot-swap the
+        layers into the live model. Returns the pre-apply status.
+
+        Args:
+            save_cimatrix: Optional `.cimatrix` path to save the collected importance matrix.
+            model_id: Optional model ID. If None, uses the default model.
         """
 
     def tokenize_text(
@@ -870,9 +966,7 @@ class Runner:
         Replaces any existing session with the same ID.
         """
 
-    def delete_session(
-        self, session_id: str, model_id: str | None = None
-    ) -> bool:
+    def delete_session(self, session_id: str, model_id: str | None = None) -> bool:
         """
         Delete an agentic session. Returns whether the session existed.
         """
@@ -1089,6 +1183,42 @@ class RequestedFile:
         format: str | None = None,
         description: str | None = None,
     ) -> None: ...
+
+class InputFile:
+    """
+    User-provided input file attached to a chat request.
+
+    Text-like files are previewed in prompt context and can be paginated by
+    the built-in file tools when the agentic runtime is active. Binary files
+    are stored and mounted into shell/code workdirs, but are metadata-only in
+    prompt context.
+    """
+
+    id: str
+    name: str
+    mime_type: str | None
+    bytes: int
+
+    def __init__(
+        self,
+        name: str,
+        data: bytes,
+        mime_type: str | None = None,
+    ) -> None: ...
+
+    @staticmethod
+    def from_text(
+        name: str,
+        text: str,
+        mime_type: str = "text/plain",
+    ) -> "InputFile": ...
+
+    @staticmethod
+    def from_path(
+        path: str,
+        mime_type: str | None = None,
+        name: str | None = None,
+    ) -> "InputFile": ...
 
 @dataclass
 class FileSource:

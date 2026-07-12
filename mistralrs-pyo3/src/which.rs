@@ -30,7 +30,11 @@ pub enum Architecture {
     SmolLm3,
     GraniteMoeHybrid,
     GptOss,
+    HunYuanDenseV1,
+    HunYuanMoEV1,
     Qwen3Next,
+    Lfm2,
+    Lfm2Moe,
 }
 
 impl From<Architecture> for NormalLoaderType {
@@ -56,7 +60,11 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::SmolLm3 => Self::SmolLm3,
             Architecture::GraniteMoeHybrid => Self::GraniteMoeHybrid,
             Architecture::GptOss => Self::GptOss,
+            Architecture::HunYuanDenseV1 => Self::HunYuanDenseV1,
+            Architecture::HunYuanMoEV1 => Self::HunYuanMoEV1,
             Architecture::Qwen3Next => Self::Qwen3Next,
+            Architecture::Lfm2 => Self::Lfm2,
+            Architecture::Lfm2Moe => Self::Lfm2Moe,
         }
     }
 }
@@ -84,6 +92,7 @@ pub enum MultimodalArchitecture {
     Idefics2,
     LLaVANext,
     LLaVA,
+    Lfm2Vl,
     VLlama,
     Qwen2VL,
     Idefics3,
@@ -100,6 +109,7 @@ pub enum MultimodalArchitecture {
     Qwen3_5Moe,
     Voxtral,
     Gemma4,
+    DiffusionGemma,
 }
 
 impl From<MultimodalArchitecture> for MultimodalLoaderType {
@@ -109,6 +119,7 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::Idefics2 => MultimodalLoaderType::Idefics2,
             MultimodalArchitecture::LLaVANext => MultimodalLoaderType::LLaVANext,
             MultimodalArchitecture::LLaVA => MultimodalLoaderType::LLaVA,
+            MultimodalArchitecture::Lfm2Vl => MultimodalLoaderType::Lfm2Vl,
             MultimodalArchitecture::VLlama => MultimodalLoaderType::VLlama,
             MultimodalArchitecture::Qwen2VL => MultimodalLoaderType::Qwen2VL,
             MultimodalArchitecture::Idefics3 => MultimodalLoaderType::Idefics3,
@@ -125,6 +136,7 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::Qwen3_5Moe => MultimodalLoaderType::Qwen3_5Moe,
             MultimodalArchitecture::Voxtral => MultimodalLoaderType::Voxtral,
             MultimodalArchitecture::Gemma4 => MultimodalLoaderType::Gemma4,
+            MultimodalArchitecture::DiffusionGemma => MultimodalLoaderType::DiffusionGemma,
         }
     }
 }
@@ -277,6 +289,8 @@ pub enum Which {
         from_uqff = None,
         dtype = ModelDType::Auto,
         hf_cache_path = None,
+        imatrix = None,
+        calibration_file = None,
     ))]
     Embedding {
         model_id: String,
@@ -287,6 +301,8 @@ pub enum Which {
         from_uqff: Option<Either<String, Vec<String>>>,
         dtype: ModelDType,
         hf_cache_path: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
     },
 
     #[pyo3(constructor = (

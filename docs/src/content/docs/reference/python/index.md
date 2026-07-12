@@ -9,15 +9,13 @@ The `mistralrs` Python package exposes the same engine that powers the `mistralr
 
 ## Install
 
-One wheel per accelerator. All wheels expose the same `mistralrs` module.
+`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.
 
-| Accelerator | Package |
-| --- | --- |
-| CPU (or Intel CPU with MKL) | `pip install mistralrs` |
-| NVIDIA GPU | `pip install mistralrs-cuda` |
-| Apple Silicon | `pip install mistralrs-metal` |
-| Intel MKL (pinned) | `pip install mistralrs-mkl` |
-| macOS Accelerate | `pip install mistralrs-accelerate` |
+```bash
+pip install mistralrs                                   # CPU / Metal (PyPI)
+pip install "mistralrs==0.9.0+cuda128.sm89" \          # NVIDIA (replace version, CUDA level, and SM)
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.0
+```
 
 ## Pages
 
@@ -30,13 +28,13 @@ One wheel per accelerator. All wheels expose the same `mistralrs` module.
 | [Enums](/mistral.rs/reference/python/enums/) | Architecture, dtype, and option enums. |
 | [Search](/mistral.rs/reference/python/search/) | Types for web-search tool configuration. |
 | [AnyMoE](/mistral.rs/reference/python/anymoe/) | AnyMoE expert and config types. |
-| [Code execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python code executor. |
+| [Code and shell execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python and shell executors. |
 | [Agent approvals](/mistral.rs/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
-| [Files](/mistral.rs/reference/python/files/) | First-class output files surfaced from agentic runs. |
+| [Files](/mistral.rs/reference/python/files/) | Input files and first-class output files surfaced from agentic runs. |
 | [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
 | [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
 
-See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
+See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
 
 ---
 

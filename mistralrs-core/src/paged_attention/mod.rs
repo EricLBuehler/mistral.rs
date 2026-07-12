@@ -1,10 +1,11 @@
+/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
+/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
+/// operations issued by the scheduler.
+pub(crate) mod attention_backend;
 /// Content-addressable block hashing for prefix caching (vLLM v1 approach).
 pub mod block_hash;
 /// Flat block pool with LRU free list for KV cache block management (vLLM v1 approach).
 pub mod block_pool;
-/// This is the lower-level manager of the cache. It manages swapping and copying the blocks and
-/// actually allocates the KV cache for the CPU and GPU. It is used by the LLMEngine to execute
-/// operations issued by the scheduler.
 mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
@@ -12,12 +13,16 @@ pub mod encoder_cache;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
+pub(crate) mod mm_prefix;
+#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+pub(crate) mod plan;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
+pub use attention_backend::AttentionBackendKind;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
-pub use config::{KvCacheLayout, ModelConfigLike, ModelConfigMetadata};
+pub use config::{KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
@@ -30,7 +35,7 @@ use tracing::info;
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 
 /// All memory counts in MB. Default for block size is 32.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
@@ -57,10 +62,14 @@ pub enum AttentionImplementation {
     PagedAttention,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass)]
 pub enum MemoryGpuConfig {
     MbAmount(usize),
+    BestEffortMbAmount {
+        target_mb: usize,
+        min_mb: Option<usize>,
+    },
     Utilization(f32),
     ContextSize(usize),
 }
@@ -131,6 +140,16 @@ pub fn calculate_cache_config(
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let mem_gpu = match mem_gpu {
             MemoryGpuConfig::MbAmount(v) => v,
+            MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
+                if let Some(min_mb) = min_mb {
+                    if target_mb < min_mb {
+                        anyhow::bail!(
+                            "Best-effort PagedAttention KV cache target {target_mb} MB is below the required minimum {min_mb} MB."
+                        );
+                    }
+                }
+                target_mb
+            }
             MemoryGpuConfig::Utilization(f) => {
                 let mem = MemoryUsage.query(device)?;
                 let total = mem.total() as f32 / SIZE_IN_MB as f32;
@@ -185,5 +204,6 @@ pub fn calculate_cache_config(
         block_size,
         num_gpu_blocks,
         cache_type,
+        kv_cache_group_ids: config.kv_cache_group_ids(),
     })
 }

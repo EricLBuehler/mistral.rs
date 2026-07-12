@@ -452,7 +452,8 @@ pub struct Gemma4AudioSubSampleConvProjection {
 
 impl Gemma4AudioSubSampleConvProjection {
     fn new(cfg: &Gemma4AudioConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let mut current_f_for_block_input = cfg.input_feat_size;
+        let input_feat_size = cfg.input_feat_size();
+        let mut current_f_for_block_input = input_feat_size;
         let mut calculated_f_out_dims = Vec::new();
 
         for i in 0..2 {
@@ -464,7 +465,7 @@ impl Gemma4AudioSubSampleConvProjection {
             current_f_for_block_input = f_out_after_conv;
         }
 
-        let conv_0 = Gemma4AudioSSCPConvBlock::new(cfg, 0, cfg.input_feat_size, vb.pp("layer0"))?;
+        let conv_0 = Gemma4AudioSSCPConvBlock::new(cfg, 0, input_feat_size, vb.pp("layer0"))?;
         let conv_1 =
             Gemma4AudioSSCPConvBlock::new(cfg, 1, calculated_f_out_dims[0], vb.pp("layer1"))?;
         let final_c_out = cfg.sscp_conv_channel_size[1];
@@ -1222,31 +1223,5 @@ impl AudioModel {
         }
 
         uvb.to_safetensors()
-    }
-
-    #[allow(dead_code)]
-    pub fn get_isq_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
-        let mut tensors = Vec::new();
-        for block in &mut self.conformer {
-            tensors.push((&mut block.attention.attn.q_proj.inner, None));
-            tensors.push((&mut block.attention.attn.k_proj.inner, None));
-            tensors.push((&mut block.attention.attn.v_proj.inner, None));
-            tensors.push((
-                &mut block.attention.attn.relative_position_embedding.pos_proj,
-                None,
-            ));
-            tensors.push((&mut block.attention.post.inner, None));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_1.inner, None));
-            tensors.push((&mut block.ffw_layer_start.ffw_layer_2.inner, None));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_1.inner, None));
-            tensors.push((&mut block.ffw_layer_end.ffw_layer_2.inner, None));
-            tensors.push((&mut block.lconv1d.linear_start.inner, None));
-            tensors.push((&mut block.lconv1d.linear_end.inner, None));
-        }
-        tensors.push((&mut self.subsample_conv_projection.input_proj_linear, None));
-        if let Some(ref mut proj) = self.output_proj {
-            tensors.push((proj, None));
-        }
-        tensors
     }
 }

@@ -7,11 +7,22 @@
   let denyMessage = $state("");
   let showArguments = $state(false);
 
+  function getShellCommands(args: Record<string, unknown>): string[] {
+    const commands = args.commands;
+    if (!Array.isArray(commands)) return [];
+    return commands.filter((command): command is string => typeof command === "string");
+  }
+
   let argumentsJson = $derived(JSON.stringify(data.arguments ?? {}, null, 2));
+  let shellCommands = $derived(
+    data.tool.kind === "shell" ? getShellCommands(data.arguments ?? {}) : []
+  );
+  let shellCommandText = $derived(shellCommands.map((command) => `$ ${command}`).join("\n"));
   let isBusy = $derived(data.status === "submitting");
   let isResolved = $derived(data.status === "approved" || data.status === "denied");
   let showDetailsToggle = $derived(
-    data.tool.source !== "built_in" || data.tool.kind !== "code_execution"
+    data.tool.source !== "built_in" ||
+      (data.tool.kind !== "code_execution" && data.tool.kind !== "shell")
   );
 
   function approve(rememberForSession = false) {
@@ -55,6 +66,13 @@
   {/if}
 
   <div class="space-y-2 border-t border-gray-200 px-3 py-2 dark:border-gray-800">
+    {#if shellCommands.length}
+      <div class="overflow-hidden rounded-md border border-gray-700">
+        <div class="bg-gray-900 px-3 py-1 text-xs font-medium text-gray-400">Commands</div>
+        <pre class="max-h-44 overflow-auto bg-gray-950 px-3 py-2 font-mono text-xs leading-relaxed text-gray-200">{shellCommandText}</pre>
+      </div>
+    {/if}
+
     {#if showDetailsToggle}
       <button
         type="button"

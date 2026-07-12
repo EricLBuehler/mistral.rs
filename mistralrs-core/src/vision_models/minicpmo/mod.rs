@@ -6,21 +6,20 @@ use std::{
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
-use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use resampler::Resampler;
 
 use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     models::qwen2,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -305,7 +304,6 @@ impl MiniCpmOModel {
         Ok(vllm_embedding)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         input_ids: &Tensor,
@@ -313,10 +311,7 @@ impl MiniCpmOModel {
         tgt_sizes: Option<Vec<Tensor>>,
         image_bound: Option<Vec<Tensor>>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let vllm_embedding = self.get_vllm_embedding(
             input_ids,
@@ -327,14 +322,7 @@ impl MiniCpmOModel {
             image_hashes,
         )?;
 
-        self.llm.forward_embed(
-            input_ids,
-            vllm_embedding,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.llm.forward_embed(input_ids, vllm_embedding, ctx)
     }
 }
 
@@ -346,12 +334,13 @@ pub(crate) struct MiniCpmOSpecificArgs {
     pub(crate) image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for MiniCpmOModel {}
+
 impl MultimodalModel for MiniCpmOModel {
     fn cache(&self) -> &EitherCache {
         self.llm.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.llm.cache_mut()
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.llm.config()
@@ -366,12 +355,8 @@ impl MultimodalModel for MiniCpmOModel {
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MiniCpmOSpecificArgs {
             pixel_values_all,
@@ -387,10 +372,7 @@ impl MultimodalModel for MiniCpmOModel {
             tgt_sizes,
             image_bound,
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
@@ -417,15 +399,6 @@ impl MultimodalModel for MiniCpmOModel {
 }
 
 impl IsqModel for MiniCpmOModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.llm.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -435,18 +408,6 @@ impl IsqModel for MiniCpmOModel {
             .extend(self.resampler.residual_tensors());
 
         uvb.to_safetensors()
-    }
-
-    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
-
-    /// This is used for imatrix generation internally. Begin stats tracking.
-    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        self.llm.begin_track_stats()
-    }
-
-    /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
-        self.llm.extract_imatrix_data()
     }
 }
 

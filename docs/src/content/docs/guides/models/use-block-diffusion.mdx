@@ -1,0 +1,101 @@
+---
+title: Block-diffusion models
+description: Run diffusion text generation models like DiffusionGemma.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Block-diffusion models generate text by iteratively *denoising* whole blocks of tokens in parallel instead of sampling one token at a time. The mechanism:
+
+1. A causal encoder fills the KV cache with the prompt.
+2. The model refines a block (a "canvas") of mask tokens over a handful of bidirectional passes.
+3. It commits the block and repeats.
+
+Because each pass commits many tokens at once, decode throughput is higher than a comparable autoregressive model.
+
+Currently supported:
+- **DiffusionGemma** (`google/diffusiongemma-26B-A4B-it`), a 26B-A4B [MoE (Mixture of Experts)](/mistral.rs/guides/models/model-family-notes/) model with vision input, built on the Gemma 4 architecture.
+
+## Quick start
+
+No special flags or APIs: block-diffusion models are detected automatically and served through the standard endpoints.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m google/diffusiongemma-26B-A4B-it
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+```bash
+mistralrs serve -p 1234 -m google/diffusiongemma-26B-A4B-it
+```
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Why is the sky blue?"}],
+    "max_tokens": 1024
+  }'
+```
+
+</TabItem>
+<TabItem label="Python">
+
+The standard chat-completion API works unchanged. See the [Python example](/mistral.rs/examples/python/diffusion-gemma/) (vision input).
+
+```python
+from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
+
+runner = Runner(
+    which=Which.MultimodalPlain(
+        model_id="google/diffusiongemma-26B-A4B-it",
+        arch=MultimodalArchitecture.DiffusionGemma,
+    )
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Why is the sky blue?"}],
+        max_tokens=1024,
+    )
+)
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+The standard chat API works unchanged. See the [Rust example](/mistral.rs/examples/rust/models/diffusion-gemma/) (streaming, shows block-at-a-time output).
+
+```rust
+use mistralrs::{MultimodalModelBuilder, TextMessageRole, TextMessages};
+
+let model = MultimodalModelBuilder::new("google/diffusiongemma-26B-A4B-it")
+    .build()
+    .await?;
+
+let messages = TextMessages::new().add_message(TextMessageRole::User, "Why is the sky blue?");
+let response = model.send_chat_request(messages).await?;
+println!("{}", response.choices[0].message.content.as_ref().unwrap());
+```
+
+</TabItem>
+</Tabs>
+
+## What behaves differently
+
+- **Streaming is bursty.** Output arrives one block (256 tokens by default, set by the checkpoint's `canvas_length`) at a time, after that block's denoising loop converges, rather than token by token.
+- **Sampling is the diffusion schedule.** The temperature ramp, entropy-bound acceptance, and stopping thresholds come from the checkpoint's `generation_config.json`. Request-level `temperature`, `top_p`, and penalties are ignored. `max_tokens` still caps output length.
+- **Stats split differently.** Prompt T/s measures the encoder prefill alone; decode T/s is the effective denoising throughput (committed tokens over denoising time).
+- **Thinking is on by default.** DiffusionGemma's channel-tag reasoning is parsed into the reasoning field, like other thinking models.
+- **Tool calling** works through the model's native format, including calls spanning block boundaries. Grammar-constrained generation is NOT enforced during denoising, so `tool_choice: required`, named tools, and JSON schema outputs are unconstrained: the model relies on its trained formatting instead. (Per-token grammars are incompatible with parallel token refinement.)
+- **Concurrency batches by context length.** Concurrent requests with equal context lengths batch together and denoise their blocks in lockstep, amortizing the per-block MoE computation across requests. Requests with different prompt lengths run as separate groups.
+
+See also: [model family notes](/mistral.rs/guides/models/model-family-notes/) and the [supported models reference](/mistral.rs/reference/supported-models/).
