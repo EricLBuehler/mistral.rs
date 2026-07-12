@@ -148,8 +148,8 @@ mod tests {
         let device = Device::Cpu;
         let position_ids = Tensor::from_vec((0i64..36).collect::<Vec<_>>(), (3, 2, 6), &device)
             .expect("position tensor must build");
-        let deltas = Tensor::zeros((2, 1), DType::I64, &device)
-            .expect("position deltas must build");
+        let deltas =
+            Tensor::zeros((2, 1), DType::I64, &device).expect("position deltas must build");
         let input_ids =
             Tensor::zeros((2, 2), DType::U32, &device).expect("input tensor must build");
 
@@ -171,10 +171,10 @@ mod tests {
     #[test]
     fn chunked_mrope_positions_reject_batch_offset_mismatch() {
         let device = Device::Cpu;
-        let position_ids = Tensor::zeros((3, 2, 4), DType::I64, &device)
-            .expect("position tensor must build");
-        let deltas = Tensor::zeros((2, 1), DType::I64, &device)
-            .expect("position deltas must build");
+        let position_ids =
+            Tensor::zeros((3, 2, 4), DType::I64, &device).expect("position tensor must build");
+        let deltas =
+            Tensor::zeros((2, 1), DType::I64, &device).expect("position deltas must build");
         let input_ids =
             Tensor::zeros((2, 2), DType::U32, &device).expect("input tensor must build");
 
@@ -184,6 +184,32 @@ mod tests {
         assert!(
             err.to_string().contains("incompatible with input shape"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn chunked_mrope_positions_fall_back_for_offsets_past_full_tensor() {
+        let device = Device::Cpu;
+        let position_ids =
+            Tensor::zeros((3, 2, 2), DType::I64, &device).expect("position tensor must build");
+        let deltas =
+            Tensor::from_vec(vec![10i64, 20], (2, 1), &device).expect("position deltas must build");
+        let input_ids =
+            Tensor::zeros((2, 2), DType::U32, &device).expect("input tensor must build");
+
+        let got = mrope_position_ids_for_input(&position_ids, &deltas, &input_ids, &[3, 5])
+            .expect("decode-style MRoPE positions must be synthesized")
+            .to_vec3::<i64>()
+            .expect("position tensor must convert");
+
+        let expected_plane = vec![vec![13, 14], vec![25, 26]];
+        assert_eq!(
+            got,
+            vec![
+                expected_plane.clone(),
+                expected_plane.clone(),
+                expected_plane
+            ]
         );
     }
 }
