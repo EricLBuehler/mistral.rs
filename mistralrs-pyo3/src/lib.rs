@@ -1389,7 +1389,7 @@ impl Runner {
                 (
                     request_ref.inputs.clone(),
                     request_ref.truncate_sequence,
-                    format!("{:?}", &*request_ref),
+                    format!("{:?}", *request_ref),
                 )
             };
 

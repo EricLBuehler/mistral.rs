@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn grows_small_initial_capacity_for_large_first_prefill() -> candle_core::Result<()> {
         let mut cache = RotatingCache::new(2, 1024, 512);
-        let values = (0..1024).map(|value| value as f32).collect::<Vec<_>>();
+        let values = (0_u16..1024).map(f32::from).collect::<Vec<_>>();
 
         let result = cache.append(&make_src(&values)?)?;
 
@@ -518,17 +518,17 @@ mod tests {
     #[test]
     fn compacts_full_window_before_large_append() -> candle_core::Result<()> {
         let mut cache = RotatingCache::new(2, 1024, 512);
-        let first = (0..512).map(|value| value as f32).collect::<Vec<_>>();
-        let second = (512..1024).map(|value| value as f32).collect::<Vec<_>>();
-        let third = (1024..1624).map(|value| value as f32).collect::<Vec<_>>();
+        let first = (0_u16..512).map(f32::from).collect::<Vec<_>>();
+        let second = (512_u16..1024).map(f32::from).collect::<Vec<_>>();
+        let third = (1024_u16..1624).map(f32::from).collect::<Vec<_>>();
 
         let _ = cache.append(&make_src(&first)?)?;
         let _ = cache.append(&make_src(&second)?)?;
         let result = cache.append(&make_src(&third)?)?;
 
-        let expected_result = (0..1624).map(|value| value as f32).collect::<Vec<_>>();
+        let expected_result = (0_u16..1624).map(f32::from).collect::<Vec<_>>();
         assert_eq!(result.flatten_all()?.to_vec1::<f32>()?, expected_result);
-        let expected_retained = (600..1624).map(|value| value as f32).collect::<Vec<_>>();
+        let expected_retained = (600_u16..1624).map(f32::from).collect::<Vec<_>>();
         assert_eq!(
             cache
                 .current_data()?

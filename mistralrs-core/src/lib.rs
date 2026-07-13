@@ -470,7 +470,7 @@ pub enum MistralRsError {
 
 impl std::fmt::Display for MistralRsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", &self)
+        write!(f, "{:?}", self)
     }
 }
 
@@ -666,7 +666,7 @@ impl Drop for MistralRs {
     fn drop(&mut self) {
         // Terminate all engines
         if let Ok(engines) = self.engines.read() {
-            for (_, engine) in engines.iter() {
+            for engine in engines.values() {
                 // Use try_send instead of blocking_send to avoid runtime panics
                 engine.terminate();
             }
