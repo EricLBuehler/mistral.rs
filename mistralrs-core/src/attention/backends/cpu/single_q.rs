@@ -80,7 +80,7 @@ where
     let n_kv_chunks = target_units.div_ceil(n_groups.max(1)).clamp(1, max_chunks);
     let kv_chunk = meta.kv_len.div_ceil(n_kv_chunks).max(1);
 
-    // Online-softmax partial per (row, kv chunk): vkq accumulator then running (max, sum).
+    // Online-softmax partial per (kv chunk, row): vkq accumulator then running (max, sum).
     let stride = meta.dv + 2;
     let units = n_groups * n_kv_chunks;
     let mut partials = vec![0f32; total_rows * n_kv_chunks * stride];
@@ -98,30 +98,26 @@ where
                 meta.kv_len.min(kv_start + kv_chunk)
             };
             let row0 = group_idx * group;
-            // partials are laid out [row][chunk]
-            let base = unsafe { p_ptr.add((row0 * n_kv_chunks + chunk_idx) * stride) };
-            let rows =
-                unsafe { std::slice::from_raw_parts_mut(base, group * n_kv_chunks * stride) };
-            compute_group_range(ctx, meta, row0, group, n_kv_chunks, kv_start, kv_end, rows);
+            let base = unsafe { p_ptr.add((chunk_idx * total_rows + row0) * stride) };
+            let rows = unsafe { std::slice::from_raw_parts_mut(base, group * stride) };
+            compute_group_range(ctx, meta, row0, group, kv_start, kv_end, rows);
         }
     });
 
     let out_ptr = out_ptr as *mut T;
     for row_idx in 0..total_rows {
-        let row_base = row_idx * n_kv_chunks * stride;
         let mut m_all = f32::NEG_INFINITY;
         for c in 0..n_kv_chunks {
-            m_all = m_all.max(partials[row_base + c * stride + meta.dv]);
+            let base = (c * total_rows + row_idx) * stride;
+            m_all = m_all.max(partials[base + meta.dv]);
         }
         let out_chunk =
             unsafe { std::slice::from_raw_parts_mut(out_ptr.add(row_idx * meta.dv), meta.dv) };
         if n_kv_chunks == 1 {
-            let s = partials[row_base + meta.dv + 1];
+            let base = row_idx * stride;
+            let s = partials[base + meta.dv + 1];
             let inv_s = 1.0 / s;
-            for (o, v) in out_chunk
-                .iter_mut()
-                .zip(&partials[row_base..row_base + meta.dv])
-            {
+            for (o, v) in out_chunk.iter_mut().zip(&partials[base..base + meta.dv]) {
                 *o = T::cast(*v * inv_s);
             }
             continue;
@@ -137,7 +133,7 @@ where
             heap_acc.as_mut_slice()
         };
         for c in 0..n_kv_chunks {
-            let base = row_base + c * stride;
+            let base = (c * total_rows + row_idx) * stride;
             let m_c = partials[base + meta.dv];
             let s_c = partials[base + meta.dv + 1];
             if s_c == 0.0 || m_c == f32::NEG_INFINITY {
@@ -157,15 +153,13 @@ where
 }
 
 // One pass over K/V for `group` consecutive q rows sharing the same kv head.
-// `rows` spans the group's partial slots laid out [row][chunk]; this writes chunk
-// its kv chunk of each row: vkq in [..dv], then running max and sum.
+// `rows` spans one chunk's contiguous row slots: vkq in [..dv], then running max and sum.
 #[allow(clippy::too_many_arguments)]
 fn compute_group_range<T>(
     ctx: &CpuAttnCtx<'_, T>,
     meta: SingleQMeta,
     row0: usize,
     group: usize,
-    n_kv_chunks: usize,
     kv_start: usize,
     kv_end: usize,
     rows: &mut [f32],
@@ -225,7 +219,7 @@ fn compute_group_range<T>(
             }
 
             let bmax = super::elem::simd_max_f32(tile);
-            let chunk_base = j * n_kv_chunks * stride;
+            let chunk_base = j * stride;
             let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
             if bmax > m[j] {
                 if m[j] != f32::NEG_INFINITY {
@@ -243,16 +237,7 @@ fn compute_group_range<T>(
             b_i * ctx.v.stride[0] + kv_pos * ctx.v.stride[1] + v_head * ctx.v.stride[2]
         };
         let handled = T::pv_tile(
-            rows,
-            n_kv_chunks * stride,
-            group,
-            meta.dv,
-            ctx.v.data,
-            &v_row_of,
-            bs,
-            be,
-            &s_tile,
-            TILE,
+            rows, stride, group, meta.dv, ctx.v.data, &v_row_of, bs, be, &s_tile, TILE,
         );
         if !handled {
             for kv_pos in bs..be {
@@ -263,7 +248,7 @@ fn compute_group_range<T>(
                 let v_row = &ctx.v.data[v_base..v_base + meta.dv];
                 for j in 0..group {
                     let p = s_tile[j * TILE + (kv_pos - bs)];
-                    let chunk_base = j * n_kv_chunks * stride;
+                    let chunk_base = j * stride;
                     let vkq = &mut rows[chunk_base..chunk_base + meta.dv];
                     T::mad(vkq, v_row, p);
                 }
@@ -274,7 +259,7 @@ fn compute_group_range<T>(
     }
 
     for j in 0..group {
-        let chunk_base = (j * n_kv_chunks) * stride;
+        let chunk_base = j * stride;
         rows[chunk_base + meta.dv] = m[j];
         rows[chunk_base + meta.dv + 1] = s[j];
     }

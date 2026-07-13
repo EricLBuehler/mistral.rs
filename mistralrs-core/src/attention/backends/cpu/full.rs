@@ -1,5 +1,6 @@
 use candle_core::{Device, Result, Tensor, WithDType};
 use rayon::prelude::*;
+use std::sync::OnceLock;
 
 use super::{
     elem::{fast_exp, ElemOps},
@@ -12,6 +13,110 @@ use super::{
 const Q_BLOCK: usize = 8;
 // kv positions scored per tile; keeps the score tile and softmax pass in L1
 const KV_BLOCK: usize = 128;
+const F32_MAGNITUDE_BITS: u32 = 0x7fff_ffff;
+const NEG_INFINITY_BITS: u32 = 0xff80_0000;
+
+#[derive(Clone, Copy)]
+enum MaskRowClass {
+    General,
+    Binary { start: usize, end: usize },
+}
+
+struct MaskClassCache {
+    rows: Vec<OnceLock<MaskRowClass>>,
+}
+
+impl MaskClassCache {
+    fn new(mask: &super::mask::MaskInfo<'_>) -> Self {
+        let rows = (0..mask.row_count()).map(|_| OnceLock::new()).collect();
+        Self { rows }
+    }
+
+    #[inline(always)]
+    fn classify(&self, row_id: usize, row: &[f32], pivot: usize) -> MaskRowClass {
+        *self.rows[row_id].get_or_init(|| classify_mask_row(row, pivot))
+    }
+}
+
+fn classify_mask_row(row: &[f32], pivot: usize) -> MaskRowClass {
+    binary_mask_range(row, pivot).map_or(MaskRowClass::General, |(start, end)| {
+        MaskRowClass::Binary { start, end }
+    })
+}
+
+fn all_zero(values: &[f32]) -> bool {
+    let mut mismatch = 0;
+    let mut chunks = values.chunks_exact(4);
+    for chunk in &mut chunks {
+        mismatch |= chunk[0].to_bits() & F32_MAGNITUDE_BITS;
+        mismatch |= chunk[1].to_bits() & F32_MAGNITUDE_BITS;
+        mismatch |= chunk[2].to_bits() & F32_MAGNITUDE_BITS;
+        mismatch |= chunk[3].to_bits() & F32_MAGNITUDE_BITS;
+    }
+    for value in chunks.remainder() {
+        mismatch |= value.to_bits() & F32_MAGNITUDE_BITS;
+    }
+    mismatch == 0
+}
+
+fn all_neg_infinity(values: &[f32]) -> bool {
+    let mut mismatch = 0;
+    let mut chunks = values.chunks_exact(4);
+    for chunk in &mut chunks {
+        mismatch |= chunk[0].to_bits() ^ NEG_INFINITY_BITS;
+        mismatch |= chunk[1].to_bits() ^ NEG_INFINITY_BITS;
+        mismatch |= chunk[2].to_bits() ^ NEG_INFINITY_BITS;
+        mismatch |= chunk[3].to_bits() ^ NEG_INFINITY_BITS;
+    }
+    for value in chunks.remainder() {
+        mismatch |= value.to_bits() ^ NEG_INFINITY_BITS;
+    }
+    mismatch == 0
+}
+
+fn binary_mask_range(row: &[f32], pivot: usize) -> Option<(usize, usize)> {
+    let mut pivot = pivot;
+    let pivot_value = *row.get(pivot)?;
+    if pivot_value == f32::NEG_INFINITY {
+        let Some(first_live) = row.iter().position(|value| *value != f32::NEG_INFINITY) else {
+            return Some((row.len(), row.len()));
+        };
+        if row[first_live] != 0.0 {
+            return None;
+        }
+        pivot = first_live;
+    }
+    if row[pivot] != 0.0 {
+        return None;
+    }
+
+    let mut lo = 0;
+    let mut hi = pivot;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if row[mid] == f32::NEG_INFINITY {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let start = lo;
+
+    let mut lo = pivot + 1;
+    let mut hi = row.len();
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if row[mid] != f32::NEG_INFINITY {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let end = lo;
+
+    (all_neg_infinity(&row[..start]) && all_zero(&row[start..end]) && all_neg_infinity(&row[end..]))
+        .then_some((start, end))
+}
 
 pub(super) fn run<T>(ctx: &CpuAttnCtx<'_, T>) -> Result<Tensor>
 where
@@ -27,6 +132,7 @@ where
     let mut out = vec![T::cast(0.0); b * q_len * h * dv];
 
     if T::USE_BARRIER_POOL {
+        let mask_classes = ctx.mask.as_ref().map(MaskClassCache::new);
         // rayon here would fight the barrier workers spinning between the surrounding matmuls;
         // q rows of one head share K/V, so blocks of Q_BLOCK rows stream them once
         let tiled = ctx.logit_softcap == 0.0;
@@ -54,9 +160,18 @@ where
                         out_ptr,
                         &mut kscratch,
                         &mut qscratch,
+                        mask_classes.as_ref(),
                     ))
                 {
-                    compute_full_qblock(ctx, b_i, h_i, q_start, q_end, out_ptr);
+                    compute_full_qblock(
+                        ctx,
+                        b_i,
+                        h_i,
+                        q_start,
+                        q_end,
+                        out_ptr,
+                        mask_classes.as_ref(),
+                    );
                 }
             }
         });
@@ -86,6 +201,7 @@ fn compute_tiled_qblock<T>(
     out_ptr: *mut T,
     kscratch: &mut Vec<f32>,
     qscratch: &mut Vec<f32>,
+    mask_classes: Option<&MaskClassCache>,
 ) -> bool
 where
     T: ElemOps,
@@ -97,6 +213,7 @@ where
     let dv = d;
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
     let nq = q_end - q_start;
+    let pivot_offset = kv_len.saturating_sub(q_len);
 
     let slope = if ctx.max_bias > 0.0 {
         2.0f32.powf(-ctx.max_bias * ((h_i + 1) as f32) / n2 as f32)
@@ -113,40 +230,24 @@ where
     // removes an O(len^2) f32 stream that llama.cpp's mask-free kernels never pay
     let mut row_binary = [false; Q_BLOCK];
     if let Some(mask) = ctx.mask.as_ref() {
+        let mask_classes = mask_classes.unwrap();
         for j in 0..nq {
             let q_pos = q_start + j;
-            let Some(row) = mask.row(b_i, h_i, q_pos, kv_len) else {
+            let Some((row_id, row)) = mask.row_with_id(b_i, h_i, q_pos, kv_len) else {
                 return false;
             };
-            mask_rows[j] = Some(row);
-            // contiguous live block: -inf^a live^b -inf^c, anchored at the self position
-            let pivot = (kv_len - q_len + q_pos).min(kv_len - 1);
-            if row[pivot] == f32::NEG_INFINITY {
-                continue;
-            }
-            let (mut lo, mut hi) = (0usize, pivot);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if row[mid] == f32::NEG_INFINITY {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
+            let pivot = pivot_offset
+                .saturating_add(q_pos)
+                .min(kv_len.saturating_sub(1));
+            match mask_classes.classify(row_id, row, pivot) {
+                MaskRowClass::General => {
+                    mask_rows[j] = Some(row);
                 }
-            }
-            row_start[j] = lo;
-            let (mut lo, mut hi) = (pivot + 1, kv_len);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if row[mid] != f32::NEG_INFINITY {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
+                MaskRowClass::Binary { start, end } => {
+                    row_start[j] = start;
+                    row_end[j] = end;
+                    row_binary[j] = true;
                 }
-            }
-            row_end[j] = lo;
-            let (rs, re) = (row_start[j], row_end[j]);
-            if re > rs {
-                row_binary[j] = row[rs] == 0.0 && row[re - 1] == 0.0 && row[(rs + re) / 2] == 0.0;
             }
         }
     }
@@ -358,6 +459,7 @@ fn compute_full_qblock<T>(
     q_start: usize,
     q_end: usize,
     out_ptr: *mut T,
+    mask_classes: Option<&MaskClassCache>,
 ) where
     T: ElemOps,
 {
@@ -368,6 +470,7 @@ fn compute_full_qblock<T>(
     let dv = d;
     let n2 = 2_usize.pow((h as f32).log2().ceil() as u32);
     let nq = q_end - q_start;
+    let pivot_offset = kv_len.saturating_sub(q_len);
 
     let slope = if ctx.max_bias > 0.0 {
         2.0f32.powf(-ctx.max_bias * ((h_i + 1) as f32) / n2 as f32)
@@ -390,37 +493,20 @@ fn compute_full_qblock<T>(
     let mut row_start = [0usize; Q_BLOCK];
     let mut row_end = [kv_len; Q_BLOCK];
     if let Some(mask) = ctx.mask.as_ref() {
-        // causal/window masks are a contiguous live block: -inf^a live^b -inf^c,
-        // so both boundaries binary-search in ~log(kv) lookups per row
+        let mask_classes = mask_classes.unwrap();
         for j in 0..nq {
             let q_pos = q_start + j;
-            let is_inf = |kv: usize| mask.value(b_i, h_i, q_pos, kv) == f32::NEG_INFINITY;
-            // the query's own position is always live, anchoring both searches
-            let pivot = (kv_len - q_len + q_pos).min(kv_len - 1);
-            if is_inf(pivot) {
-                // unexpected mask shape: fall back to the full range
-                continue;
-            }
-            let (mut lo, mut hi) = (0usize, pivot);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if is_inf(mid) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
+            if let Some((row_id, row)) = mask.row_with_id(b_i, h_i, q_pos, kv_len) {
+                let pivot = pivot_offset
+                    .saturating_add(q_pos)
+                    .min(kv_len.saturating_sub(1));
+                if let MaskRowClass::Binary { start, end } =
+                    mask_classes.classify(row_id, row, pivot)
+                {
+                    row_start[j] = start;
+                    row_end[j] = end;
                 }
             }
-            row_start[j] = lo;
-            let (mut lo, mut hi) = (pivot + 1, kv_len);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if !is_inf(mid) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
-            row_end[j] = lo;
         }
     }
     let kv_lo = (0..nq).map(|j| row_start[j]).min().unwrap_or(0);
@@ -588,5 +674,34 @@ where
     let inv_s = 1.0 / s;
     for (o, v) in out_chunk.iter_mut().zip(vkq.iter()) {
         *o = T::cast(*v * inv_s);
+    }
+}
+
+#[cfg(test)]
+mod mask_class_tests {
+    use super::binary_mask_range;
+
+    #[test]
+    fn exact_binary_ranges() {
+        assert_eq!(binary_mask_range(&[0.0, 0.0], 1), Some((0, 2)));
+        assert_eq!(
+            binary_mask_range(&[f32::NEG_INFINITY, f32::NEG_INFINITY], 1),
+            Some((2, 2))
+        );
+        assert_eq!(
+            binary_mask_range(&[f32::NEG_INFINITY, 0.0, 0.0, f32::NEG_INFINITY], 2),
+            Some((1, 3))
+        );
+        assert_eq!(
+            binary_mask_range(&[f32::NEG_INFINITY, 0.0, f32::NEG_INFINITY], 0),
+            Some((1, 2))
+        );
+    }
+
+    #[test]
+    fn rejects_nonbinary_ranges() {
+        assert_eq!(binary_mask_range(&[0.0, f32::MIN, 0.0], 2), None);
+        assert_eq!(binary_mask_range(&[0.0, f32::NEG_INFINITY, 0.0], 2), None);
+        assert_eq!(binary_mask_range(&[0.0, f32::NAN], 1), None);
     }
 }
