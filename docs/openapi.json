@@ -6118,7 +6118,7 @@
               "string",
               "null"
             ],
-            "description": "Override the description for the extraction tool."
+            "description": "Override the description for the extraction tool in trusted, in-process use.\nServers accepting untrusted requests should strip this field."
           },
           "filters": {
             "oneOf": [
@@ -6174,7 +6174,7 @@
               "string",
               "null"
             ],
-            "description": "Override the description for the search tool."
+            "description": "Override the description for the search tool in trusted, in-process use.\nServers accepting untrusted requests should strip this field."
           },
           "user_location": {
             "oneOf": [
