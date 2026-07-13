@@ -13,6 +13,21 @@ const Q_BLOCK: usize = 8;
 // kv positions scored per tile; keeps the score tile and softmax pass in L1
 const KV_BLOCK: usize = 128;
 
+fn binary_mask_range(row: &[f32]) -> Option<(usize, usize)> {
+    let start = row
+        .iter()
+        .position(|value| *value != f32::NEG_INFINITY)
+        .unwrap_or(row.len());
+    let end = row[start..]
+        .iter()
+        .position(|value| *value == f32::NEG_INFINITY)
+        .map_or(row.len(), |offset| start + offset);
+    (row[..start].iter().all(|value| *value == f32::NEG_INFINITY)
+        && row[start..end].iter().all(|value| *value == 0.0)
+        && row[end..].iter().all(|value| *value == f32::NEG_INFINITY))
+    .then_some((start, end))
+}
+
 pub(super) fn run<T>(ctx: &CpuAttnCtx<'_, T>) -> Result<Tensor>
 where
     T: WithDType + ElemOps + Send + Sync,
@@ -119,34 +134,10 @@ where
                 return false;
             };
             mask_rows[j] = Some(row);
-            // contiguous live block: -inf^a live^b -inf^c, anchored at the self position
-            let pivot = (kv_len - q_len + q_pos).min(kv_len - 1);
-            if row[pivot] == f32::NEG_INFINITY {
-                continue;
-            }
-            let (mut lo, mut hi) = (0usize, pivot);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if row[mid] == f32::NEG_INFINITY {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
-            row_start[j] = lo;
-            let (mut lo, mut hi) = (pivot + 1, kv_len);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if row[mid] != f32::NEG_INFINITY {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
-            row_end[j] = lo;
-            let (rs, re) = (row_start[j], row_end[j]);
-            if re > rs {
-                row_binary[j] = row[rs] == 0.0 && row[re - 1] == 0.0 && row[(rs + re) / 2] == 0.0;
+            if let Some((start, end)) = binary_mask_range(row) {
+                row_start[j] = start;
+                row_end[j] = end;
+                row_binary[j] = true;
             }
         }
     }
@@ -390,37 +381,14 @@ fn compute_full_qblock<T>(
     let mut row_start = [0usize; Q_BLOCK];
     let mut row_end = [kv_len; Q_BLOCK];
     if let Some(mask) = ctx.mask.as_ref() {
-        // causal/window masks are a contiguous live block: -inf^a live^b -inf^c,
-        // so both boundaries binary-search in ~log(kv) lookups per row
         for j in 0..nq {
             let q_pos = q_start + j;
-            let is_inf = |kv: usize| mask.value(b_i, h_i, q_pos, kv) == f32::NEG_INFINITY;
-            // the query's own position is always live, anchoring both searches
-            let pivot = (kv_len - q_len + q_pos).min(kv_len - 1);
-            if is_inf(pivot) {
-                // unexpected mask shape: fall back to the full range
-                continue;
-            }
-            let (mut lo, mut hi) = (0usize, pivot);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if is_inf(mid) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
+            if let Some(row) = mask.row(b_i, h_i, q_pos, kv_len) {
+                if let Some((start, end)) = binary_mask_range(row) {
+                    row_start[j] = start;
+                    row_end[j] = end;
                 }
             }
-            row_start[j] = lo;
-            let (mut lo, mut hi) = (pivot + 1, kv_len);
-            while lo < hi {
-                let mid = (lo + hi) / 2;
-                if !is_inf(mid) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
-            row_end[j] = lo;
         }
     }
     let kv_lo = (0..nq).map(|j| row_start[j]).min().unwrap_or(0);

@@ -17,6 +17,14 @@ import * as api from "../services/api";
 import { settingsStore } from "./settings.svelte";
 import { modelStore } from "./models.svelte";
 
+const UI_UPLOAD_URL =
+  /^uploads\/(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.(?:jpg|jpeg|png|gif|webp|bmp|svg|mp4|avi|mov|mkv|webm|m4v)$/;
+
+function inferenceMediaUrl(url: string): string {
+  if (!UI_UPLOAD_URL.test(url)) return url;
+  return `mistralrs-upload:${url.slice("uploads/".length)}`;
+}
+
 function newId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -184,7 +192,7 @@ class ChatStore {
           for (const url of msg.images) {
             (contentParts as Array<{ type: string; image_url?: { url: string } }>).push({
               type: "image_url",
-              image_url: { url },
+              image_url: { url: inferenceMediaUrl(url) },
             });
           }
         }
@@ -192,7 +200,7 @@ class ChatStore {
           for (const url of msg.videos) {
             (contentParts as Array<{ type: string; video_url?: { url: string } }>).push({
               type: "video_url",
-              video_url: { url },
+              video_url: { url: inferenceMediaUrl(url) },
             });
           }
         }
