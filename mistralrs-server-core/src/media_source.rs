@@ -1,15 +1,16 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use anyhow::{Context, Result};
+use mistralrs_core::network_security::{fetch_public_url_limited, PublicHttpFetchOptions};
 use reqwest::{header, redirect::Policy};
 use tokio::{fs::File, io::AsyncReadExt};
 use url::Url;
 
 pub(crate) const MAX_MEDIA_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MEDIA_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const MEDIA_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const MEDIA_FETCH_REDIRECTS: usize = 3;
 pub(crate) const SERVER_VIDEO_FRAME_LIMIT: usize = 32;
@@ -97,24 +98,54 @@ pub(crate) async fn fetch_remote_limited(
 }
 
 async fn fetch_remote_limited_inner(
-    mut url: Url,
+    url: Url,
     max_bytes: usize,
     kind: &str,
     validate_network: bool,
 ) -> Result<LoadedMedia> {
+    if validate_network {
+        let response = fetch_public_url_limited(
+            url,
+            PublicHttpFetchOptions {
+                max_bytes,
+                connect_timeout: MEDIA_CONNECT_TIMEOUT,
+                total_timeout: MEDIA_FETCH_TIMEOUT,
+                max_redirects: MEDIA_FETCH_REDIRECTS,
+            },
+            None,
+        )
+        .await
+        .with_context(|| format!("Failed to fetch {kind} from a public URL"))?;
+        return Ok(LoadedMedia {
+            mime_type: response.media_type().map(str::to_owned),
+            bytes: response.bytes,
+            final_url: Some(response.final_url),
+        });
+    }
+
+    tokio::time::timeout(
+        MEDIA_FETCH_TIMEOUT,
+        fetch_trusted_remote_limited(url, max_bytes, kind),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("Fetching {kind} exceeded the total timeout."))?
+}
+
+async fn fetch_trusted_remote_limited(
+    mut url: Url,
+    max_bytes: usize,
+    kind: &str,
+) -> Result<LoadedMedia> {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        anyhow::bail!("Remote media URLs must use http or https.");
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(MEDIA_CONNECT_TIMEOUT)
+        .redirect(Policy::none())
+        .no_proxy()
+        .build()?;
+
     for redirect_idx in 0..=MEDIA_FETCH_REDIRECTS {
-        let mut client = reqwest::Client::builder()
-            .timeout(MEDIA_FETCH_TIMEOUT)
-            .redirect(Policy::none())
-            .no_proxy();
-        if validate_network {
-            let addrs = validate_remote_url(&url).await?;
-            client =
-                client.resolve_to_addrs(url.host_str().expect("validated URL has host"), &addrs);
-        } else if url.scheme() != "http" && url.scheme() != "https" {
-            anyhow::bail!("Remote media URLs must use http or https.");
-        }
-        let client = client.build()?;
         let response = client
             .get(url.clone())
             .send()
@@ -234,103 +265,60 @@ pub(crate) fn data_url_mime(source: &str) -> Option<String> {
     (!mime.is_empty()).then(|| mime.to_string())
 }
 
-async fn validate_remote_url(url: &Url) -> Result<Vec<SocketAddr>> {
-    if url.scheme() != "http" && url.scheme() != "https" {
-        anyhow::bail!("Remote media URLs must use http or https.");
-    }
-    let Some(host) = url.host_str() else {
-        anyhow::bail!("Remote media URL must include a host.");
-    };
-    reject_private_hostname(host)?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| anyhow::anyhow!("Remote media URL must include a valid port."))?;
-    let addrs = tokio::net::lookup_host((host, port))
-        .await
-        .with_context(|| format!("Failed to resolve remote media host `{host}`"))?
-        .collect::<Vec<_>>();
-    if addrs.is_empty() {
-        anyhow::bail!("Remote media host `{host}` did not resolve to any addresses.");
-    }
-    for addr in &addrs {
-        reject_private_ip(addr.ip())?;
-    }
-    Ok(addrs)
-}
-
-fn reject_private_hostname(host: &str) -> Result<()> {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
-        anyhow::bail!("Remote media URLs must not target local hosts.");
-    }
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        reject_private_ip(ip)?;
-    }
-    Ok(())
-}
-
-fn reject_private_ip(ip: IpAddr) -> Result<()> {
-    if !is_global_ip(ip) {
-        anyhow::bail!("Remote media URLs must not target private or local IP addresses.");
-    }
-    Ok(())
-}
-
-fn is_global_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_global_ipv4(ip),
-        IpAddr::V6(ip) => {
-            if let Some(ip) = ip.to_ipv4_mapped() {
-                return is_global_ipv4(ip);
-            }
-            is_global_ipv6(ip)
-        }
-    }
-}
-
-fn is_global_ipv4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        || matches!(octets, [100, 64..=127, _, _])
-        || matches!(octets, [192, 0, 0, _])
-        || matches!(octets, [192, 0, 2, _])
-        || matches!(octets, [198, 18 | 19, _, _])
-        || matches!(octets, [198, 51, 100, _])
-        || matches!(octets, [203, 0, 113, _])
-        || octets[0] >= 240)
-}
-
-fn is_global_ipv6(ip: Ipv6Addr) -> bool {
-    let segments = ip.segments();
-    !(ip.is_loopback()
-        || ip.is_unspecified()
-        || ip.is_unique_local()
-        || ip.is_unicast_link_local()
-        || ip.is_multicast()
-        || segments[0] == 0x2001 && segments[1] == 0x0db8)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn rejects_private_remote_hosts() {
+    async fn server_policy_rejects_private_remote_hosts() {
         for source in [
             "http://127.0.0.1/image.png",
+            "http://127.1/image.png",
+            "http://2130706433/image.png",
+            "http://0x7f000001/image.png",
             "http://169.254.169.254/latest/meta-data",
             "http://[::1]/image.png",
             "http://localhost/image.png",
             "http://service.local/image.png",
         ] {
-            let url = Url::parse(source).unwrap();
-            assert!(validate_remote_url(&url).await.is_err(), "{source}");
+            assert!(
+                load_media_source(source, MediaSourcePolicy::ServerRequest, "test")
+                    .await
+                    .is_err(),
+                "{source}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn local_policy_keeps_trusted_private_http_compatibility() {
+        use std::net::Ipv4Addr;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\nConnection: close\r\n\r\nlocal")
+                .await
+                .unwrap();
+        });
+
+        let media = load_media_source(
+            &format!("http://{address}/media"),
+            MediaSourcePolicy::Local,
+            "test",
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
+        assert_eq!(media.bytes, b"local");
+        assert_eq!(media.mime_type.as_deref(), Some("text/plain"));
     }
 
     #[test]

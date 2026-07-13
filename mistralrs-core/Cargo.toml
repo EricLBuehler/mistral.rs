@@ -66,6 +66,7 @@ sysinfo.workspace = true
 mistralrs-vision.workspace = true
 csv.workspace = true
 reqwest.workspace = true
+encoding_rs.workspace = true
 base64.workspace = true
 bytemuck_derive.workspace = true
 mistralrs-paged-attn = { workspace = true, optional = true }
