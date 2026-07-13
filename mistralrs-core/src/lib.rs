@@ -62,6 +62,8 @@ mod embedding_models;
 mod flashinfer;
 mod kv_cache;
 mod search;
+#[doc(hidden)]
+pub use search::{is_builtin_search_tool_name, BUILTIN_SEARCH_TOOL_NAMES};
 
 mod model_selected;
 pub use model_selected::ModelSelected;
