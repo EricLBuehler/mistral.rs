@@ -453,12 +453,10 @@ mod tests {
         )
         .await;
         server.await.unwrap();
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("exceeds the 5 byte limit")
-        );
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds the 5 byte limit"));
     }
 
     fn test_options(max_bytes: usize) -> PublicHttpFetchOptions {
@@ -482,7 +480,7 @@ mod tests {
     #[test]
     fn decodes_bounded_body_using_declared_charset() {
         let response = PublicHttpResponse {
-            bytes: b"caf\xe9".to_vec(),
+            bytes: vec![0x63, 0x61, 0x66, 0xe9],
             content_type: Some("text/html; Charset=\"windows-1252\"".to_string()),
             final_url: Url::parse("https://example.com").unwrap(),
         };
