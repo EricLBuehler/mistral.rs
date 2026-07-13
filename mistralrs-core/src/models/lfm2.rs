@@ -112,6 +112,8 @@ pub struct Config {
     pub tie_embedding: Option<bool>,
     #[serde(default)]
     pub layer_types: Vec<String>,
+    #[serde(default)]
+    pub full_attn_idxs: Option<Vec<usize>>,
     #[serde(default = "default_moe_intermediate_size")]
     pub moe_intermediate_size: usize,
     #[serde(default = "default_num_dense_layers")]
@@ -166,6 +168,18 @@ impl Config {
 
     pub fn layer_types(&self) -> Vec<LayerType> {
         if self.layer_types.is_empty() {
+            // older LFM2 configs list attention layers via full_attn_idxs instead of layer_types
+            if let Some(full_attn_idxs) = &self.full_attn_idxs {
+                return (0..self.num_hidden_layers)
+                    .map(|idx| {
+                        if full_attn_idxs.contains(&idx) {
+                            LayerType::Attention
+                        } else {
+                            LayerType::Conv
+                        }
+                    })
+                    .collect();
+            }
             return vec![LayerType::Attention; self.num_hidden_layers];
         }
         self.layer_types
