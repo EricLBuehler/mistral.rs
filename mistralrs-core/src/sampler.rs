@@ -432,7 +432,7 @@ impl Sampler {
         let mut probs_copy = probs.to_vec();
         let top_k = partial_sort_top_k(&mut probs_copy, k, false);
 
-        // Build the result vector with log10 of probabilities and optional decoding
+        // Build the result vector with natural log of probabilities and optional decoding
         let mut result = Vec::with_capacity(k);
         if let Some(tokenizer) = &self.tokenizer {
             for (token, prob) in top_k {
@@ -441,7 +441,7 @@ impl Sampler {
                     .map_err(|e| Error::Msg(e.to_string()))?;
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: Some(decoded),
                 });
             }
@@ -449,7 +449,7 @@ impl Sampler {
             for (token, prob) in top_k {
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: None,
                 });
             }
@@ -460,7 +460,7 @@ impl Sampler {
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
         let probs: Vec<f32> = logits.to_vec1()?;
         let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
+        let logprob = probs[next_token as usize].ln();
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&probs)?)
@@ -538,7 +538,7 @@ impl Sampler {
 
         // Find argmax directly on the Vec (O(n) scan, no Tensor creation)
         let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
+        let logprob = probs[next_token as usize].ln();
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&probs)?)
@@ -605,7 +605,7 @@ impl Sampler {
 
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
-        let logprob = probs[next_token].log(10.0);
+        let logprob = probs[next_token].ln();
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(probs)?)
@@ -832,7 +832,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
 
         Ok(Logprobs {
             token: next_token,
@@ -967,7 +967,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
         let bytes = if let Some(tokenizer) = &self.tokenizer {
             Some(
                 tokenizer
@@ -1087,7 +1087,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let prob = probs.get(token as usize).copied().unwrap_or(0.0);
         let logprob = if prob > 0.0 {
-            prob.log(10.0)
+            prob.ln()
         } else {
             f32::NEG_INFINITY
         };
@@ -1472,7 +1472,7 @@ mod tests {
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        assert_eq!(res.logprob, 1023f64.ln() as f32)
     }
 
     #[test]
@@ -1513,7 +1513,7 @@ mod tests {
             .unwrap();
         assert_eq!(res.token, 1023);
         assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        assert_eq!(res.logprob, 1023f64.ln() as f32)
     }
 
     #[test]
