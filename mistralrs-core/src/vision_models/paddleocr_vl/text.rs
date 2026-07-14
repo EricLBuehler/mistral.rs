@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use super::config::TextConfig;
+use crate::attention::{AttentionMask, Sdpa, SdpaParams};
 use crate::device_map::DeviceMapper;
 use crate::pipeline::KvCache as EngineKvCache;
 use crate::utils::unvarbuilder::UnVarBuilder;
@@ -106,18 +107,6 @@ fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     a + b
 }
 
-/// `repeat_kv`: `[num_kv, seq, hd] -> [num_kv*n_rep, seq, hd]`; kv head j feeds out-heads j*n_rep..+n_rep.
-fn repeat_kv(x: &Tensor, n_rep: usize) -> Result<Tensor> {
-    if n_rep == 1 {
-        return Ok(x.clone());
-    }
-    let (nkv, seq, hd) = x.dims3()?;
-    x.unsqueeze(1)? // [nkv, 1, seq, hd]
-        .broadcast_as((nkv, n_rep, seq, hd))?
-        .contiguous()?
-        .reshape((nkv * n_rep, seq, hd))
-}
-
 /// GQA self-attention with 3D chunked mrope, causal, scale head_dim^-0.5, no biases.
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
@@ -127,7 +116,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    scale: f64,
+    sdpa_params: SdpaParams,
 }
 
 impl Attention {
@@ -188,8 +177,33 @@ impl Attention {
             num_heads: nh / comm.world_size(),
             num_kv_heads: (nkv / comm.world_size()).max(1),
             head_dim: hd,
-            scale: (hd as f64).powf(-0.5),
+            sdpa_params: SdpaParams {
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(nkv, nh, comm)?,
+                softcap: None,
+                softmax_scale: (hd as f32).powf(-0.5),
+                sliding_window: None,
+                sinks: None,
+            },
         })
+    }
+
+    /// Sdpa over `q` `[num_heads, n_new, head_dim]`, `k`/`v` `[num_kv_heads, total, head_dim]` with an
+    /// additive `[n_new, total]` mask; GQA repetition is handled by `sdpa_params.n_kv_groups`. Returns
+    /// `[n_new, num_heads*head_dim]` for `o_proj`.
+    fn sdpa(&self, q: &Tensor, k: &Tensor, v: &Tensor, mask: &Tensor) -> Result<Tensor> {
+        let n_new = q.dim(1)?;
+        let attn = Sdpa.run_attention(
+            &q.unsqueeze(0)?,
+            &k.unsqueeze(0)?,
+            &v.unsqueeze(0)?,
+            &AttentionMask::Custom(mask.clone()),
+            None,
+            &self.sdpa_params,
+        )?;
+        attn.squeeze(0)?
+            .transpose(0, 1)?
+            .contiguous()?
+            .reshape((n_new, self.num_heads * self.head_dim))
     }
 
     /// `x`: `[seq, hidden]`; `cos`/`sin`: `[seq, head_dim]`; `mask`: additive causal `[seq, seq]`.
@@ -219,21 +233,7 @@ impl Attention {
         let q = apply_rope(&q, cos, sin)?;
         let k = apply_rope(&k, cos, sin)?;
 
-        let n_rep = self.num_heads / self.num_kv_heads;
-        let k = repeat_kv(&k, n_rep)?; // [heads, seq, hd]
-        let v = repeat_kv(&v, n_rep)?;
-
-        // scores = (q @ k^T) * scale + mask ; softmax over keys ; @ v
-        let k_t = k.transpose(1, 2)?.contiguous()?; // [heads, hd, seq]
-        let scores = q.matmul(&k_t)?.affine(self.scale, 0.0)?; // [heads, seq, seq]
-        let scores = scores.broadcast_add(mask)?;
-        let probs = candle_nn::ops::softmax(&scores, D::Minus1)?;
-        let ctx = probs.matmul(&v)?; // [heads, seq, hd]
-
-        let ctx = ctx
-            .transpose(0, 1)? // [seq, heads, hd]
-            .contiguous()?
-            .reshape((seq, self.num_heads * hd))?;
+        let ctx = self.sdpa(&q, &k, &v, mask)?;
         self.o_proj.forward(&ctx)
     }
 
@@ -280,20 +280,7 @@ impl Attention {
         };
         *cache = Some((k.clone(), v.clone()));
 
-        let n_rep = self.num_heads / self.num_kv_heads;
-        let k = repeat_kv(&k, n_rep)?; // [heads, offset+n_new, hd]
-        let v = repeat_kv(&v, n_rep)?;
-
-        let k_t = k.transpose(1, 2)?.contiguous()?;
-        let scores = q.matmul(&k_t)?.affine(self.scale, 0.0)?; // [heads, n_new, offset+n_new]
-        let scores = scores.broadcast_add(mask)?;
-        let probs = candle_nn::ops::softmax(&scores, D::Minus1)?;
-        let ctx = probs.matmul(&v)?; // [heads, n_new, hd]
-
-        let ctx = ctx
-            .transpose(0, 1)?
-            .contiguous()?
-            .reshape((n_new, self.num_heads * hd))?;
+        let ctx = self.sdpa(&q, &k, &v, mask)?;
         self.o_proj.forward(&ctx)
     }
 
@@ -339,20 +326,7 @@ impl Attention {
         let k = k.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?; // [num_kv, offset+n_new, hd]
         let v = v.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?;
 
-        let n_rep = self.num_heads / self.num_kv_heads;
-        let k = repeat_kv(&k, n_rep)?;
-        let v = repeat_kv(&v, n_rep)?;
-
-        let k_t = k.transpose(1, 2)?.contiguous()?;
-        let scores = q.matmul(&k_t)?.affine(self.scale, 0.0)?;
-        let scores = scores.broadcast_add(mask)?;
-        let probs = candle_nn::ops::softmax(&scores, D::Minus1)?;
-        let ctx = probs.matmul(&v)?;
-
-        let ctx = ctx
-            .transpose(0, 1)?
-            .contiguous()?
-            .reshape((n_new, self.num_heads * hd))?;
+        let ctx = self.sdpa(&q, &k, &v, mask)?;
         self.o_proj.forward(&ctx)
     }
 }
