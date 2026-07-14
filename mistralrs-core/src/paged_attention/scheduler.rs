@@ -387,6 +387,7 @@ impl PagedAttentionScheduler {
         self.sort_running_by_priority_fcfs();
 
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        let mut deferred: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
@@ -422,12 +423,13 @@ impl PagedAttentionScheduler {
 
             if !finished_with_break {
                 let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-                if running.is_empty()
-                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
-                {
+                let batch_head_has_images =
+                    running.front().map(|s| get_mut_arcmutex!(s).has_images());
+                // Defer to a side queue, not back into self.running: the loop only pops, so it terminates.
+                if batch_joins(batch_head_has_images, new_seq_has_images) {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    deferred.push_back(seq);
                 }
             }
         }
@@ -484,11 +486,16 @@ impl PagedAttentionScheduler {
             }
         }
 
+        let scheduled: Vec<_> = self.running.clone().into_iter().collect();
+
+        // Re-append after snapshotting scheduled: deferred seqs keep their slots and run next pass.
+        self.running.extend(deferred);
+
         logger.set_num_running(self.running.len());
         logger.set_num_waiting(self.waiting.len());
 
         PagedAttentionSchedulerOutput {
-            scheduled: self.running.clone().into_iter().collect(),
+            scheduled,
             num_cached_tokens: Vec::new(), // No prefix cache for completion
         }
     }
@@ -543,6 +550,14 @@ impl PagedAttentionScheduler {
             self.seq_block_hash_revisions.remove(&id);
             self.waiting_counts.remove(&id);
         }
+    }
+}
+
+/// A batch never mixes image and non-image seqs: joins only if empty or matching the head's flag.
+fn batch_joins(batch_head_has_images: Option<bool>, seq_has_images: bool) -> bool {
+    match batch_head_has_images {
+        None => true,
+        Some(head) => head == seq_has_images,
     }
 }
 
@@ -626,5 +641,60 @@ impl Scheduler for PagedAttentionScheduler {
     }
     fn set_prefix_caching_enabled(&mut self, enabled: bool) {
         self.set_prefix_caching_enabled_sync(enabled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::batch_joins;
+    use std::collections::VecDeque;
+
+    /// Mirrors the decode drain loop; that it returns at all is the anti-livelock guarantee.
+    fn partition_decode_batch(seqs: &[bool]) -> (Vec<bool>, Vec<bool>) {
+        let mut input: VecDeque<bool> = seqs.iter().copied().collect();
+        let mut batch: Vec<bool> = Vec::new();
+        let mut deferred: Vec<bool> = Vec::new();
+        while let Some(seq) = input.pop_front() {
+            if batch_joins(batch.first().copied(), seq) {
+                batch.push(seq);
+            } else {
+                deferred.push(seq);
+            }
+        }
+        (batch, deferred)
+    }
+
+    #[test]
+    fn all_incompatible_terminates_with_head_only() {
+        let (batch, deferred) = partition_decode_batch(&[true, false, false, false]);
+        assert_eq!(batch, vec![true]);
+        assert_eq!(deferred, vec![false, false, false]);
+    }
+
+    #[test]
+    fn mixed_keeps_head_compatible_defers_rest() {
+        let (batch, deferred) = partition_decode_batch(&[false, false, true, false, true]);
+        assert_eq!(batch, vec![false, false, false]);
+        assert_eq!(deferred, vec![true, true]);
+    }
+
+    #[test]
+    fn all_compatible_schedules_everything() {
+        let (batch, deferred) = partition_decode_batch(&[true, true, true]);
+        assert_eq!(batch, vec![true, true, true]);
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn empty_input_is_empty() {
+        let (batch, deferred) = partition_decode_batch(&[]);
+        assert!(batch.is_empty());
+        assert!(deferred.is_empty());
+    }
+
+    #[test]
+    fn batch_joins_empty_head_always_joins() {
+        assert!(batch_joins(None, true));
+        assert!(batch_joins(None, false));
     }
 }
