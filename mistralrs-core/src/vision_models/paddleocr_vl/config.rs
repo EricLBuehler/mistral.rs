@@ -4,6 +4,8 @@
 //! 5.13 `PaddleOCRTextConfig`): 18 layers, hidden 1024, GQA 16 heads / 2 KV heads x head_dim 128,
 //! SwiGLU intermediate 3072, RMSNorm eps 1e-5, 3D chunked mrope theta=500000 sections [16,24,24].
 
+use mistralrs_quant::QuantizedConfig;
+
 /// Config for the ERNIE-4.5 dense decoder. `Default` = the shipped PaddleOCR-VL-1.5 values.
 #[derive(Debug, Clone)]
 pub struct TextConfig {
@@ -18,6 +20,7 @@ pub struct TextConfig {
     pub rope_theta: f64,
     /// mrope_section (temporal, height, width); sum = head_dim/2 = 64.
     pub mrope_section: [usize; 3],
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 impl Default for TextConfig {
@@ -33,6 +36,7 @@ impl Default for TextConfig {
             rms_norm_eps: 1e-5,
             rope_theta: 500000.0,
             mrope_section: [16, 24, 24],
+            quantization_config: None,
         }
     }
 }
@@ -124,6 +128,8 @@ pub struct Config {
     pub vision_end_token_id: u32,
     pub tie_word_embeddings: bool,
     pub vision_config: VisionConfigRaw,
+    #[serde(default)]
+    pub quantization_config: Option<QuantizedConfig>,
 }
 
 /// theta for the SigLIP 2D axial rope: `null` in config.json, fixed by the reference.
@@ -143,6 +149,7 @@ impl Config {
             rms_norm_eps: self.rms_norm_eps,
             rope_theta: self.rope_theta,
             mrope_section: [ms[0], ms[1], ms[2]],
+            quantization_config: self.quantization_config.clone(),
         }
     }
 

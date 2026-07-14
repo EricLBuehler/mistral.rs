@@ -655,6 +655,7 @@ mod tests {
             rms_norm_eps: 1e-5,
             rope_theta: 10000.0,
             mrope_section: [1, 1, 1],
+            quantization_config: None,
         }
     }
 
