@@ -211,37 +211,6 @@ impl Attention {
             .reshape((n_new, self.num_heads * self.head_dim))
     }
 
-    /// `x`: `[seq, hidden]`; `cos`/`sin`: `[seq, head_dim]`; `mask`: additive causal `[seq, seq]`.
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let seq = x.dim(0)?;
-        let hd = self.head_dim;
-        // project, then [seq, heads*hd] -> [heads, seq, hd]
-        let q = self
-            .q_proj
-            .forward(x)?
-            .reshape((seq, self.num_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let k = self
-            .k_proj
-            .forward(x)?
-            .reshape((seq, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let v = self
-            .v_proj
-            .forward(x)?
-            .reshape((seq, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-
-        let q = apply_rope(&q, cos, sin)?;
-        let k = apply_rope(&k, cos, sin)?;
-
-        let ctx = self.sdpa(&q, &k, &v, mask)?;
-        self.o_proj.forward(&ctx)
-    }
-
     /// Engine attention for `n_new` new tokens. With `paged_attn` the K/V ride the paged cache
     /// (`metadata` selects this layer's cache slot); otherwise the engine `NormalCache` slot is
     /// appended and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute).
@@ -434,17 +403,6 @@ impl DecoderLayer {
         })
     }
 
-    fn forward(&self, x: &Tensor, cos: &Tensor, sin: &Tensor, mask: &Tensor) -> Result<Tensor> {
-        let h = (x + self
-            .self_attn
-            .forward(&self.input_layernorm.forward(x)?, cos, sin, mask)?)?;
-        let out = (&h
-            + self
-                .mlp
-                .forward(&self.post_attention_layernorm.forward(&h)?)?)?;
-        Ok(out)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward_engine(
         &self,
@@ -538,45 +496,6 @@ impl ErnieTextModel {
         })
     }
 
-    /// `inputs_embeds`: `[seq, hidden]`; `position_ids`: `[3, seq]` (t/h/w rows).
-    pub fn forward(&self, inputs_embeds: &Tensor, position_ids: &Tensor) -> Result<TextOutput> {
-        let dev = inputs_embeds.device();
-        let seq = inputs_embeds.dim(0)?;
-
-        let (cos_t, sin_t) =
-            rope_tables(position_ids, self.cfg.head_dim, self.cfg.rope_theta, dev)?;
-        let sections_doubled: Vec<usize> =
-            [self.cfg.mrope_section, self.cfg.mrope_section].concat();
-        let cos = mrope_select(&cos_t, &sections_doubled)?; // [seq, head_dim]
-        let sin = mrope_select(&sin_t, &sections_doubled)?;
-
-        let mask = causal_mask(seq, dev)?;
-
-        // rope tables + mask are built in f32; cast to the activation dtype (bf16 on the GPU path).
-        let dtype = inputs_embeds.dtype();
-        let (cos, sin, mask) = (
-            cos.to_dtype(dtype)?,
-            sin.to_dtype(dtype)?,
-            mask.to_dtype(dtype)?,
-        );
-
-        let mut h = inputs_embeds.clone();
-        let mut layer0_out = None;
-        for (i, layer) in self.layers.iter().enumerate() {
-            h = layer.forward(&h, &cos, &sin, &mask)?;
-            if i == 0 {
-                layer0_out = Some(h.clone());
-            }
-        }
-        let last_hidden = self.norm.forward(&h)?;
-        let logits = self.lm_head.forward(&last_hidden)?;
-        Ok(TextOutput {
-            layer0_out: layer0_out.unwrap(),
-            last_hidden,
-            logits,
-        })
-    }
-
     /// Engine forward the `MultimodalModel` trait calls; `offset` is `ctx.seqlen_offsets()[0]` (past
     /// length). With `paged` set, each layer reads its `(key_cache, value_cache)` slot and paged
     /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`,
@@ -659,19 +578,9 @@ impl ErnieTextModel {
     }
 }
 
-/// Additive causal mask `[seq, seq]`: 0 on/below the diagonal, `-inf` above.
-fn causal_mask(seq: usize, dev: &Device) -> Result<Tensor> {
-    let mut data = vec![0f32; seq * seq];
-    for i in 0..seq {
-        for j in (i + 1)..seq {
-            data[i * seq + j] = f32::NEG_INFINITY;
-        }
-    }
-    Tensor::from_vec(data, (seq, seq), dev)
-}
-
 /// Additive causal mask `[n_new, offset+n_new]` for cached decode: new query `i` sits at absolute
-/// position `offset+i` and may attend to keys `0..=offset+i`. Reduces to `causal_mask` when offset 0.
+/// position `offset+i` and may attend to keys `0..=offset+i`. Reduces to a lower-triangular mask when
+/// offset 0.
 fn causal_mask_offset(n_new: usize, offset: usize, dev: &Device) -> Result<Tensor> {
     let total = offset + n_new;
     let mut data = vec![0f32; n_new * total];
@@ -693,10 +602,6 @@ mod tests {
     use rand_distr::{Distribution, Normal};
 
     const TEST_SEED: u64 = 0x5EED_5EED;
-    // engine-cache-vs-recompute bound on the f16 CPU KV path (cpu_kv_f16 rounds stored K/V); the f32
-    // path is bit-exact at 1e-5. Covers the measured f16 storage band with margin, well under the
-    // >1e-2 logit scale a real cache-mapping bug would produce.
-    const KV_F16_MATCH_TOL: f32 = 5e-3;
 
     fn randn_vec(rng: &mut StdRng, mean: f32, std: f32, n: usize) -> Vec<f32> {
         let normal = Normal::new(mean, std).unwrap();
@@ -790,22 +695,13 @@ mod tests {
         ErnieTextModel::load(vb, cfg, &*mapper, false, AttentionImplementation::Eager).unwrap()
     }
 
-    // The engine-cache `forward_engine` (prefill + one-token-per-step decode driving `KvCache::append`)
-    // must reproduce the full-recompute `forward` bit-for-bit: this is what proves the cache mapping
-    // preserves the reference-verified attention math once wired to the engine.
+    // Incremental engine decode (prefill + one-token-per-step, driving `KvCache::append`) must
+    // reproduce a single-shot `forward_engine` over the whole sequence bit-for-bit. Both round stored
+    // K/V through the same cache dtype, so they agree at 1e-5 even on cpu_kv_f16; a real cache-mapping
+    // bug diverges on the logit scale (>1e-2, asserted below).
     #[test]
     fn engine_cache_matches_full_recompute() {
-        // engine-cache decode == full-recompute is bit-exact on the f32 CPU KV path; cpu_kv_f16
-        // (avx2/f16c or aarch64, on by default incl. CI runners) rounds stored K/V, so on that path
-        // the two differ by the f16 storage band. Read the resolved cache dtype (process-global
-        // OnceLock, set once) and assert the matching bound -- no MISTRALRS_CPU_KV_F32 set_var, so no
-        // ordering race in the shared unfiltered test binary. A real cache-mapping bug diverges on the
-        // logit scale (>1e-2, asserted below), above both bounds.
-        let tol: f32 = if crate::kv_cache::cpu_kv_f16() {
-            KV_F16_MATCH_TOL
-        } else {
-            1e-5
-        };
+        const TOL: f32 = 1e-5;
         let dev = Device::Cpu;
         let mut rng = StdRng::seed_from_u64(TEST_SEED); // candle CPU rng is unseedable; seed init here
         let cfg = tiny_cfg();
@@ -826,7 +722,13 @@ mod tests {
         )
         .unwrap();
 
-        let full = model.forward(&embeds, &pos).unwrap().logits; // [seq, vocab]
+        let mut ref_caches: Vec<EngineKvCache> = (0..cfg.num_hidden_layers)
+            .map(|_| EngineKvCache::new_normal(2, 64, 512))
+            .collect();
+        let full = model
+            .forward_engine(&embeds, &pos, &mut ref_caches, 0, None, None)
+            .unwrap()
+            .logits; // [seq, vocab]
         let hi = full
             .max(0)
             .unwrap()
@@ -864,7 +766,7 @@ mod tests {
                 &out.narrow(0, i, 1).unwrap(),
                 &full.narrow(0, i, 1).unwrap(),
             );
-            assert!(d < tol, "prefill row {i} diff {d} (tol {tol})");
+            assert!(d < TOL, "prefill row {i} diff {d} (tol {TOL})");
         }
 
         for t in prefill..seq {
@@ -880,7 +782,7 @@ mod tests {
                 .unwrap()
                 .logits;
             let d = max_abs(&out, &full.narrow(0, t, 1).unwrap());
-            assert!(d < tol, "decode step {t} diff {d} (tol {tol})");
+            assert!(d < TOL, "decode step {t} diff {d} (tol {TOL})");
         }
     }
 
