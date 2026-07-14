@@ -61,6 +61,8 @@ pub struct PagedAttentionScheduler {
     seq_block_hash_revisions: HashMap<usize, u64>,
     /// Per-sequence waitlist counter for starvation detection.
     waiting_counts: HashMap<usize, usize>,
+    /// Image-presence of the last decode batch, used to alternate types so neither starves.
+    last_decode_batch_had_images: Option<bool>,
 }
 
 impl PagedAttentionScheduler {
@@ -80,6 +82,7 @@ impl PagedAttentionScheduler {
             seq_block_hashes: HashMap::new(),
             seq_block_hash_revisions: HashMap::new(),
             waiting_counts: HashMap::new(),
+            last_decode_batch_had_images: None,
         }
     }
 
@@ -386,6 +389,19 @@ impl PagedAttentionScheduler {
 
         self.sort_running_by_priority_fcfs();
 
+        // When both image and non-image seqs are running, only one type can batch per pass. FCFS
+        // alone would let the oldest type run forever and starve the other, so lead with the type
+        // opposite to last pass when it is present.
+        if let Some(last_had_images) = self.last_decode_batch_had_images {
+            if let Some(pos) = self
+                .running
+                .iter()
+                .position(|s| get_mut_arcmutex!(s).has_images() != last_had_images)
+            {
+                self.running.rotate_left(pos);
+            }
+        }
+
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         let mut deferred: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.running.is_empty() {
@@ -440,6 +456,16 @@ impl PagedAttentionScheduler {
         let bucketed = self.bucket_and_preempt_sequences(running_for_bucket);
         self.running = bucketed;
 
+        // The scheduled forward-pass batch is exactly the bucketed set; snapshot it before merging
+        // deferred back in. Deferred seqs stay in self.running so terminate-all and state updates
+        // reach them, but they do not join this pass's batch.
+        let scheduled: Vec<_> = self.running.clone().into_iter().collect();
+        self.last_decode_batch_had_images = self
+            .running
+            .front()
+            .map(|seq| get_mut_arcmutex!(seq).has_images());
+        self.running.extend(deferred);
+
         self.running
             .iter()
             .for_each(|seq| get_mut_arcmutex!(seq).set_state(SequenceState::RunningCompletion));
@@ -485,11 +511,6 @@ impl PagedAttentionScheduler {
                 }
             }
         }
-
-        let scheduled: Vec<_> = self.running.clone().into_iter().collect();
-
-        // Re-append after snapshotting scheduled: deferred seqs keep their slots and run next pass.
-        self.running.extend(deferred);
 
         logger.set_num_running(self.running.len());
         logger.set_num_waiting(self.waiting.len());
@@ -664,6 +685,15 @@ mod tests {
         (batch, deferred)
     }
 
+    /// Mirrors the fairness rotation: bring a seq of the type opposite to last pass to the head.
+    fn rotate_for_fairness(running: &mut VecDeque<bool>, last_had_images: Option<bool>) {
+        if let Some(last) = last_had_images {
+            if let Some(pos) = running.iter().position(|&has_images| has_images != last) {
+                running.rotate_left(pos);
+            }
+        }
+    }
+
     #[test]
     fn all_incompatible_terminates_with_head_only() {
         let (batch, deferred) = partition_decode_batch(&[true, false, false, false]);
@@ -696,5 +726,42 @@ mod tests {
     fn batch_joins_empty_head_always_joins() {
         assert!(batch_joins(None, true));
         assert!(batch_joins(None, false));
+    }
+
+    #[test]
+    fn fairness_rotation_leads_with_opposite_type() {
+        // Last pass ran images; a mixed queue should now lead with the first non-image seq.
+        let mut running: VecDeque<bool> = [true, true, false, true].into_iter().collect();
+        rotate_for_fairness(&mut running, Some(true));
+        assert_eq!(running.front(), Some(&false));
+    }
+
+    #[test]
+    fn fairness_rotation_noop_when_single_type() {
+        let mut running: VecDeque<bool> = [true, true, true].into_iter().collect();
+        rotate_for_fairness(&mut running, Some(false));
+        assert_eq!(running, VecDeque::from(vec![true, true, true]));
+    }
+
+    #[test]
+    fn alternation_lets_both_types_make_progress() {
+        // A long image request coexisting with text: over passes, both must get scheduled.
+        let seqs = [true, false, false];
+        let mut last: Option<bool> = None;
+        let mut scheduled_images = false;
+        let mut scheduled_text = false;
+        for _ in 0..4 {
+            let mut running: VecDeque<bool> = seqs.into_iter().collect();
+            rotate_for_fairness(&mut running, last);
+            let (batch, _deferred) = partition_decode_batch(running.make_contiguous());
+            let head = batch[0];
+            if head {
+                scheduled_images = true;
+            } else {
+                scheduled_text = true;
+            }
+            last = Some(head);
+        }
+        assert!(scheduled_images && scheduled_text);
     }
 }
