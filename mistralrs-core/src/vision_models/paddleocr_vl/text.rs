@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::config::TextConfig;
 use crate::attention::{AttentionMask, Sdpa, SdpaParams};
 use crate::device_map::DeviceMapper;
+use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::KvCache as EngineKvCache;
 use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -116,6 +117,7 @@ struct Attention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
 
@@ -126,6 +128,7 @@ impl Attention {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let h = cfg.hidden_size;
@@ -177,6 +180,7 @@ impl Attention {
             num_heads: nh / comm.world_size(),
             num_kv_heads: (nkv / comm.world_size()).max(1),
             head_dim: hd,
+            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(nkv, nh, comm)?,
                 softcap: None,
@@ -401,6 +405,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         Ok(Self {
@@ -415,6 +420,7 @@ impl DecoderLayer {
                 mapper,
                 layer_idx,
                 loading_isq,
+                paged_attn,
                 comm,
             )?,
             post_attention_layernorm: RmsNorm::load(
@@ -508,17 +514,26 @@ impl ErnieTextModel {
         cfg: &TextConfig,
         mapper: &dyn DeviceMapper,
         loading_isq: bool,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vm = vb.pp("model");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
             let comm = mapper.get_comm_for(i)?;
+            let device = mapper.device_for(i, false).unwrap_or(vb.device());
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(cfg.head_dim, device, None)?)
+                }
+            };
             layers.push(DecoderLayer::load(
                 vm.pp("layers").pp(i),
                 cfg,
                 mapper,
                 i,
                 loading_isq,
+                paged_attn,
                 &comm,
             )?);
         }
@@ -831,7 +846,7 @@ mod tests {
         let mapper = crate::device_map::DeviceMapSetting::dummy()
             .into_mapper(cfg.num_hidden_layers, dev, None, &[dev.clone()])
             .unwrap();
-        ErnieTextModel::load(vb, cfg, &*mapper, false).unwrap()
+        ErnieTextModel::load(vb, cfg, &*mapper, false, AttentionImplementation::Eager).unwrap()
     }
 
     // The engine-cache `forward_engine` (prefill + one-token-per-step decode driving `KvCache::append`)

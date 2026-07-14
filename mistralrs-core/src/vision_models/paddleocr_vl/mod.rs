@@ -24,7 +24,7 @@ use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::amoe::AnyMoeBaseModelMixin;
-use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata};
+use crate::paged_attention::{AttentionImplementation, KvCacheLayout, ModelConfigMetadata};
 use crate::pipeline::{
     EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
 };
@@ -85,6 +85,7 @@ impl PaddleOcrVlModel {
             &tcfg,
             &*normal_loading_metadata.mapper,
             normal_loading_metadata.loading_isq,
+            AttentionImplementation::Eager,
         )?;
         // world_size 1 (CPU f32 parity path, no tensor-parallel sharding); head_dim is the K/V dim.
         let config_meta = ModelConfigMetadata {
