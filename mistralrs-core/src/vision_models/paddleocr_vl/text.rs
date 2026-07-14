@@ -14,6 +14,7 @@ use std::sync::Arc;
 use super::config::TextConfig;
 use crate::device_map::DeviceMapper;
 use crate::pipeline::KvCache as EngineKvCache;
+use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{DType, Device, Result, Tensor, D};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
@@ -702,6 +703,26 @@ impl ErnieTextModel {
             logits,
         })
     }
+
+    /// Non-quantized residuals (RMSNorm weights) keyed with the checkpoint's `model.*` paths. The
+    /// q/k/v/o, MLP, and lm_head projections are ISQ-quantized so they are excluded here.
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+        uvb_m
+            .pp("norm")
+            .add_tensor("weight", self.norm.weight.clone());
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(i);
+            uvb_l
+                .pp("input_layernorm")
+                .add_tensor("weight", layer.input_layernorm.weight.clone());
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add_tensor("weight", layer.post_attention_layernorm.weight.clone());
+        }
+        uvb.to_safetensors()
+    }
 }
 
 /// Per-layer KV cache: `cache[layer]` is `Some((k, v))` with K post-RoPE and V raw, each
@@ -927,5 +948,25 @@ mod tests {
             let d = max_abs(&out, &full.narrow(0, t, 1).unwrap());
             assert!(d < tol, "decode step {t} diff {d} (tol {tol})");
         }
+    }
+
+    // ISQ residuals must expose the RMSNorm weights (kept full-precision) and exclude the
+    // quantized projections/lm_head, so a UQFF write pairs the residual set with the quant layers.
+    #[test]
+    fn residual_tensors_excludes_quantized_projections() {
+        let dev = Device::Cpu;
+        let mut rng = StdRng::seed_from_u64(TEST_SEED);
+        let cfg = tiny_cfg();
+        let model = tiny_model(&cfg, &dev, &mut rng);
+        let names: std::collections::HashSet<String> = model
+            .residual_tensors()
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect();
+        assert!(names.contains("model.norm.weight"));
+        assert!(names.contains("model.layers.0.input_layernorm.weight"));
+        assert!(names.contains("model.layers.1.post_attention_layernorm.weight"));
+        assert!(!names.contains("model.layers.0.self_attn.q_proj.weight"));
+        assert!(!names.contains("lm_head.weight"));
     }
 }

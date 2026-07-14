@@ -13,6 +13,7 @@
 //! image rows at the running image counter. General over any mask layout (multi-image too).
 
 use crate::layers::embedding;
+use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{DType, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::ShardedVarBuilder;
@@ -69,5 +70,12 @@ impl Merger {
         let combined = Tensor::cat(&[&text, image_embeds], 0)?; // [S+K, D]
         let gather = Tensor::from_vec(gather, s, input_ids.device())?;
         combined.index_select(&gather, 0)
+    }
+
+    /// The (non-quantized) token embedding, keyed `model.embed_tokens.weight` to match the checkpoint.
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("model").pp("embed_tokens").add(&self.embed_tokens);
+        uvb.to_safetensors()
     }
 }

@@ -10,6 +10,7 @@
 //! different activation) -> `linear_2[4608->1024]`.
 
 use crate::layers::{layer_norm, linear};
+use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{Result, Tensor};
 use candle_nn::{LayerNorm, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
@@ -66,5 +67,15 @@ impl Connector {
             .permute((0, 1, 3, 2, 4, 5))? // (t, hb, wb, p1, p2, d)
             .contiguous()?
             .reshape((t * (h / m) * (w / m), m * m * d))
+    }
+
+    /// The connector's (non-quantized) LayerNorm + linears, keyed under `mlp_AR.*`.
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_c = uvb.pp("mlp_AR");
+        uvb_c.pp("pre_norm").add(&self.pre_norm);
+        uvb_c.pp("linear_1").add(&self.linear_1);
+        uvb_c.pp("linear_2").add(&self.linear_2);
+        uvb.to_safetensors()
     }
 }

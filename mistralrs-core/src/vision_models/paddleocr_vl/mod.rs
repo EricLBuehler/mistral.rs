@@ -140,11 +140,14 @@ impl crate::speculative::SpeculativeTargetMixin for PaddleOcrVlModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for PaddleOcrVlModel {}
 
 impl IsqModel for PaddleOcrVlModel {
-    // ISQ is not wired for the f32 CPU parity path (parity, not quantization, is the goal);
-    // empty means "no full-precision residuals reserved", a no-op while ISQ is off.
-    // Populate with norms/embeddings/lm_head when an ISQ speed path is added.
+    // The ERNIE LM projections + lm_head are ISQ-quantized (see the loader's `isq_layer_regexes`);
+    // everything else is a full-precision residual serialized alongside for a UQFF round-trip.
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        vec![]
+        let mut tensors = self.text.residual_tensors();
+        tensors.extend(self.merger.residual_tensors());
+        tensors.extend(self.connector.residual_tensors());
+        tensors.extend(self.vision.residual_tensors());
+        tensors
     }
 }
 

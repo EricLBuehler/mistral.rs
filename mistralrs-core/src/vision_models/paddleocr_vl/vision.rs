@@ -16,6 +16,7 @@ use super::config::VisionConfig;
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::layers::{layer_norm, linear, Sdpa};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
+use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{Device, Result, Tensor, D};
 use candle_nn::{LayerNorm, Linear, Module};
 use mistralrs_quant::ShardedVarBuilder;
@@ -335,5 +336,46 @@ impl VisionModel {
             block_last,
             post_ln,
         })
+    }
+
+    /// The whole (non-quantized) SigLIP tower, keyed under `visual.vision_model.*`. The patch-embed
+    /// weight is folded back to the 4D conv shape it was flattened from at load, so it round-trips.
+    pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_v = uvb.pp("visual").pp("vision_model");
+
+        let emb = uvb_v.pp("embeddings");
+        let conv_w = self
+            .patch_embed
+            .weight
+            .reshape((
+                self.cfg.hidden_size,
+                self.cfg.num_channels,
+                self.cfg.patch_size,
+                self.cfg.patch_size,
+            ))
+            .expect("patch embed weight reshape");
+        let pe = emb.pp("patch_embedding");
+        pe.add_tensor("weight", conv_w);
+        pe.add_tensor("bias", self.patch_embed.bias.clone());
+        emb.pp("position_embedding")
+            .add_tensor("weight", self.position_embedding.clone());
+
+        let enc = uvb_v.pp("encoder").pp("layers");
+        for (i, layer) in self.layers.iter().enumerate() {
+            let uvb_l = enc.pp(i);
+            uvb_l.pp("layer_norm1").add(&layer.layer_norm1);
+            uvb_l.pp("layer_norm2").add(&layer.layer_norm2);
+            let attn = uvb_l.pp("self_attn");
+            attn.pp("q_proj").add(&layer.self_attn.q_proj);
+            attn.pp("k_proj").add(&layer.self_attn.k_proj);
+            attn.pp("v_proj").add(&layer.self_attn.v_proj);
+            attn.pp("out_proj").add(&layer.self_attn.out_proj);
+            let mlp = uvb_l.pp("mlp");
+            mlp.pp("fc1").add(&layer.mlp.fc1);
+            mlp.pp("fc2").add(&layer.mlp.fc2);
+        }
+        uvb_v.pp("post_layernorm").add(&self.post_layernorm);
+        uvb.to_safetensors()
     }
 }
