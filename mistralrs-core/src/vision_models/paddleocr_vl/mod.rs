@@ -4,8 +4,8 @@
 //! HuggingFace transformers `modeling_paddleocr_vl` reference and the GGUF ERNIE-4.5 layout.
 
 // `dead_code`: each submodule keeps numerical-parity-only helpers (the inherent prefill `forward`,
-// the hand-rolled `KvCache`/`forward_cached`/`causal_mask`, `preprocess_image`, activation-capture
-// fields) that the loader/`MultimodalModel` path does not all reach.
+// `causal_mask`, `preprocess_image`, activation-capture fields) that the loader/`MultimodalModel`
+// path does not all reach.
 #![allow(dead_code)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
@@ -45,10 +45,8 @@ pub struct PaddleOcrVlModel {
     merger: Merger,
     text: ErnieTextModel,
     cfg: Config,
-    // Engine-facing accessor state for the `MultimodalModel` trait. Held on the top-level model,
-    // not `ErnieTextModel`, so `text.rs` stays byte-identical to the parity-verified port.
-    // `cache` is the engine's KV cache the trait `forward` will drive; the hand-rolled
-    // `text::KvCache` is only used by the parity harness.
+    // Engine-facing accessor state for the `MultimodalModel` trait: `cache` is the engine KV cache
+    // the trait `forward` drives, held here so `text.rs` stays the parity-verified port.
     device: Device,
     max_seq_len: usize,
     config_meta: ModelConfigMetadata,

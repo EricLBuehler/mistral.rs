@@ -242,53 +242,6 @@ impl Attention {
         self.o_proj.forward(&ctx)
     }
 
-    /// KV-cache decode: `x`/`cos`/`sin` cover only the `n_new` new tokens; `cache` holds the prior
-    /// post-RoPE K and V (`[num_kv, offset, head_dim]`); `mask` is `[n_new, offset+n_new]`. Unifies
-    /// prefill (offset 0, mask == plain causal) and single-token decode (n_new 1, mask all-zero).
-    /// Numerically identical to the full-recompute `forward`: same RoPE math + attention, K/V reused.
-    fn forward_cached(
-        &self,
-        x: &Tensor,
-        cos: &Tensor,
-        sin: &Tensor,
-        mask: &Tensor,
-        cache: &mut Option<(Tensor, Tensor)>,
-    ) -> Result<Tensor> {
-        let n_new = x.dim(0)?;
-        let hd = self.head_dim;
-        let q = self
-            .q_proj
-            .forward(x)?
-            .reshape((n_new, self.num_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let k = self
-            .k_proj
-            .forward(x)?
-            .reshape((n_new, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let v = self
-            .v_proj
-            .forward(x)?
-            .reshape((n_new, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-
-        let q = apply_rope(&q, cos, sin)?;
-        let k = apply_rope(&k, cos, sin)?;
-
-        // append the new K/V to the cache (K stored post-RoPE, V raw), then store back
-        let (k, v) = match cache.take() {
-            Some((pk, pv)) => (Tensor::cat(&[&pk, &k], 1)?, Tensor::cat(&[&pv, &v], 1)?),
-            None => (k, v),
-        };
-        *cache = Some((k.clone(), v.clone()));
-
-        let ctx = self.sdpa(&q, &k, &v, mask)?;
-        self.o_proj.forward(&ctx)
-    }
-
     /// Engine attention for `n_new` new tokens. With `paged_attn` the K/V ride the paged cache
     /// (`metadata` selects this layer's cache slot); otherwise the engine `NormalCache` slot is
     /// appended and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute).
@@ -492,28 +445,6 @@ impl DecoderLayer {
         Ok(out)
     }
 
-    fn forward_cached(
-        &self,
-        x: &Tensor,
-        cos: &Tensor,
-        sin: &Tensor,
-        mask: &Tensor,
-        cache: &mut Option<(Tensor, Tensor)>,
-    ) -> Result<Tensor> {
-        let h = (x + self.self_attn.forward_cached(
-            &self.input_layernorm.forward(x)?,
-            cos,
-            sin,
-            mask,
-            cache,
-        )?)?;
-        let out = (&h
-            + self
-                .mlp
-                .forward(&self.post_attention_layernorm.forward(&h)?)?)?;
-        Ok(out)
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn forward_engine(
         &self,
@@ -646,63 +577,11 @@ impl ErnieTextModel {
         })
     }
 
-    /// Fresh per-layer KV cache (all `None`), one slot per decoder layer.
-    pub fn empty_cache(&self) -> KvCache {
-        vec![None; self.layers.len()]
-    }
-
-    /// KV-cache forward for `n_new` tokens starting at absolute position `offset`. Prefill passes
-    /// the whole prompt with `offset == 0`; decode passes one token per step with the growing offset.
-    /// `position_ids` is `[3, n_new]` (the new tokens' mrope positions). Numerically identical to
-    /// `forward` on the same total sequence, the cache just avoids recomputing prior K/V.
-    pub fn forward_cached(
-        &self,
-        inputs_embeds: &Tensor,
-        position_ids: &Tensor,
-        cache: &mut KvCache,
-        offset: usize,
-    ) -> Result<TextOutput> {
-        let dev = inputs_embeds.device();
-        let n_new = inputs_embeds.dim(0)?;
-
-        let (cos_t, sin_t) =
-            rope_tables(position_ids, self.cfg.head_dim, self.cfg.rope_theta, dev)?;
-        let sections_doubled: Vec<usize> =
-            [self.cfg.mrope_section, self.cfg.mrope_section].concat();
-        let cos = mrope_select(&cos_t, &sections_doubled)?; // [n_new, head_dim]
-        let sin = mrope_select(&sin_t, &sections_doubled)?;
-
-        let mask = causal_mask_offset(n_new, offset, dev)?;
-
-        // rope tables + mask are built in f32; cast to the activation dtype (bf16 on the GPU path).
-        let dtype = inputs_embeds.dtype();
-        let (cos, sin, mask) = (
-            cos.to_dtype(dtype)?,
-            sin.to_dtype(dtype)?,
-            mask.to_dtype(dtype)?,
-        );
-
-        let mut h = inputs_embeds.clone();
-        let mut layer0_out = None;
-        for (i, layer) in self.layers.iter().enumerate() {
-            h = layer.forward_cached(&h, &cos, &sin, &mask, &mut cache[i])?;
-            if i == 0 {
-                layer0_out = Some(h.clone());
-            }
-        }
-        let last_hidden = self.norm.forward(&h)?;
-        let logits = self.lm_head.forward(&last_hidden)?;
-        Ok(TextOutput {
-            layer0_out: layer0_out.unwrap(),
-            last_hidden,
-            logits,
-        })
-    }
-
     /// Engine forward the `MultimodalModel` trait calls; `offset` is `ctx.seqlen_offsets()[0]` (past
     /// length). With `paged` set, each layer reads its `(key_cache, value_cache)` slot and paged
-    /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`, `KvCache::append`)
-    /// and is numerically identical to `forward_cached`/`forward` (unit test `engine_cache_matches_*`).
+    /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`,
+    /// `EngineKvCache::append`) and matches the full-recompute `forward` (unit test
+    /// `engine_cache_matches_full_recompute`).
     #[allow(clippy::too_many_arguments)]
     pub fn forward_engine(
         &self,
@@ -779,10 +658,6 @@ impl ErnieTextModel {
         uvb.to_safetensors()
     }
 }
-
-/// Per-layer KV cache: `cache[layer]` is `Some((k, v))` with K post-RoPE and V raw, each
-/// `[num_kv_heads, cached_len, head_dim]`. `None` before the first (prefill) step.
-pub type KvCache = Vec<Option<(Tensor, Tensor)>>;
 
 /// Additive causal mask `[seq, seq]`: 0 on/below the diagonal, `-inf` above.
 fn causal_mask(seq: usize, dev: &Device) -> Result<Tensor> {
