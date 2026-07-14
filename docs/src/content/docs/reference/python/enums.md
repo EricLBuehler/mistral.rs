@@ -92,6 +92,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | Member | Wire/config name |
 | --- | --- |
 | `SpeechLoaderType.Dia` | `'Dia'` |
+| `SpeechLoaderType.PocketTts` | `'PocketTts'` |
 
 
 ## `ModelDType`

@@ -688,6 +688,10 @@ pub enum ModelSelected {
         #[arg(short, long, value_parser = parse_speech_arch)]
         arch: SpeechLoaderType,
 
+        /// Speaker voice for pocket-tts (a stock name like `alba`). Ignored by Dia.
+        #[arg(long)]
+        voice: Option<String>,
+
         /// Model data type. Defaults to `auto`.
         #[arg(long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,

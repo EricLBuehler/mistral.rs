@@ -16,3 +16,7 @@ docs/node_modules/
 docs/dist/
 docs/.astro/
 out/
+
+dist
+dist-build-arm64
+.memsearch
