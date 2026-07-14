@@ -112,24 +112,6 @@ impl PaddleOcrVlModel {
             )),
         })
     }
-
-    /// Prefill forward: pixel_values -> vision -> connector -> embed+scatter merge -> ERNIE LM.
-    /// Returns logits `[seq, vocab]`.
-    /// `grid` is the image `(t,h,w)` and `position_ids` is the `[3,seq]` mrope index (see rope_index).
-    /// No decode loop / KV cache here; that rides the `MultimodalModel` wiring.
-    pub fn forward(
-        &self,
-        pixel_values: &Tensor,
-        grid: (usize, usize, usize),
-        input_ids: &Tensor,
-        position_ids: &Tensor,
-    ) -> Result<Tensor> {
-        let (t, h, w) = grid;
-        let vout = self.vision.forward(pixel_values, t, h, w)?;
-        let image_embeds = self.connector.forward(&vout.post_ln, t, h, w)?;
-        let embeds = self.merger.forward(input_ids, &image_embeds)?;
-        Ok(self.text.forward(&embeds, position_ids)?.logits)
-    }
 }
 
 // The three mixins are supertraits of `MultimodalModel` but PaddleOCR-VL is a plain dense VLM:
