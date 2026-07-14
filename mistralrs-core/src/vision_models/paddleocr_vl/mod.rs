@@ -25,7 +25,9 @@ use mistralrs_quant::ShardedVarBuilder;
 
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata};
-use crate::pipeline::{EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache};
+use crate::pipeline::{
+    EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
+};
 
 use config::Config;
 use connector::Connector;
@@ -56,7 +58,11 @@ pub struct PaddleOcrVlModel {
 impl PaddleOcrVlModel {
     /// `vb` is the checkpoint root. Sub-prefixes: `visual.vision_model.*` (tower), `mlp_AR.*`
     /// (connector), `model.embed_tokens.*` (merge embed), `model.layers/norm.*` + `lm_head.*` (LM).
-    pub fn new(cfg: &Config, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        cfg: &Config,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+    ) -> Result<Self> {
         let tcfg = cfg.text_config();
         let vcfg = cfg.vision_config();
         let vision = VisionModel::load(vb.pp("visual").pp("vision_model"), &vcfg)?;
@@ -74,7 +80,12 @@ impl PaddleOcrVlModel {
         )?;
         // ErnieTextModel::load consumes the root vb (it does its own .pp("model")/.pp("lm_head")).
         let device = vb.device().clone();
-        let text = ErnieTextModel::load(vb, &tcfg)?;
+        let text = ErnieTextModel::load(
+            vb,
+            &tcfg,
+            &*normal_loading_metadata.mapper,
+            normal_loading_metadata.loading_isq,
+        )?;
         // world_size 1 (CPU f32 parity path, no tensor-parallel sharding); head_dim is the K/V dim.
         let config_meta = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,

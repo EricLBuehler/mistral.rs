@@ -5924,14 +5924,15 @@ impl MultimodalModelLoader for PaddleOcrVlLoader {
         &self,
         config: &str,
         vb: ShardedVarBuilder,
-        _normal_loading_metadata: NormalLoadingMetadata,
+        normal_loading_metadata: NormalLoadingMetadata,
         _attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
-        // ponytail: CPU-f32 single-device parity path - the model reads its device from `vb` and does
-        // not shard, so `normal_loading_metadata` (device mapper) and `attention_mechanism` (paged vs
-        // eager) are unused. Thread them through if a device-mapped/paged speed path is added.
         let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
-        Ok(Box::new(PaddleOcrVlModel::new(&cfg, vb)?))
+        Ok(Box::new(PaddleOcrVlModel::new(
+            &cfg,
+            vb,
+            normal_loading_metadata,
+        )?))
     }
     fn is_gptx(&self, _config: &str) -> bool {
         true

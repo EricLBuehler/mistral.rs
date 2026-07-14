@@ -9,12 +9,15 @@
 //! position-axis, then for each 128-dim channel chunk we pick axis `i % 3` (Qwen2.5-VL scheme),
 //! NOT the interleaved Qwen3-VL scheme.
 
+use std::sync::Arc;
+
 use super::config::TextConfig;
+use crate::device_map::DeviceMapper;
 use crate::layers::linear_no_bias;
 use crate::pipeline::KvCache as EngineKvCache;
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
 
 /// RMSNorm (`PaddleOCRRMSNorm`, eps from config): upcast f32, `x*rsqrt(mean(x^2)+eps)`, `* weight`.
 struct RmsNorm {
@@ -116,10 +119,10 @@ fn repeat_kv(x: &Tensor, n_rep: usize) -> Result<Tensor> {
 
 /// GQA self-attention with 3D chunked mrope, causal, scale head_dim^-0.5, no biases.
 struct Attention {
-    q_proj: Linear,
-    k_proj: Linear,
-    v_proj: Linear,
-    o_proj: Linear,
+    q_proj: Arc<dyn QuantMethod>,
+    k_proj: Arc<dyn QuantMethod>,
+    v_proj: Arc<dyn QuantMethod>,
+    o_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
@@ -127,20 +130,62 @@ struct Attention {
 }
 
 impl Attention {
-    fn load(vb: ShardedVarBuilder, cfg: &TextConfig) -> Result<Self> {
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let h = cfg.hidden_size;
         let (nh, nkv, hd) = (
             cfg.num_attention_heads,
             cfg.num_key_value_heads,
             cfg.head_dim,
         );
+        let q_proj = ColumnParallelLayer::new(
+            h,
+            nh * hd,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
+        )?;
+        let kv_shard = mistralrs_quant::compute_kv_shard(nkv, hd, comm)?;
+        let k_proj = ColumnParallelLayer::new_with_shard(
+            h,
+            nkv * hd,
+            &cfg.quantization_config,
+            false,
+            comm,
+            kv_shard,
+            mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
+        )?;
+        let v_proj = ColumnParallelLayer::new_with_shard(
+            h,
+            nkv * hd,
+            &cfg.quantization_config,
+            false,
+            comm,
+            kv_shard,
+            mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
+        )?;
+        let o_proj = RowParallelLayer::new(
+            nh * hd,
+            h,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
+        )?;
         Ok(Self {
-            q_proj: linear_no_bias(h, nh * hd, vb.pp("q_proj"))?,
-            k_proj: linear_no_bias(h, nkv * hd, vb.pp("k_proj"))?,
-            v_proj: linear_no_bias(h, nkv * hd, vb.pp("v_proj"))?,
-            o_proj: linear_no_bias(nh * hd, h, vb.pp("o_proj"))?,
-            num_heads: nh,
-            num_kv_heads: nkv,
+            q_proj,
+            k_proj,
+            v_proj,
+            o_proj,
+            num_heads: nh / comm.world_size(),
+            num_kv_heads: (nkv / comm.world_size()).max(1),
             head_dim: hd,
             scale: (hd as f64).powf(-0.5),
         })
@@ -344,14 +389,28 @@ struct DecoderLayer {
 }
 
 impl DecoderLayer {
-    fn load(vb: ShardedVarBuilder, cfg: &TextConfig) -> Result<Self> {
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         Ok(Self {
             input_layernorm: RmsNorm::load(
                 vb.pp("input_layernorm"),
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
             )?,
-            self_attn: Attention::load(vb.pp("self_attn"), cfg)?,
+            self_attn: Attention::load(
+                vb.pp("self_attn"),
+                cfg,
+                mapper,
+                layer_idx,
+                loading_isq,
+                comm,
+            )?,
             post_attention_layernorm: RmsNorm::load(
                 vb.pp("post_attention_layernorm"),
                 cfg.hidden_size,
@@ -438,11 +497,24 @@ pub struct ErnieTextModel {
 
 impl ErnieTextModel {
     /// `vb` is the checkpoint root (keys `model.layers.*`, `model.norm.*`, `lm_head.*`).
-    pub fn load(vb: ShardedVarBuilder, cfg: &TextConfig) -> Result<Self> {
+    pub fn load(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Self> {
         let vm = vb.pp("model");
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
-            layers.push(DecoderLayer::load(vm.pp("layers").pp(i), cfg)?);
+            let comm = mapper.get_comm_for(i)?;
+            layers.push(DecoderLayer::load(
+                vm.pp("layers").pp(i),
+                cfg,
+                mapper,
+                i,
+                loading_isq,
+                &comm,
+            )?);
         }
         let norm = RmsNorm::load(vm.pp("norm"), cfg.hidden_size, cfg.rms_norm_eps)?;
         let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
@@ -724,7 +796,10 @@ mod tests {
             put("lm_head.weight".to_string(), vec![vocab, h], lin);
         }
         let vb = ShardedSafeTensors::wrap(vm, DType::F32, dev.clone());
-        ErnieTextModel::load(vb, cfg).unwrap()
+        let mapper = crate::device_map::DeviceMapSetting::dummy()
+            .into_mapper(cfg.num_hidden_layers, dev, None, &[dev.clone()])
+            .unwrap();
+        ErnieTextModel::load(vb, cfg, &*mapper, false).unwrap()
     }
 
     // The engine-cache `forward_engine` (prefill + one-token-per-step decode driving `KvCache::append`)
