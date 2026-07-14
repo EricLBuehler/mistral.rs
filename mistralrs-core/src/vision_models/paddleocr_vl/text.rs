@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use super::config::TextConfig;
 use crate::device_map::DeviceMapper;
-use crate::layers::linear_no_bias;
 use crate::pipeline::KvCache as EngineKvCache;
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Linear, Module};
-use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+};
 
 /// RMSNorm (`PaddleOCRRMSNorm`, eps from config): upcast f32, `x*rsqrt(mean(x^2)+eps)`, `* weight`.
 struct RmsNorm {
@@ -358,18 +358,49 @@ impl Attention {
 
 /// SwiGLU MLP: `down(silu(gate(x)) * up(x))`, no biases.
 struct Mlp {
-    gate_proj: Linear,
-    up_proj: Linear,
-    down_proj: Linear,
+    gate_proj: Arc<dyn QuantMethod>,
+    up_proj: Arc<dyn QuantMethod>,
+    down_proj: Arc<dyn QuantMethod>,
 }
 
 impl Mlp {
-    fn load(vb: ShardedVarBuilder, cfg: &TextConfig) -> Result<Self> {
+    fn load(
+        vb: ShardedVarBuilder,
+        cfg: &TextConfig,
+        mapper: &dyn DeviceMapper,
+        layer_idx: usize,
+        loading_isq: bool,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let (h, i) = (cfg.hidden_size, cfg.intermediate_size);
+        let gate_proj = ColumnParallelLayer::new(
+            h,
+            i,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("gate_proj"), loading_isq),
+        )?;
+        let up_proj = ColumnParallelLayer::new(
+            h,
+            i,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("up_proj"), loading_isq),
+        )?;
+        let down_proj = RowParallelLayer::new(
+            i,
+            h,
+            &cfg.quantization_config,
+            false,
+            comm,
+            mapper.set_device(layer_idx, vb.pp("down_proj"), loading_isq),
+        )?;
         Ok(Self {
-            gate_proj: linear_no_bias(h, i, vb.pp("gate_proj"))?,
-            up_proj: linear_no_bias(h, i, vb.pp("up_proj"))?,
-            down_proj: linear_no_bias(i, h, vb.pp("down_proj"))?,
+            gate_proj,
+            up_proj,
+            down_proj,
         })
     }
 
@@ -416,7 +447,7 @@ impl DecoderLayer {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
             )?,
-            mlp: Mlp::load(vb.pp("mlp"), cfg)?,
+            mlp: Mlp::load(vb.pp("mlp"), cfg, mapper, layer_idx, loading_isq, comm)?,
         })
     }
 
@@ -491,7 +522,7 @@ pub struct TextOutput {
 pub struct ErnieTextModel {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
-    lm_head: Linear,
+    lm_head: Arc<dyn QuantMethod>,
     cfg: TextConfig,
 }
 
@@ -517,7 +548,13 @@ impl ErnieTextModel {
             )?);
         }
         let norm = RmsNorm::load(vm.pp("norm"), cfg.hidden_size, cfg.rms_norm_eps)?;
-        let lm_head = linear_no_bias(cfg.hidden_size, cfg.vocab_size, vb.pp("lm_head"))?;
+        let lm_head = ReplicatedLayer::new(
+            cfg.hidden_size,
+            cfg.vocab_size,
+            &cfg.quantization_config,
+            false,
+            mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
+        )?;
         Ok(Self {
             layers,
             norm,
