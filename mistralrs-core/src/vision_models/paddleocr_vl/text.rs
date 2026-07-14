@@ -15,6 +15,7 @@ use super::config::TextConfig;
 use crate::attention::{AttentionMask, Sdpa, SdpaParams};
 use crate::device_map::DeviceMapper;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::KvCache as EngineKvCache;
 use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -288,10 +289,10 @@ impl Attention {
         self.o_proj.forward(&ctx)
     }
 
-    /// Same as `forward_cached`, but driving the engine's `NormalCache` slot (`KvCache::append`)
-    /// instead of the hand-rolled `Option<(K,V)>`. The engine cache stores `[batch, heads, seq, hd]`
-    /// and appends on dim 2, so we carry a batch axis of 1 through the append then drop it; the
-    /// growing concat is the same op as `forward_cached`'s `cat(dim=1)` (unit test asserts equality).
+    /// Engine attention for `n_new` new tokens. With `paged_attn` the K/V ride the paged cache
+    /// (`metadata` selects this layer's cache slot); otherwise the engine `NormalCache` slot is
+    /// appended and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute).
+    #[allow(clippy::too_many_arguments)]
     fn forward_engine(
         &self,
         x: &Tensor,
@@ -299,6 +300,8 @@ impl Attention {
         sin: &Tensor,
         mask: &Tensor,
         kv_cache: &mut EngineKvCache,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let n_new = x.dim(0)?;
         let hd = self.head_dim;
@@ -324,13 +327,59 @@ impl Attention {
         let q = apply_rope(&q, cos, sin)?;
         let k = apply_rope(&k, cos, sin)?;
 
-        // append K (post-RoPE) / V (raw) to the engine cache with a batch axis, then drop it.
-        let (k, v) = kv_cache.append(&k.unsqueeze(0)?, &v.unsqueeze(0)?)?;
-        // cache may store f16 (cpu_kv_f16); cast back to q's dtype so attention runs in the compute dtype.
-        let k = k.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?; // [num_kv, offset+n_new, hd]
-        let v = v.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?;
-
-        let ctx = self.sdpa(&q, &k, &v, mask)?;
+        let ctx = match &self.paged_attn {
+            Some(paged_attn) => {
+                // paged expects [batch, heads, seq, head_dim]; batch is 1 on this path.
+                let q = q.unsqueeze(0)?.contiguous()?;
+                let k = k.unsqueeze(0)?.contiguous()?;
+                let v = v.unsqueeze(0)?.contiguous()?;
+                let attn = match metadata {
+                    Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        &AttentionMask::Custom(mask.clone()),
+                        Some(key_cache),
+                        Some(value_cache),
+                        input_metadata,
+                        &self.sdpa_params,
+                        flash_params,
+                    )?,
+                    // No metadata: imatrix-style prompt pass with no cache to populate.
+                    None => {
+                        let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                        paged_attn.forward(
+                            &q,
+                            &k,
+                            &v,
+                            &AttentionMask::Custom(mask.clone()),
+                            None,
+                            None,
+                            &input_metadata,
+                            &self.sdpa_params,
+                            flash_params,
+                        )?
+                    }
+                };
+                // prefill/gather returns [1, heads, n_new, hd]; the decode kernel drops the seq axis.
+                if attn.rank() == 4 {
+                    attn.squeeze(0)?
+                        .transpose(0, 1)?
+                        .contiguous()?
+                        .reshape((n_new, self.num_heads * hd))?
+                } else {
+                    attn.reshape((n_new, self.num_heads * hd))?
+                }
+            }
+            None => {
+                // append K (post-RoPE) / V (raw) to the engine cache with a batch axis, then drop it.
+                let (k, v) = kv_cache.append(&k.unsqueeze(0)?, &v.unsqueeze(0)?)?;
+                // cache may store f16 (cpu_kv_f16); cast back to q's dtype so attention runs in compute dtype.
+                let k = k.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?; // [num_kv, offset+n_new, hd]
+                let v = v.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?;
+                self.sdpa(&q, &k, &v, mask)?
+            }
+        };
         self.o_proj.forward(&ctx)
     }
 }
@@ -465,6 +514,7 @@ impl DecoderLayer {
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn forward_engine(
         &self,
         x: &Tensor,
@@ -472,6 +522,8 @@ impl DecoderLayer {
         sin: &Tensor,
         mask: &Tensor,
         kv_cache: &mut EngineKvCache,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
         let h = (x + self.self_attn.forward_engine(
             &self.input_layernorm.forward(x)?,
@@ -479,6 +531,8 @@ impl DecoderLayer {
             sin,
             mask,
             kv_cache,
+            metadata,
+            flash_params,
         )?)?;
         let out = (&h
             + self
@@ -645,16 +699,19 @@ impl ErnieTextModel {
         })
     }
 
-    /// Engine-cache twin of `forward_cached`: drives the engine's per-layer `NormalCache` slots
-    /// (`caches[i]`, `KvCache::append`) instead of the hand-rolled `KvCache`. This is the path the
-    /// `MultimodalModel` trait `forward` calls; `offset` is `ctx.seqlen_offsets()[0]` (past length).
-    /// Numerically identical to `forward_cached`/`forward` (unit test `engine_cache_matches_*`).
+    /// Engine forward the `MultimodalModel` trait calls; `offset` is `ctx.seqlen_offsets()[0]` (past
+    /// length). With `paged` set, each layer reads its `(key_cache, value_cache)` slot and paged
+    /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`, `KvCache::append`)
+    /// and is numerically identical to `forward_cached`/`forward` (unit test `engine_cache_matches_*`).
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_engine(
         &self,
         inputs_embeds: &Tensor,
         position_ids: &Tensor,
         caches: &mut [EngineKvCache],
         offset: usize,
+        paged: Option<(&[(Tensor, Tensor)], &PagedAttentionInputMetadata)>,
+        flash_params: Option<&FlashParams>,
     ) -> Result<TextOutput> {
         let dev = inputs_embeds.device();
         let n_new = inputs_embeds.dim(0)?;
@@ -679,7 +736,16 @@ impl ErnieTextModel {
         let mut h = inputs_embeds.clone();
         let mut layer0_out = None;
         for (i, layer) in self.layers.iter().enumerate() {
-            h = layer.forward_engine(&h, &cos, &sin, &mask, &mut caches[i])?;
+            let metadata = paged.map(|(kv, meta)| (kv[i].clone(), meta));
+            h = layer.forward_engine(
+                &h,
+                &cos,
+                &sin,
+                &mask,
+                &mut caches[i],
+                metadata,
+                flash_params,
+            )?;
             if i == 0 {
                 layer0_out = Some(h.clone());
             }
@@ -913,6 +979,8 @@ mod tests {
                 &pos.narrow(1, 0, prefill).unwrap(),
                 &mut caches,
                 0,
+                None,
+                None,
             )
             .unwrap()
             .logits;
@@ -931,6 +999,8 @@ mod tests {
                     &pos.narrow(1, t, 1).unwrap(),
                     &mut caches,
                     t,
+                    None,
+                    None,
                 )
                 .unwrap()
                 .logits;

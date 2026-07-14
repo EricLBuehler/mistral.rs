@@ -229,9 +229,20 @@ impl MultimodalModel for PaddleOcrVlModel {
         };
 
         let mut guard = self.cache.normal();
+        // Paged metadata is threaded through but inert until the loader enables paged attention:
+        // `paged_metadata` is None on the NormalCache path, so the text model falls back to Sdpa.
+        let paged = ctx.paged_metadata();
+        let paged_ref = paged.as_ref().map(|(kv, meta)| (kv.as_slice(), *meta));
         let logits = self
             .text
-            .forward_engine(&embeds, &position_ids, &mut guard.0, offset)?
+            .forward_engine(
+                &embeds,
+                &position_ids,
+                &mut guard.0,
+                offset,
+                paged_ref,
+                Some(ctx.flash_params()),
+            )?
             .logits; // [seq, vocab]
         ctx.logits(&logits.unsqueeze(0)?) // [1, seq, vocab]; engine slices the wanted rows
     }
