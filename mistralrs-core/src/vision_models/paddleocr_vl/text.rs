@@ -215,7 +215,7 @@ impl Attention {
     /// (`metadata` selects this layer's cache slot); otherwise the engine `NormalCache` slot is
     /// appended and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute).
     #[allow(clippy::too_many_arguments)]
-    fn forward_engine(
+    fn forward(
         &self,
         x: &Tensor,
         cos: &Tensor,
@@ -404,7 +404,7 @@ impl DecoderLayer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward_engine(
+    fn forward(
         &self,
         x: &Tensor,
         cos: &Tensor,
@@ -414,7 +414,7 @@ impl DecoderLayer {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
-        let h = (x + self.self_attn.forward_engine(
+        let h = (x + self.self_attn.forward(
             &self.input_layernorm.forward(x)?,
             cos,
             sin,
@@ -499,10 +499,10 @@ impl ErnieTextModel {
     /// Engine forward the `MultimodalModel` trait calls; `offset` is `ctx.seqlen_offsets()[0]` (past
     /// length). With `paged` set, each layer reads its `(key_cache, value_cache)` slot and paged
     /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`,
-    /// `EngineKvCache::append`) and matches the full-recompute `forward` (unit test
+    /// `EngineKvCache::append`) and matches a single-shot run over the whole sequence (unit test
     /// `engine_cache_matches_full_recompute`).
     #[allow(clippy::too_many_arguments)]
-    pub fn forward_engine(
+    pub fn forward(
         &self,
         inputs_embeds: &Tensor,
         position_ids: &Tensor,
@@ -535,7 +535,7 @@ impl ErnieTextModel {
         let mut layer0_out = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let metadata = paged.map(|(kv, meta)| (kv[i].clone(), meta));
-            h = layer.forward_engine(
+            h = layer.forward(
                 &h,
                 &cos,
                 &sin,
@@ -696,7 +696,7 @@ mod tests {
     }
 
     // Incremental engine decode (prefill + one-token-per-step, driving `KvCache::append`) must
-    // reproduce a single-shot `forward_engine` over the whole sequence bit-for-bit. Both round stored
+    // reproduce a single-shot `forward` over the whole sequence bit-for-bit. Both round stored
     // K/V through the same cache dtype, so they agree at 1e-5 even on cpu_kv_f16; a real cache-mapping
     // bug diverges on the logit scale (>1e-2, asserted below).
     #[test]
@@ -726,7 +726,7 @@ mod tests {
             .map(|_| EngineKvCache::new_normal(2, 64, 512))
             .collect();
         let full = model
-            .forward_engine(&embeds, &pos, &mut ref_caches, 0, None, None)
+            .forward(&embeds, &pos, &mut ref_caches, 0, None, None)
             .unwrap()
             .logits; // [seq, vocab]
         let hi = full
@@ -751,7 +751,7 @@ mod tests {
             .collect();
 
         let out = model
-            .forward_engine(
+            .forward(
                 &embeds.narrow(0, 0, prefill).unwrap(),
                 &pos.narrow(1, 0, prefill).unwrap(),
                 &mut caches,
@@ -771,7 +771,7 @@ mod tests {
 
         for t in prefill..seq {
             let out = model
-                .forward_engine(
+                .forward(
                     &embeds.narrow(0, t, 1).unwrap(),
                     &pos.narrow(1, t, 1).unwrap(),
                     &mut caches,

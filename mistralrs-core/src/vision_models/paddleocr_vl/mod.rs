@@ -215,7 +215,7 @@ impl MultimodalModel for PaddleOcrVlModel {
         let paged_ref = paged.as_ref().map(|(kv, meta)| (kv.as_slice(), *meta));
         let logits = self
             .text
-            .forward_engine(
+            .forward(
                 &embeds,
                 &position_ids,
                 &mut guard.0,
