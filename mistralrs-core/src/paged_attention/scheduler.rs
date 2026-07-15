@@ -427,7 +427,9 @@ impl PagedAttentionScheduler {
                 {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    // Re-pushing onto the queue being drained livelocks when the mismatch is stable
+                    // (chunked-prefill mm windows never advance while schedule() spins); recompute instead.
+                    self._preempt(seq);
                 }
             }
         }
