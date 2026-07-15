@@ -24,6 +24,8 @@ use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::amoe::AnyMoeBaseModelMixin;
+use crate::layers::CausalMasker;
+use crate::layers_masker::{CausalMaskConfig, PastKvLenCache};
 use crate::paged_attention::{AttentionImplementation, KvCacheLayout, ModelConfigMetadata};
 use crate::pipeline::{
     EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
@@ -208,6 +210,15 @@ impl MultimodalModel for PaddleOcrVlModel {
             None => self.merger.embed(&ids_vec)?,
         };
 
+        // Engine causal mask: `Custom` on prefill, `None` on single-token decode (no per-token alloc).
+        let seqlen_offsets = ctx.seqlen_offsets();
+        let mask = CausalMasker.make_causal_mask(
+            input_ids,
+            &seqlen_offsets as &dyn PastKvLenCache,
+            embeds.dtype(),
+            &CausalMaskConfig::default(),
+        )?;
+
         let mut guard = self.cache.normal();
         // Paged metadata is threaded through but inert until the loader enables paged attention:
         // `paged_metadata` is None on the NormalCache path, so the text model falls back to Sdpa.
@@ -219,7 +230,7 @@ impl MultimodalModel for PaddleOcrVlModel {
                 &embeds,
                 &position_ids,
                 &mut guard.0,
-                offset,
+                &mask,
                 paged_ref,
                 Some(ctx.flash_params()),
             )?

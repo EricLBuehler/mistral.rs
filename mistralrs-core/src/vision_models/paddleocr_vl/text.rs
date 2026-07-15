@@ -192,16 +192,17 @@ impl Attention {
         })
     }
 
-    /// Sdpa over `q` `[num_heads, n_new, head_dim]`, `k`/`v` `[num_kv_heads, total, head_dim]` with an
-    /// additive `[n_new, total]` mask; GQA repetition is handled by `sdpa_params.n_kv_groups`. Returns
-    /// `[n_new, num_heads*head_dim]` for `o_proj`.
-    fn sdpa(&self, q: &Tensor, k: &Tensor, v: &Tensor, mask: &Tensor) -> Result<Tensor> {
+    /// Sdpa over `q` `[num_heads, n_new, head_dim]`, `k`/`v` `[num_kv_heads, total, head_dim]` with the
+    /// engine `mask` (`Custom` on prefill, `None` on single-token decode); GQA repetition is handled by
+    /// `sdpa_params.n_kv_groups`. Returns `[n_new, num_heads*head_dim]` for `o_proj`. The final reshape is
+    /// identical for both mask variants because the `n_new==1` transpose is a memory no-op.
+    fn sdpa(&self, q: &Tensor, k: &Tensor, v: &Tensor, mask: &AttentionMask) -> Result<Tensor> {
         let n_new = q.dim(1)?;
         let attn = Sdpa.run_attention(
             &q.unsqueeze(0)?,
             &k.unsqueeze(0)?,
             &v.unsqueeze(0)?,
-            &AttentionMask::Custom(mask.clone()),
+            mask,
             None,
             &self.sdpa_params,
         )?;
@@ -220,7 +221,7 @@ impl Attention {
         x: &Tensor,
         cos: &Tensor,
         sin: &Tensor,
-        mask: &Tensor,
+        mask: &AttentionMask,
         kv_cache: &mut EngineKvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
@@ -260,7 +261,7 @@ impl Attention {
                         &q,
                         &k,
                         &v,
-                        &AttentionMask::Custom(mask.clone()),
+                        mask,
                         Some(key_cache),
                         Some(value_cache),
                         input_metadata,
@@ -274,7 +275,7 @@ impl Attention {
                             &q,
                             &k,
                             &v,
-                            &AttentionMask::Custom(mask.clone()),
+                            mask,
                             None,
                             None,
                             &input_metadata,
@@ -409,7 +410,7 @@ impl DecoderLayer {
         x: &Tensor,
         cos: &Tensor,
         sin: &Tensor,
-        mask: &Tensor,
+        mask: &AttentionMask,
         kv_cache: &mut EngineKvCache,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
@@ -499,23 +500,22 @@ impl ErnieTextModel {
         })
     }
 
-    /// Engine forward the `MultimodalModel` trait calls; `offset` is `ctx.seqlen_offsets()[0]` (past
-    /// length). With `paged` set, each layer reads its `(key_cache, value_cache)` slot and paged
-    /// metadata; otherwise it drives the per-layer `NormalCache` slots (`caches[i]`,
-    /// `EngineKvCache::append`) and matches a single-shot run over the whole sequence (unit test
-    /// `engine_cache_matches_full_recompute`).
+    /// Engine forward the `MultimodalModel` trait calls; `mask` is the engine causal mask
+    /// (`Custom` on prefill, `None` on single-token decode) built by the caller. With `paged` set, each
+    /// layer reads its `(key_cache, value_cache)` slot and paged metadata; otherwise it drives the
+    /// per-layer `NormalCache` slots (`caches[i]`, `EngineKvCache::append`) and matches a single-shot run
+    /// over the whole sequence (unit test `engine_cache_matches_full_recompute`).
     #[allow(clippy::too_many_arguments)]
     pub fn forward(
         &self,
         inputs_embeds: &Tensor,
         position_ids: &Tensor,
         caches: &mut [EngineKvCache],
-        offset: usize,
+        mask: &AttentionMask,
         paged: Option<(&[(Tensor, Tensor)], &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
     ) -> Result<TextOutput> {
         let dev = inputs_embeds.device();
-        let n_new = inputs_embeds.dim(0)?;
 
         let inv_freq = self.inv_freq.to_device(dev)?;
         let (cos_t, sin_t) = rope_tables(position_ids, &inv_freq)?;
@@ -524,29 +524,15 @@ impl ErnieTextModel {
         let cos = mrope_select(&cos_t, &sections_doubled)?;
         let sin = mrope_select(&sin_t, &sections_doubled)?;
 
-        let mask = causal_mask_offset(n_new, offset, dev)?;
-
-        // rope tables + mask are built in f32; cast to the activation dtype (bf16 on the GPU path).
+        // rope tables are built in f32; cast to the activation dtype (bf16 on the GPU path).
         let dtype = inputs_embeds.dtype();
-        let (cos, sin, mask) = (
-            cos.to_dtype(dtype)?,
-            sin.to_dtype(dtype)?,
-            mask.to_dtype(dtype)?,
-        );
+        let (cos, sin) = (cos.to_dtype(dtype)?, sin.to_dtype(dtype)?);
 
         let mut h = inputs_embeds.clone();
         let mut layer0_out = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let metadata = paged.map(|(kv, meta)| (kv[i].clone(), meta));
-            h = layer.forward(
-                &h,
-                &cos,
-                &sin,
-                &mask,
-                &mut caches[i],
-                metadata,
-                flash_params,
-            )?;
+            h = layer.forward(&h, &cos, &sin, mask, &mut caches[i], metadata, flash_params)?;
             if i == 0 {
                 layer0_out = Some(h.clone());
             }
@@ -581,23 +567,11 @@ impl ErnieTextModel {
     }
 }
 
-/// Additive causal mask `[n_new, offset+n_new]` for cached decode: new query `i` sits at absolute
-/// position `offset+i` and may attend to keys `0..=offset+i`. Reduces to a lower-triangular mask when
-/// offset 0.
-fn causal_mask_offset(n_new: usize, offset: usize, dev: &Device) -> Result<Tensor> {
-    let total = offset + n_new;
-    let mut data = vec![0f32; n_new * total];
-    for i in 0..n_new {
-        for j in (offset + i + 1)..total {
-            data[i * total + j] = f32::NEG_INFINITY;
-        }
-    }
-    Tensor::from_vec(data, (n_new, total), dev)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layers::CausalMasker;
+    use crate::layers_masker::{CausalMaskConfig, PastKvLenCache};
     use candle_core::Var;
     use candle_nn::VarMap;
     use mistralrs_quant::ShardedSafeTensors;
@@ -609,6 +583,22 @@ mod tests {
     fn randn_vec(rng: &mut StdRng, mean: f32, std: f32, n: usize) -> Vec<f32> {
         let normal = Normal::new(mean, std).unwrap();
         (0..n).map(|_| normal.sample(rng)).collect()
+    }
+
+    // Engine causal mask the same way `MultimodalModel::forward` builds it: `[1, n_new]` ids over a
+    // `[offset]` past-length cache. `None` for single-token decode, `Custom` otherwise.
+    fn causal_mask(n_new: usize, offset: usize, dev: &Device) -> AttentionMask {
+        let ids = Tensor::zeros((1, n_new), DType::U32, dev).unwrap();
+        let offsets = [offset];
+        let offsets_slice = offsets.as_slice();
+        CausalMasker
+            .make_causal_mask(
+                &ids,
+                &offsets_slice as &dyn PastKvLenCache,
+                DType::F32,
+                &CausalMaskConfig::default(),
+            )
+            .unwrap()
     }
 
     fn tiny_cfg() -> TextConfig {
@@ -729,7 +719,14 @@ mod tests {
             .map(|_| EngineKvCache::new_normal(2, 64, 512))
             .collect();
         let full = model
-            .forward(&embeds, &pos, &mut ref_caches, 0, None, None)
+            .forward(
+                &embeds,
+                &pos,
+                &mut ref_caches,
+                &causal_mask(seq, 0, &dev),
+                None,
+                None,
+            )
             .unwrap()
             .logits; // [seq, vocab]
         let hi = full
@@ -758,7 +755,7 @@ mod tests {
                 &embeds.narrow(0, 0, prefill).unwrap(),
                 &pos.narrow(1, 0, prefill).unwrap(),
                 &mut caches,
-                0,
+                &causal_mask(prefill, 0, &dev),
                 None,
                 None,
             )
@@ -778,7 +775,7 @@ mod tests {
                     &embeds.narrow(0, t, 1).unwrap(),
                     &pos.narrow(1, t, 1).unwrap(),
                     &mut caches,
-                    t,
+                    &causal_mask(1, t, &dev),
                     None,
                     None,
                 )
