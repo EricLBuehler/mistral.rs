@@ -171,7 +171,14 @@ impl MultimodalModel for PaddleOcrVlModel {
         // qwen3_vl), then slice/continue the current window. Image prefill is batch-1; text/decode
         // rows carry no image grid.
         let (batch, _full_len) = input_ids_full.dims2()?;
+        // `image_grid_thw` carries a single grid, so batched image prefill has no per-sequence grid;
+        // fail clearly instead of indexing past `grids` in get_rope_index_batched. Text/decode rows
+        // (no grid) batch fine.
         let grids: Vec<Vec<(usize, usize, usize)>> = match image_grid_thw {
+            Some(_) if batch > 1 => candle_core::bail!(
+                "PaddleOCR-VL does not support batched image prefill (batch={batch} with an image); \
+                 send multimodal requests one at a time (batch size 1)"
+            ),
             Some(grid) => vec![vec![grid]],
             None => vec![Vec::new(); batch],
         };
