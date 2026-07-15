@@ -319,6 +319,20 @@ impl Engine {
                         .unwrap_or_else(|_| warn!("Receiver disconnected"));
                     return;
                 };
+                // Raw token ids come straight from the request; an out-of-range id would index past
+                // the embedding table (a CUDA release build has no bounds check -> OOB read).
+                let vocab_size = tokenizer.get_vocab_size(true);
+                if let Some(&bad) = it.iter().find(|&&t| t as usize >= vocab_size) {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            format!("Token id {bad} is out of range for vocab size {vocab_size}.")
+                                .into(),
+                        ))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
                 let prompt = tokenizer
                     .decode(&it, false)
                     .map_err(|e| anyhow::Error::msg(e.to_string()));
