@@ -494,6 +494,14 @@ pub enum MistralRsError {
     Other(String),
 }
 
+impl std::fmt::Display for MistralRsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl std::error::Error for MistralRsError {}
+
 #[cfg(feature = "pyo3_macros")]
 impl From<MistralRsError> for pyo3::PyErr {
     fn from(value: MistralRsError) -> Self {
