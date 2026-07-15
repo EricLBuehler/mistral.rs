@@ -322,7 +322,7 @@ impl Engine {
                 // Raw token ids come straight from the request; an out-of-range id would index past
                 // the embedding table (a CUDA release build has no bounds check -> OOB read).
                 let vocab_size = tokenizer.get_vocab_size(true);
-                if let Some(&bad) = it.iter().find(|&&t| t as usize >= vocab_size) {
+                if let Err(bad) = first_out_of_range_token(&it, vocab_size) {
                     request
                         .response
                         .send(Response::ValidationError(
@@ -954,5 +954,47 @@ impl Engine {
             .send(Ok(txt))
             .await
             .expect("Sender disconnected unexpectedly!");
+    }
+}
+
+/// Returns `Err(id)` for the first token id at or above `vocab_size`, else `Ok(())`. Ids in
+/// `[0, vocab_size)` are the only valid embedding-table indices.
+fn first_out_of_range_token(tokens: &[u32], vocab_size: usize) -> Result<(), u32> {
+    match tokens.iter().find(|&&t| t as usize >= vocab_size) {
+        Some(&bad) => Err(bad),
+        None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::first_out_of_range_token;
+
+    #[test]
+    fn accepts_ids_below_vocab_size() {
+        assert_eq!(first_out_of_range_token(&[0, 5, 99], 100), Ok(()));
+    }
+
+    #[test]
+    fn accepts_max_valid_id() {
+        assert_eq!(first_out_of_range_token(&[99], 100), Ok(()));
+    }
+
+    #[test]
+    fn rejects_id_equal_to_vocab_size() {
+        assert_eq!(first_out_of_range_token(&[100], 100), Err(100));
+    }
+
+    #[test]
+    fn rejects_id_above_vocab_size_and_reports_it() {
+        assert_eq!(
+            first_out_of_range_token(&[1, 2, 4294967294], 100),
+            Err(4294967294)
+        );
+    }
+
+    #[test]
+    fn empty_is_ok() {
+        assert_eq!(first_out_of_range_token(&[], 100), Ok(()));
     }
 }
