@@ -780,4 +780,74 @@ mod tests {
         assert!(!names.contains("model.layers.0.self_attn.q_proj.weight"));
         assert!(!names.contains("lm_head.weight"));
     }
+
+    // A batch-of-2 prefill must reproduce each sequence's logits from a batch-1 run of that sequence
+    // alone. A batching bug (shared positions, a mask that leaks across rows, or an attention reshape
+    // that mixes the batch axis) surfaces here as cross-sequence contamination.
+    #[test]
+    fn batch_forward_matches_separate_sequences() {
+        const TOL: f32 = 1e-5;
+        let dev = Device::Cpu;
+        let mut rng = StdRng::seed_from_u64(TEST_SEED);
+        let cfg = tiny_cfg();
+        let model = tiny_model(&cfg, &dev, &mut rng);
+
+        let seq = 5usize;
+        let h = cfg.hidden_size;
+        let embeds0 =
+            Tensor::from_vec(randn_vec(&mut rng, 0.0, 1.0, seq * h), (1, seq, h), &dev).unwrap();
+        let embeds1 =
+            Tensor::from_vec(randn_vec(&mut rng, 0.0, 1.0, seq * h), (1, seq, h), &dev).unwrap();
+        // distinct t/h/w mrope rows per sequence so the positions actually diverge across the batch.
+        let pos0 = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 0, 1, 1, 2, 0, 1, 0, 1, 0],
+            (3, 1, seq),
+            &dev,
+        )
+        .unwrap();
+        let pos1 = Tensor::from_vec(
+            vec![0i64, 1, 2, 3, 4, 0, 1, 1, 2, 2, 1, 0, 1, 0, 1],
+            (3, 1, seq),
+            &dev,
+        )
+        .unwrap();
+
+        let run = |embeds: &Tensor, pos: &Tensor, batch: usize| {
+            let ids = Tensor::zeros((batch, seq), DType::U32, &dev).unwrap();
+            let offsets = vec![0usize; batch];
+            let offsets_slice = offsets.as_slice();
+            let mask = CausalMasker
+                .make_causal_mask(
+                    &ids,
+                    &offsets_slice as &dyn PastKvLenCache,
+                    DType::F32,
+                    &CausalMaskConfig::default(),
+                )
+                .unwrap();
+            let mut caches: Vec<EngineKvCache> = (0..cfg.num_hidden_layers)
+                .map(|_| EngineKvCache::new_normal(2, 64, 512))
+                .collect();
+            model
+                .forward(embeds, pos, &mut caches, &mask, None, None)
+                .unwrap()
+                .logits
+        };
+
+        let sep0 = run(&embeds0, &pos0, 1); // [1, seq, vocab]
+        let sep1 = run(&embeds1, &pos1, 1);
+        // guard: distinct inputs must yield distinct logits, else the equality assert is vacuous.
+        assert!(
+            max_abs(&sep0, &sep1) > 1e-2,
+            "sequences too similar, contamination test would be vacuous"
+        );
+
+        let embeds = Tensor::cat(&[&embeds0, &embeds1], 0).unwrap(); // [2, seq, hidden]
+        let pos = Tensor::cat(&[&pos0, &pos1], 1).unwrap(); // [3, 2, seq]
+        let batched = run(&embeds, &pos, 2); // [2, seq, vocab]
+
+        let d0 = max_abs(&batched.narrow(0, 0, 1).unwrap(), &sep0);
+        let d1 = max_abs(&batched.narrow(0, 1, 1).unwrap(), &sep1);
+        assert!(d0 < TOL, "batch row 0 diff {d0} (tol {TOL})");
+        assert!(d1 < TOL, "batch row 1 diff {d1} (tol {TOL})");
+    }
 }
