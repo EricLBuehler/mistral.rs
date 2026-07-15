@@ -13,7 +13,7 @@
 //!
 //! Verified against the reference `position_ids[3,174]` (integer-exact) and a worked example.
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 /// Compute `position_ids [3, seq]` (i64) and the decode `rope_delta`.
 ///
@@ -93,6 +93,31 @@ pub fn get_rope_index(
     Ok((position_ids, delta))
 }
 
+/// Batched `get_rope_index`: one row per sequence of `input_ids` `[batch, full_len]`. `grids[b]` are
+/// the image grids for sequence `b`, in stream order (empty for text-only rows). Returns
+/// `position_ids [3, batch, full_len]` and `mrope_position_deltas [batch, 1]`, the shapes
+/// `mrope_position_ids_for_input` consumes to slice the current window and continue the decode cursor.
+pub fn get_rope_index_batched(
+    input_ids: &Tensor,
+    grids: &[Vec<(usize, usize, usize)>],
+    image_token_id: i64,
+    merge: usize,
+    dev: &Device,
+) -> Result<(Tensor, Tensor)> {
+    let (batch, _full_len) = input_ids.dims2()?;
+    let ids = input_ids.to_dtype(DType::I64)?.to_vec2::<i64>()?;
+    let mut pos_rows = Vec::with_capacity(batch);
+    let mut deltas = Vec::with_capacity(batch);
+    for b in 0..batch {
+        let (pos, delta) = get_rope_index(&ids[b], &grids[b], image_token_id, merge, dev)?;
+        pos_rows.push(pos);
+        deltas.push(delta);
+    }
+    let position_ids = Tensor::stack(&pos_rows, 1)?;
+    let deltas = Tensor::from_vec(deltas, (batch, 1), dev)?;
+    Ok((position_ids, deltas))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +157,38 @@ mod tests {
             vec![decode_p; 3],
             "decode position must continue the cursor"
         );
+    }
+
+    // The batched wrapper must equal the single-sequence `get_rope_index` applied row by row (no
+    // cross-row contamination), for a mixed batch of an image row and a text-only row.
+    #[test]
+    fn batched_rope_index_matches_per_sequence() {
+        let dev = Device::Cpu;
+        let img = 999i64;
+        let grid = (1usize, 4usize, 4usize); // merged (1,2,2) -> 4 image placeholder tokens
+        let row0: Vec<i64> = vec![10, 11, img, img, img, img, 12, 13];
+        let row1: Vec<i64> = vec![20, 21, 22, 23, 24, 25, 26, 27];
+        let input_ids =
+            Tensor::from_vec([row0.clone(), row1.clone()].concat(), (2, 8), &dev).unwrap();
+        let grids = vec![vec![grid], vec![]];
+
+        let (pos, deltas) = get_rope_index_batched(&input_ids, &grids, img, 2, &dev).unwrap();
+        assert_eq!(pos.dims(), &[3, 2, 8]);
+        assert_eq!(deltas.dims(), &[2, 1]);
+
+        let (pos0, d0) = get_rope_index(&row0, &[grid], img, 2, &dev).unwrap();
+        let (pos1, d1) = get_rope_index(&row1, &[], img, 2, &dev).unwrap();
+        let got0 = pos.narrow(1, 0, 1).unwrap().squeeze(1).unwrap();
+        let got1 = pos.narrow(1, 1, 1).unwrap().squeeze(1).unwrap();
+        assert_eq!(
+            got0.to_vec2::<i64>().unwrap(),
+            pos0.to_vec2::<i64>().unwrap()
+        );
+        assert_eq!(
+            got1.to_vec2::<i64>().unwrap(),
+            pos1.to_vec2::<i64>().unwrap()
+        );
+        let dv = deltas.flatten_all().unwrap().to_vec1::<i64>().unwrap();
+        assert_eq!(dv, vec![d0, d1]);
     }
 }
