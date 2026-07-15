@@ -186,8 +186,8 @@ impl MultimodalModel for PaddleOcrVlModel {
         let embeds = match pixel_values {
             Some(pv) => {
                 let (t, h, w) = image_grid_thw.expect("pixel_values require image_grid_thw");
-                let vout = self.vision.forward(&pv, t, h, w)?;
-                let image_embeds = self.connector.forward(&vout.post_ln, t, h, w)?;
+                let post_ln = self.vision.forward(&pv, t, h, w)?;
+                let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
                 self.merger
                     .forward(&input_ids.flatten_all()?, &image_embeds)?
                     .unsqueeze(0)?

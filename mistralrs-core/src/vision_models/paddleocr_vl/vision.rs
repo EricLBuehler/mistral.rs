@@ -232,20 +232,6 @@ impl EncoderLayer {
     }
 }
 
-/// Intermediate activations captured for stage-by-stage parity vs the reference.
-pub struct VisionOutput {
-    /// Conv patch-embed output (== reference `patch_embed_out`, squeezed to `[N, hidden]`).
-    pub patch_embed: Tensor,
-    /// After adding the interpolated learned position embedding (== reference `vision_embeds`).
-    pub embeds: Tensor,
-    /// After encoder layer 0 (== reference `vision_block0`).
-    pub block0: Tensor,
-    /// After the final encoder layer (== reference `vision_block26`).
-    pub block_last: Tensor,
-    /// After `post_layernorm` (== reference `vision_post_ln`), the connector's input.
-    pub post_ln: Tensor,
-}
-
 /// The SigLIP/NaViT vision tower: patch embed -> +interp-pos -> 27 pre-norm blocks -> post_layernorm.
 pub struct VisionModel {
     patch_embed: PatchEmbed,
@@ -300,13 +286,7 @@ impl VisionModel {
     }
 
     /// `pixel_values`: `[N, 3, patch, patch]`; grid `(t, h, w)` with `N = t*h*w`. Still images: t=1.
-    pub fn forward(
-        &self,
-        pixel_values: &Tensor,
-        t: usize,
-        h: usize,
-        w: usize,
-    ) -> Result<VisionOutput> {
+    pub fn forward(&self, pixel_values: &Tensor, t: usize, h: usize, w: usize) -> Result<Tensor> {
         assert_eq!(
             t, 1,
             "video temporal grid (t>1) not in scope for the OCR path"
@@ -314,28 +294,15 @@ impl VisionModel {
         let dev = pixel_values.device();
         let patch_embed = self.patch_embed.forward(pixel_values)?; // [N, hidden]
         let pos = self.interpolate_pos(h, w)?; // [h*w, hidden] == [N, hidden] for t=1
-        let embeds = (&patch_embed + &pos)?;
+        let mut x = (&patch_embed + &pos)?;
 
         let (cos, sin) = vision_rope(h, w, self.cfg.head_dim, self.cfg.rope_theta, dev)?;
-        let (cos, sin) = (cos.to_dtype(embeds.dtype())?, sin.to_dtype(embeds.dtype())?);
+        let (cos, sin) = (cos.to_dtype(x.dtype())?, sin.to_dtype(x.dtype())?);
 
-        let mut x = embeds.clone();
-        let mut block0 = None;
-        for (i, layer) in self.layers.iter().enumerate() {
+        for layer in self.layers.iter() {
             x = layer.forward(&x, &cos, &sin)?;
-            if i == 0 {
-                block0 = Some(x.clone());
-            }
         }
-        let block_last = x.clone();
-        let post_ln = self.post_layernorm.forward(&x)?;
-        Ok(VisionOutput {
-            patch_embed,
-            embeds,
-            block0: block0.unwrap(),
-            block_last,
-            post_ln,
-        })
+        self.post_layernorm.forward(&x)
     }
 
     /// The whole (non-quantized) SigLIP tower, keyed under `visual.vision_model.*`. The patch-embed
