@@ -409,9 +409,7 @@ impl DecoderLayer {
 
 /// Output of a text forward pass.
 pub struct TextOutput {
-    /// Final `norm(last_layer_out)` (== reference `lm_hidden_last`, the lm_head input).
-    pub last_hidden: Tensor,
-    /// `lm_head(last_hidden)` (== reference `logits`).
+    /// `lm_head(norm(last_layer_out))` (== reference `logits`).
     pub logits: Tensor,
 }
 
@@ -506,12 +504,9 @@ impl ErnieTextModel {
             let metadata = paged.map(|(kv, meta)| (kv[i].clone(), meta));
             h = layer.forward(&h, &cos, &sin, mask, &mut caches[i], metadata, flash_params)?;
         }
-        let last_hidden = self.norm.forward(&h)?;
-        let logits = self.lm_head.forward(&last_hidden)?;
-        Ok(TextOutput {
-            last_hidden,
-            logits,
-        })
+        let normed = self.norm.forward(&h)?;
+        let logits = self.lm_head.forward(&normed)?;
+        Ok(TextOutput { logits })
     }
 
     /// Non-quantized residuals (RMSNorm weights) keyed with the checkpoint's `model.*` paths. The
