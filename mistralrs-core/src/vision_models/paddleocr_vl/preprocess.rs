@@ -80,17 +80,10 @@ pub fn normalize_patchify(resized: &Tensor) -> Result<Tensor> {
         .reshape((gh * gw, c, PATCH, PATCH))
 }
 
-/// Full production preprocessing: decode -> `smart_resize` -> `image`-crate CatmullRom resize ->
-/// `normalize_patchify`. Returns (`pixel_values [N,3,14,14]`, `grid_thw = (t=1, gh, gw)`).
-/// The CatmullRom resize is mistral.rs's `resample=3` path and is NOT byte-exact vs the HF
-/// reference; this is the path that must yield token-parity.
-pub fn preprocess_image(path: &str, dev: &Device) -> Result<(Tensor, (usize, usize, usize))> {
-    let img = image::open(path).map_err(candle_core::Error::wrap)?;
-    preprocess_decoded(&img, dev)
-}
-
-/// Same as `preprocess_image` but on an already-decoded image (the inputs_processor hands us
-/// `DynamicImage`s, not paths). The resize+normalize path is byte-identical to `preprocess_image`.
+/// Full production preprocessing on an already-decoded image: `smart_resize` -> `image`-crate
+/// CatmullRom resize -> `normalize_patchify`. Returns (`pixel_values [N,3,14,14]`,
+/// `grid_thw = (t=1, gh, gw)`). The CatmullRom resize is mistral.rs's `resample=3` path and is NOT
+/// byte-exact vs the HF reference; this is the path that must yield token-parity.
 pub fn preprocess_decoded(
     img: &DynamicImage,
     dev: &Device,
