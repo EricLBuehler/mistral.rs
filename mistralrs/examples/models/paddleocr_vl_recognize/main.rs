@@ -1,9 +1,12 @@
 //! PaddleOCR-VL recognition example.
 //!
-//! Reads a layout manifest (`manifest.json` + crop PNGs), builds ONE CPU/f32 mistral.rs engine on
-//! a local checkpoint (auto-detects `PaddleOCRVLForConditionalGeneration` -> `PaddleOcrVlLoader`),
-//! runs each crop through the VLM with its manifest-resolved task `prompt` (greedy), and writes
-//! `results.json` = `[{read_order, class, text}]` next to the manifest.
+//! Reads a layout manifest (`manifest.json` + crop PNGs), builds ONE mistral.rs engine on a local
+//! checkpoint (auto-detects `PaddleOCRVLForConditionalGeneration` -> `PaddleOcrVlLoader`), runs each
+//! crop through the VLM with its manifest-resolved task `prompt` (greedy), and writes `results.json`
+//! = `[{read_order, class, text}]` next to the manifest.
+//!
+//! Defaults to CPU/f32 (the deterministic parity path). Opt-in env toggles: `PADDLEOCR_VL_GPU=1`
+//! (bf16 on the accelerator), `PADDLEOCR_VL_ISQ=1` (in-situ Q4K), `PADDLEOCR_VL_PAGED=1` (paged attn).
 //!
 //! Run: `PADDLEOCR_VL_WEIGHTS=<checkpoint_dir> \
 //!   cargo run --release --example paddleocr_vl_recognize -p mistralrs -- <manifest_dir>`
@@ -12,7 +15,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use mistralrs::{
-    ModelDType, MultimodalMessages, MultimodalModelBuilder, RequestBuilder, TextMessageRole,
+    IsqType, ModelDType, MultimodalMessages, MultimodalModelBuilder, PagedAttentionMetaBuilder,
+    RequestBuilder, TextMessageRole,
 };
 use serde::{Deserialize, Serialize};
 
@@ -59,12 +63,23 @@ async fn main() -> Result<()> {
         manifest_path.display()
     );
 
-    let model = MultimodalModelBuilder::new(&weights_dir)
-        .with_dtype(ModelDType::F32)
-        .with_force_cpu()
-        .with_logging()
-        .build()
-        .await?;
+    // Default CPU/f32 (deterministic parity path); set PADDLEOCR_VL_GPU=1 for bf16 on the accelerator.
+    let gpu = std::env::var("PADDLEOCR_VL_GPU").is_ok();
+    let mut builder = MultimodalModelBuilder::new(&weights_dir)
+        .with_dtype(if gpu { ModelDType::BF16 } else { ModelDType::F32 })
+        .with_logging();
+    if !gpu {
+        builder = builder.with_force_cpu();
+    }
+    // PADDLEOCR_VL_ISQ=1 quantizes the LM projections in-situ (Q4K) to exercise the ISQ path.
+    if std::env::var("PADDLEOCR_VL_ISQ").is_ok() {
+        builder = builder.with_isq(IsqType::Q4K);
+    }
+    // PADDLEOCR_VL_PAGED=1 routes decode through the PagedAttention branch instead of the normal cache.
+    if std::env::var("PADDLEOCR_VL_PAGED").is_ok() {
+        builder = builder.with_paged_attn(PagedAttentionMetaBuilder::default().build()?);
+    }
+    let model = builder.build().await?;
 
     let mut results = Vec::with_capacity(tasks.len());
     for task in &tasks {
