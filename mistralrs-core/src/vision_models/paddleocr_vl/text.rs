@@ -56,27 +56,27 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)
 }
 
-/// Build the full-`head_dim` cos/sin tables from 3D `position_ids`.
-///
-/// `position_ids`: `[3, seq]` (one row per t/h/w axis). Returns `(cos, sin)` each `[3, seq, head_dim]`,
-/// mirrors `PaddleOCRRotaryEmbedding.forward` (inv_freq outer pos, `cat(freqs, freqs)`, cos/sin).
-fn rope_tables(
-    position_ids: &Tensor,
-    head_dim: usize,
-    theta: f64,
-    dev: &Device,
-) -> Result<(Tensor, Tensor)> {
-    let (three, seq) = position_ids.dims2()?;
+/// `inv_freq[i] = 1 / theta^(2i/head_dim)`, `i in 0..head_dim/2`, shape `[1, 1, half]`. Computed in
+/// f32 to mirror torch; precomputed at load so the decode hot path never re-allocates it.
+fn rope_inv_freq(head_dim: usize, theta: f64, dev: &Device) -> Result<Tensor> {
     let half = head_dim / 2;
-    // inv_freq[i] = 1 / theta^(2i/head_dim), i in 0..half. Computed in f32 to mirror torch.
     let inv_freq: Vec<f32> = (0..half)
         .map(|i| 1f32 / (theta as f32).powf((2 * i) as f32 / head_dim as f32))
         .collect();
-    let inv_freq = Tensor::from_vec(inv_freq, (1, 1, half), dev)?; // [1,1,half]
+    Tensor::from_vec(inv_freq, (1, 1, half), dev)
+}
+
+/// Build the full-`head_dim` cos/sin tables from 3D `position_ids`.
+///
+/// `position_ids`: `[3, seq]` (one row per t/h/w axis), `inv_freq`: `[1, 1, head_dim/2]`. Returns
+/// `(cos, sin)` each `[3, seq, head_dim]`, mirrors `PaddleOCRRotaryEmbedding.forward` (inv_freq outer
+/// pos, `cat(freqs, freqs)`, cos/sin).
+fn rope_tables(position_ids: &Tensor, inv_freq: &Tensor) -> Result<(Tensor, Tensor)> {
+    let (three, seq) = position_ids.dims2()?;
     let pos = position_ids
         .to_dtype(DType::F32)?
         .reshape((three, seq, 1))?; // [3,seq,1]
-    let freqs = pos.broadcast_mul(&inv_freq)?; // [3,seq,half]
+    let freqs = pos.broadcast_mul(inv_freq)?; // [3,seq,half]
     let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?; // [3,seq,head_dim]
     Ok((emb.cos()?, emb.sin()?))
 }
@@ -447,6 +447,7 @@ pub struct ErnieTextModel {
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    inv_freq: Tensor,
     cfg: TextConfig,
 }
 
@@ -488,10 +489,12 @@ impl ErnieTextModel {
             false,
             mapper.set_nm_device(vb.pp("lm_head"), loading_isq),
         )?;
+        let inv_freq = rope_inv_freq(cfg.head_dim, cfg.rope_theta, vb.device())?;
         Ok(Self {
             layers,
             norm,
             lm_head,
+            inv_freq,
             cfg: cfg.clone(),
         })
     }
@@ -514,8 +517,8 @@ impl ErnieTextModel {
         let dev = inputs_embeds.device();
         let n_new = inputs_embeds.dim(0)?;
 
-        let (cos_t, sin_t) =
-            rope_tables(position_ids, self.cfg.head_dim, self.cfg.rope_theta, dev)?;
+        let inv_freq = self.inv_freq.to_device(dev)?;
+        let (cos_t, sin_t) = rope_tables(position_ids, &inv_freq)?;
         let sections_doubled: Vec<usize> =
             [self.cfg.mrope_section, self.cfg.mrope_section].concat();
         let cos = mrope_select(&cos_t, &sections_doubled)?;
