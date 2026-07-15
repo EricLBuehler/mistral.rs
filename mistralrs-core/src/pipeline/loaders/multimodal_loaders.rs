@@ -5952,7 +5952,7 @@ impl MultimodalModelLoader for PaddleOcrVlLoader {
         Arc::new(PaddleOcrVlProcessor)
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(PaddleOcrVlPrefixer)
