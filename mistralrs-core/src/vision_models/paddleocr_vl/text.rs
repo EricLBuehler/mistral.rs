@@ -1,13 +1,10 @@
-//! ERNIE-4.5-0.3B dense decoder ported to candle.
+//! ERNIE-4.5-0.3B dense decoder: the PaddleOCR-VL language model.
 //!
-//! Faithful to the native transformers 5.13 `PaddleOCR*` text classes. Everything runs at
-//! f32/CPU for parity vs the HF reference. Batch is fixed to 1 (one layout crop = one VLM call),
-//! so hidden states are `[seq, hidden]` and attention tensors are `[heads, seq, head_dim]`, the
-//! leading batch axis is dropped.
+//! Mirrors the transformers `PaddleOCR*` text classes. Hidden states are `[batch, seq, hidden]` and
+//! attention tensors `[batch, heads, seq, head_dim]`, driven by the engine KV cache / paged metadata.
 //!
-//! The single highest parity risk is the 3D **chunked** mrope: cos/sin are built per
-//! position-axis, then for each 128-dim channel chunk we pick axis `i % 3` (Qwen2.5-VL scheme),
-//! NOT the interleaved Qwen3-VL scheme.
+//! The parity-critical piece is the 3D **chunked** mrope: cos/sin are built per position-axis, then for
+//! each channel chunk we pick axis `i % 3` (Qwen2.5-VL scheme), NOT the interleaved Qwen3-VL scheme.
 
 use std::sync::Arc;
 
@@ -56,32 +53,33 @@ fn rotate_half(x: &Tensor) -> Result<Tensor> {
     Tensor::cat(&[&x2.neg()?, &x1], D::Minus1)
 }
 
-/// `inv_freq[i] = 1 / theta^(2i/head_dim)`, `i in 0..head_dim/2`, shape `[1, 1, half]`. Computed in
-/// f32 to mirror torch; precomputed at load so the decode hot path never re-allocates it.
+/// `inv_freq[i] = 1 / theta^(2i/head_dim)`, `i in 0..head_dim/2`, shape `[half]`. Computed in f32 to
+/// mirror torch; precomputed at load so the decode hot path never re-allocates it.
 fn rope_inv_freq(head_dim: usize, theta: f64, dev: &Device) -> Result<Tensor> {
     let half = head_dim / 2;
     let inv_freq: Vec<f32> = (0..half)
         .map(|i| 1f32 / (theta as f32).powf((2 * i) as f32 / head_dim as f32))
         .collect();
-    Tensor::from_vec(inv_freq, (1, 1, half), dev)
+    Tensor::from_vec(inv_freq, half, dev)
 }
 
 /// Build the full-`head_dim` cos/sin tables from 3D `position_ids`.
 ///
-/// `position_ids`: `[3, seq]` (one row per t/h/w axis), `inv_freq`: `[1, 1, head_dim/2]`. Returns
-/// `(cos, sin)` each `[3, seq, head_dim]`, mirrors `PaddleOCRRotaryEmbedding.forward` (inv_freq outer
-/// pos, `cat(freqs, freqs)`, cos/sin).
+/// `position_ids`: `[3, batch, seq]` (one row per t/h/w axis), `inv_freq`: `[head_dim/2]`. Returns
+/// `(cos, sin)` each `[3, batch, seq, head_dim]`, mirrors `PaddleOCRRotaryEmbedding.forward` (inv_freq
+/// outer pos, `cat(freqs, freqs)`, cos/sin).
 fn rope_tables(position_ids: &Tensor, inv_freq: &Tensor) -> Result<(Tensor, Tensor)> {
-    let (three, seq) = position_ids.dims2()?;
+    let (three, batch, seq) = position_ids.dims3()?;
+    let half = inv_freq.dim(0)?;
     let pos = position_ids
         .to_dtype(DType::F32)?
-        .reshape((three, seq, 1))?; // [3,seq,1]
-    let freqs = pos.broadcast_mul(inv_freq)?; // [3,seq,half]
-    let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?; // [3,seq,head_dim]
+        .reshape((three, batch, seq, 1))?;
+    let freqs = pos.broadcast_mul(&inv_freq.reshape((1, 1, 1, half))?)?; // [3,batch,seq,half]
+    let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?; // [3,batch,seq,head_dim]
     Ok((emb.cos()?, emb.sin()?))
 }
 
-/// Chunked-select of a cos/sin table `[3, seq, head_dim]` down to `[seq, head_dim]`.
+/// Chunked-select of a cos/sin table `[3, batch, seq, head_dim]` down to `[batch, seq, head_dim]`.
 ///
 /// `apply_multimodal_rotary_pos_emb`: split the last dim into sections `[16,24,24,16,24,24]`; for
 /// chunk index `i` take axis-plane `i % 3`, then concat. This is the parity-critical mrope wiring.
@@ -91,19 +89,20 @@ fn mrope_select(table: &Tensor, sections_doubled: &[usize]) -> Result<Tensor> {
     for (i, &s) in sections_doubled.iter().enumerate() {
         let plane = i % 3;
         let chunk = table
-            .narrow(D::Minus1, offset, s)? // [3, seq, s]
-            .narrow(0, plane, 1)? // [1, seq, s]
-            .squeeze(0)?; // [seq, s]
+            .narrow(D::Minus1, offset, s)? // [3, batch, seq, s]
+            .narrow(0, plane, 1)? // [1, batch, seq, s]
+            .squeeze(0)?; // [batch, seq, s]
         parts.push(chunk);
         offset += s;
     }
-    Tensor::cat(&parts, D::Minus1) // [seq, head_dim]
+    Tensor::cat(&parts, D::Minus1) // [batch, seq, head_dim]
 }
 
-/// Apply rope to `x` `[heads, seq, head_dim]` with `cos`/`sin` `[seq, head_dim]` (broadcast over heads).
+/// Apply rope to `x` `[batch, heads, seq, head_dim]` with `cos`/`sin` `[batch, seq, head_dim]`
+/// (broadcast over the head axis).
 fn apply_rope(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-    let cos = cos.unsqueeze(0)?; // [1, seq, head_dim]
-    let sin = sin.unsqueeze(0)?;
+    let cos = cos.unsqueeze(1)?; // [batch, 1, seq, head_dim]
+    let sin = sin.unsqueeze(1)?;
     let a = x.broadcast_mul(&cos)?;
     let b = rotate_half(x)?.broadcast_mul(&sin)?;
     a + b
@@ -192,29 +191,11 @@ impl Attention {
         })
     }
 
-    /// Sdpa over `q` `[num_heads, n_new, head_dim]`, `k`/`v` `[num_kv_heads, total, head_dim]` with the
-    /// engine `mask` (`Custom` on prefill, `None` on single-token decode); GQA repetition is handled by
-    /// `sdpa_params.n_kv_groups`. Returns `[n_new, num_heads*head_dim]` for `o_proj`. The final reshape is
-    /// identical for both mask variants because the `n_new==1` transpose is a memory no-op.
-    fn sdpa(&self, q: &Tensor, k: &Tensor, v: &Tensor, mask: &AttentionMask) -> Result<Tensor> {
-        let n_new = q.dim(1)?;
-        let attn = Sdpa.run_attention(
-            &q.unsqueeze(0)?,
-            &k.unsqueeze(0)?,
-            &v.unsqueeze(0)?,
-            mask,
-            None,
-            &self.sdpa_params,
-        )?;
-        attn.squeeze(0)?
-            .transpose(0, 1)?
-            .contiguous()?
-            .reshape((n_new, self.num_heads * self.head_dim))
-    }
-
-    /// Engine attention for `n_new` new tokens. With `paged_attn` the K/V ride the paged cache
-    /// (`metadata` selects this layer's cache slot); otherwise the engine `NormalCache` slot is
-    /// appended and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute).
+    /// Engine attention for a `[batch, q_len, hidden]` block. With `paged_attn` the K/V ride the paged
+    /// cache (`metadata` selects this layer's slot); otherwise the engine `NormalCache` slot is appended
+    /// and `Sdpa` runs over the growing K/V (unit test asserts this matches full recompute). Returns
+    /// `[batch, q_len, num_heads*head_dim]` for `o_proj`; the `q_len==1` decode reshape skips the
+    /// transpose because it is a memory no-op.
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
@@ -226,84 +207,78 @@ impl Attention {
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: Option<&FlashParams>,
     ) -> Result<Tensor> {
-        let n_new = x.dim(0)?;
+        let (b_sz, q_len, _) = x.dims3()?;
         let hd = self.head_dim;
-        let q = self
-            .q_proj
-            .forward(x)?
-            .reshape((n_new, self.num_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let k = self
-            .k_proj
-            .forward(x)?
-            .reshape((n_new, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
-        let v = self
-            .v_proj
-            .forward(x)?
-            .reshape((n_new, self.num_kv_heads, hd))?
-            .transpose(0, 1)?
-            .contiguous()?;
+        let q = self.q_proj.forward(x)?;
+        let k = self.k_proj.forward(x)?;
+        let v = self.v_proj.forward(x)?;
+        let (q, k, v) = if q_len != 1 {
+            let q = q
+                .reshape((b_sz, q_len, self.num_heads, hd))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, q_len, self.num_kv_heads, hd))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, q_len, self.num_kv_heads, hd))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.num_heads, q_len, hd))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, q_len, hd))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, q_len, hd))?;
+            (q, k, v)
+        };
 
-        let q = apply_rope(&q, cos, sin)?;
-        let k = apply_rope(&k, cos, sin)?;
+        let q = apply_rope(&q, cos, sin)?.contiguous()?;
+        let k = apply_rope(&k, cos, sin)?.contiguous()?;
+        let v = v.contiguous()?;
 
-        let ctx = match &self.paged_attn {
-            Some(paged_attn) => {
-                // paged expects [batch, heads, seq, head_dim]; batch is 1 on this path.
-                let q = q.unsqueeze(0)?.contiguous()?;
-                let k = k.unsqueeze(0)?.contiguous()?;
-                let v = v.unsqueeze(0)?.contiguous()?;
-                let attn = match metadata {
-                    Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+        let attn = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    flash_params,
+                )?,
+                // No metadata: imatrix-style prompt pass with no cache to populate.
+                None => {
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    paged_attn.forward(
                         &q,
                         &k,
                         &v,
                         mask,
-                        Some(key_cache),
-                        Some(value_cache),
-                        input_metadata,
+                        None,
+                        None,
+                        &input_metadata,
                         &self.sdpa_params,
                         flash_params,
-                    )?,
-                    // No metadata: imatrix-style prompt pass with no cache to populate.
-                    None => {
-                        let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                        paged_attn.forward(
-                            &q,
-                            &k,
-                            &v,
-                            mask,
-                            None,
-                            None,
-                            &input_metadata,
-                            &self.sdpa_params,
-                            flash_params,
-                        )?
-                    }
-                };
-                // prefill/gather returns [1, heads, n_new, hd]; the decode kernel drops the seq axis.
-                if attn.rank() == 4 {
-                    attn.squeeze(0)?
-                        .transpose(0, 1)?
-                        .contiguous()?
-                        .reshape((n_new, self.num_heads * hd))?
-                } else {
-                    attn.reshape((n_new, self.num_heads * hd))?
+                    )?
                 }
-            }
+            },
             None => {
-                // append K (post-RoPE) / V (raw) to the engine cache with a batch axis, then drop it.
-                let (k, v) = kv_cache.append(&k.unsqueeze(0)?, &v.unsqueeze(0)?)?;
-                // cache may store f16 (cpu_kv_f16); cast back to q's dtype so attention runs in compute dtype.
-                let k = k.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?; // [num_kv, offset+n_new, hd]
-                let v = v.squeeze(0)?.contiguous()?.to_dtype(q.dtype())?;
-                self.sdpa(&q, &k, &v, mask)?
+                let (k, v) = kv_cache.append(&k, &v)?;
+                // cache may store f16 (cpu_kv_f16); cast back to q's dtype for the compute-dtype attention.
+                let k = k.contiguous()?.to_dtype(q.dtype())?;
+                let v = v.contiguous()?.to_dtype(q.dtype())?;
+                Sdpa.run_attention(&q, &k, &v, mask, flash_params, &self.sdpa_params)?
             }
         };
-        self.o_proj.forward(&ctx)
+
+        // decode (mask None) returns [batch, seq, heads*hd] already; prefill needs the head transpose.
+        let attn = if matches!(mask, AttentionMask::None) {
+            attn.reshape((b_sz, q_len, ()))?
+        } else {
+            attn.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        };
+        self.o_proj.forward(&attn)
     }
 }
 
@@ -703,14 +678,14 @@ mod tests {
         let seq = 5usize;
         let embeds = Tensor::from_vec(
             randn_vec(&mut rng, 0.0, 1.0, seq * cfg.hidden_size),
-            (seq, cfg.hidden_size),
+            (1, seq, cfg.hidden_size),
             &dev,
         )
         .unwrap();
         // distinct t/h/w rows so the 3-axis chunked mrope actually matters.
         let pos = Tensor::from_vec(
             vec![0i64, 1, 2, 3, 4, 0, 0, 1, 1, 2, 0, 1, 0, 1, 0],
-            (3, seq),
+            (3, 1, seq),
             &dev,
         )
         .unwrap();
@@ -728,16 +703,16 @@ mod tests {
                 None,
             )
             .unwrap()
-            .logits; // [seq, vocab]
+            .logits; // [1, seq, vocab]
         let hi = full
-            .max(0)
+            .flatten_all()
             .unwrap()
             .max(0)
             .unwrap()
             .to_scalar::<f32>()
             .unwrap();
         let lo = full
-            .min(0)
+            .flatten_all()
             .unwrap()
             .min(0)
             .unwrap()
@@ -752,8 +727,8 @@ mod tests {
 
         let out = model
             .forward(
-                &embeds.narrow(0, 0, prefill).unwrap(),
-                &pos.narrow(1, 0, prefill).unwrap(),
+                &embeds.narrow(1, 0, prefill).unwrap(),
+                &pos.narrow(2, 0, prefill).unwrap(),
                 &mut caches,
                 &causal_mask(prefill, 0, &dev),
                 None,
@@ -763,8 +738,8 @@ mod tests {
             .logits;
         for i in 0..prefill {
             let d = max_abs(
-                &out.narrow(0, i, 1).unwrap(),
-                &full.narrow(0, i, 1).unwrap(),
+                &out.narrow(1, i, 1).unwrap(),
+                &full.narrow(1, i, 1).unwrap(),
             );
             assert!(d < TOL, "prefill row {i} diff {d} (tol {TOL})");
         }
@@ -772,8 +747,8 @@ mod tests {
         for t in prefill..seq {
             let out = model
                 .forward(
-                    &embeds.narrow(0, t, 1).unwrap(),
-                    &pos.narrow(1, t, 1).unwrap(),
+                    &embeds.narrow(1, t, 1).unwrap(),
+                    &pos.narrow(2, t, 1).unwrap(),
                     &mut caches,
                     &causal_mask(1, t, &dev),
                     None,
@@ -781,7 +756,7 @@ mod tests {
                 )
                 .unwrap()
                 .logits;
-            let d = max_abs(&out, &full.narrow(0, t, 1).unwrap());
+            let d = max_abs(&out, &full.narrow(1, t, 1).unwrap());
             assert!(d < TOL, "decode step {t} diff {d} (tol {TOL})");
         }
     }

@@ -227,15 +227,15 @@ impl MultimodalModel for PaddleOcrVlModel {
         let logits = self
             .text
             .forward(
-                &embeds,
-                &position_ids,
+                &embeds.unsqueeze(0)?,
+                &position_ids.unsqueeze(1)?,
                 &mut guard.0,
                 &mask,
                 paged_ref,
                 Some(ctx.flash_params()),
             )?
-            .logits; // [seq, vocab]
-        ctx.logits(&logits.unsqueeze(0)?) // [1, seq, vocab]; engine slices the wanted rows
+            .logits; // [1, seq, vocab]
+        ctx.logits(&logits) // engine slices the wanted rows
     }
 
     fn device(&self) -> &Device {
