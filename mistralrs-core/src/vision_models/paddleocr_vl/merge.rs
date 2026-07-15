@@ -37,14 +37,10 @@ impl Merger {
         })
     }
 
-    /// Embed a slice of token ids `[n]` -> `[n, D]`. Used by the autoregressive greedy loop to
-    /// embed each newly generated token (pure text tokens, no scatter). Device is taken from the
-    /// embedding weight so callers don't have to thread one through.
-    pub fn embed(&self, ids: &[i64]) -> Result<Tensor> {
-        let idx: Vec<u32> = ids.iter().map(|&v| v as u32).collect();
-        let n = idx.len();
-        let idx = Tensor::from_vec(idx, n, self.embed_tokens.embeddings().device())?;
-        self.embed_tokens.forward(&idx)
+    /// Embed `input_ids` `[batch, seq]` -> `[batch, seq, D]` on-device (no host round-trip), for the
+    /// text/decode hot path. Pure token embedding, no image scatter.
+    pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
+        self.embed_tokens.forward(&input_ids.to_dtype(DType::U32)?)
     }
 
     /// `input_ids` `[S]` (i64), `image_embeds` `[K, D]` (connector output). Returns `[S, D]`.

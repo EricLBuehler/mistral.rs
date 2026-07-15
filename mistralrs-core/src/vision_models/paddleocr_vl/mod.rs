@@ -20,7 +20,7 @@ pub mod vision;
 
 use std::any::Any;
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::amoe::AnyMoeBaseModelMixin;
@@ -34,7 +34,7 @@ use crate::pipeline::{
 use config::Config;
 use connector::Connector;
 use merge::Merger;
-use rope_index::get_rope_index;
+use rope_index::get_rope_index_batched;
 use text::ErnieTextModel;
 use vision::VisionModel;
 
@@ -159,59 +159,42 @@ impl MultimodalModel for PaddleOcrVlModel {
             .expect("Cannot downcast into `PaddleOcrVlVisionSpecificArgs`");
 
         let dev = &self.device;
-        let offset = ctx.seqlen_offsets()[0]; // batch 1: past length, 0 on prefill
         let merge = self.cfg.vision_config().spatial_merge_size;
         let image_token_id = self.cfg.image_token_id as i64;
+        let seqlen_offsets = ctx.seqlen_offsets();
 
-        let ids_flat = input_ids.flatten_all()?; // batch 1 -> [seq]
-        let ids_vec = ids_flat.to_dtype(DType::I64)?.to_vec1::<i64>()?;
-
-        // mrope: full prefill positions [3, full_len] + decode `delta`, recomputed each step from
-        // input_ids_full (stateless, like qwen3_vl). Decode position = offset + delta on all 3 rows.
-        let full_ids = input_ids_full
-            .flatten_all()?
-            .to_dtype(DType::I64)?
-            .to_vec1::<i64>()?;
-        let (full_pos, delta) = match image_grid_thw {
-            Some(grid) => get_rope_index(&full_ids, &[grid], image_token_id, merge, dev)?,
-            None => {
-                let n = full_ids.len();
-                let mut v = Vec::with_capacity(3 * n);
-                for _ in 0..3 {
-                    for j in 0..n as i64 {
-                        v.push(j);
-                    }
-                }
-                (Tensor::from_vec(v, (3, n), dev)?, 0i64)
-            }
+        // mrope: recompute full-sequence positions from input_ids_full each step (stateless, like
+        // qwen3_vl), then slice/continue the current window. Image prefill is batch-1; text/decode
+        // rows carry no image grid.
+        let (batch, _full_len) = input_ids_full.dims2()?;
+        let grids: Vec<Vec<(usize, usize, usize)>> = match image_grid_thw {
+            Some(grid) => vec![vec![grid]],
+            None => vec![Vec::new(); batch],
         };
-        let position_ids = if offset == 0 {
-            full_pos
-        } else {
-            let n = ids_vec.len();
-            let mut cols = Vec::with_capacity(3 * n);
-            for _ in 0..3 {
-                for j in 0..n as i64 {
-                    cols.push(offset as i64 + j + delta);
-                }
-            }
-            Tensor::from_vec(cols, (3, n), dev)?
-        };
+        let (full_pos, deltas) =
+            get_rope_index_batched(&input_ids_full, &grids, image_token_id, merge, dev)?;
+        let position_ids = crate::vision_models::mrope_position_ids_for_input(
+            &full_pos,
+            &deltas,
+            input_ids,
+            seqlen_offsets,
+        )?;
 
-        // Prefill runs vision -> connector -> masked-scatter merge (needs pixel_values); decode is a
-        // pure text embed of the newly generated token(s).
+        // Prefill-with-image runs vision -> connector -> masked-scatter merge (batch-1); text/decode
+        // is a pure on-device token embed of the current window.
         let embeds = match pixel_values {
             Some(pv) => {
                 let (t, h, w) = image_grid_thw.expect("pixel_values require image_grid_thw");
                 let vout = self.vision.forward(&pv, t, h, w)?;
                 let image_embeds = self.connector.forward(&vout.post_ln, t, h, w)?;
-                self.merger.forward(&ids_flat, &image_embeds)?
+                self.merger
+                    .forward(&input_ids.flatten_all()?, &image_embeds)?
+                    .unsqueeze(0)?
             }
-            None => self.merger.embed(&ids_vec)?,
+            None => self.merger.embed_tokens(input_ids)?,
         };
 
-        // Engine causal mask: `Custom` on prefill, `None` on single-token decode (no per-token alloc).
-        let seqlen_offsets = ctx.seqlen_offsets();
+        // Engine causal mask: batch-aware; `Custom` on prefill, `None` on single-token decode.
         let mask = CausalMasker.make_causal_mask(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -227,14 +210,14 @@ impl MultimodalModel for PaddleOcrVlModel {
         let logits = self
             .text
             .forward(
-                &embeds.unsqueeze(0)?,
-                &position_ids.unsqueeze(1)?,
+                &embeds,
+                &position_ids,
                 &mut guard.0,
                 &mask,
                 paged_ref,
                 Some(ctx.flash_params()),
             )?
-            .logits; // [1, seq, vocab]
+            .logits; // [batch, seq, vocab]
         ctx.logits(&logits) // engine slices the wanted rows
     }
 
