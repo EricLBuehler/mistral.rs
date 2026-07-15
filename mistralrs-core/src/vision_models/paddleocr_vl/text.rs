@@ -407,10 +407,8 @@ impl DecoderLayer {
     }
 }
 
-/// Output of a text forward pass, for parity checks against the reference tensors.
+/// Output of a text forward pass.
 pub struct TextOutput {
-    /// Output of decoder layer 0 (== reference `lm_hidden_0`).
-    pub layer0_out: Tensor,
     /// Final `norm(last_layer_out)` (== reference `lm_hidden_last`, the lm_head input).
     pub last_hidden: Tensor,
     /// `lm_head(last_hidden)` (== reference `logits`).
@@ -504,18 +502,13 @@ impl ErnieTextModel {
         let (cos, sin) = (cos.to_dtype(dtype)?, sin.to_dtype(dtype)?);
 
         let mut h = inputs_embeds.clone();
-        let mut layer0_out = None;
         for (i, layer) in self.layers.iter().enumerate() {
             let metadata = paged.map(|(kv, meta)| (kv[i].clone(), meta));
             h = layer.forward(&h, &cos, &sin, mask, &mut caches[i], metadata, flash_params)?;
-            if i == 0 {
-                layer0_out = Some(h.clone());
-            }
         }
         let last_hidden = self.norm.forward(&h)?;
         let logits = self.lm_head.forward(&last_hidden)?;
         Ok(TextOutput {
-            layer0_out: layer0_out.unwrap(),
             last_hidden,
             logits,
         })
