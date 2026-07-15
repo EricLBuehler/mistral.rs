@@ -3,10 +3,6 @@
 //! Ported from PaddleOCR-VL (Apache-2.0, https://github.com/PaddlePaddle/PaddleOCR), following the
 //! HuggingFace transformers `modeling_paddleocr_vl` reference and the GGUF ERNIE-4.5 layout.
 
-// `dead_code`: each submodule keeps numerical-parity-only helpers (the inherent prefill `forward`,
-// `causal_mask`, `preprocess_image`, activation-capture fields) that the loader/`MultimodalModel`
-// path does not all reach.
-#![allow(dead_code)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 pub mod config;

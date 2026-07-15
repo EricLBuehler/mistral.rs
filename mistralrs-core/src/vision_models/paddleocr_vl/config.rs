@@ -123,10 +123,6 @@ pub struct Config {
     pub rope_scaling: MRopeScaling,
     pub max_position_embeddings: usize,
     pub image_token_id: u32,
-    pub video_token_id: u32,
-    pub vision_start_token_id: u32,
-    pub vision_end_token_id: u32,
-    pub tie_word_embeddings: bool,
     pub vision_config: VisionConfigRaw,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
@@ -211,8 +207,5 @@ mod tests {
         assert_eq!(v.spatial_merge_size, vd.spatial_merge_size);
 
         assert_eq!(cfg.image_token_id, 100295);
-        assert_eq!(cfg.vision_start_token_id, 101305);
-        assert_eq!(cfg.vision_end_token_id, 101306);
-        assert!(!cfg.tie_word_embeddings);
     }
 }
