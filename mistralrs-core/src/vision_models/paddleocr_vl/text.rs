@@ -357,7 +357,7 @@ impl DecoderLayer {
     ) -> Result<Self> {
         Ok(Self {
             input_layernorm: RmsNorm::load(
-                vb.pp("input_layernorm"),
+                mapper.set_device(layer_idx, vb.pp("input_layernorm"), false),
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
             )?,
@@ -371,7 +371,7 @@ impl DecoderLayer {
                 comm,
             )?,
             post_attention_layernorm: RmsNorm::load(
-                vb.pp("post_attention_layernorm"),
+                mapper.set_device(layer_idx, vb.pp("post_attention_layernorm"), false),
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
             )?,
@@ -453,7 +453,11 @@ impl ErnieTextModel {
                 &comm,
             )?);
         }
-        let norm = RmsNorm::load(vm.pp("norm"), cfg.hidden_size, cfg.rms_norm_eps)?;
+        let norm = RmsNorm::load(
+            mapper.set_nm_device(vm.pp("norm"), false),
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+        )?;
         let lm_head = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.vocab_size,

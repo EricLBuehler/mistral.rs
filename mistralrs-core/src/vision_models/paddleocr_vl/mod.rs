@@ -62,21 +62,28 @@ impl PaddleOcrVlModel {
     ) -> Result<Self> {
         let tcfg = cfg.text_config();
         let vcfg = cfg.vision_config();
-        let vision = VisionModel::load(vb.pp("visual").pp("vision_model"), &vcfg)?;
+        // Non-quantized parts (tower/connector/embed) must load on the real compute device, not the
+        // cpu staging device ISQ uses for the quantizable LM weights, or their activations reach the
+        // cuda quant projections on cpu ("input must live on CUDA"). Mirrors qwen2vl.
+        let real_dev = normal_loading_metadata.real_device.clone();
+        let vision = VisionModel::load(
+            vb.pp("visual").pp("vision_model").set_device(real_dev.clone()),
+            &vcfg,
+        )?;
         let connector = Connector::load(
-            vb.pp("mlp_AR"),
+            vb.pp("mlp_AR").set_device(real_dev.clone()),
             vcfg.hidden_size,
             vcfg.spatial_merge_size,
             tcfg.hidden_size,
         )?;
         let merger = Merger::load(
-            vb.pp("model"),
+            vb.pp("model").set_device(real_dev.clone()),
             tcfg.vocab_size,
             tcfg.hidden_size,
             cfg.image_token_id as i64,
         )?;
         // ErnieTextModel::load consumes the root vb (it does its own .pp("model")/.pp("lm_head")).
-        let device = vb.device().clone();
+        let device = real_dev;
         let text = ErnieTextModel::load(
             vb,
             &tcfg,
