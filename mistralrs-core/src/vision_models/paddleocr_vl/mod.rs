@@ -62,6 +62,7 @@ impl PaddleOcrVlModel {
         cfg: &Config,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let tcfg = cfg.text_config();
         let vcfg = cfg.vision_config();
@@ -85,7 +86,7 @@ impl PaddleOcrVlModel {
             &tcfg,
             &*normal_loading_metadata.mapper,
             normal_loading_metadata.loading_isq,
-            AttentionImplementation::Eager,
+            attention_mechanism,
         )?;
         // world_size 1 (CPU f32 parity path, no tensor-parallel sharding); head_dim is the K/V dim.
         let config_meta = ModelConfigMetadata {

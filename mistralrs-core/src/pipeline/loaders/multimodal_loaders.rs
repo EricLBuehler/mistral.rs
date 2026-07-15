@@ -5925,13 +5925,14 @@ impl MultimodalModelLoader for PaddleOcrVlLoader {
         config: &str,
         vb: ShardedVarBuilder,
         normal_loading_metadata: NormalLoadingMetadata,
-        _attention_mechanism: AttentionImplementation,
+        attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
         Ok(Box::new(PaddleOcrVlModel::new(
             &cfg,
             vb,
             normal_loading_metadata,
+            attention_mechanism,
         )?))
     }
     fn is_gptx(&self, _config: &str) -> bool {
