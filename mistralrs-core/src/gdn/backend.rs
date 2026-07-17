@@ -728,6 +728,7 @@ fn causal_conv1d_update(
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
             &x_t,
             &weight,
+            None,
             &conv_state,
             dims.conv_kernel_size,
             true,
@@ -848,6 +849,7 @@ fn causal_conv1d_full(
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
             &x_t,
             &weight,
+            None,
             &cache.conv_state,
             dims.conv_kernel_size,
             false,

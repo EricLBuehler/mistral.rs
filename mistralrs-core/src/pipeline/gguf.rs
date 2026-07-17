@@ -15,7 +15,7 @@ use crate::gguf::{
     get_gguf_chat_template, {convert_gguf_to_hf_tokenizer, GgufTokenizerConversion},
 };
 use crate::gguf::{Content, GGUFArchitecture};
-use crate::kv_cache::{FullCacheManager, NormalCacheManager};
+use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheEngine, ModelConfigLike,
@@ -42,6 +42,7 @@ use crate::{
     models::quantized_phi3::ModelWeights as QPhi3,
     models::quantized_qwen::ModelWeights as QQwen,
     models::quantized_qwen3::ModelWeights as QQwen3,
+    models::quantized_qwen3_5::ModelWeights as QQwen3_5,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -71,6 +72,7 @@ enum Model {
     Qwen(QQwen),
     Qwen3(QQwen3),
     Qwen3MoE(QQwen3MoE),
+    Qwen35(QQwen3_5),
 }
 
 pub struct GGUFPipeline {
@@ -482,6 +484,7 @@ impl Loader for GGUFLoader {
                 GGUFArchitecture::Qwen2 => Model::Qwen(QQwen::try_from(model_config)?),
                 GGUFArchitecture::Qwen3 => Model::Qwen3(QQwen3::try_from(model_config)?),
                 GGUFArchitecture::Qwen3MoE => Model::Qwen3MoE(QQwen3MoE::try_from(model_config)?),
+                GGUFArchitecture::Qwen35 => Model::Qwen35(QQwen3_5::try_from(model_config)?),
                 a => bail!("Unsupported architecture `{a:?}` for GGUF"),
             },
             ModelKind::GgufAdapter { adapter, .. } => match arch {
@@ -548,6 +551,7 @@ impl Loader for GGUFLoader {
             Model::Qwen(ref p) => p.max_seq_len,
             Model::Qwen3(ref p) => p.max_seq_len,
             Model::Qwen3MoE(ref p) => p.max_seq_len,
+            Model::Qwen35(ref p) => p.max_seq_len,
         };
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
@@ -560,6 +564,7 @@ impl Loader for GGUFLoader {
             Model::Qwen(ref model) => model.cache.normal().0.len(),
             Model::Qwen3(ref model) => model.cache.normal().0.len(),
             Model::Qwen3MoE(ref model) => model.cache.normal().0.len(),
+            Model::Qwen35(ref model) => model.cache.hybrid().num_layers(),
         };
 
         if chat_template.bos_token.is_none() {
@@ -653,17 +658,17 @@ impl IsqPipelineMixin for GGUFPipeline {
 
 impl CacheManagerMixin for GGUFPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_in_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_in_cache(self, seqs, false)
+        match self.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_in_cache(self, seqs, false),
+            _ => NormalCacheManager.clone_in_cache(self, seqs, false),
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
-        if matches!(self.cache(), EitherCache::Full(_)) {
-            FullCacheManager.clone_out_cache(self, seqs, false)
-        } else {
-            NormalCacheManager.clone_out_cache(self, seqs, false)
+        match self.cache() {
+            EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
+            EitherCache::Hybrid(_) => HybridCacheManager.clone_out_cache(self, seqs, false),
+            _ => NormalCacheManager.clone_out_cache(self, seqs, false),
         }
     }
     fn set_none_cache(
@@ -673,15 +678,21 @@ impl CacheManagerMixin for GGUFPipeline {
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
     ) {
-        if matches!(self.cache(), EitherCache::Full(_)) {
-            FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
-        } else {
-            NormalCacheManager.set_none_cache(
-                self,
-                seqs,
-                modify_draft_cache,
-                load_preallocated_cache,
-            );
+        match self.cache() {
+            EitherCache::Full(_) => {
+                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+            }
+            EitherCache::Hybrid(_) => {
+                HybridCacheManager.set_none_cache(self, seqs, modify_draft_cache, false);
+            }
+            _ => {
+                NormalCacheManager.set_none_cache(
+                    self,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                );
+            }
         }
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -698,6 +709,7 @@ impl CacheManagerMixin for GGUFPipeline {
             Model::Qwen(ref model) => &model.cache,
             Model::Qwen3(ref model) => &model.cache,
             Model::Qwen3MoE(ref model) => &model.cache,
+            Model::Qwen35(ref model) => &model.cache,
         }
     }
 }
@@ -714,6 +726,7 @@ impl MetadataMixin for GGUFPipeline {
             Model::Qwen(ref model) => model.device.clone(),
             Model::Qwen3(ref model) => model.device.clone(),
             Model::Qwen3MoE(ref model) => model.device.clone(),
+            Model::Qwen35(ref model) => model.device.clone(),
         }
     }
     fn tokenizer(&self) -> Option<Arc<Tokenizer>> {
@@ -813,6 +826,9 @@ impl Pipeline for GGUFPipeline {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
             Model::Qwen3MoE(ref model) => {
+                model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
+            }
+            Model::Qwen35(ref model) => {
                 model.forward(&input_ids, &seqlen_offsets, context_lens, paged_attn_meta)?
             }
         };

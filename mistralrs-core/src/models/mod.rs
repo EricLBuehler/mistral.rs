@@ -1,5 +1,6 @@
 pub(crate) mod deepseek2;
 pub(crate) mod deepseek3;
+pub(crate) mod gdn;
 pub(crate) mod gemma;
 pub(crate) mod gemma2;
 pub(crate) mod glm4;
@@ -22,6 +23,7 @@ pub(crate) mod quantized_phi2;
 pub(crate) mod quantized_phi3;
 pub(crate) mod quantized_qwen;
 pub(crate) mod quantized_qwen3;
+pub(crate) mod quantized_qwen3_5;
 pub(crate) mod quantized_qwen3_moe;
 pub(crate) mod quantized_starcoder2;
 pub(crate) mod qwen2;
