@@ -3771,8 +3771,8 @@ dependencies = [
  "base64 0.22.1",
  "image",
  "libc",
- "mistralrs-mcp",
  "mistralrs-sandbox",
+ "mistralrs-tool-types",
  "serde",
  "serde_json",
  "tempfile",
@@ -3815,7 +3815,6 @@ dependencies = [
  "half",
  "hashbrown 0.16.1",
  "hf-hub",
- "hound",
  "html2text",
  "http",
  "image",
@@ -3837,6 +3836,7 @@ dependencies = [
  "mistralrs-paged-attn",
  "mistralrs-quant",
  "mistralrs-sandbox",
+ "mistralrs-tool-types",
  "mistralrs-vision",
  "num-traits",
  "objc",
@@ -3854,7 +3854,6 @@ dependencies = [
  "regex-automata",
  "reqwest 0.13.1",
  "rubato",
- "rust-mcp-schema",
  "rustc-hash 2.1.1",
  "rustfft",
  "safetensors 0.8.0",
@@ -3867,7 +3866,6 @@ dependencies = [
  "serde_plain",
  "statrs",
  "strum 0.27.2",
- "symphonia",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
@@ -3918,6 +3916,7 @@ dependencies = [
  "futures-util",
  "http",
  "image",
+ "mistralrs-tool-types",
  "pyo3",
  "reqwest 0.13.1",
  "rust-mcp-schema",
@@ -4071,6 +4070,19 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid 1.19.0",
  "zip 2.4.2",
+]
+
+[[package]]
+name = "mistralrs-tool-types"
+version = "0.9.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "pyo3",
+ "serde",
+ "serde_json",
+ "tracing",
+ "utoipa",
 ]
 
 [[package]]

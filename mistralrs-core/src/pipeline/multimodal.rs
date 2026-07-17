@@ -223,6 +223,32 @@ impl MultimodalLoaderBuilder {
     }
 }
 
+#[cfg(all(test, not(feature = "audio")))]
+mod no_audio_tests {
+    use super::{MultimodalLoaderBuilder, MultimodalSpecificConfig};
+    use crate::MultimodalLoaderType;
+
+    fn builder() -> MultimodalLoaderBuilder {
+        MultimodalLoaderBuilder::new(
+            MultimodalSpecificConfig::default(),
+            None,
+            None,
+            Some("test/model".to_string()),
+            None,
+        )
+    }
+
+    #[test]
+    fn explicit_phi4mm_builder_is_available_without_audio() {
+        let _ = builder().build(Some(MultimodalLoaderType::Phi4MM));
+    }
+
+    #[test]
+    fn explicit_gemma3n_builder_is_available_without_audio() {
+        let _ = builder().build(Some(MultimodalLoaderType::Gemma3n));
+    }
+}
+
 impl Loader for MultimodalLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(

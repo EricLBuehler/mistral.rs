@@ -219,6 +219,7 @@ mod messages;
 mod model;
 pub mod model_builder_trait;
 mod multimodal_model;
+#[cfg(feature = "audio")]
 mod speech_model;
 mod text_model;
 mod xlora_model;
@@ -254,6 +255,7 @@ pub use mistralrs_core::{
     WIRE_EMBED_LIMIT_BYTES,
 };
 pub use mistralrs_core::{CalibrationAction, CalibrationStatus};
+#[cfg(feature = "mcp")]
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
@@ -266,6 +268,7 @@ pub use mistralrs_core::{MISTRALRS_GIT_REVISION, MISTRALRS_VERSION};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
+#[cfg(feature = "audio")]
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
@@ -304,6 +307,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Audio Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::AudioInput;
 
 // ========== Video Types ==========
@@ -319,6 +323,7 @@ pub use mistralrs_core::ModelCategory;
 pub use mistralrs_core::{SearchEmbeddingModel, SearchFunctionParameters};
 
 // ========== Speech Types ==========
+#[cfg(feature = "audio")]
 pub use mistralrs_core::{speech_utils, SpeechLoaderType};
 
 // ========== AnyMoe Types ==========

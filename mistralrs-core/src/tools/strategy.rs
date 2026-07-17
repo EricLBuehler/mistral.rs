@@ -5,7 +5,7 @@ use crate::{
     tools::{parsers, ToolCallFormat, ToolCallResponse, ToolCallType},
     Tool,
 };
-use mistralrs_mcp::CalledFunction;
+use mistralrs_tool_types::CalledFunction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolCallBoundary {

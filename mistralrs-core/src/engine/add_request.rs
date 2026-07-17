@@ -197,14 +197,17 @@ impl Engine {
             _ => None,
         };
 
+        #[cfg(feature = "audio")]
         let audios = match request.messages {
             RequestMessage::MultimodalChat { ref audios, .. } => Some(audios.clone()),
             _ => None,
         };
+
         let videos = match request.messages {
             RequestMessage::MultimodalChat { ref videos, .. } => Some(videos.clone()),
             _ => None,
         };
+
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
         let preferred_tool_call_format = {
             let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -264,7 +267,8 @@ impl Engine {
             }
             | RequestMessage::MultimodalChat {
                 images: _,
-                audios: _,
+                #[cfg(feature = "audio")]
+                    audios: _,
                 videos: _,
                 messages,
                 enable_thinking,
@@ -688,7 +692,10 @@ impl Engine {
                     None
                 },
                 images.clone(),
+                #[cfg(feature = "audio")]
                 audios.clone(),
+                #[cfg(not(feature = "audio"))]
+                None,
                 videos.clone(),
                 block_size,
                 tool_call_state,

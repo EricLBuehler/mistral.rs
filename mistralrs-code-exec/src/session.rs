@@ -199,7 +199,7 @@ impl PythonSession {
 
     pub fn mount_input_files(
         &mut self,
-        files: &[mistralrs_mcp::ToolInputFile],
+        files: &[mistralrs_tool_types::ToolInputFile],
     ) -> anyhow::Result<()> {
         let key = files
             .iter()
