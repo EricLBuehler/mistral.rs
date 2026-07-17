@@ -827,7 +827,7 @@ impl RequestBuilder {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
-            ("function".to_string(), Either::Right(tool_messages)),
+            ("tool_calls".to_string(), Either::Right(tool_messages)),
         ]));
         self
     }
@@ -1444,5 +1444,50 @@ impl EmbeddingRequestBuilder {
             inputs: self.inputs,
             truncate_sequence: self.truncate_sequence,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_message_with_tool_call_uses_tool_calls_key() {
+        let tool_call = ToolCallResponse {
+            index: 0,
+            id: "call-1".to_string(),
+            tp: ToolCallType::Function,
+            function: CalledFunction {
+                name: "get_weather".to_string(),
+                arguments: "{\"city\":\"Paris\"}".to_string(),
+            },
+        };
+
+        let builder = RequestBuilder::new().add_message_with_tool_call(
+            TextMessageRole::Assistant,
+            "",
+            vec![tool_call],
+        );
+        let message = builder.messages_ref().last().expect("message was pushed");
+
+        // Chat templates and the agentic loop read tool calls from `tool_calls`, not `function`.
+        assert!(message.contains_key("tool_calls"));
+        assert!(!message.contains_key("function"));
+
+        let Some(Either::Right(tool_calls)) = message.get("tool_calls") else {
+            panic!("`tool_calls` must hold the tool call array");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            tool_calls[0].get("id"),
+            Some(&Value::String("call-1".to_string()))
+        );
+        let Some(Value::Object(function)) = tool_calls[0].get("function") else {
+            panic!("each tool call must carry a nested `function` object");
+        };
+        assert_eq!(
+            function.get("name"),
+            Some(&Value::String("get_weather".to_string()))
+        );
     }
 }
