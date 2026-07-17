@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Module, Result, Tensor};
 use candle_nn::Embedding;
 use mistralrs_quant::{
     softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer,
@@ -2269,51 +2269,63 @@ impl TextModel {
         image_token_id: usize,
         video_token_id: Option<usize>,
     ) -> Result<Tensor> {
-        let (_, seq_len) = input_ids.dims2()?;
+        let (bsz, seq_len) = input_ids.dims2()?;
         let total_len = causal_mask.dim(1)?;
         let past_kv_len = total_len - seq_len;
-
-        let input_ids_1d = input_ids.squeeze(0)?;
-        // Both image and video tokens get bidirectional attention within their
-        // respective groups.
-        let is_image = input_ids_1d.eq(image_token_id as f64)?;
-        let is_vision = if let Some(vid_id) = video_token_id {
-            is_image.add(&input_ids_1d.eq(vid_id as f64)?)?
-        } else {
-            is_image
-        };
-        let is_vision_vec: Vec<u32> = is_vision.to_dtype(candle_core::DType::U32)?.to_vec1()?;
-        let mut group_ids = vec![-1i64; seq_len];
-        let mut current_group: i64 = -1;
-        for i in 0..seq_len {
-            if is_vision_vec[i] == 1 {
-                if i == 0 || is_vision_vec[i - 1] == 0 {
-                    current_group += 1;
-                }
-                group_ids[i] = current_group;
-            }
-        }
 
         let device = causal_mask.device();
         let dtype = causal_mask.dtype();
 
-        let mut override_vals = vec![0f32; seq_len * total_len];
-        for qi in 0..seq_len {
-            if group_ids[qi] < 0 {
-                continue;
-            }
-            for ki in 0..seq_len {
-                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
-                    let col = ki + past_kv_len;
-                    override_vals[qi * total_len + col] = 1.0;
+        // Batched prefill (bsz > 1) computes the same per-row override against the
+        // shared 2-D causal mask and stacks the rows; bsz == 1 keeps the original
+        // 2-D [seq_len, total_len] output the callers/broadcast rely on.
+        let mut rows = Vec::with_capacity(bsz);
+        for b in 0..bsz {
+            let input_ids_1d = input_ids.i(b)?;
+            // Both image and video tokens get bidirectional attention within their
+            // respective groups.
+            let is_image = input_ids_1d.eq(image_token_id as f64)?;
+            let is_vision = if let Some(vid_id) = video_token_id {
+                is_image.add(&input_ids_1d.eq(vid_id as f64)?)?
+            } else {
+                is_image
+            };
+            let is_vision_vec: Vec<u32> = is_vision.to_dtype(candle_core::DType::U32)?.to_vec1()?;
+            let mut group_ids = vec![-1i64; seq_len];
+            let mut current_group: i64 = -1;
+            for i in 0..seq_len {
+                if is_vision_vec[i] == 1 {
+                    if i == 0 || is_vision_vec[i - 1] == 0 {
+                        current_group += 1;
+                    }
+                    group_ids[i] = current_group;
                 }
             }
+
+            let mut override_vals = vec![0f32; seq_len * total_len];
+            for qi in 0..seq_len {
+                if group_ids[qi] < 0 {
+                    continue;
+                }
+                for ki in 0..seq_len {
+                    if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
+                        let col = ki + past_kv_len;
+                        override_vals[qi * total_len + col] = 1.0;
+                    }
+                }
+            }
+
+            let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
+            let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
+            let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
+            rows.push(override_bool.where_cond(&zero, causal_mask)?);
         }
 
-        let override_mask = Tensor::from_vec(override_vals, (seq_len, total_len), device)?;
-        let zero = Tensor::zeros((seq_len, total_len), dtype, device)?;
-        let override_bool = override_mask.to_dtype(candle_core::DType::U8)?;
-        override_bool.where_cond(&zero, causal_mask)
+        if bsz == 1 {
+            Ok(rows.into_iter().next().unwrap())
+        } else {
+            Tensor::stack(&rows, 0)?.unsqueeze(1)
+        }
     }
 
     /// Block-diffusion canvas pass over already-embedded (and self-conditioned) canvas
@@ -2508,7 +2520,8 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use super::sliding_decode_kv_window;
+    use super::{sliding_decode_kv_window, TextModel};
+    use candle_core::{Device, IndexOp, Tensor};
 
     #[test]
     fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
@@ -2521,5 +2534,110 @@ mod tests {
         assert_eq!(sliding_decode_kv_window(true, 7, Some(512), 7354), None);
         assert_eq!(sliding_decode_kv_window(false, 1, Some(512), 7354), None);
         assert_eq!(sliding_decode_kv_window(true, 1, None, 7354), None);
+    }
+
+    // Causal mask [seq_len, total_len] over a prefix of `past_kv_len` cached keys:
+    // 0.0 where a query may attend, NEG_INFINITY on future positions (production
+    // pattern). Query `qi` sits at absolute position `qi + past_kv_len`.
+    fn causal_mask(
+        seq_len: usize,
+        total_len: usize,
+        past_kv_len: usize,
+        device: &Device,
+    ) -> Tensor {
+        let mut v = vec![0f32; seq_len * total_len];
+        for qi in 0..seq_len {
+            for ki in 0..total_len {
+                if ki > qi + past_kv_len {
+                    v[qi * total_len + ki] = f32::NEG_INFINITY;
+                }
+            }
+        }
+        Tensor::from_vec(v, (seq_len, total_len), device).unwrap()
+    }
+
+    #[test]
+    fn batched_bidirectional_mask_matches_per_row() {
+        let device = Device::Cpu;
+        let mask = causal_mask(4, 6, 2, &device);
+        // image_token_id = 99, groups at different positions per row.
+        // row0: [txt, img, img, txt]; row1: [img, img, txt, img].
+        let input_ids =
+            Tensor::from_vec(vec![1u32, 99, 99, 1, 99, 99, 1, 99], (2, 4), &device).unwrap();
+
+        let batched =
+            TextModel::apply_image_bidirectional_mask(&mask, &input_ids, 99, None).unwrap();
+        assert_eq!(batched.dims(), &[2, 1, 4, 6]);
+
+        for b in 0..2 {
+            let row_ids = input_ids.i(b).unwrap().unsqueeze(0).unwrap();
+            let per_row =
+                TextModel::apply_image_bidirectional_mask(&mask, &row_ids, 99, None).unwrap();
+            assert_eq!(per_row.dims(), &[4, 6]);
+            let batched_row = batched.i(b).unwrap().i(0).unwrap();
+            assert_eq!(
+                batched_row.to_vec2::<f32>().unwrap(),
+                per_row.to_vec2::<f32>().unwrap(),
+                "batched row {b} must equal the per-row result"
+            );
+        }
+    }
+
+    #[test]
+    fn single_row_mask_unchanged_shape_and_values() {
+        let device = Device::Cpu;
+        let mask = causal_mask(4, 6, 2, &device);
+        // [txt, img, img, txt]: positions 1,2 form one vision group.
+        let input_ids = Tensor::from_vec(vec![1u32, 99, 99, 1], (1, 4), &device).unwrap();
+
+        let out = TextModel::apply_image_bidirectional_mask(&mask, &input_ids, 99, None).unwrap();
+        assert_eq!(out.dims(), &[4, 6], "bsz==1 stays 2-D");
+        let out = out.to_vec2::<f32>().unwrap();
+
+        // Query 1 (group member) now attends bidirectionally to key at col 4
+        // (seq position 2, same group) — was NEG_INFINITY, overridden to 0.0.
+        assert_eq!(out[1][4], 0.0);
+        // A non-group query keeps the causal value: query 0's future key col 3
+        // stays masked.
+        assert_eq!(out[0][3], f32::NEG_INFINITY);
+        // And a causally-allowed non-group entry is untouched.
+        assert_eq!(out[0][0], 0.0);
+    }
+
+    #[test]
+    fn batched_mask_no_video_and_with_video() {
+        let device = Device::Cpu;
+        let mask = causal_mask(4, 6, 2, &device);
+        // video_token_id = 98, image_token_id = 99.
+        // row0 mixes both ids: [img, vid, txt, img] -> group0 = {0,1}, group1 = {3}.
+        // row1 is image-only (no video token): [txt, img, img, txt] -> group0 = {1,2}.
+        // row2 is text-only: the override never fires and the causal mask is kept.
+        let input_ids = Tensor::from_vec(
+            vec![99u32, 98, 1, 99, 1, 99, 99, 1, 1, 1, 1, 1],
+            (3, 4),
+            &device,
+        )
+        .unwrap();
+
+        let out =
+            TextModel::apply_image_bidirectional_mask(&mask, &input_ids, 99, Some(98)).unwrap();
+        assert_eq!(out.dims(), &[3, 1, 4, 6]);
+
+        let row0 = out.i(0).unwrap().i(0).unwrap().to_vec2::<f32>().unwrap();
+        // img+vid are contiguous -> one group: query 0 attends bidirectionally to
+        // key at col 3 (seq position 1) — was NEG_INFINITY, now 0.0.
+        assert_eq!(row0[0][3], 0.0);
+        // The lone trailing image (group1) is a separate group: query 1 (group0)
+        // must NOT attend to key col 5 (seq position 3, group1) — stays masked.
+        assert_eq!(row0[1][5], f32::NEG_INFINITY);
+
+        let row1 = out.i(1).unwrap().i(0).unwrap().to_vec2::<f32>().unwrap();
+        // Image-only row still groups: query 1 attends to key col 4 (seq position 2).
+        assert_eq!(row1[1][4], 0.0);
+
+        // Text-only row: mask is exactly the shared causal mask, untouched.
+        let row2 = out.i(2).unwrap().i(0).unwrap().to_vec2::<f32>().unwrap();
+        let causal = mask.to_vec2::<f32>().unwrap();
+        assert_eq!(row2, causal);
     }
 }
