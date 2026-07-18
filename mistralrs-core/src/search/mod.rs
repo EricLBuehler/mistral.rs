@@ -22,12 +22,22 @@ const MAX_SEARCH_RESULTS: usize = 10;
 pub type SearchCallback =
     dyn Fn(&SearchFunctionParameters) -> Result<Vec<SearchResult>> + Send + Sync;
 
-pub(crate) fn search_tool_called(name: &str) -> bool {
-    name == SEARCH_TOOL_NAME || name == EXTRACT_TOOL_NAME
-}
-
 pub(crate) const SEARCH_TOOL_NAME: &str = "mistralrs_search_the_web";
 pub(crate) const EXTRACT_TOOL_NAME: &str = "mistralrs_website_content_extractor";
+
+/// Names reserved for the built-in web-search and page-extraction tools.
+#[doc(hidden)]
+pub const BUILTIN_SEARCH_TOOL_NAMES: [&str; 2] = [SEARCH_TOOL_NAME, EXTRACT_TOOL_NAME];
+
+/// Returns whether `name` is dispatched as a built-in web-search tool.
+#[doc(hidden)]
+pub fn is_builtin_search_tool_name(name: &str) -> bool {
+    BUILTIN_SEARCH_TOOL_NAMES.contains(&name)
+}
+
+pub(crate) fn search_tool_called(name: &str) -> bool {
+    is_builtin_search_tool_name(name)
+}
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(crate) const SEARCH_DESCRIPTION: &str = r#"This tool is used to search the web given a query.
