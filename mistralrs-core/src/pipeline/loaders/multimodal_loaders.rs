@@ -43,6 +43,9 @@ use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::gemma4::config::Gemma4Config;
 use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor, Gemma4ProcessorSettings};
+use crate::vision_models::hunyuan_vl::{
+    Config as HunyuanVLConfig, HunyuanVLModel, HunyuanVLProcessor,
+};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
@@ -213,6 +216,8 @@ pub enum MultimodalLoaderType {
     Llama4,
     #[serde(rename = "gemma3n")]
     Gemma3n,
+    #[serde(rename = "hunyuan_vl")]
+    HunyuanVL,
     #[serde(rename = "qwen3vl")]
     Qwen3VL,
     #[serde(rename = "qwen3vlmoe")]
@@ -253,6 +258,7 @@ impl MultimodalLoaderType {
             | "Gemma4UnifiedForConditionalGeneration"
             | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
             "DiffusionGemmaForBlockDiffusion" => Ok(Self::DiffusionGemma),
+            "HunYuanVLForConditionalGeneration" => Ok(Self::HunyuanVL),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -287,12 +293,13 @@ impl FromStr for MultimodalLoaderType {
             "gemma3n" => Ok(Self::Gemma3n),
             "gemma4" => Ok(Self::Gemma4),
             "diffusiongemma" => Ok(Self::DiffusionGemma),
+            "hunyuan_vl" => Ok(Self::HunyuanVL),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `hunyuan_vl`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -315,6 +322,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Mistral3 => "mistral3",
             MultimodalLoaderType::Llama4 => "llama4",
             MultimodalLoaderType::Gemma3n => "gemma3n",
+            MultimodalLoaderType::HunyuanVL => "hunyuan_vl",
             MultimodalLoaderType::Qwen3VL => "qwen3vl",
             MultimodalLoaderType::Qwen3VLMoE => "qwen3vlmoe",
             MultimodalLoaderType::Qwen3_5 => "qwen3_5",
@@ -375,6 +383,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Mistral3 => Box::new(Mistral3Loader),
             MultimodalLoaderType::Llama4 => Box::new(VLlama4Loader),
             MultimodalLoaderType::Gemma3n => Box::new(Gemma3nLoader),
+            MultimodalLoaderType::HunyuanVL => Box::new(HunyuanVLLoader),
             MultimodalLoaderType::Qwen3VL => Box::new(Qwen3VLLoader),
             MultimodalLoaderType::Qwen3VLMoE => Box::new(Qwen3VLMoELoader),
             MultimodalLoaderType::Qwen3_5 => Box::new(Qwen3_5Loader),
@@ -5609,6 +5618,238 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision, NonMappedSubModel::Audio])
+    }
+}
+
+// ======================== HunyuanVL Loader
+
+/// [`MultimodalLoader`] for a HunyuanVL model.
+pub struct HunyuanVLLoader;
+
+pub struct HunyuanVLPrefixer;
+
+impl MultimodalPromptPrefixer for HunyuanVLPrefixer {
+    // No-op: With MessagesAction::Keep, the chat template handles image tokens.
+}
+
+impl MultimodalModelLoader for HunyuanVLLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(HunyuanVLModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: HunyuanVLConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        _model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        Arc::new(HunyuanVLProcessor::new(max_edge))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        false
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(HunyuanVLPrefixer)
+    }
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for HunyuanVLLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for HunyuanVLLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        let merge = cfg.vision_config.spatial_merge_size;
+        let grid_h = (max_image_shape.0 / cfg.vision_config.patch_size) / merge;
+        let grid_w = (max_image_shape.1 / cfg.vision_config.patch_size) / merge;
+        let img_seq_len = (grid_h * (grid_w + 1) + 2) * max_num_images;
+        let max_seq_len = img_seq_len + max_seq_len.min(&ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * cfg.num_attention_heads * max_seq_len * max_seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        let grid_h = max_image_shape.0 / cfg.vision_config.patch_size;
+        let grid_w = max_image_shape.1 / cfg.vision_config.patch_size;
+        let img_seq_len = grid_h * grid_w;
+        Ok((max_batch_size * max_num_images)
+            * cfg.vision_config.num_attention_heads
+            * img_seq_len
+            * img_seq_len)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        let tie = cfg.tie_word_embeddings;
+        let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+        let lm_head = if !tie || weight_pack_factor != 1 {
+            cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+        } else {
+            0
+        };
+        let norm = cfg.hidden_size;
+        let text_nonmapped = embed_tokens + lm_head + norm;
+
+        let v = &cfg.vision_config;
+        let patch_embed =
+            v.hidden_size * v.num_channels * v.patch_size * v.patch_size + v.hidden_size;
+        let pos_embed = (v.max_image_size.unwrap_or(2048) / v.patch_size).pow(2) * v.hidden_size
+            + v.hidden_size;
+        let vision_layer = {
+            let norm = 2 * (v.hidden_size + v.hidden_size);
+            let attn = 4 * (v.hidden_size * v.hidden_size + v.hidden_size);
+            let mlp = v.hidden_size * v.intermediate_size
+                + v.intermediate_size
+                + v.intermediate_size * v.hidden_size
+                + v.hidden_size;
+            norm + attn + mlp
+        };
+        let merged_hidden = v.hidden_size * v.spatial_merge_size * v.spatial_merge_size;
+        let perceive = v.hidden_size
+            + v.out_hidden_size
+            + (v.hidden_size * 2 * v.hidden_size * v.spatial_merge_size * v.spatial_merge_size)
+            + v.hidden_size * 2
+            + (merged_hidden * v.hidden_size * 2)
+            + merged_hidden
+            + (merged_hidden * v.out_hidden_size + v.out_hidden_size)
+            + 3 * v.out_hidden_size
+            + merged_hidden;
+
+        Ok((text_nonmapped
+            + patch_embed
+            + pos_embed
+            + vision_layer * v.num_hidden_layers
+            + perceive)
+            * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        let size_in = cfg.hidden_size;
+        let size_q = cfg.head_dim * cfg.num_attention_heads;
+        let size_kv = cfg.head_dim * cfg.num_key_value_heads;
+        let per_layer_elems = cfg.hidden_size
+            + cfg.hidden_size
+            + size_in * size_q / weight_pack_factor
+            + size_in * size_kv / weight_pack_factor
+            + size_in * size_kv / weight_pack_factor
+            + size_q * size_in / weight_pack_factor
+            + cfg.head_dim
+            + cfg.head_dim
+            + cfg.hidden_size * cfg.intermediate_size / weight_pack_factor
+            + cfg.hidden_size * cfg.intermediate_size / weight_pack_factor
+            + cfg.intermediate_size * cfg.hidden_size / weight_pack_factor;
+        Ok(vec![
+            per_layer_elems * dtype.size_in_bytes();
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: HunyuanVLConfig = serde_json::from_str(config)?;
+        let cfg = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        Ok(Box::new(cfg))
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
     }
 }
 
