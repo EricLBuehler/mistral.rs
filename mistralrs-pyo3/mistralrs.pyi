@@ -242,6 +242,7 @@ class Architecture(Enum):
     SmolLm3 = "smollm3"
     GraniteMoeHybrid = "granitemoehybrid"
     GptOss = "gptoss"
+    HyV3 = "hy_v3"
     Qwen3Next = "qwen3next"
     Lfm2 = "lfm2"
     Lfm2Moe = "lfm2_moe"

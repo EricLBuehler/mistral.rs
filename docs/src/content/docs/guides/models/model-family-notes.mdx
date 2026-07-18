@@ -80,6 +80,12 @@ A parallel fast path covers prefill with prefix caching (paged attention on, CUD
 
 `MISTRALRS_NO_MLA=1` forces the generic path; use it when debugging suspected MLA kernel issues, and try `--paged-attn off` as a sanity check for unexpected paged-attention behavior. Background: the [DeepSeek V2 paper](https://arxiv.org/abs/2405.04434).
 
+## HYV3, Hy3, and Hy-MT2
+
+HYV3 checkpoints load through `HYV3ForCausalLM`. The loader covers the main causal LM path used by `tencent/Hy3` BF16 and `tencent/Hy-MT2-30B-A3B`, including Q/K RMSNorm, sigmoid MoE routing with expert bias, the shared expert, and fp32 output head projection when requested by the checkpoint. HYV3 tool calls use the model-native `<tool_calls...>` / `<arg_key...>` tag format from the checkpoint chat template.
+
+`tencent/Hy3` also ships one MTP layer (`num_nextn_predict_layers = 1`) for speculative decoding. Standard generation does not require that layer; the current HYV3 loader ignores the extra MTP weights. `tencent/Hy3-FP8` uses FP8 scale tensors and requires FP8 checkpoint support before it can be loaded as published.
+
 ## GPT-OSS
 
 GPT-OSS experts are stored pre-quantized in MXFP4 (4-bit microscaling float), and its attention uses per-head sinks. Load it without a quantization flag first:
