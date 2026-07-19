@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter::zip, ops::Mul, sync::Arc};
 
-use candle_core::{quantized::QMatMul, DType, Module, Result, Tensor};
+use candle_core::{quantized::QMatMul, Module, Result, Tensor};
 use candle_nn::Linear;
 use either::Either;
 use mistralrs_quant::{
@@ -204,17 +204,11 @@ impl Merge for QLoraLinear {
 }
 
 impl LinearLayerLike for QLoraLinear {
-    fn quant_inner(&mut self) -> &mut Arc<dyn QuantMethod> {
-        &mut self.old
-    }
     fn bias(&self) -> Option<&Tensor> {
         None
     }
     fn weight(&self) -> &Tensor {
         unimplemented!()
-    }
-    fn quantized_act_type(&self) -> Option<DType> {
-        Some(DType::F32)
     }
     fn lora_forward(
         &self,

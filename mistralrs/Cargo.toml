@@ -106,6 +106,10 @@ name = "imatrix"
 path = "examples/quantization/imatrix/main.rs"
 
 [[example]]
+name = "online_calibration"
+path = "examples/quantization/online_calibration/main.rs"
+
+[[example]]
 name = "uqff"
 path = "examples/quantization/uqff/main.rs"
 
@@ -126,6 +130,10 @@ path = "examples/quantization/mixture_of_quant_experts/main.rs"
 [[example]]
 name = "tools"
 path = "examples/advanced/tools/main.rs"
+
+[[example]]
+name = "allowed_tools"
+path = "examples/advanced/allowed_tools/main.rs"
 
 [[example]]
 name = "agent"
@@ -184,10 +192,6 @@ name = "paged_attn"
 path = "examples/advanced/paged_attn/main.rs"
 
 [[example]]
-name = "speculative"
-path = "examples/advanced/speculative/main.rs"
-
-[[example]]
 name = "auto_device_map"
 path = "examples/advanced/auto_device_map/main.rs"
 
@@ -223,6 +227,30 @@ path = "examples/advanced/perplexity/main.rs"
 name = "embeddings"
 path = "examples/advanced/embeddings/main.rs"
 
+[[example]]
+name = "code_execution"
+path = "examples/advanced/code_execution/main.rs"
+
+[[example]]
+name = "code_execution_approval"
+path = "examples/advanced/code_execution_approval/main.rs"
+
+[[example]]
+name = "code_execution_files"
+path = "examples/advanced/code_execution_files/main.rs"
+
+[[example]]
+name = "file_inputs"
+path = "examples/advanced/file_inputs/main.rs"
+
+[[example]]
+name = "shell"
+path = "examples/advanced/shell/main.rs"
+
+[[example]]
+name = "shell_skills"
+path = "examples/advanced/shell_skills/main.rs"
+
 # ========== Cookbook ==========
 
 [[example]]
@@ -242,7 +270,7 @@ name = "cookbook_agent"
 path = "examples/cookbook/agent/main.rs"
 
 [package.metadata.docs.rs]
-all-features = true
+no-default-features = true
 
 [features]
 # NVIDIA CUDA GPU support
@@ -261,3 +289,5 @@ mkl = ["mistralrs-core/mkl"]
 nccl = ["mistralrs-core/nccl"]
 # Use ring instead of aws-lc-rs for TLS
 ring = ["mistralrs-core/ring"]
+# Python code execution tool
+code-execution = ["mistralrs-core/code-execution"]

@@ -10,7 +10,7 @@ use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
-use crate::layers::{CausalMaskConfig, CausalMasker, MatMul, QRmsNorm, RotaryEmbedding, Sdpa};
+use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -28,10 +28,10 @@ struct Mlp {
 
 impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let w1 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w1)?;
-        let w3 = MatMul.qmethod_matmul(xs, &*self.feed_forward_w3)?;
+        let w1 = self.feed_forward_w1.forward(xs)?;
+        let w3 = self.feed_forward_w3.forward(xs)?;
         let y = crate::ops::mul_and_act(&w1, &w3, crate::layers::Activation::Silu)?;
-        MatMul.qmethod_matmul(&y, &*self.feed_forward_w2)
+        self.feed_forward_w2.forward(&y)
     }
 }
 
@@ -65,9 +65,9 @@ impl LayerWeights {
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
 
-        let q = MatMul.qmethod_matmul(x, &*self.attention_wq)?;
-        let k = MatMul.qmethod_matmul(x, &*self.attention_wk)?;
-        let v = MatMul.qmethod_matmul(x, &*self.attention_wv)?;
+        let q = self.attention_wq.forward(x)?;
+        let k = self.attention_wk.forward(x)?;
+        let v = self.attention_wv.forward(x)?;
 
         let (q, k, v) = if seq_len != 1 {
             let q = q
@@ -87,22 +87,20 @@ impl LayerWeights {
             (q, k, v)
         };
 
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
         let (q, k) = match (&self.q_norm, &self.k_norm) {
-            (Some(q_norm), Some(k_norm)) => {
-                //Per‑head RMSNorm in qwen3
-                let q_flat = q.flatten(0, 2)?; // (B*H, L, D) -> (BHL, D) after transpose later
-                let k_flat = k.flatten(0, 2)?;
-                //q_norm and k_norm weights stored in f32 format in qwen3 gguf
-                let q_flat = q_norm.forward(&q_flat)?;
-                let k_flat = k_norm.forward(&k_flat)?;
-                let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-                let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-                (q, k)
-            }
-            _ => (q, k),
+            (Some(q_norm), Some(k_norm)) => self.rotary.forward_qk_norm(
+                &q,
+                &k,
+                q_norm.weight(),
+                k_norm.weight(),
+                q_norm.eps(),
+                k_norm.eps(),
+                &positions,
+            )?,
+            _ => self.rotary.forward(&q, &k, &positions)?,
         };
-
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,
@@ -138,7 +136,7 @@ impl LayerWeights {
             y.reshape((b_sz, seq_len, ()))?
         };
 
-        let y = MatMul.qmethod_matmul(&y.to_dtype(x.dtype())?, &*self.attention_wo)?;
+        let y = self.attention_wo.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
     }
 }
@@ -490,6 +488,6 @@ impl ModelWeights {
         }
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
-        MatMul.qmethod_matmul(&x.contiguous()?, &*self.output)
+        self.output.forward(&x.contiguous()?)
     }
 }

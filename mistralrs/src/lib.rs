@@ -179,7 +179,7 @@
 //! | `cuda` | CUDA GPU support |
 //! | `flash-attn` | Flash Attention 2 kernels (requires `cuda`) |
 //! | `cudnn` | cuDNN acceleration (requires `cuda`) |
-//! | `nccl` | Multi-GPU via NCCL (requires `cuda`) |
+//! | `nccl` | Multi-GPU via NCCL (requires `cuda` and NCCL) |
 //! | `metal` | Apple Metal GPU support |
 //! | `accelerate` | Apple Accelerate framework |
 //! | `mkl` | Intel MKL acceleration |
@@ -219,7 +219,6 @@ mod messages;
 mod model;
 pub mod model_builder_trait;
 mod multimodal_model;
-mod speculative;
 mod speech_model;
 mod text_model;
 mod xlora_model;
@@ -240,17 +239,33 @@ pub use gguf_lora_model::GgufLoraModelBuilder;
 pub use gguf_xlora_model::GgufXLoraModelBuilder;
 pub use lora_model::LoraModelBuilder;
 pub use messages::{
-    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, MultimodalMessages,
-    RequestBuilder, RequestLike, TextMessageRole, TextMessages,
+    EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, InputFile,
+    MultimodalMessages, RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
+pub use mistralrs_core::{
+    AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
+    AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
+    AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
+    CodeExecutionConfig, CodeExecutionPermission, NetworkMode, SandboxPolicy, ShellConfig,
+    ShellOptions, ShellSkillMount,
+};
+pub use mistralrs_core::{
+    AgenticToolCallRecord, File, FileContent, FileSource, RequestedFile, MODEL_INLINE_BYTES,
+    WIRE_EMBED_LIMIT_BYTES,
+};
+pub use mistralrs_core::{CalibrationAction, CalibrationStatus};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use mistralrs_core::{SearchCallback, SearchResult, ToolCallback};
+pub use mistralrs_core::{
+    MultimodalToolCallback, SearchCallback, SearchResult, ToolCallContext, ToolCallback,
+    ToolCallbackKind, ToolOutput,
+};
+pub use mistralrs_core::{SerializedSession, SerializedVideo};
+pub use mistralrs_core::{MISTRALRS_GIT_REVISION, MISTRALRS_VERSION};
 pub use model::{best_device, Model};
 pub use model_builder_trait::{AnyModelBuilder, MultiModelBuilder};
 pub use multimodal_model::{MultimodalModelBuilder, UqffMultimodalModelBuilder};
-pub use speculative::TextSpeculativeBuilder;
 pub use speech_model::SpeechModelBuilder;
 pub use text_model::{PagedAttentionMetaBuilder, TextModelBuilder, UqffTextModelBuilder};
 pub use xlora_model::XLoraModelBuilder;
@@ -266,8 +281,8 @@ pub mod core;
 
 // ========== Response Types ==========
 pub use mistralrs_core::{
-    ChatCompletionChunkResponse, ChatCompletionResponse, Choice, ChunkChoice, CompletionResponse,
-    Delta, Logprobs, Response, ResponseMessage, TopLogprob, Usage,
+    BlockDenoisingProgress, ChatCompletionChunkResponse, ChatCompletionResponse, Choice,
+    ChunkChoice, CompletionResponse, Delta, Logprobs, Response, ResponseMessage, TopLogprob, Usage,
 };
 
 // ========== Request Types ==========
@@ -278,6 +293,7 @@ pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingPar
 
 // ========== Tool Types ==========
 pub use mistralrs_core::{
+    AllowedToolChoice, AllowedToolsMode, AllowedToolsToolChoice, AllowedToolsToolChoiceType,
     CalledFunction, Function, Tool, ToolCallResponse, ToolCallType, ToolChoice, ToolType,
 };
 
@@ -314,7 +330,7 @@ pub use mistralrs_core::{
 };
 
 // ========== Speculative Types ==========
-pub use mistralrs_core::SpeculativeConfig;
+pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
 pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};

@@ -9,28 +9,32 @@
 mod args;
 mod commands;
 mod config;
+#[cfg(test)]
+mod docgen;
 mod ui;
 
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use clap_complete::generate;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
     run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune,
+    run_login, run_quantize, run_server, run_tune, run_uninstall, run_update, run_uqff,
+    BenchRunConfig,
 };
+use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
+
+// Tensor ops allocate fresh output buffers constantly; mimalloc removes the page-fault
+// churn that dominates small-model CPU inference with the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing (can be customized via RUST_LOG env var)
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
+    candle_core::utils::init_global_threadpool();
     let cli = Cli::parse();
+    init_tracing(cli.global.verbose);
 
     match cli.command {
         Command::Serve {
@@ -38,15 +42,27 @@ async fn main() -> Result<()> {
             default_model,
             server,
             runtime,
+            agent_options,
+            sandbox,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
-            run_server(model_type, server, runtime, cli.global).await?;
+            run_server(
+                model_type,
+                server,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+            )
+            .await?;
         }
 
         Command::Run {
             model_type,
             default_model,
             runtime,
+            agent_options,
+            sandbox,
             thinking,
             input,
             image,
@@ -55,7 +71,16 @@ async fn main() -> Result<()> {
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(
-                model_type, runtime, cli.global, thinking, input, image, video, audio,
+                model_type,
+                runtime,
+                agent_options,
+                sandbox,
+                cli.global,
+                thinking,
+                input,
+                image,
+                video,
+                audio,
             )
             .await?;
         }
@@ -74,8 +99,20 @@ async fn main() -> Result<()> {
             run_quantize(model_type, cli.global).await?;
         }
 
+        Command::Uqff { command } => {
+            run_uqff(command, cli.global).await?;
+        }
+
         Command::FromConfig { file } => {
             run_from_config(file).await?;
+        }
+
+        Command::Update { tag } => {
+            run_update(tag)?;
+        }
+
+        Command::Uninstall { yes } => {
+            run_uninstall(yes)?;
         }
 
         Command::Doctor { json } => {
@@ -108,16 +145,30 @@ async fn main() -> Result<()> {
             runtime,
             prompt_len,
             gen_len,
+            depth,
             iterations,
             warmup,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_bench(
-                model_type, runtime, cli.global, prompt_len, gen_len, iterations, warmup,
+                model_type,
+                runtime,
+                cli.global,
+                BenchRunConfig {
+                    prompt_lens: prompt_len,
+                    gen_len,
+                    depths: depth,
+                    iterations,
+                    warmup,
+                },
             )
             .await?;
         }
     }
 
     Ok(())
+}
+
+fn init_tracing(verbose: u8) {
+    initialize_mistralrs_logging(LogVerbosity::from_count(verbose));
 }

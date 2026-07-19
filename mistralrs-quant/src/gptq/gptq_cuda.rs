@@ -23,9 +23,10 @@ use half::f16;
 
 use crate::{
     gptq::marlin_backend::{marlin_matmul, marlin_weight_repack},
+    has_missing_required_tensors, make_dummy_or_error,
     utils::get_cuda_device,
-    DummyLayer, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
-    QuantizedSerde, ShardedVarBuilder,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde,
+    ShardedVarBuilder,
 };
 
 use super::{
@@ -353,7 +354,7 @@ impl QuantMethod for GptqLayer {
         candle_core::bail!("GptqLayer cannot be dequantized!");
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // https://github.com/vllm-project/vllm/blob/ba991d5c84adbc0685075af88333c688ddb06011/vllm/model_executor/layers/quantization/gptq.py#L200
         let out_shape = Shape::from_dims(
             &[
@@ -408,6 +409,21 @@ impl QuantMethod for GptqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let pack = 32usize / usize::try_from(self.bits).unwrap_or(1).max(1);
+        let shape = vec![
+            self.q_weight.dim(1)?,
+            self.q_weight.dim(0)?.saturating_mul(pack),
+        ];
+        Ok(crate::plan_weight_isq(
+            self.scales.dtype(),
+            self.scales.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -449,14 +465,12 @@ pub fn gptq_linear(
     };
 
     let is_awq = *is_awq;
-    // Handle the case where the layer is dummy (no tensors)
-    if !vb.contains_tensor("qweight")
-        || !vb.contains_tensor("qzeros")
-        || !vb.contains_tensor("scales")
-        || !is_awq && !vb.contains_tensor("g_idx")
-    {
-        let layer = <DummyLayer as QuantMethod>::new(QuantMethodConfig::Dummy)?;
-        return Ok(Arc::new(layer) as Arc<dyn QuantMethod>);
+    let mut required = vec!["qweight", "qzeros", "scales"];
+    if !is_awq {
+        required.push("g_idx");
+    }
+    if has_missing_required_tensors(&vb, &required) {
+        return make_dummy_or_error("gptq_awq_linear", &vb, &required);
     }
 
     let marlin_compatible = *bits == 4 || *bits == 8;

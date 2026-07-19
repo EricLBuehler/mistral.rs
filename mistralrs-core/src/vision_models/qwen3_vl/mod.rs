@@ -8,21 +8,20 @@ use std::{
 };
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::Qwen3VLTextModel;
 use vision::Qwen3VLVisionModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::CausalMasker,
     layers_masker::{masked_fill, PastKvLenCache},
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
 };
 
@@ -400,12 +399,10 @@ impl Qwen3VLModel {
         seqlens: Vec<usize>,
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
         image_hashes: &[u64],
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let seqlen_offsets = ctx.seqlen_offsets();
         let mut attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &seqlen_offsets as &dyn PastKvLenCache,
@@ -415,10 +412,7 @@ impl Qwen3VLModel {
                 ..Default::default()
             },
         )?;
-        let is_first_chunk = metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true);
+        let is_first_chunk = ctx.is_first_prompt_chunk();
         attention_mask = if is_first_chunk {
             attention_mask
         } else {
@@ -469,7 +463,7 @@ impl Qwen3VLModel {
                         .lock()
                         .expect("encoder cache lock poisoned");
                     for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
                             per_image[i] = Some(cached);
                         } else {
                             miss_indices.push(i);
@@ -534,7 +528,11 @@ impl Qwen3VLModel {
                                 cache_entry.push(single_ds.clone());
                             }
                             enc_offset += n_out;
-                            guard.insert(image_hashes[orig_idx], cache_entry.clone());
+                            guard.insert(
+                                CacheModality::Image,
+                                image_hashes[orig_idx],
+                                cache_entry.clone(),
+                            );
                             per_image[orig_idx] = Some(cache_entry);
                         }
                     }
@@ -732,28 +730,18 @@ impl Qwen3VLModel {
             self.vision_start_token_id,
             self.vision_end_token_id,
         )?;
-        let position_ids = if !matches!(attention_mask, AttentionMask::None) {
-            let full_len = position_ids.dim(2)?;
-            let trimmed_len = input_ids.dim(1)?;
-            position_ids.narrow(2, full_len - trimmed_len, trimmed_len)?
-        } else {
-            let mut position_ids = Tensor::new(
-                seqlen_offsets.iter().map(|x| *x as i64).collect::<Vec<_>>(),
-                input_ids.device(),
-            )?
-            .reshape((1, (), 1))?
-            .repeat((3, 1, 1))?;
-            position_ids = position_ids.broadcast_add(&mrope_position_deltas.unsqueeze(0)?)?;
-            position_ids
-        };
+        let position_ids = crate::vision_models::mrope_position_ids_for_input(
+            &position_ids,
+            &mrope_position_deltas,
+            input_ids,
+            seqlen_offsets,
+        )?;
 
         let out = self.text.forward_embeds(
             input_embeds,
             &attention_mask,
             &position_ids,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             visual_pos_masks.as_ref(),
             deepstack_visual_embeds.as_deref(),
         )?;
@@ -776,17 +764,17 @@ pub(crate) struct Qwen3VLVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Qwen3VLModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Qwen3VLModel {}
+
 impl MultimodalModel for Qwen3VLModel {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {
             input_ids_full,
@@ -825,18 +813,12 @@ impl MultimodalModel for Qwen3VLModel {
             seqlens,
             continuous_img_pad,
             continuous_vid_pad,
-            seqlen_offsets,
-            context_lens,
             &image_hashes,
-            metadata,
-            flash_params,
+            ctx,
         )
     }
     fn cache(&self) -> &EitherCache {
         &self.text.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.text.cache
     }
     fn device(&self) -> &Device {
         &self.text.device
@@ -877,14 +859,6 @@ impl MultimodalModel for Qwen3VLModel {
 }
 
 impl IsqModel for Qwen3VLModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.text.get_layers()
-    }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let mut tensors = self.text.residual_tensors();
         tensors.extend(self.vision.residual_tensors());

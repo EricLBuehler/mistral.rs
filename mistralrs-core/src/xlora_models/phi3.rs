@@ -10,13 +10,12 @@ use crate::{
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -114,20 +113,12 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut qkv = self.qkv_proj.lora_forward(
-            &xs,
+        let qkv = self.qkv_proj.lora_forward(
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            qkv = qkv.to_dtype(original_dtype)?;
-        }
         let query_pos = self.num_heads * self.head_dim;
         let q = qkv.narrow(D::Minus1, 0, query_pos)?;
         let k = qkv.narrow(D::Minus1, query_pos, self.num_kv_heads * self.head_dim)?;
@@ -155,9 +146,14 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self
-            .rotary_emb
-            .forward(&q, &k, seqlen_offsets, position_ids)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, &positions, position_ids)?;
 
         let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
             kv_cache,
@@ -171,7 +167,7 @@ impl Attention {
             None => AttentionMask::None,
         };
 
-        let mut attn_output = Sdpa.run_attention(
+        let attn_output = Sdpa.run_attention(
             &q,
             &k,
             &v,
@@ -180,18 +176,12 @@ impl Attention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.qkv_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.lora_forward(
+        let res = self.o_proj.lora_forward(
             &attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.qkv_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -254,13 +244,8 @@ impl Mlp {
         global_scaling_weight: f64,
         is_scaling_pass: Option<f64>,
     ) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_up_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
         let up_states = self.gate_up_proj.lora_forward(
-            &xs,
+            xs,
             scalings.clone(),
             global_scaling_weight,
             is_scaling_pass,
@@ -268,15 +253,12 @@ impl Mlp {
         let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
         let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
         let up_states = (up_states * gate.apply(&self.act_fn))?;
-        let mut res = self.down_proj.lora_forward(
+        let res = self.down_proj.lora_forward(
             &up_states,
             scalings,
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        if self.gate_up_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -627,10 +609,7 @@ impl Model {
                         flash_params_full,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             } else {
                 // is_full_pass=true is ok because no_kv_cache=false
@@ -646,10 +625,7 @@ impl Model {
                         flash_params,
                     )?
                     .contiguous()?;
-                let mut res = extract_logits(&res, context_lens)?;
-                if let Some(t) = self.lm_head.quantized_act_type() {
-                    res = res.to_dtype(t)?;
-                }
+                let res = extract_logits(&res, context_lens)?;
                 self.lm_head.lora_forward(&res, None, 1.0, None)
             }
         } else {
@@ -665,67 +641,25 @@ impl Model {
                     flash_params,
                 )?
                 .contiguous()?;
-            let mut res = extract_logits(&res, context_lens)?;
-            if let Some(t) = self.lm_head.quantized_act_type() {
-                res = res.to_dtype(t)?;
-            }
+            let res = extract_logits(&res, context_lens)?;
             self.lm_head.lora_forward(&res, None, 1.0, None)
         }
     }
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.qkv_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.gate_up_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.mlp.down_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
 impl NormalModel for Model {
     fn forward(
         &self,
         _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -757,9 +691,6 @@ impl NormalModel for Model {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

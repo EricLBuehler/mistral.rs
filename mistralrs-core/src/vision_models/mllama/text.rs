@@ -16,7 +16,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -66,20 +66,12 @@ impl MLlamaTextMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut res = self.down_proj.forward(
+        let res = self.down_proj.forward(
             &self
                 .act
-                .forward(&self.gate_proj.forward(&xs)?)?
-                .broadcast_mul(&self.up_proj.forward(&xs)?)?,
+                .forward(&self.gate_proj.forward(xs)?)?
+                .broadcast_mul(&self.up_proj.forward(xs)?)?,
         )?;
-        if self.gate_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
         Ok(res)
     }
 }
@@ -156,25 +148,17 @@ impl MLlamaTextSelfAttention {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut hidden_states = hidden_states.clone();
-        let original_dtype = hidden_states.dtype();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            hidden_states = hidden_states.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.forward(&hidden_states)?;
-        let mut k = self.k_proj.forward(&hidden_states)?;
-        let mut v = self.v_proj.forward(&hidden_states)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let (q, k, v) = crate::ops::qkv_projections(
+            hidden_states,
+            &*self.q_proj,
+            &*self.k_proj,
+            &*self.v_proj,
+        )?;
         let (q, k, mut v) = if q_len != 1 {
             let q = q
                 .reshape((bs, q_len, self.num_heads, self.head_dim))?
@@ -193,11 +177,15 @@ impl MLlamaTextSelfAttention {
             (q, k, v)
         };
 
-        let (q, mut k) = self.rope.forward(&q, &k, seqlen_offsets)?;
+        let positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .clone();
+        let (q, mut k) = self.rope.forward(&q, &k, &positions)?;
 
         (k, v) = kv_cache.append(&k, &v)?;
 
-        let mut attn_output = Sdpa
+        let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
@@ -211,13 +199,7 @@ impl MLlamaTextSelfAttention {
             .reshape((bs, q_len, ()))?
             .to_dtype(q.dtype())?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -273,16 +255,16 @@ impl MLlamaSelfAttentionDecoderLayer {
         &self,
         hidden_states: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states =
-            self.attn
-                .forward(&hidden_states, attention_mask, seqlen_offsets, kv_cache)?;
+        hidden_states = self
+            .attn
+            .forward(&hidden_states, attention_mask, ctx, kv_cache)?;
         hidden_states = (residual + hidden_states)?;
 
         let residual = &hidden_states;
@@ -378,39 +360,20 @@ impl MLlamaTextCrossAttention {
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
-        let mut hidden_states = hidden_states.clone();
-        let original_dtype = hidden_states.dtype();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            hidden_states = hidden_states.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.forward(&hidden_states)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-        }
+        let mut q = self.q_proj.forward(hidden_states)?;
         q = q
             .reshape((bs, q_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let mut cross_attn_states = cross_attn_states.clone();
-            let original_dtype = cross_attn_states.dtype();
-            if let Some(t) = self.k_proj.quantized_act_type() {
-                cross_attn_states = cross_attn_states.to_dtype(t)?;
-            }
-            let mut k = self.k_proj.forward(&cross_attn_states)?;
+            let mut k = self.k_proj.forward(cross_attn_states)?;
             k = k
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
-            if self.q_proj.quantized_act_type().is_some() {
-                k = k.to_dtype(original_dtype)?;
-            }
             k = self.k_norm.forward(&k)?;
 
-            let mut v = self.v_proj.forward(&cross_attn_states)?;
-            if self.q_proj.quantized_act_type().is_some() {
-                v = v.to_dtype(original_dtype)?;
-            }
+            let mut v = self.v_proj.forward(cross_attn_states)?;
             v = v
                 .reshape((bs, (), self.num_kv_heads, self.head_dim))?
                 .transpose(1, 2)?;
@@ -426,7 +389,7 @@ impl MLlamaTextCrossAttention {
             }
             other => other.clone(),
         };
-        let mut attn_output = Sdpa
+        let attn_output = Sdpa
             .run_attention(
                 &q.contiguous()?,
                 &k.contiguous()?,
@@ -440,13 +403,7 @@ impl MLlamaTextCrossAttention {
             .reshape((bs, q_len, ()))?
             .to_dtype(q.dtype())?;
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -589,10 +546,13 @@ impl MLlamaTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), false),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), false),
+            )?
         };
 
         let vb = vb.pp("model");
@@ -688,15 +648,15 @@ impl MLlamaTextModel {
         cross_attn_states: Option<&Tensor>,
         cross_attention_mask: &AttentionMask,
         full_text_row_masked_out_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.forward(input_ids)?;
 
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let self_mask = CausalMasker.make_causal_mask(
             input_ids,
-            cache as &dyn PastKvLenCache,
+            &mask_cache as &dyn PastKvLenCache,
             hidden_states.dtype(),
             &CausalMaskConfig::default(),
         )?;
@@ -718,7 +678,7 @@ impl MLlamaTextModel {
                     hidden_states = attn.forward(
                         &hidden_states,
                         &self_mask.get(hidden_states.device()),
-                        seqlen_offsets,
+                        ctx,
                         &mut cache[i],
                     )?;
                 }
@@ -747,47 +707,13 @@ impl MLlamaTextModel {
         hidden_states = hidden_states.to_device(&self.device)?;
         hidden_states = self.norm.forward(&hidden_states)?;
 
-        hidden_states = self
-            .lm_head
-            .forward(&extract_logits(&hidden_states, context_lens)?)?;
+        hidden_states = self.lm_head.forward(&ctx.logits(&hidden_states)?)?;
 
         Ok(hidden_states)
     }
 }
 
 impl IsqModel for MLlamaTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match layer {
-                MLlamaDecoderLayer::CrossAttn(_cross) => {
-                    // tensors.push((&mut cross.attn.q_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.k_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.v_proj, Some(i)));
-                    // tensors.push((&mut cross.attn.o_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.gate_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.up_proj, Some(i)));
-                    // tensors.push((&mut cross.mlp.down_proj, Some(i)));
-                }
-                MLlamaDecoderLayer::SelfAttn(self_attn) => {
-                    tensors.push((&mut self_attn.attn.q_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.k_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.v_proj, Some(i)));
-                    tensors.push((&mut self_attn.attn.o_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.gate_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.up_proj, Some(i)));
-                    tensors.push((&mut self_attn.mlp.down_proj, Some(i)));
-                }
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

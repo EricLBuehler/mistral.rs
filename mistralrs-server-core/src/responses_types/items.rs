@@ -333,6 +333,44 @@ pub enum OutputItem {
         /// Status of the item
         status: ItemStatus,
     },
+    /// A shell command call item.
+    #[serde(rename = "shell_call")]
+    ShellCall {
+        id: String,
+        call_id: String,
+        action: ShellCallAction,
+        status: ItemStatus,
+    },
+    /// Output from a shell command call.
+    #[serde(rename = "shell_call_output")]
+    ShellCallOutput {
+        id: String,
+        call_id: String,
+        output: Vec<ShellCallOutputPart>,
+        status: ItemStatus,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ShellCallAction {
+    pub commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ShellCallOutputPart {
+    #[serde(rename = "stdout")]
+    Stdout { text: String },
+    #[serde(rename = "stderr")]
+    Stderr { text: String },
+    #[serde(rename = "outcome")]
+    Outcome {
+        status: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timed_out: Option<bool>,
+    },
 }
 
 impl PartialSchema for OutputItem {
@@ -468,6 +506,116 @@ fn output_item_schema() -> Schema {
                     .required("status")
                     .build(),
             ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::Object))
+                    .property(
+                        "type",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .enum_values(Some(vec![serde_json::Value::String(
+                                    "shell_call".to_string(),
+                                )]))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "call_id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "action",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::Object))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "status",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .required("type")
+                    .required("id")
+                    .required("call_id")
+                    .required("action")
+                    .required("status")
+                    .build(),
+            ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::Object))
+                    .property(
+                        "type",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .enum_values(Some(vec![serde_json::Value::String(
+                                    "shell_call_output".to_string(),
+                                )]))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "call_id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "output",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new()
+                                .items(RefOr::T(Schema::Object(
+                                    ObjectBuilder::new()
+                                        .schema_type(SchemaType::Type(Type::Object))
+                                        .build(),
+                                )))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "status",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .required("type")
+                    .required("id")
+                    .required("call_id")
+                    .required("output")
+                    .required("status")
+                    .build(),
+            ))
             .build(),
     )
 }
@@ -478,6 +626,8 @@ impl OutputItem {
         match self {
             OutputItem::Message { id, .. } => id,
             OutputItem::FunctionCall { id, .. } => id,
+            OutputItem::ShellCall { id, .. } => id,
+            OutputItem::ShellCallOutput { id, .. } => id,
         }
     }
 
@@ -486,6 +636,8 @@ impl OutputItem {
         match self {
             OutputItem::Message { status, .. } => *status,
             OutputItem::FunctionCall { status, .. } => *status,
+            OutputItem::ShellCall { status, .. } => *status,
+            OutputItem::ShellCallOutput { status, .. } => *status,
         }
     }
 
@@ -512,6 +664,34 @@ impl OutputItem {
             call_id,
             name,
             arguments,
+            status,
+        }
+    }
+
+    pub fn shell_call(
+        id: String,
+        call_id: String,
+        commands: Vec<String>,
+        status: ItemStatus,
+    ) -> Self {
+        OutputItem::ShellCall {
+            id,
+            call_id,
+            action: ShellCallAction { commands },
+            status,
+        }
+    }
+
+    pub fn shell_call_output(
+        id: String,
+        call_id: String,
+        output: Vec<ShellCallOutputPart>,
+        status: ItemStatus,
+    ) -> Self {
+        OutputItem::ShellCallOutput {
+            id,
+            call_id,
+            output,
             status,
         }
     }

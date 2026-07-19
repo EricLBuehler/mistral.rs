@@ -5,20 +5,18 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{Context, DType, Device, Result, Tensor, D};
 use config::Gemma3Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use mmproj::Gemma3MultiModalProjector;
 use text::TextModel;
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
-    device_map::DeviceMapper,
     paged_attention::{
-        encoder_cache::{cached_encode_images, EncoderCacheManager},
+        encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
     AnyMoeConfig, AnyMoeExpertType,
@@ -97,16 +95,12 @@ impl Gemma3Model {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
         let has_images = pixel_values.is_some();
@@ -135,6 +129,7 @@ impl Gemma3Model {
             let dtype = vision_tower.dtype();
 
             let image_features = cached_encode_images(
+                CacheModality::Image,
                 image_hashes,
                 &pixel_values.to_dtype(dtype)?,
                 &self.encoder_cache,
@@ -154,29 +149,14 @@ impl Gemma3Model {
 
             input_embeds = x_flat.reshape(input_embeds.shape())?;
         };
-        let res = self.language_model.forward_embeds(
-            input_ids,
-            input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-            has_images,
-        )?;
+        let res = self
+            .language_model
+            .forward_embeds(input_ids, input_embeds, ctx, has_images)?;
         Ok(res)
     }
 }
 
 impl IsqModel for Gemma3Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        self.language_model.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         match &self.cfg {
             Gemma3Config::Text(_) => self.language_model.residual_tensors(),
@@ -197,51 +177,40 @@ impl IsqModel for Gemma3Model {
             }
         }
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
-    }
 }
 
 pub struct Gemma3SpecificArgs {
     pub image_hashes: Vec<u64>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Gemma3Model {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma3Model {}
+
 impl MultimodalModel for Gemma3Model {
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let Gemma3SpecificArgs { image_hashes } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Gemma3SpecificArgs`");
-        self.forward(
-            input_ids,
-            pixel_values,
-            &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, pixel_values, &image_hashes, ctx)
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Gemma3SpecificArgs {
             image_hashes: vec![],
         })
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
+    }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
     }
     fn device(&self) -> &Device {
         self.language_model.device()

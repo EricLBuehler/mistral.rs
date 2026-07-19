@@ -3,12 +3,72 @@
 # Automatic hardware detection and feature configuration
 
 $ErrorActionPreference = "Stop"
+$RemoteSizeTimeoutSec = 5
 
 # Color output functions
 function Write-Info { Write-Host "info: $args" -ForegroundColor Blue }
 function Write-Success { Write-Host "success: $args" -ForegroundColor Green }
 function Write-Warn { Write-Host "warning: $args" -ForegroundColor Yellow }
 function Write-Err { Write-Host "error: $args" -ForegroundColor Red; exit 1 }
+# Echo a dependency-install command (rustup, ...) before running it.
+function Show-Cmd($cmd) { Write-Host "  > $cmd" -ForegroundColor DarkGray }
+
+# Format a byte count for humans (e.g. 1234567 -> 1.2 MiB).
+function Format-ByteSize([long]$Bytes) {
+    $units = @("B", "KiB", "MiB", "GiB", "TiB")
+    $value = [double]$Bytes
+    $i = 0
+    while ($value -ge 1024 -and $i -lt ($units.Count - 1)) { $value /= 1024; $i++ }
+    if ($i -eq 0) { return "{0} {1}" -f [long]$value, $units[$i] }
+    return "{0:N1} {1}" -f $value, $units[$i]
+}
+
+# Content-Length of a URL after redirects; $null if it cannot be determined.
+function Get-RemoteDownloadSize($Url) {
+    try {
+        $head = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec $RemoteSizeTimeoutSec -ErrorAction Stop
+        $len = @($head.Headers['Content-Length']) | Select-Object -Last 1
+        if ($len) { return [long]$len }
+    } catch {}
+    return $null
+}
+
+# MISTRALRS_INSTALL_YES=1 auto-confirms every prompt (non-interactive installs, `mistralrs update`).
+function Read-Confirm($prompt) {
+    if ($env:MISTRALRS_INSTALL_YES -eq "1") { return "y" }
+    return Read-Host $prompt
+}
+
+function Add-UserPath($PathToAdd) {
+    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $Entries = @()
+    if ($UserPath) {
+        $Entries = $UserPath -split ';' | Where-Object { $_ }
+    }
+    if ($Entries -notcontains $PathToAdd) {
+        $NewPath = @($PathToAdd) + $Entries
+        [Environment]::SetEnvironmentVariable('Path', ($NewPath -join ';'), 'User')
+    }
+    if (($env:PATH -split ';') -notcontains $PathToAdd) {
+        $env:PATH = "$PathToAdd;$env:PATH"
+    }
+}
+
+function Warn-IfShadowed {
+    param([string]$ExpectedBin, [string]$ExpectedInstall)
+
+    $Command = Get-Command mistralrs -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $Command) { return }
+
+    $Resolved = $Command.Source
+    if (-not $Resolved) { $Resolved = $Command.Path }
+    if (-not $Resolved) { return }
+
+    if (($Resolved -ine $ExpectedBin) -and ($Resolved -ine $ExpectedInstall)) {
+        Write-Warn "Another mistralrs appears earlier on PATH: $Resolved"
+        Write-Host "      The managed install is available at: $ExpectedInstall"
+    }
+}
 
 # Banner
 function Show-Banner {
@@ -24,7 +84,10 @@ function Show-Banner {
 }
 
 # Minimum required Rust version (from Cargo.toml rust-version)
-$RequiredRustVersion = "1.88"
+$RequiredRustVersion = "1.94"
+$MistralRsRepoUrl = "https://github.com/EricLBuehler/mistral.rs"
+$MistralRsBranch = "master"
+$MistralRsCliPackage = "mistralrs-cli"
 
 # Check if Rust is installed
 function Test-Rust {
@@ -109,6 +172,66 @@ function Get-CudaComputeCap {
     return $null
 }
 
+# CUDA toolkit version as major*100+minor (e.g. 13.1 -> 1301). $null if nvcc is unavailable.
+function Get-CudaVersionCode {
+    try {
+        $null = Get-Command nvcc -ErrorAction Stop
+        $output = & nvcc --version 2>$null | Out-String
+        if ($output -match "release (\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
+function Get-CudaDriverVersionCode {
+    try {
+        $null = Get-Command nvidia-smi -ErrorAction Stop
+        $output = & nvidia-smi 2>$null | Out-String
+        if ($output -match "CUDA Version:\s*(\d+)\.(\d+)") {
+            return [int]$Matches[1] * 100 + [int]$Matches[2]
+        }
+    } catch {}
+    return $null
+}
+
+function Format-CudaVersionCode($Code) {
+    if ($null -eq $Code) { return "unknown" }
+    return "{0}.{1}" -f [math]::Floor($Code / 100), ($Code % 100)
+}
+
+function Test-CuTileSupported {
+    param([int]$CudaVersionCode, [int]$CudaComputeCap)
+
+    if (($CudaComputeCap -ge 80) -and ($CudaComputeCap -lt 90) -and ($CudaVersionCode -ge 1302)) {
+        return $true
+    }
+    if (($CudaComputeCap -eq 90) -and ($CudaVersionCode -ge 1303)) {
+        return $true
+    }
+    if (($CudaComputeCap -ge 100) -and ($CudaVersionCode -ge 1301)) {
+        return $true
+    }
+    return $false
+}
+
+function Test-CudaSourceBuildVersions {
+    $cudaCC = Get-CudaComputeCap
+    if (-not $cudaCC) { return }
+
+    $cudaVer = Get-CudaVersionCode
+    $driverCuda = Get-CudaDriverVersionCode
+    if (($null -eq $cudaVer) -or ($null -eq $driverCuda)) { return }
+
+    if ($cudaVer -gt $driverCuda) {
+        if ($env:MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH -eq "1") {
+            Write-Warn "Local nvcc CUDA $(Format-CudaVersionCode $cudaVer) is newer than the NVIDIA driver supports ($(Format-CudaVersionCode $driverCuda)); continuing because MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1."
+        } else {
+            Write-Err "Local nvcc CUDA $(Format-CudaVersionCode $cudaVer) is newer than the NVIDIA driver supports ($(Format-CudaVersionCode $driverCuda)). Source builds can fail with CUDA_ERROR_UNSUPPORTED_PTX_VERSION; upgrade the driver, install a matching CUDA toolkit, use a prebuilt, or set MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1 to override."
+        }
+    }
+}
+
 # Check if MKL is installed
 function Test-MKL {
     if ($env:MKLROOT -and (Test-Path $env:MKLROOT)) {
@@ -146,9 +269,31 @@ function Test-CuDNN {
         "$env:CUDA_PATH\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\cudnn*.dll",
         "C:\Program Files\NVIDIA\CUDNN\*\bin\cudnn*.dll"
+        "C:\Program Files\NVIDIA\CUDNN\*\bin\*\x64\cudnn*.dll"
     )
 
     foreach ($pattern in $cudnnPaths) {
+        if (Get-Item $pattern -ErrorAction SilentlyContinue) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Check if NCCL is installed
+function Test-NCCL {
+    $ncclPaths = @(
+        "$env:NCCL_ROOT\bin\nccl*.dll",
+        "$env:NCCL_ROOT\lib\nccl*.lib",
+        "$env:NCCL_HOME\bin\nccl*.dll",
+        "$env:NCCL_HOME\lib\nccl*.lib",
+        "$env:CUDA_PATH\bin\nccl*.dll",
+        "$env:CUDA_PATH\lib\x64\nccl*.lib",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\bin\nccl*.dll",
+        "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\*\lib\x64\nccl*.lib"
+    )
+
+    foreach ($pattern in $ncclPaths) {
         if (Get-Item $pattern -ErrorAction SilentlyContinue) {
             return $true
         }
@@ -169,6 +314,18 @@ function Get-Features {
         $ccMinor = if ($cudaCC.Length -gt 1) { $cudaCC.Substring(1) } else { "0" }
         Write-Info "CUDA detected (compute capability: $ccMajor.$ccMinor)"
 
+        if ($env:MISTRALRS_INSTALL_NO_NCCL -eq "1") {
+            Write-Info "MISTRALRS_INSTALL_NO_NCCL=1 set - skipping nccl"
+        } elseif (Test-NCCL) {
+            $features += "nccl"
+            Write-Info "NCCL detected - enabling nccl for CUDA multi-GPU tensor parallelism"
+        } elseif ($env:MISTRALRS_INSTALL_NCCL -eq "1") {
+            $features += "nccl"
+            Write-Warn "MISTRALRS_INSTALL_NCCL=1 set but NCCL was not detected; the build may fail unless NCCL is on the linker path"
+        } else {
+            Write-Warn "NCCL not found - skipping nccl. Install NCCL or set MISTRALRS_INSTALL_NCCL=1 to force it; NCCL is the preferred CUDA multi-GPU path."
+        }
+
         # Check for cuDNN
         if (Test-CuDNN) {
             $features += "cudnn"
@@ -184,6 +341,13 @@ function Get-Features {
         } elseif ([int]$cudaCC -ge 80) {
             $features += "flash-attn"
             Write-Info "Ampere+ GPU detected - enabling flash-attn"
+        }
+
+        $cudaVer = Get-CudaVersionCode
+        $ccNum = [int]$cudaCC
+        if ($cudaVer -and (Test-CuTileSupported -CudaVersionCode $cudaVer -CudaComputeCap $ccNum)) {
+            $features += "cutile"
+            Write-Info "CUDA $(Format-CudaVersionCode $cudaVer) and supported arch - enabling cutile"
         }
     } else {
         Write-Info "No NVIDIA GPU detected"
@@ -201,13 +365,24 @@ function Get-Features {
 # Install mistralrs-cli
 function Install-MistralRS {
     param([string]$Features)
+    $script:SourceInstallRoot = Join-Path $env:TEMP "mistralrs-cargo-install-$([guid]::NewGuid().ToString())"
+    $script:SourceMistralRs = Join-Path $script:SourceInstallRoot "bin\mistralrs.exe"
+
+    # MISTRALRS_INSTALL_TAG pins a git tag; otherwise build the latest master.
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        $gitRef = @("--tag", $env:MISTRALRS_INSTALL_TAG)
+        $refDesc = "tag $($env:MISTRALRS_INSTALL_TAG)"
+    } else {
+        $gitRef = @("--branch", $MistralRsBranch)
+        $refDesc = "branch $MistralRsBranch"
+    }
 
     if ($Features) {
-        Write-Info "Installing mistralrs-cli with features: $Features"
-        & cargo install mistralrs-cli@0.8.0 --features "$Features"
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with features: $Features"
+        & cargo install --root $script:SourceInstallRoot --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage --features "$Features"
     } else {
-        Write-Info "Installing mistralrs-cli with default features"
-        & cargo install mistralrs-cli@0.8.0
+        Write-Info "Installing mistralrs-cli from GitHub $refDesc with default features"
+        & cargo install --root $script:SourceInstallRoot --force --locked --git $MistralRsRepoUrl @gitRef $MistralRsCliPackage
     }
 
     if ($LASTEXITCODE -ne 0) {
@@ -215,11 +390,200 @@ function Install-MistralRS {
     }
 }
 
+# MISTRALRS_INSTALL_TAG pins a specific release (e.g. v0.8.9); default is the latest stable release.
+$ReleaseBase = if ($env:MISTRALRS_INSTALL_TAG) {
+    "https://github.com/EricLBuehler/mistral.rs/releases/download/$($env:MISTRALRS_INSTALL_TAG)"
+} else {
+    "https://github.com/EricLBuehler/mistral.rs/releases/latest/download"
+}
+$PrebuiltDir = "$env:USERPROFILE\.mistralrs"
+$BinDir = "$env:USERPROFILE\.local\bin"
+$CargoBinDir = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME "bin" } else { "$env:USERPROFILE\.cargo\bin" }
+$CargoMistralRs = Join-Path $CargoBinDir "mistralrs.exe"
+$ManagedBin = Join-Path $PrebuiltDir "mistralrs.exe"
+$LauncherPath = Join-Path $BinDir "mistralrs.cmd"
+$LegacyBinPath = Join-Path $BinDir "mistralrs.exe"
+$script:SourceInstallRoot = $null
+$script:SourceMistralRs = $null
+$script:ReplaceDuplicateInstalls = $false
+$script:DuplicateInstalls = @()
+
+function Normalize-InstallPath {
+    param([string]$Path)
+    try {
+        return [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    } catch {
+        return $Path
+    }
+}
+
+function Test-SameInstallPath {
+    param([string]$Left, [string]$Right)
+    return [string]::Equals((Normalize-InstallPath $Left), (Normalize-InstallPath $Right), [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Add-DuplicateInstall {
+    param([string]$Path)
+    if (-not $Path) { return }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ((Test-SameInstallPath $Path $ManagedBin) -or (Test-SameInstallPath $Path $LauncherPath)) { return }
+    $normalized = Normalize-InstallPath $Path
+    foreach ($existing in $script:DuplicateInstalls) {
+        if (Test-SameInstallPath $existing $normalized) { return }
+    }
+    $script:DuplicateInstalls += $normalized
+}
+
+function Find-DuplicateInstalls {
+    $script:DuplicateInstalls = @()
+    Add-DuplicateInstall $CargoMistralRs
+    Add-DuplicateInstall $LegacyBinPath
+    foreach ($dir in ($env:PATH -split ';' | Where-Object { $_ })) {
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.exe")
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.cmd")
+        Add-DuplicateInstall (Join-Path $dir "mistralrs.bat")
+    }
+    return $script:DuplicateInstalls
+}
+
+function Confirm-DuplicateReplacement {
+    $duplicates = @(Find-DuplicateInstalls)
+    if ($duplicates.Count -eq 0) { return }
+    Write-Host ""
+    Write-Warn "Found duplicate mistralrs installs:"
+    foreach ($duplicate in $duplicates) {
+        Write-Host "  $duplicate"
+    }
+    Write-Host ""
+    $response = Read-Confirm "Replace duplicate installs? [Y/n]"
+    if ($response -match "^[Nn]") {
+        Write-Err "duplicate mistralrs installs must be resolved before installing"
+    }
+    $script:ReplaceDuplicateInstalls = $true
+}
+
+function Remove-DuplicateInstalls {
+    if (-not $script:ReplaceDuplicateInstalls) { return }
+    $duplicates = @(Find-DuplicateInstalls)
+    foreach ($duplicate in $duplicates) {
+        try {
+            Remove-Item -LiteralPath $duplicate -Force
+            Write-Info "Removed duplicate install: $duplicate"
+        } catch {
+            Write-Err "failed to remove duplicate install: $duplicate"
+        }
+    }
+}
+
+function Install-Launcher {
+    New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+    $cmdPath = $ManagedBin -replace '%', '%%'
+    Set-Content -LiteralPath $LauncherPath -Encoding ASCII -Value @(
+        "@echo off",
+        "`"$cmdPath`" %*"
+    )
+}
+
+function Install-SourceFromStaging {
+    if (-not (Test-Path -LiteralPath $script:SourceMistralRs -PathType Leaf)) {
+        Write-Err "cargo install succeeded but $script:SourceMistralRs was not found"
+    }
+    if (Test-Path $PrebuiltDir) { Remove-Item -Recurse -Force $PrebuiltDir }
+    New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
+    Copy-Item -Force $script:SourceMistralRs $ManagedBin
+    Remove-Item -Recurse -Force $script:SourceInstallRoot
+    Install-Launcher
+    & $ManagedBin --version *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Err "source-built binary did not run after installation"
+    }
+}
+
+function Write-InstallSuccess {
+    param([string]$Method)
+    $ver = (& $ManagedBin --version 2>$null | Select-Object -First 1)
+    if (-not $ver) { $ver = "mistral.rs" }
+    if ($Method -eq "prebuilt") {
+        Write-Success "$ver installed successfully (prebuilt binary)!"
+    } else {
+        Write-Success "$ver installed successfully (built from source)!"
+    }
+    Write-Host ""
+    Write-Host "Installed" -ForegroundColor White
+    Write-Host "========="
+    Write-Host "  binary   $ManagedBin"
+    Write-Host "  on PATH  $LauncherPath"
+    Write-Host ""
+    if (($env:PATH -split ';') -notcontains $BinDir) {
+        Add-UserPath $BinDir
+        Write-Warn "Added $BinDir to your user PATH. Restart your terminal to use 'mistralrs'."
+    }
+    Warn-IfShadowed $LauncherPath $ManagedBin
+    Write-Host ""
+    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
+    Write-Host ""
+}
+
+# Download and install the Windows CPU prebuilt. Returns $true on success.
+function Install-Prebuilt {
+    $asset = "mistralrs-cpu-x86_64-pc-windows-msvc.zip"
+    $tmp = Join-Path $env:TEMP $asset
+    $downloadSize = Get-RemoteDownloadSize "$ReleaseBase/$asset"
+    if ($downloadSize) {
+        Write-Info "Downloading $asset ($(Format-ByteSize $downloadSize))"
+    } else {
+        Write-Info "Downloading $asset"
+    }
+    try {
+        # Start-BitsTransfer shows a native progress bar and is fast; fall back to IWR with its bar.
+        try {
+            Start-BitsTransfer -Source "$ReleaseBase/$asset" -Destination $tmp -ErrorAction Stop
+        } catch {
+            $ProgressPreference = 'Continue'
+            Invoke-WebRequest -Uri "$ReleaseBase/$asset" -OutFile $tmp -UseBasicParsing
+        }
+    } catch {
+        return $false
+    }
+    try {
+        if (Test-Path $PrebuiltDir) { Remove-Item -Recurse -Force $PrebuiltDir }
+        New-Item -ItemType Directory -Force -Path $PrebuiltDir | Out-Null
+        Expand-Archive -Path $tmp -DestinationPath $PrebuiltDir -Force
+        Remove-Item -Force $tmp
+        Install-Launcher
+        & $ManagedBin --version *> $null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
 # Main installation flow
 function Main {
     Show-Banner
 
     Write-Info "Detected OS: Windows"
+    Confirm-DuplicateReplacement
+
+    # Prefer the prebuilt CPU binary: no Rust toolchain, no compile. Set
+    # MISTRALRS_INSTALL_FROM_SOURCE=1 to force a source build instead.
+    if (-not $env:MISTRALRS_INSTALL_FROM_SOURCE) {
+        Write-Info "Checking for a prebuilt binary..."
+        if (Install-Prebuilt) {
+            Remove-DuplicateInstalls
+            Write-InstallSuccess "prebuilt"
+            return
+        }
+        Write-Warn "Prebuilt install failed; building from source instead."
+        Write-Host ""
+    }
+
+    if ($env:MISTRALRS_INSTALL_TAG) {
+        Write-Info "Building from source: tag $($env:MISTRALRS_INSTALL_TAG)."
+    } else {
+        Write-Info "Building from source: latest $MistralRsBranch (bleeding edge)."
+    }
 
     # Check for Rust
     if (Test-Rust) {
@@ -231,7 +595,8 @@ function Main {
         if ($rustVersion -and -not (Test-VersionGte $rustVersion $RequiredRustVersion)) {
             Write-Warn "Rust $rustVersion is below the required version $RequiredRustVersion"
             Write-Host ""
-            $response = Read-Host "Would you like to update Rust now? [Y/n]"
+            Show-Cmd "rustup update stable"
+            $response = Read-Confirm "Would you like to update Rust now? [Y/n]"
             if ($response -match "^[Nn]") {
                 Write-Err "Rust $RequiredRustVersion or newer is required to install mistral.rs"
             }
@@ -245,7 +610,8 @@ function Main {
     } else {
         Write-Warn "Rust is not installed"
         Write-Host ""
-        $response = Read-Host "Would you like to install Rust now? [Y/n]"
+        Show-Cmd "Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile rustup-init.exe; .\rustup-init.exe -y"
+        $response = Read-Confirm "Would you like to install Rust now? [Y/n]"
         if ($response -match "^[Nn]") {
             Write-Err "Rust is required to install mistral.rs"
         }
@@ -254,6 +620,7 @@ function Main {
 
     Write-Host ""
     Write-Info "Detecting hardware capabilities..."
+    Test-CudaSourceBuildVersions
 
     # Build features
     $features = Get-Features
@@ -271,7 +638,7 @@ function Main {
     Write-Host ""
 
     # Confirm installation
-    $response = Read-Host "Proceed with installation? [Y/n]"
+    $response = Read-Confirm "Proceed with installation? [Y/n]"
     if ($response -match "^[Nn]") {
         Write-Info "Installation cancelled"
         exit 0
@@ -279,21 +646,11 @@ function Main {
 
     Write-Host ""
     Install-MistralRS -Features $features
+    Install-SourceFromStaging
+    Remove-DuplicateInstalls
 
     Write-Host ""
-    Write-Success "mistral.rs installed successfully!"
-    Write-Host ""
-    Write-Host "Quick Start" -ForegroundColor White
-    Write-Host "===========" -ForegroundColor White
-    Write-Host ""
-    Write-Host "  mistralrs run -m Qwen/Qwen3-4B"
-    Write-Host ""
-    Write-Host "  mistralrs serve --ui -m google/gemma-4-E4B-it"
-    Write-Host ""
-    Write-Host "For more information, visit: https://github.com/EricLBuehler/mistral.rs"
-    Write-Host ""
-    Write-Host "Note: " -ForegroundColor Yellow -NoNewline
-    Write-Host "Restart your terminal to use the 'mistralrs' command."
+    Write-InstallSuccess "source"
 }
 
 # Run main

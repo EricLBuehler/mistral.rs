@@ -123,9 +123,8 @@ impl Attention {
         attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let (b, patches, _) = xs.dims3()?;
-        let query_states = self.q_proj.forward_autocast(xs)?;
-        let key_states = self.k_proj.forward_autocast(xs)?;
-        let value_states = self.v_proj.forward_autocast(xs)?;
+        let (query_states, key_states, value_states) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
 
         let shape = (b, patches, self.num_heads, self.head_dim);
         let query_states = query_states.reshape(shape)?.transpose(1, 2)?.contiguous()?;
@@ -143,7 +142,7 @@ impl Attention {
 
         let attn_weights = candle_nn::ops::softmax_last_dim(&attn_weights)?;
 
-        self.o_proj.forward_autocast(
+        self.o_proj.forward(
             &attn_weights
                 .matmul(&value_states)?
                 .transpose(1, 2)?
@@ -177,10 +176,10 @@ impl Mlp {
 
 impl Module for Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        self.down_proj.forward_autocast(
-            &(self.gate_proj.forward_autocast(xs)?.apply(&self.act_fn)?
-                * self.up_proj.forward_autocast(xs)?)?,
-        )
+        let lhs = self.gate_proj.forward(xs)?;
+        let rhs = self.up_proj.forward(xs)?;
+        self.down_proj
+            .forward(&crate::ops::mul_and_candle_act(&lhs, &rhs, self.act_fn)?)
     }
 }
 
@@ -328,9 +327,7 @@ impl RotaryEmbedding {
                 &self.sin.index_select(pos, 0)?,
             ),
         };
-        let q_embed = candle_nn::rotary_emb::rope(q, cos, sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(k, cos, sin)?;
-        Ok((q_embed, k_embed))
+        crate::layers::apply_rotary_preselected_qk(q, k, cos, sin, true)
     }
 }
 
@@ -490,22 +487,6 @@ impl Mistral3VisionModel {
     pub fn dtype(&self) -> DType {
         self.dtype
     }
-
-    pub fn get_layers(&mut self) -> Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)> {
-        let mut tensors = Vec::new();
-        for layer in &mut self.transformer.layers {
-            tensors.push((&mut layer.attention.q_proj, None));
-            tensors.push((&mut layer.attention.k_proj, None));
-            tensors.push((&mut layer.attention.v_proj, None));
-            tensors.push((&mut layer.attention.o_proj, None));
-
-            tensors.push((&mut layer.feed_forward.gate_proj, None));
-            tensors.push((&mut layer.feed_forward.up_proj, None));
-            tensors.push((&mut layer.feed_forward.down_proj, None));
-        }
-        tensors
-    }
-
     pub fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

@@ -1,27 +1,59 @@
-use std::{
-    borrow::Cow,
-    io::Cursor,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{quantized::GgmlDType, DType, Device, DeviceLocation, Result, Shape, Tensor, D};
 use candle_nn::Linear;
+use safetensors::tensor::Dtype;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
     generate_isq, generate_isq_imatrix,
     hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer, ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
     AfqBits, AfqGroupSize, AfqLayer, FP8Linear, GgufMatMul, ImatrixLayerStats, IsqType,
-    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType, Shard,
+    UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
 pub struct UnquantLinear {
     w: Tensor,
     b: Option<Tensor>,
-    stats: Option<ImatrixLayerStats>,
+    stats: ImatrixLayerStats,
+}
+
+fn has_cublaslt_batch_layout(x: &Tensor) -> bool {
+    if x.rank() != 3 {
+        return false;
+    }
+
+    let dims = x.dims();
+    let stride = x.layout().stride();
+    stride[1] == dims[2] && stride[2] == 1
+}
+
+fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
+    has_cublaslt_batch_layout(a) && has_cublaslt_batch_layout(w)
+}
+
+impl UnquantLinear {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format"];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES) && layer.scalar("weight.format", Dtype::U8)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Unquant,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("unquant".to_string())
+    }
 }
 
 impl QuantMethod for UnquantLinear {
@@ -43,7 +75,7 @@ impl QuantMethod for UnquantLinear {
             QuantMethodConfig::Unquantized(l) => Ok(Self {
                 w: l.weight().clone(),
                 b: l.bias().cloned(),
-                stats: None,
+                stats: ImatrixLayerStats::empty(),
             }),
         }
     }
@@ -52,7 +84,7 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn forward(&self, a: &Tensor) -> Result<Tensor> {
+    fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
@@ -68,9 +100,7 @@ impl QuantMethod for UnquantLinear {
             _ => self.w.clone(),
         };
 
-        if let Some(stats) = &self.stats {
-            stats.process(a)?;
-        }
+        self.stats.process(a)?;
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -80,9 +110,12 @@ impl QuantMethod for UnquantLinear {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
+                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                        CUBLASLT_CONTROLLER.get_for_device(a.device())
+                    } else {
+                        None
+                    };
+                    if let Some(cublaslt) = cublaslt {
                         cublaslt
                             .batch_matmul(
                                 a,
@@ -125,17 +158,15 @@ impl QuantMethod for UnquantLinear {
         } else {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
-                        // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
-                        if a.rank() >= 3 && w.rank() >= 3 {
-                            cublaslt
-                                .batch_matmul(a, &w, None, None, None, None, None)?
-                                .t()
-                        } else {
-                            a.matmul(&w.t()?)
-                        }
+                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                        CUBLASLT_CONTROLLER.get_for_device(a.device())
+                    } else {
+                        None
+                    };
+                    if let Some(cublaslt) = cublaslt {
+                        cublaslt
+                            .batch_matmul(a, &w, None, None, None, None, None)?
+                            .t()
                     } else {
                         a.matmul(&w.t()?)
                     }
@@ -158,7 +189,7 @@ impl QuantMethod for UnquantLinear {
         }
     }
 
-    fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         // Weights are [num_experts, out_features, in_features]
         // For Metal path:
         //   - a: (b_size, seq_len, 1, 1, hidden_dim) - 5D
@@ -223,6 +254,51 @@ impl QuantMethod for UnquantLinear {
                 // Reshape to [n, k, out]
                 result.reshape((num_tokens, num_experts_per_tok, out_features))
             }
+            &[num_tokens, num_experts_per_tok, hidden_dim] => {
+                let (indices_num_tokens, indices_num_experts_per_tok) = indices.dims2()?;
+                if num_tokens != indices_num_tokens
+                    || num_experts_per_tok != indices_num_experts_per_tok
+                {
+                    candle_core::bail!(
+                        "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
+                        a.dims(),
+                        indices.dims()
+                    );
+                }
+
+                let flat_indices = indices.reshape((num_tokens * num_experts_per_tok,))?;
+                let selected_w = w.index_select(&flat_indices, 0)?;
+                let a_flat = a.reshape((num_tokens * num_experts_per_tok, hidden_dim))?;
+
+                let result = a_flat
+                    .unsqueeze(1)?
+                    .matmul(&selected_w.transpose(1, 2)?)?
+                    .squeeze(1)?;
+
+                result.reshape((num_tokens, num_experts_per_tok, out_features))
+            }
+            // Metal path stage 2: per-slot inputs (b, s, k, hidden) from a prior gather's output
+            &[b_size, seq_len, num_experts_per_tok, hidden_dim] => {
+                let (ib, is, ik) = indices.dims3()?;
+                if (b_size, seq_len, num_experts_per_tok) != (ib, is, ik) {
+                    candle_core::bail!(
+                        "UnquantLinear::gather_forward: input shape {:?} does not match indices shape {:?}",
+                        a.dims(),
+                        indices.dims()
+                    );
+                }
+                let flat = b_size * seq_len * num_experts_per_tok;
+                let flat_indices = indices.reshape((flat,))?;
+                let selected_w = w.index_select(&flat_indices, 0)?;
+                let a_flat = a.reshape((flat, hidden_dim))?;
+
+                let result = a_flat
+                    .unsqueeze(1)?
+                    .matmul(&selected_w.transpose(1, 2)?)?
+                    .squeeze(1)?;
+
+                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+            }
             dims => {
                 candle_core::bail!(
                     "UnquantLinear::gather_forward: unsupported input shape {:?}",
@@ -246,6 +322,20 @@ impl QuantMethod for UnquantLinear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (self.w.dtype(), self.w.device().clone())
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.w.dtype(),
+            self.w.device().clone(),
+            self.w.dims().to_vec(),
+            request,
+            false,
+        ))
+    }
+
+    fn has_bias(&self) -> bool {
+        self.b.is_some()
     }
 
     fn apply_isq(
@@ -293,13 +383,11 @@ impl QuantMethod for UnquantLinear {
                 }
             }
             Some(IsqType::AFQ2 | IsqType::AFQ3 | IsqType::AFQ4 | IsqType::AFQ6 | IsqType::AFQ8) => {
-                let _acquired_quantize_guard = guard.acquire(&device);
                 if imatrix_weight.is_some() {
                     // TODO just warn?
                     candle_core::bail!("AFQ does not support imatrix.");
                 }
 
-                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let bits = match dtype.unwrap() {
                     IsqType::AFQ8 => AfqBits::Eight,
                     IsqType::AFQ6 => AfqBits::Six,
@@ -308,12 +396,35 @@ impl QuantMethod for UnquantLinear {
                     IsqType::AFQ2 => AfqBits::Two,
                     _ => unreachable!(),
                 };
+                let group_size = AfqGroupSize::default();
+
+                if self.w.rank() >= 2 && !crate::afq::ops::can_quantize(&self.w, group_size)? {
+                    let shape = self.w.dims().to_vec();
+                    crate::utils::isq::warn_skip_quantization(
+                        Some(&guard),
+                        guard.module_key(),
+                        Some("AFQ"),
+                        &shape,
+                        &format!(
+                            "last dim is not divisible by group size {}",
+                            group_size as usize
+                        ),
+                    );
+                    let w = self.w.to_device(&device)?;
+                    let b = self.b.as_ref().map(|b| b.to_device(&device)).transpose()?;
+                    return Ok(Arc::new(UnquantLinear::new(
+                        QuantMethodConfig::Unquantized(Linear::new(w, b)),
+                    )?));
+                }
+
+                let _acquired_quantize_guard = guard.acquire(&device);
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
                     weight: self.w.to_device(&device)?,
-                    bias: self.b.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bias: self.b.as_ref().map(|b| b.to_device(&device)).transpose()?,
                     bits,
-                    group_size: AfqGroupSize::default(),
+                    group_size,
                 })?))
             }
             Some(
@@ -330,7 +441,24 @@ impl QuantMethod for UnquantLinear {
                 | IsqType::Q8_0
                 | IsqType::Q8_1,
             ) => {
-                let dtype: GgmlDType = dtype.unwrap().try_into()?;
+                let ty = dtype.unwrap();
+                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
+                if self.w.rank() == 3 && imatrix_weight.is_some() {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = GgufMatMul::quantize_expert_stack(
+                        &self.w,
+                        ty,
+                        imatrix_weight.as_deref(),
+                        &device,
+                        guard,
+                    )?;
+                    let b = match &self.b {
+                        Some(b) => Some(b.to_dtype(DType::F32)?.to_device(&device)?),
+                        None => None,
+                    };
+                    return Ok(Arc::new(GgufMatMul::from_qtensor(w, b)));
+                }
+                let dtype: GgmlDType = ty.try_into()?;
                 let res = if let Some(imatrix_weight) = imatrix_weight {
                     generate_isq_imatrix!(self.w, imatrix_weight, device, dtype, n_quantized, guard)
                 } else {
@@ -408,35 +536,37 @@ impl QuantMethod for UnquantLinear {
         Some((self.w.clone(), self.b.clone()))
     }
 
-    fn begin_track_stats(&mut self) -> Result<()> {
-        self.stats = Some(ImatrixLayerStats::new(&self.w, self.w.device())?);
-        Ok(())
+    fn begin_track_stats(&self) -> Result<()> {
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if self.w.dims().len() == 3 {
+            self.stats.enable_routed(
+                self.w.dim(0)?,
+                self.w.dim(candle_core::D::Minus1)?,
+                self.w.device(),
+            )
+        } else {
+            self.stats
+                .enable(self.w.dim(candle_core::D::Minus1)?, self.w.device())
+        }
     }
 
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
     fn end_track_stats(&self) -> Result<Tensor> {
-        if let Some(stats) = &self.stats {
-            let imatrix = stats.compute_imatrix()?;
-            stats.clear()?;
-            Ok(imatrix)
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix();
+            self.stats.clear()?;
+            imatrix
         } else {
-            candle_core::bail!("`{}` does not support tracking stats.", self.name())
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
     }
 }
-
-// Serialization structure:
-//
-// -----------------------
-// UQFF version, u32, little endian
-// -----------------------
-// ISQ type (1 for unquantized), u8, little endian
-// -----------------------
-// Whether bias data is included, u8 boolean
-// -----------------------
-// Weight tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
 
 impl QuantizedSerde for UnquantLinear {
     fn isq_serde_supported(&self) -> bool {
@@ -445,111 +575,173 @@ impl QuantizedSerde for UnquantLinear {
     fn name(&self) -> &'static str {
         "unquant-linear"
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.b.clone())
-    }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = Vec::new();
-
-        // Version is always first!
-
-        buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-        // ISQ type for unquant is 1
-        buffer.push(QuantizedSerdeType::Unquant as u8);
-
-        // Has bias
-        buffer.push(bias.is_some() as u8);
-
-        // Weight
-        serialize_tensor(&mut buffer, &self.w)?;
-
-        if let Some(bias) = &bias {
-            // Bias
-            serialize_tensor(&mut buffer, bias)?;
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if !ty.supports_uqff() {
+            candle_core::bail!("UQFF serialization does not support {ty}.");
         }
 
-        Ok(Cow::from(buffer))
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Unquant as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.w)?,
+        ];
+        if let Some(bias) = &self.b {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
 
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_uqff(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Unquant as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Unquant as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let w = deserialize_tensor(&mut buffer, device)?;
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(Self { w, b, stats: None }))
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let weight_name = format!("{prefix}.weight");
+        let dims = reader.tensor_dims(&weight_name)?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let w = reader.load_tensor_sharded(&weight_name, device, range)?;
+        let b = reader.load_bias(prefix, device, range, dims.len())?;
+        Ok(Arc::new(Self::new(QuantMethodConfig::Unquantized(
+            Linear::new(w, b),
+        ))?))
     }
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data);
+}
 
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Unquant as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Unquant as usize
-            );
-        }
+    fn test_layer(device: &Device) -> Result<UnquantLinear> {
+        let weight = Tensor::from_vec(
+            vec![1f32, 0., 0., 0., 1., 0., 0., 0., 1., 1., 1., 1.],
+            (2, 2, 3),
+            device,
+        )?;
+        <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(Linear::new(
+            weight, None,
+        )))
+    }
 
-        let has_bias = buffer.read_u8()? != 0;
+    #[test]
+    fn gather_forward_expands_single_route_input() -> Result<()> {
+        let device = Device::Cpu;
+        let layer = test_layer(&device)?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (2, 1, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1, 1, 0], (2, 2), &device)?;
 
-        let _acquired_load_guard = guard.acquire(device);
-        let w = deserialize_tensor(&mut buffer, device)?;
+        let output = layer.gather_forward(&input, &indices)?;
 
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
+        assert_eq!(output.dims(), &[2, 2, 2]);
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<f32>()?,
+            &[1., 2., 3., 6., 6., 15., 4., 5.]
+        );
+        Ok(())
+    }
 
-        Ok((
-            Arc::new(Self {
-                w,
-                b: None,
-                stats: None,
-            }),
-            b,
-        ))
+    #[test]
+    fn gather_forward_accepts_per_route_input() -> Result<()> {
+        let device = Device::Cpu;
+        let layer = test_layer(&device)?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6.], (1, 2, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(output.dims(), &[1, 2, 2]);
+        assert_eq!(output.flatten_all()?.to_vec1::<f32>()?, &[1., 2., 6., 15.]);
+        Ok(())
+    }
+
+    #[test]
+    fn afq_keeps_unsupported_shape_unquantized() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((2, 65), DType::BF16, &device)?;
+        let layer = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+        )?);
+        let n_quantized = AtomicUsize::new(0);
+
+        let layer = layer.apply_isq(
+            Some(IsqType::AFQ3),
+            device,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+
+        assert_eq!(layer.name(), "unquant-linear");
+        assert_eq!(layer.dtype_and_device().0, DType::BF16);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let tensors = layer.serialize_uqff("test.linear", IsqType::AFQ3)?;
+        assert!(tensors
+            .iter()
+            .any(|tensor| tensor.name() == "test.linear.weight"));
+        assert!(tensors
+            .iter()
+            .any(|tensor| tensor.name() == "test.linear.weight.format"));
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn forward_cuda_accepts_non_contiguous_3d_input() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let input = Tensor::randn(0., 1., (1, 4, 3), &device)?
+            .to_dtype(DType::F32)?
+            .transpose(1, 2)?;
+        let weight = Tensor::randn(0., 1., (5, 4), &device)?.to_dtype(DType::F32)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), None),
+        ))?;
+
+        assert!(!has_cublaslt_batch_layout(&input));
+        let output = layer.forward(&input)?;
+        let expected = input.matmul(&weight.broadcast_left(1)?.t()?)?;
+        let max_diff = (output - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+
+        assert!(max_diff <= 1e-5, "max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn unquant_uqff_round_trips() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((2, 65), DType::BF16, &device)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, None),
+        ))?;
+        let mut tensors = crate::uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("test.linear", IsqType::AFQ3)?);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mistralrs-unquant-uqff-{}-{stamp}.uqff",
+            std::process::id()
+        ));
+
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = UqffReader::open(std::slice::from_ref(&path))?;
+        let loaded = reader
+            .load_linear("test.linear", &device, Shard::default())?
+            .unwrap();
+        let (weight, bias) = loaded.unquant_weight_bias().unwrap();
+        assert_eq!(weight.dims(), &[2, 65]);
+        assert_eq!(weight.dtype(), DType::BF16);
+        assert!(bias.is_none());
+
+        drop(reader);
+        let _ = std::fs::remove_file(path);
+        Ok(())
     }
 }

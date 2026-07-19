@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, cmp, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -171,8 +172,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
                         .expect("Detokenization failed!");
 
                     let mut image_prompt_strings = Vec::new();
-                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap().into_iter())
-                    {
+                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap()) {
                         let image_prompt_string =
                             get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
                         image_prompt_strings.push(image_prompt_string);
@@ -209,7 +209,9 @@ impl InputsProcessor for Idefics3ImageProcessor {
                             // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
                             let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }
@@ -339,6 +341,11 @@ impl InputsProcessor for Idefics3ImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,
@@ -569,7 +576,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
 
                 let (split_image_array, rows, cols) =
                     split_image(image, max_image_size["longest_edge"] as usize)?;
-                new_images.extend(split_image_array.into_iter());
+                new_images.extend(split_image_array);
                 image_rows.push(rows);
                 image_cols.push(cols);
             }

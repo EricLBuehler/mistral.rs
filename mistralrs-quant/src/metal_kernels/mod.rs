@@ -6,8 +6,9 @@
 use candle_core::{DType, MetalDevice};
 use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
+    MetalDeviceType, Value as ConstantValue,
 };
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLMathMode, MTLSize};
+use objc2_metal::{MTLDevice, MTLSize};
 use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
@@ -15,7 +16,7 @@ use std::{collections::HashMap, sync::OnceLock};
 pub mod utils;
 use utils::{
     get_2d_grid_dims, get_2d_grid_dims_divisor, get_block_dims, linear_split, EncoderParam,
-    EncoderProvider, RawBytesEncoder,
+    EncoderProvider, Output, RawBytesEncoder,
 };
 
 use crate::set_params;
@@ -36,13 +37,15 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     "/mistralrs_quant_visionos.metallib"
 ));
 
+include!("source_set.rs");
+
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
     #[error("Could not lock kernel map: {0}")]
     LockError(String),
     #[error("Error while loading function: {0:?}")]
     LoadFunctionError(String),
-    #[error("Failed to create pipeline")]
+    #[error("Failed to create pipeline: {0}")]
     FailedToCreatePipeline(String),
     #[error("dtype mismatch, got {got:?}, expected {expected:?}")]
     DTypeMismatch { expected: Vec<DType>, got: DType },
@@ -56,7 +59,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
     }
 }
 
-type Pipelines = HashMap<String, ComputePipeline>;
+type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipeline>;
 
 static LIBRARY: OnceLock<Library> = OnceLock::new();
 
@@ -111,198 +114,8 @@ impl Kernels {
     }
 
     fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        use std::collections::{HashMap, HashSet};
-
-        // Create a virtual filesystem with all our Metal sources
-        let mut file_system = HashMap::new();
-        file_system.insert("bitwise.metal", include_str!("bitwise.metal"));
-        file_system.insert("blockwise_fp8.metal", include_str!("blockwise_fp8.metal"));
-        file_system.insert("bnb_dequantize.metal", include_str!("bnb_dequantize.metal"));
-        file_system.insert("fused_glu.metal", include_str!("fused_glu.metal"));
-        file_system.insert("hqq_dequantize.metal", include_str!("hqq_dequantize.metal"));
-        file_system.insert("mxfp4.metal", include_str!("mxfp4.metal"));
-        file_system.insert("quantized.metal", include_str!("quantized.metal"));
-        file_system.insert("scan.metal", include_str!("scan.metal"));
-        file_system.insert("sort.metal", include_str!("sort.metal"));
-        file_system.insert("copy.metal", include_str!("copy.metal"));
-        file_system.insert("utils.metal", include_str!("utils.metal"));
-        file_system.insert("bf16.metal", include_str!("bf16.metal"));
-        file_system.insert("scan_impl.metal", include_str!("scan_impl.metal"));
-        file_system.insert("sort_impl.metal", include_str!("sort_impl.metal"));
-        file_system.insert("copy_impl.metal", include_str!("copy_impl.metal"));
-        file_system.insert("float8.metal", include_str!("float8.metal"));
-        file_system.insert("float4.metal", include_str!("float4.metal"));
-        file_system.insert("scalar_fp8.metal", include_str!("scalar_fp8.metal"));
-        file_system.insert(
-            "sdpa_with_sinks.metal",
-            include_str!("sdpa_with_sinks.metal"),
-        );
-        file_system.insert(
-            "softmax_with_sinks.metal",
-            include_str!("softmax_with_sinks.metal"),
-        );
-
-        // Recursive include preprocessor
-        fn preprocess_includes(
-            content: &str,
-            current_file: &str,
-            file_system: &HashMap<&str, &str>,
-            included_files: &mut HashSet<String>,
-            include_stack: &mut Vec<String>,
-        ) -> Result<String, String> {
-            // Check for circular includes
-            if include_stack.contains(&current_file.to_string()) {
-                return Err(format!(
-                    "Circular include detected: {} -> {}",
-                    include_stack.join(" -> "),
-                    current_file
-                ));
-            }
-
-            include_stack.push(current_file.to_string());
-
-            let mut result = String::new();
-            let lines = content.lines();
-
-            for line in lines {
-                let trimmed = line.trim();
-
-                // Check for #include directive
-                if trimmed.starts_with("#include") {
-                    // Extract the included filename
-                    if let Some(start) = trimmed.find('"') {
-                        if let Some(end) = trimmed[start + 1..].find('"') {
-                            let include_file = &trimmed[start + 1..start + 1 + end];
-
-                            // Check if this is one of our local files
-                            if let Some(included_content) = file_system.get(include_file) {
-                                // Only include each file once (like #pragma once)
-                                if !included_files.contains(include_file) {
-                                    included_files.insert(include_file.to_string());
-
-                                    // Recursively process the included file
-                                    let processed = preprocess_includes(
-                                        included_content,
-                                        include_file,
-                                        file_system,
-                                        included_files,
-                                        include_stack,
-                                    )?;
-
-                                    result.push_str(&format!(
-                                        "\n// ===== Start of {include_file} =====\n"
-                                    ));
-                                    result.push_str(&processed);
-                                    result.push_str(&format!(
-                                        "\n// ===== End of {include_file} =====\n"
-                                    ));
-                                }
-                                // Skip the original #include line
-                                continue;
-                            } else if !trimmed.contains('<') {
-                                // This is a quoted include but not one of our files
-                                // Skip it to avoid "file not found" errors
-                                continue;
-                            }
-                        }
-                    }
-                    // For system includes (with < >), keep them
-                    if trimmed.contains('<') {
-                        result.push_str(line);
-                        result.push('\n');
-                    }
-                } else if trimmed == "#pragma once" {
-                    // Skip #pragma once as we handle it differently
-                    continue;
-                } else {
-                    // Fix backslash-newline warnings by removing trailing spaces
-                    if line.ends_with("\\ ") || line.ends_with("\\\t") {
-                        let cleaned = line.trim_end();
-                        let without_backslash = cleaned.trim_end_matches('\\');
-                        result.push_str(without_backslash);
-                        result.push_str(" \\");
-                    } else {
-                        result.push_str(line);
-                    }
-                    result.push('\n');
-                }
-            }
-
-            include_stack.pop();
-            Ok(result)
-        }
-
-        // Start with a clean slate
-        let mut included_files = HashSet::new();
-        let mut include_stack = Vec::new();
-
-        // Build the main source file
-        let mut main_source = String::new();
-
-        // Add standard Metal includes first
-        main_source.push_str("#include <metal_stdlib>\n");
-        main_source.push_str("#include <metal_common>\n");
-        main_source.push_str("#include <metal_math>\n");
-        main_source.push_str("#include <metal_integer>\n");
-        main_source.push_str("#include <metal_simdgroup>\n");
-        main_source.push_str("#include <metal_simdgroup_matrix>\n");
-        main_source.push_str("\nusing namespace metal;\n\n");
-
-        // Process only the top-level files that contain kernel definitions
-        // The implementation files (_impl.metal) and utility files will be included
-        // automatically through the preprocessor when processing these files
-        // Note: bf16.metal is excluded as it only contains type definitions that
-        // are already in utils.metal, which would cause duplicate definitions
-        let main_files = vec![
-            "bitwise.metal",        // Bitwise operations
-            "blockwise_fp8.metal",  // FP8 blockwise operations (includes float8.metal, utils.metal)
-            "bnb_dequantize.metal", // BitsAndBytes dequantization (includes utils.metal)
-            "fused_glu.metal",      // Fused GLU operations (activation(a) * b)
-            "hqq_dequantize.metal", // HQQ dequantization
-            "mxfp4.metal",          // MXFP4 kernels
-            "quantized.metal",      // Quantization operations (includes utils.metal)
-            "copy.metal",           // Copy operations (includes utils.metal, copy_impl.metal)
-            "scan.metal",           // Scan operations (includes utils.metal, scan_impl.metal)
-            "sort.metal",           // Sort operations (includes utils.metal, sort_impl.metal)
-        ];
-
-        for file in main_files {
-            if !included_files.contains(file) {
-                if let Some(content) = file_system.get(file) {
-                    match preprocess_includes(
-                        content,
-                        file,
-                        &file_system,
-                        &mut included_files,
-                        &mut include_stack,
-                    ) {
-                        Ok(processed) => {
-                            main_source.push_str(&format!("\n// ===== {file} =====\n"));
-                            main_source.push_str(&processed);
-                        }
-                        Err(e) => {
-                            return Err(MetalKernelError::CompilationError(format!(
-                                "Failed to preprocess {file}: {e}"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Compile the preprocessed source
-        let compile_options = {
-            let opts = MTLCompileOptions::new();
-            opts.setMathMode(MTLMathMode::Fast);
-            opts
-        };
-        device
-            .new_library_with_source(&main_source, Some(&compile_options))
-            .map_err(|e| {
-                MetalKernelError::CompilationError(format!(
-                    "Failed to compile Metal kernels at runtime: {e}"
-                ))
-            })
+        mistralrs_metal_compile::compile_runtime_library(device, &QUANT_METAL_SOURCE_SET)
+            .map_err(MetalKernelError::CompilationError)
     }
 
     fn load_function(
@@ -318,28 +131,44 @@ impl Kernels {
         Ok(func)
     }
 
-    /// Load the give pipeline
-    /// loads the library from source, then gets the function [`name`] from
-    /// that source (without constants)
+    /// Load a kernel pipeline by name without function constants.
     pub fn load_pipeline(
         &self,
         device: &Device,
         name: impl ToString,
     ) -> Result<ComputePipelineState, MetalKernelError> {
-        let mut pipelines = self.pipelines.write()?;
-        let key = name.to_string();
-        if let Some(pipeline) = pipelines.get(&key) {
-            Ok(pipeline.clone())
-        } else {
-            let name = key;
-            let func = self.load_function(device, &name, None)?;
-            let pipeline = device
-                .new_compute_pipeline_state_with_function(&func)
-                .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
-            pipelines.insert(name, pipeline.clone());
+        self.load_pipeline_with_constants(device, name, None)
+    }
 
-            Ok(pipeline)
+    /// Load a kernel pipeline, specializing it with the given Metal function
+    /// constants if any. Cached per (name, constants) so distinct
+    /// specializations don't share a slot. Hot path (no constants): a
+    /// read-lock lookup, no contention.
+    pub fn load_pipeline_with_constants(
+        &self,
+        device: &Device,
+        name: impl ToString,
+        constants: Option<ConstantValues>,
+    ) -> Result<ComputePipelineState, MetalKernelError> {
+        let name_str = name.to_string();
+        if constants.is_none() {
+            let pipelines = self.pipelines.read()?;
+            if let Some(pipeline) = pipelines.get(&(name_str.clone(), None)) {
+                return Ok(pipeline.clone());
+            }
         }
+        let mut pipelines = self.pipelines.write()?;
+        let key = (name_str, constants);
+        if let Some(pipeline) = pipelines.get(&key) {
+            return Ok(pipeline.clone());
+        }
+        let (name, constants) = key;
+        let func = self.load_function(device, &name, constants.as_ref())?;
+        let pipeline = device
+            .new_compute_pipeline_state_with_function(&func)
+            .map_err(|e| MetalKernelError::FailedToCreatePipeline(e.to_string()))?;
+        pipelines.insert((name, constants), pipeline.clone());
+        Ok(pipeline)
     }
 }
 
@@ -375,7 +204,7 @@ pub fn call_dequant_8bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -414,7 +243,7 @@ pub fn call_dequant_4bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -453,7 +282,7 @@ pub fn call_dequant_2bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -492,7 +321,7 @@ pub fn call_dequant_1bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -531,7 +360,7 @@ pub fn call_dequant_3bit(
 
     let length = h * w;
 
-    set_params!(encoder, (weight, scale, zero, output, h, w));
+    set_params!(encoder, (weight, scale, zero, Output::new(output), h, w));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length as usize);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -567,7 +396,7 @@ pub fn call_bitwise_not(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), output));
+    set_params!(encoder, ((a, a_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -605,7 +434,7 @@ pub fn call_bitwise_or(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -643,7 +472,7 @@ pub fn call_bitwise_and(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -681,7 +510,7 @@ pub fn call_bitwise_xor(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), output));
+    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -718,7 +547,7 @@ pub fn call_bitwise_leftshift(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), output, k));
+    set_params!(encoder, ((a, a_offset), Output::new(output), k));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -757,7 +586,14 @@ pub fn call_dequant_bnb_nf4(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -797,7 +633,14 @@ pub fn call_dequant_bnb_fp4(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -837,7 +680,14 @@ pub fn call_dequant_bnb_int8(
 
     set_params!(
         encoder,
-        (code, input, absmax, output, blocksize as i32, n as i32)
+        (
+            code,
+            input,
+            absmax,
+            Output::new(output),
+            blocksize as i32,
+            n as i32
+        )
     );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n.div_ceil(blocksize));
@@ -931,9 +781,20 @@ pub fn call_affine_quantize(
     };
 
     if dequantize {
-        set_params!(encoder, ((input, input_offset), scales, biases, output));
+        set_params!(
+            encoder,
+            ((input, input_offset), scales, biases, Output::new(output))
+        );
     } else {
-        set_params!(encoder, ((input, input_offset), output, scales, biases));
+        set_params!(
+            encoder,
+            (
+                (input, input_offset),
+                Output::new(output),
+                Output::new(scales),
+                Output::new(biases)
+            )
+        );
     }
 
     encoder.dispatch_threads(grid_dims, group_dims);
@@ -994,8 +855,34 @@ pub fn call_afq_qmm(
     let mut aligned = false;
     let mut quad = false;
 
+    // Batch-size cutoff for qmv* vs qmm_t dispatch at small M.
+    let qmv_limit: usize = if transpose {
+        match device.device_type() {
+            MetalDeviceType::Ultra => {
+                if d <= 2048 && o <= 2048 {
+                    32
+                } else if d <= 4096 && o <= 4096 {
+                    18
+                } else {
+                    12
+                }
+            }
+            _ => {
+                if d <= 2048 && o <= 2048 {
+                    18
+                } else if d <= 4096 && o <= 4096 {
+                    12
+                } else {
+                    10
+                }
+            }
+        }
+    } else {
+        4
+    };
+
     let (group_dims, grid_dims) = if transpose {
-        if b < 6 && (d == 128 || d == 64) && bits.is_power_of_two() {
+        if b < qmv_limit && (d == 128 || d == 64) && bits.is_power_of_two() {
             name.push_str("qmv_quad");
             let quads_per_simd = 8;
             let results_per_simdgroup = 8;
@@ -1013,7 +900,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 && o % 8 == 0 && d % 512 == 0 && d >= 512 {
+        } else if b < qmv_limit && o.is_multiple_of(8) && d.is_multiple_of(512) && d >= 512 {
             name.push_str("qmv_fast");
             let bo = 8;
             let bd = 32;
@@ -1028,7 +915,7 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             (group_dims, grid_dims)
-        } else if b < 6 {
+        } else if b < qmv_limit {
             name.push_str("qmv");
             let bo = 8;
             let bd = 32;
@@ -1044,11 +931,19 @@ pub fn call_afq_qmm(
             };
             (group_dims, grid_dims)
         } else {
-            name.push_str("qmm_t");
+            // Prefer the BM=64 BN=32 tile when prefill is large enough.
             let wn = 2;
             let wm = 2;
-            let bm = 32;
-            let bn = 32;
+            let use_tile_64_32 = b >= 64 && o.is_multiple_of(32);
+            let use_tile_64_64 = b >= 64 && o.is_multiple_of(64);
+            let (bm, bn) = if use_tile_64_32 {
+                (64, 32)
+            } else if use_tile_64_64 {
+                (64, 64)
+            } else {
+                (32, 32)
+            };
+            name.push_str("qmm_t");
             let group_dims = MTLSize {
                 width: 32,
                 height: wn as usize,
@@ -1067,7 +962,7 @@ pub fn call_afq_qmm(
         /*if b < 4 && d >= 1024 {
             todo!("qvm_split_k");
         } else */
-        if b < 4 {
+        if b < qmv_limit {
             name.push_str("qvm");
             let bo = 64;
             let bd = 32;
@@ -1099,14 +994,18 @@ pub fn call_afq_qmm(
                 depth: n,
             };
             matrix = true;
-            if o % bn != 0 {
+            if !o.is_multiple_of(bn) {
                 panic!("output size should be divisible by {bn} but received {o}.");
             }
             (group_dims, grid_dims)
         }
     };
 
-    let aligned_n = if o % 32 == 0 { "true" } else { "false" };
+    let aligned_n = if o.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
 
     let type_string = match ty {
         DType::F32 => "float",
@@ -1130,6 +1029,13 @@ pub fn call_afq_qmm(
     if !gather {
         name.push_str(&format!("_batch_{}", batched as usize));
     }
+    if matrix && aligned && !batched && !gather && transpose {
+        if b >= 64 && o.is_multiple_of(32) {
+            name.push_str("_t_64_32_32");
+        } else if b >= 64 && o.is_multiple_of(64) {
+            name.push_str("_t_64_64_32");
+        }
+    }
 
     let pipeline = kernels.load_pipeline(device, &name)?;
 
@@ -1137,11 +1043,11 @@ pub fn call_afq_qmm(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(w), 0);
-    encoder.set_buffer(1, Some(scales), 0);
-    encoder.set_buffer(2, Some(biases), 0);
-    encoder.set_buffer(3, Some(x), x_offset);
-    encoder.set_buffer(4, Some(out), 0);
+    encoder.set_input_buffer(0, Some(w), 0);
+    encoder.set_input_buffer(1, Some(scales), 0);
+    encoder.set_input_buffer(2, Some(biases), 0);
+    encoder.set_input_buffer(3, Some(x), x_offset);
+    encoder.set_output_buffer(4, Some(out), 0);
     <i32 as EncoderParam>::set_param(encoder, 5, d as i32);
     <i32 as EncoderParam>::set_param(encoder, 6, o as i32);
 
@@ -1200,8 +1106,8 @@ pub fn call_afq_qmm(
             offset + 9,
             &batch_shape.iter().map(|x| *x as i32).collect::<Vec<_>>(),
         );
-        encoder.set_buffer(offset + 10, Some(lhs_indices), 0);
-        encoder.set_buffer(offset + 11, Some(rhs_indices), 0);
+        encoder.set_input_buffer(offset + 10, Some(lhs_indices), 0);
+        encoder.set_input_buffer(offset + 11, Some(rhs_indices), 0);
         <&[i64] as EncoderParam>::set_param(
             encoder,
             offset + 12,
@@ -1215,6 +1121,335 @@ pub fn call_afq_qmm(
     }
 
     encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Split-K AFQ qmm_t. Writes `[split_k, m, n]` to `out`; caller sums over
+/// the leading split_k dim to get the final `[m, n]`.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_splitk(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w: &Buffer,
+    scales: &Buffer,
+    biases: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    split_k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    assert!(split_k >= 2, "call_afq_qmm_splitk requires split_k >= 2");
+    assert_eq!(
+        k % (split_k * group_size),
+        0,
+        "K ({k}) must be divisible by split_k * group_size ({})",
+        split_k * group_size
+    );
+    let k_partition_size = k / split_k;
+    let split_k_partition_stride = (m * n) as i32;
+
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
+    let name = format!("qmm_t_splitk_{type_string}_gs_{group_size}_b_{bits}_alN_{aligned}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w), 0);
+    encoder.set_input_buffer(1, Some(scales), 0);
+    encoder.set_input_buffer(2, Some(biases), 0);
+    encoder.set_input_buffer(3, Some(x), x_offset);
+    encoder.set_output_buffer(4, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, k_partition_size as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, split_k_partition_stride);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: split_k,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+// Tile presets for the MLX-ported sorted-MoE gather GEMM. Must match the
+// instantiations in quantized.metal: (BM, BN, BK, WM, WN).
+const AFQ_GATHER_RHS_BN: usize = 32;
+const AFQ_GATHER_RHS_BK: usize = 32;
+
+fn pick_afq_gather_rhs_tile(m: usize) -> (usize, usize, usize, usize, usize) {
+    // BM=32 is a sweet spot on M3-class Apple GPUs: BM=64 regresses on
+    // 26B-A4B-class MoE prefill (register pressure / occupancy), BM=16 leaves
+    // arithmetic intensity on the table for large M.
+    if m >= 128 {
+        (32, AFQ_GATHER_RHS_BN, AFQ_GATHER_RHS_BK, 1, 2)
+    } else {
+        (16, AFQ_GATHER_RHS_BN, AFQ_GATHER_RHS_BK, 1, 2)
+    }
+}
+
+/// Sorted-MoE tiled grouped GEMM (ported from MLX `affine_gather_qmm_rhs`).
+/// Caller must pre-sort `x` and `indices` by expert id; rows for the same
+/// expert must be contiguous. Output `y` has the same row order as `x` and
+/// must be unsorted by the caller using the inverse permutation.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_gather_qmm_rhs(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w: &Buffer,
+    scales: &Buffer,
+    biases: &Buffer,
+    indices: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    let (bm, bn, bk, wm, wn) = pick_afq_gather_rhs_tile(m);
+    let align_m = m.is_multiple_of(bm);
+    let align_n = n.is_multiple_of(bn);
+    let align_k = k.is_multiple_of(bk);
+    let am = if align_m { "t" } else { "n" };
+    let an = if align_n { "t" } else { "n" };
+    let ak = if align_k { "t" } else { "n" };
+    let name = format!(
+        "affine_gather_qmm_rhs_{type_string}_gs_{group_size}_b_{bits}_bm_{bm}_bn_{bn}_bk_{bk}_wm_{wm}_wn_{wn}_t_true_alM_{am}_alN_{an}_alK_{ak}",
+    );
+
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(x), x_offset);
+    encoder.set_input_buffer(1, Some(w), 0);
+    encoder.set_input_buffer(2, Some(scales), 0);
+    encoder.set_input_buffer(3, Some(biases), 0);
+    encoder.set_input_buffer(4, Some(indices), 0);
+    encoder.set_output_buffer(5, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 6, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, k as i32);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(bn),
+        height: m.div_ceil(bm),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Fused gate+up variant of `call_afq_gather_qmm_rhs`. Computes
+/// `y = activation(gate_proj(x)) * up_proj(x)` in one launch. `act_idx` maps
+/// to the same `ACT` codes used by `qmm_t_gate_up`:
+/// 0=Silu/Swish, 1=Gelu(tanh approx), 2=Gelu(erf approx), 3=Relu.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_gather_qmm_rhs_gate_up(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: &Buffer,
+    x_offset: usize,
+    w_gate: &Buffer,
+    scales_gate: &Buffer,
+    biases_gate: &Buffer,
+    w_up: &Buffer,
+    scales_up: &Buffer,
+    biases_up: &Buffer,
+    indices: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+    act_idx: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+
+    // Reuse the same tile picker but only BM=16/32 are instantiated for the
+    // fused kernel (BM=64 isn't a win and would double instantiations).
+    let (bm, bn, bk, wm, wn) = if m >= 128 {
+        (32, 32, 32, 1, 2)
+    } else {
+        (16, 32, 32, 1, 2)
+    };
+    let align_m = m.is_multiple_of(bm);
+    let align_n = n.is_multiple_of(bn);
+    let align_k = k.is_multiple_of(bk);
+    let am = if align_m { "t" } else { "n" };
+    let an = if align_n { "t" } else { "n" };
+    let ak = if align_k { "t" } else { "n" };
+    let name = format!(
+        "affine_gather_qmm_rhs_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_idx}_bm_{bm}_bn_{bn}_bk_{bk}_wm_{wm}_wn_{wn}_alM_{am}_alN_{an}_alK_{ak}",
+    );
+
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(x), x_offset);
+    encoder.set_input_buffer(1, Some(w_gate), 0);
+    encoder.set_input_buffer(2, Some(scales_gate), 0);
+    encoder.set_input_buffer(3, Some(biases_gate), 0);
+    encoder.set_input_buffer(4, Some(w_up), 0);
+    encoder.set_input_buffer(5, Some(scales_up), 0);
+    encoder.set_input_buffer(6, Some(biases_up), 0);
+    encoder.set_input_buffer(7, Some(indices), 0);
+    encoder.set_output_buffer(8, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 9, m as i32);
+    <i32 as EncoderParam>::set_param(encoder, 10, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 11, k as i32);
+
+    let group_dims = MTLSize {
+        width: 32,
+        height: wn,
+        depth: wm,
+    };
+    let grid_dims = MTLSize {
+        width: n.div_ceil(bn),
+        height: m.div_ceil(bm),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid_dims, group_dims);
+    Ok(())
+}
+
+/// Fused topk-weighted reduce: collapses
+/// `[num_tokens * topk, hidden]` (per-assignment outputs in row-contiguous
+/// (token, slot) order) into `[num_tokens, hidden]`, with each slot scaled by
+/// `topk_weights[token*topk + slot]`. Accumulation is in fp32. Replaces the
+/// `reshape -> to_dtype(F32) -> broadcast_mul -> sum -> to_dtype` tail.
+#[allow(clippy::too_many_arguments)]
+pub fn call_moe_weighted_reduce_flat(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    inputs: &Buffer,
+    inputs_offset: usize,
+    topk_weights: &Buffer,
+    topk_weights_offset: usize,
+    out: &Buffer,
+    num_tokens: usize,
+    hidden: usize,
+    topk: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat",
+        DType::F16 => "half",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!("moe_weighted_reduce_flat_{type_string}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(inputs), inputs_offset);
+    encoder.set_input_buffer(1, Some(topk_weights), topk_weights_offset);
+    encoder.set_output_buffer(2, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 3, num_tokens as i32);
+    <i32 as EncoderParam>::set_param(encoder, 4, hidden as i32);
+    <i32 as EncoderParam>::set_param(encoder, 5, topk as i32);
+
+    // 2D grid over (hidden, num_tokens). Each thread handles one output cell.
+    // Threadgroup chosen to keep h-dim wide for coalesced writes.
+    let tg_x: usize = 64;
+    let tg_y: usize = 4;
+    let group_dims = MTLSize {
+        width: tg_x,
+        height: tg_y,
+        depth: 1,
+    };
+    let grid_dims = MTLSize {
+        width: hidden.div_ceil(tg_x) * tg_x,
+        height: num_tokens.div_ceil(tg_y) * tg_y,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: grid_dims.width / tg_x,
+            height: grid_dims.height / tg_y,
+            depth: 1,
+        },
+        group_dims,
+    );
     Ok(())
 }
 
@@ -1258,7 +1493,7 @@ pub fn call_mxfp4_matmul(
             w,
             scales,
             bias,
-            out,
+            Output::new(out),
             m as i32,
             n as i32,
             k as i32,
@@ -1323,7 +1558,7 @@ pub fn call_mxfp4_vecmat(
             w,
             scales,
             bias,
-            out,
+            Output::new(out),
             m as i32,
             n as i32,
             k as i32,
@@ -1395,7 +1630,7 @@ pub fn call_mxfp4_moe_gemm(
                 scales,
                 biases,
                 indices,
-                out,
+                Output::new(out),
                 num_tokens as i32,
                 topk as i32,
                 num_experts as i32,
@@ -1413,7 +1648,7 @@ pub fn call_mxfp4_moe_gemm(
                 scales,
                 biases,
                 indices,
-                out,
+                Output::new(out),
                 num_tokens as i32,
                 topk as i32,
                 num_experts as i32,
@@ -1501,7 +1736,10 @@ pub fn call_dequant_blockwise_fp8(
         }
     }
 
-    set_params!(encoder, (weight, scales, output, &dequant_params));
+    set_params!(
+        encoder,
+        (weight, scales, Output::new(output), &dequant_params)
+    );
 
     let tg = MTLSize {
         width: 32,
@@ -1598,8 +1836,8 @@ pub fn call_scan(
     encoder.set_compute_pipeline_state(&pipeline);
 
     if contiguous {
-        encoder.set_buffer(0, Some(xs), xs_offset);
-        encoder.set_buffer(1, Some(output), 0);
+        encoder.set_input_buffer(0, Some(xs), xs_offset);
+        encoder.set_output_buffer(1, Some(output), 0);
 
         let size = shape[axis];
         encoder.set_bytes_raw(
@@ -1640,8 +1878,8 @@ pub fn call_scan(
         let bn = 32;
         let stride_blocks = stride.div_ceil(bn);
 
-        encoder.set_buffer(0, Some(xs), xs_offset);
-        encoder.set_buffer(1, Some(output), 0);
+        encoder.set_input_buffer(0, Some(xs), xs_offset);
+        encoder.set_output_buffer(1, Some(output), 0);
 
         encoder.set_bytes_raw(
             2,
@@ -1997,8 +2235,8 @@ fn call_copy_gpu_inplace(
     // === Buffers (slots 0/1) =================================================
     let byte_offset_src = src_offset * ty.size_in_bytes();
     let byte_offset_dst = dst_offset * ty.size_in_bytes();
-    encoder.set_buffer(0, Some(src), byte_offset_src);
-    encoder.set_buffer(1, Some(dst), byte_offset_dst);
+    encoder.set_input_buffer(0, Some(src), byte_offset_src);
+    encoder.set_output_buffer(1, Some(dst), byte_offset_dst);
 
     // === Specialisation for each CopyType ===================================
     match copy_type {
@@ -2166,8 +2404,8 @@ fn call_single_block_sort<'a>(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Buffers
-    encoder.set_buffer(0, Some(src), src_offset);
-    encoder.set_buffer(1, Some(dst), 0);
+    encoder.set_input_buffer(0, Some(src), src_offset);
+    encoder.set_output_buffer(1, Some(dst), 0);
 
     // Scalar params
     <i32 as EncoderParam>::set_param(encoder, 2, size_sorted_axis as i32);
@@ -2301,9 +2539,9 @@ fn call_multi_block_sort<'a>(
         let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
         encoder.set_compute_pipeline_state(&pipeline);
 
-        encoder.set_buffer(0, Some(src), src_offset);
-        encoder.set_buffer(1, Some(&*dev_vals_0), 0);
-        encoder.set_buffer(2, Some(&*dev_idxs_0), 0);
+        encoder.set_input_buffer(0, Some(src), src_offset);
+        encoder.set_output_buffer(1, Some(&*dev_vals_0), 0);
+        encoder.set_output_buffer(2, Some(&*dev_idxs_0), 0);
         <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 4, stride_sorted_axis as i32);
         <i32 as EncoderParam>::set_param(encoder, 5, nc_dim as i32);
@@ -2381,9 +2619,9 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&*block_partitions), 0);
-            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
+            encoder.set_output_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_input_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_input_buffer(2, Some(&*dev_idxs_in), 0);
             <i32 as EncoderParam>::set_param(encoder, 3, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 4, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 5, n_blocks as i32);
@@ -2416,11 +2654,11 @@ fn call_multi_block_sort<'a>(
             let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
             encoder.set_compute_pipeline_state(&pipeline);
 
-            encoder.set_buffer(0, Some(&*block_partitions), 0);
-            encoder.set_buffer(1, Some(&*dev_vals_in), 0);
-            encoder.set_buffer(2, Some(&*dev_idxs_in), 0);
-            encoder.set_buffer(3, Some(&*dev_vals_out), 0);
-            encoder.set_buffer(4, Some(&*dev_idxs_out), 0);
+            encoder.set_input_buffer(0, Some(&*block_partitions), 0);
+            encoder.set_input_buffer(1, Some(&*dev_vals_in), 0);
+            encoder.set_input_buffer(2, Some(&*dev_idxs_in), 0);
+            encoder.set_output_buffer(3, Some(&*dev_vals_out), 0);
+            encoder.set_output_buffer(4, Some(&*dev_idxs_out), 0);
             <i32 as EncoderParam>::set_param(encoder, 5, size_sorted_axis as i32);
             <i32 as EncoderParam>::set_param(encoder, 6, merge_tiles as i32);
             <i32 as EncoderParam>::set_param(encoder, 7, n_blocks as i32);
@@ -2533,7 +2771,7 @@ pub fn call_hqq_pack_8bit(
     let pipeline = kernels.load_pipeline(device, "pack_8bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements));
+    set_params!(encoder, (input, Output::new(output), num_elements));
 
     let grid_size = MTLSize {
         width: num_elements.div_ceil(256),
@@ -2564,7 +2802,7 @@ pub fn call_hqq_pack_4bit(
     let pipeline = kernels.load_pipeline(device, "pack_4bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 2;
     let grid_size = MTLSize {
@@ -2597,7 +2835,7 @@ pub fn call_hqq_pack_2bit(
     let pipeline = kernels.load_pipeline(device, "pack_2bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 4;
     let grid_size = MTLSize {
@@ -2630,7 +2868,7 @@ pub fn call_hqq_pack_3bit(
     let pipeline = kernels.load_pipeline(device, "pack_3bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 10;
     let grid_size = MTLSize {
@@ -2663,7 +2901,7 @@ pub fn call_hqq_pack_1bit(
     let pipeline = kernels.load_pipeline(device, "pack_1bit")?;
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, height, width));
+    set_params!(encoder, (input, Output::new(output), height, width));
 
     let step = height / 8;
     let grid_size = MTLSize {
@@ -2717,12 +2955,337 @@ pub fn call_fused_glu(
         (
             (a, a_offset),
             (b, b_offset),
-            output,
+            Output::new(output),
             n_elements as u32,
             activation
         )
     );
 
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_softcap(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    input: &Buffer,
+    input_offset: usize,
+    n_elements: usize,
+    cap: f32,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "softcap_float",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (input, input_offset),
+            Output::new(output),
+            n_elements as u32,
+            cap
+        )
+    );
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    src: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    src_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    batch: usize,
+    heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    cache_rows: usize,
+    is_neox: bool,
+    output: &Buffer,
+) -> Result<(), MetalKernelError> {
+    call_rotary_q(
+        device, ep, kernels, ty, src, cos, sin, src_offset, cos_offset, sin_offset, batch, heads,
+        seq_len, head_dim, rot_dim, cache_rows, is_neox, output,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary_q(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    q_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    batch: usize,
+    q_heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    cache_rows: usize,
+    is_neox: bool,
+    q_out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rotary_q_float",
+        DType::F16 => "rotary_q_half",
+        DType::BF16 => "rotary_q_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (q, q_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            Output::new(q_out),
+            batch as u32,
+            q_heads as u32,
+            seq_len as u32,
+            head_dim as u32,
+            rot_dim as u32,
+            cache_rows as u32,
+            is_neox
+        )
+    );
+
+    let n_elements = batch * q_heads * seq_len * head_dim;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary_qk(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q: &Buffer,
+    k: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    q_offset: usize,
+    k_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    batch: usize,
+    q_heads: usize,
+    k_heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    cache_rows: usize,
+    is_neox: bool,
+    q_out: &Buffer,
+    k_out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rotary_qk_float",
+        DType::F16 => "rotary_qk_half",
+        DType::BF16 => "rotary_qk_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (q, q_offset),
+            (k, k_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            Output::new(q_out),
+            Output::new(k_out),
+            batch as u32,
+            q_heads as u32,
+            k_heads as u32,
+            seq_len as u32,
+            head_dim as u32,
+            rot_dim as u32,
+            cache_rows as u32,
+            is_neox
+        )
+    );
+
+    let n_elements = batch * (q_heads + k_heads) * seq_len * head_dim;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary_q_positions(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    positions: &Buffer,
+    q_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    positions_offset: usize,
+    batch: usize,
+    q_heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    is_neox: bool,
+    q_out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rotary_q_positions_float",
+        DType::F16 => "rotary_q_positions_half",
+        DType::BF16 => "rotary_q_positions_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (q, q_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            (positions, positions_offset),
+            Output::new(q_out),
+            batch as u32,
+            q_heads as u32,
+            seq_len as u32,
+            head_dim as u32,
+            rot_dim as u32,
+            is_neox
+        )
+    );
+
+    let n_elements = batch * q_heads * seq_len * head_dim;
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rotary_qk_positions(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    q: &Buffer,
+    k: &Buffer,
+    cos: &Buffer,
+    sin: &Buffer,
+    positions: &Buffer,
+    q_offset: usize,
+    k_offset: usize,
+    cos_offset: usize,
+    sin_offset: usize,
+    positions_offset: usize,
+    batch: usize,
+    q_heads: usize,
+    k_heads: usize,
+    seq_len: usize,
+    head_dim: usize,
+    rot_dim: usize,
+    is_neox: bool,
+    q_out: &Buffer,
+    k_out: &Buffer,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rotary_qk_positions_float",
+        DType::F16 => "rotary_qk_positions_half",
+        DType::BF16 => "rotary_qk_positions_bfloat",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    set_params!(
+        encoder,
+        (
+            (q, q_offset),
+            (k, k_offset),
+            (cos, cos_offset),
+            (sin, sin_offset),
+            (positions, positions_offset),
+            Output::new(q_out),
+            Output::new(k_out),
+            batch as u32,
+            q_heads as u32,
+            k_heads as u32,
+            seq_len as u32,
+            head_dim as u32,
+            rot_dim as u32,
+            is_neox
+        )
+    );
+
+    let n_elements = batch * (q_heads + k_heads) * seq_len * head_dim;
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
     Ok(())
@@ -2777,7 +3340,7 @@ pub fn call_softmax_with_sinks(
     };
 
     // Shared memory: s_max(1) + s_sum(1) + warp_scratch(threads_per_group / 32)
-    let num_simdgroups = (threads_per_group + 31) / 32;
+    let num_simdgroups = threads_per_group.div_ceil(32);
     let shared_mem_size = (2 + num_simdgroups) * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -2786,7 +3349,7 @@ pub fn call_softmax_with_sinks(
         (
             (logits, logits_offset),
             (sinks, sinks_offset),
-            output,
+            Output::new(output),
             num_heads,
             q_len,
             k_len
@@ -2867,7 +3430,7 @@ pub fn call_sdpa_vector_with_sinks(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             gqa_factor,
             n,
             k_stride,
@@ -2938,9 +3501,9 @@ pub fn call_sdpa_vector_with_sinks_2pass(
                 (q_buffer, q_offset),
                 (k_buffer, k_offset),
                 (v_buffer, v_offset),
-                intermediate,
-                sums,
-                maxs,
+                Output::new(intermediate),
+                Output::new(sums),
+                Output::new(maxs),
                 gqa_factor,
                 n,
                 k_stride,
@@ -2978,7 +3541,7 @@ pub fn call_sdpa_vector_with_sinks_2pass(
                 sums,
                 maxs,
                 (sinks_buffer, sinks_offset),
-                output
+                Output::new(output)
             )
         );
 
@@ -3046,7 +3609,7 @@ pub fn call_flash_attn_sinks_prefill(
     encoder.set_compute_pipeline_state(&pipeline);
 
     // Shared memory: k_smem[BC * D_PAD] + v_smem[BC * D_PAD] in float32
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3063,7 +3626,7 @@ pub fn call_flash_attn_sinks_prefill(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             scale,
             q_len_i32,
             k_len_i32,
@@ -3076,7 +3639,7 @@ pub fn call_flash_attn_sinks_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (q_len + br - 1) / br,
+        depth: q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3136,7 +3699,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    let d_pad = ((head_dim + 31) / 32) * 32;
+    let d_pad = head_dim.div_ceil(32) * 32;
     let shared_mem_size = 2 * bc * d_pad * std::mem::size_of::<f32>();
     encoder.set_threadgroup_memory_length(0, shared_mem_size);
 
@@ -3152,7 +3715,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
             (k_buffer, k_offset),
             (v_buffer, v_offset),
             (sinks_buffer, sinks_offset),
-            output,
+            Output::new(output),
             (cu_seqlens_q_buffer, cu_seqlens_q_offset),
             (cu_seqlens_k_buffer, cu_seqlens_k_offset),
             scale,
@@ -3166,7 +3729,7 @@ pub fn call_flash_attn_sinks_varlen_prefill(
     let grid_dims = MTLSize {
         width: num_heads,
         height: batch_size,
-        depth: (max_q_len + br - 1) / br,
+        depth: max_q_len.div_ceil(br),
     };
     let group_dims = MTLSize {
         width: br * 32,
@@ -3209,7 +3772,7 @@ pub fn call_fp8_to_dtype(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements as u32));
+    set_params!(encoder, (input, Output::new(output), num_elements as u32));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3244,7 +3807,7 @@ pub fn call_dtype_to_fp8(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (input, output, num_elements as u32));
+    set_params!(encoder, (input, Output::new(output), num_elements as u32));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3281,7 +3844,10 @@ pub fn call_fp8_pertensor_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale_inv, output, num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale_inv, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -3318,9 +3884,916 @@ pub fn call_fp8_vector_dequant(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, (weight, scale, output, num_elements as u32));
+    set_params!(
+        encoder,
+        (weight, scale, Output::new(output), num_elements as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, num_elements);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+// Must stay in sync with the tile constants in flash_attn.metal.
+pub const FA_NQPSG: usize = 8;
+pub const FA_NCPSG: usize = 64;
+const FA_NSG: usize = 8;
+const FA_HEAD_DIM: usize = 512;
+
+const FC_FLASH_ATTN_EXT_PAD: usize = 100;
+const FC_FLASH_ATTN_EXT: usize = 300;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnPadKargs {
+    ne11: i32,
+    ne_12_2: i32,
+    ne_12_3: i32,
+    _pad0: u32,
+    nb11: u64,
+    nb12: u64,
+    nb13: u64,
+    nb21: u64,
+    nb22: u64,
+    nb23: u64,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad1: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnBlkKargs {
+    ne01: i32,
+    ne30: i32,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad0: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FlashAttnKargs {
+    ne01: i32,
+    ne02: i32,
+    ne03: i32,
+    _pad0: u32,
+    nb01: u64,
+    nb02: u64,
+    nb03: u64,
+    ne11: i32,
+    ne_12_2: i32,
+    ne_12_3: i32,
+    ns10: i32,
+    nb11: u64,
+    nb12: u64,
+    nb13: u64,
+    ns20: i32,
+    _pad1: u32,
+    nb21: u64,
+    nb22: u64,
+    nb23: u64,
+    ne31: i32,
+    ne32: i32,
+    ne33: i32,
+    _pad2: u32,
+    nb31: u64,
+    nb32: u64,
+    nb33: u64,
+    ne1: i32,
+    ne2: i32,
+    ne3: i32,
+    scale: f32,
+    max_bias: f32,
+    m0: f32,
+    m1: f32,
+    n_head_log2: i32,
+    logit_softcap: f32,
+}
+
+pub fn flash_attn_ext_blk_scratch_size(
+    q_seq: usize,
+    k_seq: usize,
+    mask_heads: usize,
+    mask_batches: usize,
+) -> usize {
+    let nblk0 = k_seq.div_ceil(FA_NCPSG);
+    let nblk1 = q_seq.div_ceil(FA_NQPSG);
+    nblk0 * nblk1 * mask_heads.max(1) * mask_batches.max(1)
+}
+
+fn flash_attn_ext_smem_bytes() -> usize {
+    let nqptg = FA_NQPSG;
+    let dk = FA_HEAD_DIM;
+    let dv = FA_HEAD_DIM;
+    let dv_pad = (dv + 63) & !63;
+    let ncpsg = FA_NCPSG;
+    let halves = nqptg * (dk + 2 * dv_pad + 4 * ncpsg);
+    let bytes = halves * 2;
+    (bytes + 15) & !15
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_ext_bf16_dk512(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    q: (&Buffer, usize),
+    k: (&Buffer, usize),
+    v: (&Buffer, usize),
+    mask: (&Buffer, usize),
+    out: &Buffer,
+    blk_scratch: &Buffer,
+    pad_scratch: Option<&Buffer>,
+    q_shape: &[usize],
+    q_stride_elems: &[usize],
+    k_shape: &[usize],
+    k_stride_elems: &[usize],
+    v_stride_elems: &[usize],
+    mask_shape: &[usize],
+    mask_stride_elems: &[usize],
+    scale: f32,
+) -> Result<(), MetalKernelError> {
+    assert_eq!(q_shape.len(), 4, "expected q rank 4");
+    assert_eq!(k_shape.len(), 4, "expected k rank 4");
+    assert_eq!(mask_shape.len(), 4, "expected mask rank 4");
+    let (b, n_heads_q, q_seq, dk) = (q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    let (b_kv, n_heads_kv, k_seq, dk_k) = (k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    assert_eq!(dk, FA_HEAD_DIM, "this dispatcher specializes DK=DV=512");
+    assert_eq!(dk_k, FA_HEAD_DIM);
+    assert_eq!(b, b_kv);
+
+    let bf16 = 2u64;
+    let halfsz = 2u64;
+
+    let q_nb = [
+        q_stride_elems[3] as u64 * bf16,
+        q_stride_elems[2] as u64 * bf16,
+        q_stride_elems[1] as u64 * bf16,
+        q_stride_elems[0] as u64 * bf16,
+    ];
+    let k_nb = [
+        k_stride_elems[3] as u64 * bf16,
+        k_stride_elems[2] as u64 * bf16,
+        k_stride_elems[1] as u64 * bf16,
+        k_stride_elems[0] as u64 * bf16,
+    ];
+    let v_nb = [
+        v_stride_elems[3] as u64 * bf16,
+        v_stride_elems[2] as u64 * bf16,
+        v_stride_elems[1] as u64 * bf16,
+        v_stride_elems[0] as u64 * bf16,
+    ];
+    let m_nb = [
+        mask_stride_elems[3] as u64 * halfsz,
+        mask_stride_elems[2] as u64 * halfsz,
+        mask_stride_elems[1] as u64 * halfsz,
+        mask_stride_elems[0] as u64 * halfsz,
+    ];
+
+    let has_kvpad = k_seq % FA_NCPSG != 0;
+    if has_kvpad {
+        assert!(
+            pad_scratch.is_some(),
+            "K seq {k_seq} requires pad scratch (not multiple of {FA_NCPSG})"
+        );
+    }
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    if has_kvpad {
+        let constants =
+            ConstantValues::new(vec![(FC_FLASH_ATTN_EXT_PAD, ConstantValue::Bool(true))]);
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            "kernel_flash_attn_ext_pad",
+            Some(constants),
+        )?;
+        let args = FlashAttnPadKargs {
+            ne11: k_seq as i32,
+            ne_12_2: n_heads_kv as i32,
+            ne_12_3: b as i32,
+            _pad0: 0,
+            nb11: k_nb[1],
+            nb12: k_nb[2],
+            nb13: k_nb[3],
+            nb21: v_nb[1],
+            nb22: v_nb[2],
+            nb23: v_nb[3],
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad1: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+        };
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(k.0), k.1);
+        encoder.set_input_buffer(2, Some(v.0), v.1);
+        encoder.set_input_buffer(3, Some(mask.0), mask.1);
+        encoder.set_output_buffer(4, Some(pad_scratch.unwrap()), 0);
+        let grid = MTLSize {
+            width: FA_NCPSG,
+            height: n_heads_kv.max(mask_shape[1]),
+            depth: b.max(mask_shape[0]),
+        };
+        let group = MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    {
+        let pipeline = kernels.load_pipeline(device, "kernel_flash_attn_ext_blk")?;
+        let args = FlashAttnBlkKargs {
+            ne01: q_seq as i32,
+            ne30: k_seq as i32,
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad0: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+        };
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(mask.0), mask.1);
+        encoder.set_output_buffer(2, Some(blk_scratch), 0);
+        let nblk0 = k_seq.div_ceil(FA_NCPSG);
+        let nblk1 = q_seq.div_ceil(FA_NQPSG);
+        let grid = MTLSize {
+            width: nblk0,
+            height: nblk1,
+            depth: (mask_shape[1] * mask_shape[0]).max(1),
+        };
+        let group = MTLSize {
+            width: 32,
+            height: 1,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    {
+        let constants = ConstantValues::new(vec![
+            (FC_FLASH_ATTN_EXT, ConstantValue::Bool(true)),
+            (FC_FLASH_ATTN_EXT + 4, ConstantValue::Bool(has_kvpad)),
+        ]);
+        let pipeline = kernels.load_pipeline_with_constants(
+            device,
+            "kernel_flash_attn_ext_bf16_dk512_dv512",
+            Some(constants),
+        )?;
+
+        let args = FlashAttnKargs {
+            ne01: q_seq as i32,
+            ne02: n_heads_q as i32,
+            ne03: b as i32,
+            _pad0: 0,
+            nb01: q_nb[1],
+            nb02: q_nb[2],
+            nb03: q_nb[3],
+            ne11: k_seq as i32,
+            ne_12_2: n_heads_kv as i32,
+            ne_12_3: b as i32,
+            ns10: (k_nb[1] / bf16) as i32,
+            nb11: k_nb[1],
+            nb12: k_nb[2],
+            nb13: k_nb[3],
+            ns20: (v_nb[1] / bf16) as i32,
+            _pad1: 0,
+            nb21: v_nb[1],
+            nb22: v_nb[2],
+            nb23: v_nb[3],
+            ne31: mask_shape[2] as i32,
+            ne32: mask_shape[1] as i32,
+            ne33: mask_shape[0] as i32,
+            _pad2: 0,
+            nb31: m_nb[1],
+            nb32: m_nb[2],
+            nb33: m_nb[3],
+            ne1: q_seq as i32,
+            ne2: n_heads_q as i32,
+            ne3: b as i32,
+            scale,
+            max_bias: 0.0,
+            m0: 0.0,
+            m1: 0.0,
+            n_head_log2: 0,
+            logit_softcap: 0.0,
+        };
+
+        encoder.set_compute_pipeline_state(&pipeline);
+        encoder.set_bytes(0, &args);
+        encoder.set_input_buffer(1, Some(q.0), q.1);
+        encoder.set_input_buffer(2, Some(k.0), k.1);
+        encoder.set_input_buffer(3, Some(v.0), v.1);
+        encoder.set_input_buffer(4, Some(mask.0), mask.1);
+        // sinks unused; bind mask as a dummy non-null buffer
+        encoder.set_input_buffer(5, Some(mask.0), mask.1);
+        encoder.set_input_buffer(6, pad_scratch.or(Some(blk_scratch)), 0);
+        encoder.set_input_buffer(7, Some(blk_scratch), 0);
+        encoder.set_output_buffer(8, Some(out), 0);
+        encoder.set_threadgroup_memory_length(0, flash_attn_ext_smem_bytes());
+
+        let grid = MTLSize {
+            width: q_seq.div_ceil(FA_NQPSG),
+            height: n_heads_q,
+            depth: b,
+        };
+        let group = MTLSize {
+            width: 32,
+            height: FA_NSG,
+            depth: 1,
+        };
+        encoder.dispatch_thread_groups(grid, group);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_rmsnorm_residual(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    residual: (&Buffer, usize),
+    weight: (&Buffer, usize),
+    scale: Option<(&Buffer, usize)>,
+    out: &Buffer,
+    n_cols: usize,
+    n_rows: usize,
+    eps: f32,
+) -> Result<(), MetalKernelError> {
+    let name = match ty {
+        DType::F32 => "rmsnorm_residual_f32",
+        DType::F16 => "rmsnorm_residual_f16",
+        DType::BF16 => "rmsnorm_residual_bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let n_cols_u32 = n_cols as u32;
+    let has_scale_u32: u32 = if scale.is_some() { 1 } else { 0 };
+
+    encoder.set_input_buffer(0, Some(x.0), x.1);
+    encoder.set_input_buffer(1, Some(residual.0), residual.1);
+    encoder.set_input_buffer(2, Some(weight.0), weight.1);
+    let (scale_buf, scale_off) = scale.unwrap_or((weight.0, weight.1));
+    encoder.set_input_buffer(3, Some(scale_buf), scale_off);
+    encoder.set_output_buffer(4, Some(out), 0);
+    <u32 as EncoderParam>::set_param(encoder, 5, n_cols_u32);
+    <f32 as EncoderParam>::set_param(encoder, 6, eps);
+    <u32 as EncoderParam>::set_param(encoder, 7, has_scale_u32);
+
+    let tg_size = 256usize.min(n_cols.next_power_of_two().max(32));
+    encoder.set_threadgroup_memory_length(0, tg_size * std::mem::size_of::<f32>());
+
+    let group = MTLSize {
+        width: tg_size,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: n_rows,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused gate+up qmm_t with GLU activation, all in one dispatch.
+/// `act_code`: 0=silu, 1=gelu(tanh), 2=gelu(erf), 3=relu.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_gate_up(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_gate: &Buffer,
+    scales_gate: &Buffer,
+    biases_gate: &Buffer,
+    w_up: &Buffer,
+    scales_up: &Buffer,
+    biases_up: &Buffer,
+    out: &Buffer,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+    act_code: u32,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let aligned = if n.is_multiple_of(32) {
+        "true"
+    } else {
+        "false"
+    };
+    let name = format!(
+        "qmm_t_gate_up_{type_string}_gs_{group_size}_b_{bits}_act_{act_code}_alN_{aligned}"
+    );
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_gate), 0);
+    encoder.set_input_buffer(1, Some(scales_gate), 0);
+    encoder.set_input_buffer(2, Some(biases_gate), 0);
+    encoder.set_input_buffer(3, Some(w_up), 0);
+    encoder.set_input_buffer(4, Some(scales_up), 0);
+    encoder.set_input_buffer(5, Some(biases_up), 0);
+    encoder.set_input_buffer(6, Some(x.0), x.1);
+    encoder.set_output_buffer(7, Some(out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 8, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 9, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 10, m as i32);
+
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused QKV qmm_t: single dispatch producing three outputs from three
+/// weight matrices. `n_q` and `n_k` must be multiples of 32 (tile width)
+/// so no threadgroup straddles two matrices.
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_qmm_qkv(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    x: (&Buffer, usize),
+    w_q: &Buffer,
+    scales_q: &Buffer,
+    biases_q: &Buffer,
+    w_k: &Buffer,
+    scales_k: &Buffer,
+    biases_k: &Buffer,
+    w_v: &Buffer,
+    scales_v: &Buffer,
+    biases_v: &Buffer,
+    q_out: &Buffer,
+    k_out: &Buffer,
+    v_out: &Buffer,
+    m: usize,
+    n_q: usize,
+    n_k: usize,
+    n_v: usize,
+    k: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!("qmm_t_qkv_{type_string}_gs_{group_size}_b_{bits}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    encoder.set_input_buffer(0, Some(w_q), 0);
+    encoder.set_input_buffer(1, Some(scales_q), 0);
+    encoder.set_input_buffer(2, Some(biases_q), 0);
+    encoder.set_input_buffer(3, Some(w_k), 0);
+    encoder.set_input_buffer(4, Some(scales_k), 0);
+    encoder.set_input_buffer(5, Some(biases_k), 0);
+    encoder.set_input_buffer(6, Some(w_v), 0);
+    encoder.set_input_buffer(7, Some(scales_v), 0);
+    encoder.set_input_buffer(8, Some(biases_v), 0);
+    encoder.set_input_buffer(9, Some(x.0), x.1);
+    encoder.set_output_buffer(10, Some(q_out), 0);
+    encoder.set_output_buffer(11, Some(k_out), 0);
+    encoder.set_output_buffer(12, Some(v_out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 13, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 14, n_q as i32);
+    <i32 as EncoderParam>::set_param(encoder, 15, n_k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 16, n_v as i32);
+    <i32 as EncoderParam>::set_param(encoder, 17, m as i32);
+
+    let total_n = n_q + n_k + n_v;
+    let group = MTLSize {
+        width: 32,
+        height: 2,
+        depth: 2,
+    };
+    let grid = MTLSize {
+        width: total_n.div_ceil(32),
+        height: m.div_ceil(32),
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Two-stage top-k + softmax stats over a logits row. `packed_out` is laid
+/// out as `[top_values (k), top_indices_as_f32 (k), denom (1), max (1)]`.
+/// `input_dtype` selects between the F32 and BF16 stage-1 kernels.
+#[allow(clippy::too_many_arguments)]
+pub fn call_topk_logits_packed(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    input_dtype: DType,
+    input: &Buffer,
+    block_values: &Buffer,
+    block_indices: &Buffer,
+    block_maxes: &Buffer,
+    block_sums: &Buffer,
+    packed_out: &Buffer,
+    ncols: usize,
+    k: usize,
+    chunk_size: usize,
+    inv_temperature: f32,
+) -> Result<(), MetalKernelError> {
+    let nblocks = ncols.div_ceil(chunk_size);
+
+    let stage1_name = match input_dtype {
+        DType::F32 => "topk_logits_stage1_f32",
+        DType::BF16 => "topk_logits_stage1_bf16",
+        DType::F16 => "topk_logits_stage1_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let stage1 = kernels.load_pipeline(device, stage1_name)?;
+    let stage2 = kernels.load_pipeline(device, "topk_logits_stage2_packed_f32")?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    encoder.set_compute_pipeline_state(&stage1);
+    encoder.set_input_buffer(0, Some(input), 0);
+    encoder.set_output_buffer(1, Some(block_values), 0);
+    encoder.set_output_buffer(2, Some(block_indices), 0);
+    encoder.set_output_buffer(3, Some(block_maxes), 0);
+    encoder.set_output_buffer(4, Some(block_sums), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, ncols as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, k as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, chunk_size as i32);
+    <f32 as EncoderParam>::set_param(encoder, 8, inv_temperature);
+    encoder.set_threadgroup_memory_length(0, chunk_size);
+    let group = MTLSize {
+        width: 1024,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: nblocks,
+        height: 1,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+
+    encoder.set_compute_pipeline_state(&stage2);
+    encoder.set_input_buffer(0, Some(block_values), 0);
+    encoder.set_input_buffer(1, Some(block_indices), 0);
+    encoder.set_input_buffer(2, Some(block_maxes), 0);
+    encoder.set_input_buffer(3, Some(block_sums), 0);
+    encoder.set_output_buffer(4, Some(packed_out), 0);
+    <i32 as EncoderParam>::set_param(encoder, 5, nblocks as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, k as i32);
+    encoder.set_threadgroup_memory_length(0, (nblocks * k).max(1));
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+        group,
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_copy_logits(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    src: &Buffer,
+    src_offset: usize,
+    dst: &Buffer,
+    n: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        DType::F32 => "copy_f32",
+        DType::BF16 => "copy_bf16",
+        DType::F16 => "copy_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(src), src_offset);
+    encoder.set_output_buffer(1, Some(dst), 0);
+    <i32 as EncoderParam>::set_param(encoder, 2, n as i32);
+    let (groups, gsize) = linear_split(&pipeline, n);
+    encoder.dispatch_thread_groups(groups, gsize);
+    Ok(())
+}
+
+/// In-place sparse penalties: each (token_id, count) pair updates one logit.
+#[allow(clippy::too_many_arguments)]
+pub fn call_apply_sparse_penalties(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    logits: &Buffer,
+    token_ids: &Buffer,
+    counts: &Buffer,
+    n: usize,
+    n_tokens: usize,
+    frequency_penalty: f32,
+    presence_penalty: f32,
+    repetition_penalty: f32,
+) -> Result<(), MetalKernelError> {
+    if n_tokens == 0 {
+        return Ok(());
+    }
+    let name = match dtype {
+        DType::F32 => "apply_sparse_penalties_f32",
+        DType::BF16 => "apply_sparse_penalties_bf16",
+        DType::F16 => "apply_sparse_penalties_f16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(logits), 0);
+    encoder.set_input_buffer(1, Some(token_ids), 0);
+    encoder.set_input_buffer(2, Some(counts), 0);
+    <i32 as EncoderParam>::set_param(encoder, 3, n as i32);
+    <i32 as EncoderParam>::set_param(encoder, 4, n_tokens as i32);
+    <f32 as EncoderParam>::set_param(encoder, 5, frequency_penalty);
+    <f32 as EncoderParam>::set_param(encoder, 6, presence_penalty);
+    <f32 as EncoderParam>::set_param(encoder, 7, repetition_penalty);
+
+    let (thread_group_count, thread_group_size) = linear_split(&pipeline, n_tokens);
+    encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
+    Ok(())
+}
+
+/// Decode-specialized flash attention for DK=DV=512 BF16, q_seq=1.
+/// Threadgroup memory: DK*2 + NSG*SH*2 + NSG*DV*2 = 1024 + NSG*256 + NSG*1024
+/// = 1024 + NSG*1280 bytes. For NSG=4: 6144 bytes (well under 32KB).
+#[allow(clippy::too_many_arguments)]
+pub fn call_flash_attn_ext_vec_bf16_dk512(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    q: (&Buffer, usize),
+    k: (&Buffer, usize),
+    v: (&Buffer, usize),
+    mask: (&Buffer, usize),
+    out: &Buffer,
+    q_shape: &[usize],
+    q_stride_elems: &[usize],
+    k_shape: &[usize],
+    k_stride_elems: &[usize],
+    v_stride_elems: &[usize],
+    mask_shape: &[usize],
+    mask_stride_elems: &[usize],
+    scale: f32,
+) -> Result<(), MetalKernelError> {
+    assert_eq!(q_shape.len(), 4, "expected q rank 4");
+    assert_eq!(k_shape.len(), 4, "expected k rank 4");
+    assert_eq!(mask_shape.len(), 4, "expected mask rank 4");
+    let (b, n_heads_q, q_seq, dk) = (q_shape[0], q_shape[1], q_shape[2], q_shape[3]);
+    let (b_kv, n_heads_kv, k_seq, dk_k) = (k_shape[0], k_shape[1], k_shape[2], k_shape[3]);
+    assert_eq!(dk, FA_HEAD_DIM);
+    assert_eq!(dk_k, FA_HEAD_DIM);
+    assert_eq!(b, b_kv);
+
+    let bf16 = 2u64;
+    let halfsz = 2u64;
+    let q_nb = [
+        q_stride_elems[3] as u64 * bf16,
+        q_stride_elems[2] as u64 * bf16,
+        q_stride_elems[1] as u64 * bf16,
+        q_stride_elems[0] as u64 * bf16,
+    ];
+    let k_nb = [
+        k_stride_elems[3] as u64 * bf16,
+        k_stride_elems[2] as u64 * bf16,
+        k_stride_elems[1] as u64 * bf16,
+        k_stride_elems[0] as u64 * bf16,
+    ];
+    let v_nb = [
+        v_stride_elems[3] as u64 * bf16,
+        v_stride_elems[2] as u64 * bf16,
+        v_stride_elems[1] as u64 * bf16,
+        v_stride_elems[0] as u64 * bf16,
+    ];
+    let m_nb = [
+        mask_stride_elems[3] as u64 * halfsz,
+        mask_stride_elems[2] as u64 * halfsz,
+        mask_stride_elems[1] as u64 * halfsz,
+        mask_stride_elems[0] as u64 * halfsz,
+    ];
+
+    let pipeline = kernels.load_pipeline(device, "kernel_flash_attn_ext_vec_bf16_dk512_dv512")?;
+
+    let args = FlashAttnKargs {
+        ne01: q_seq as i32,
+        ne02: n_heads_q as i32,
+        ne03: b as i32,
+        _pad0: 0,
+        nb01: q_nb[1],
+        nb02: q_nb[2],
+        nb03: q_nb[3],
+        ne11: k_seq as i32,
+        ne_12_2: n_heads_kv as i32,
+        ne_12_3: b as i32,
+        ns10: (k_nb[1] / bf16) as i32,
+        nb11: k_nb[1],
+        nb12: k_nb[2],
+        nb13: k_nb[3],
+        ns20: (v_nb[1] / bf16) as i32,
+        _pad1: 0,
+        nb21: v_nb[1],
+        nb22: v_nb[2],
+        nb23: v_nb[3],
+        ne31: mask_shape[2] as i32,
+        ne32: mask_shape[1] as i32,
+        ne33: mask_shape[0] as i32,
+        _pad2: 0,
+        nb31: m_nb[1],
+        nb32: m_nb[2],
+        nb33: m_nb[3],
+        ne1: q_seq as i32,
+        ne2: n_heads_q as i32,
+        ne3: b as i32,
+        scale,
+        max_bias: 0.0,
+        m0: 0.0,
+        m1: 0.0,
+        n_head_log2: 0,
+        logit_softcap: 0.0,
+    };
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_bytes(0, &args);
+    encoder.set_input_buffer(1, Some(q.0), q.1);
+    encoder.set_input_buffer(2, Some(k.0), k.1);
+    encoder.set_input_buffer(3, Some(v.0), v.1);
+    encoder.set_input_buffer(4, Some(mask.0), mask.1);
+    encoder.set_output_buffer(8, Some(out), 0);
+
+    // Shared mem: DK*2 + NSG*SH*2 + NSG*DV*2 bytes. For NSG=4: 1024 + 1024 + 4096 = 6144.
+    const FA_VEC_NSG: usize = 4;
+    const FA_VEC_C: usize = 32;
+    let smem_bytes =
+        FA_HEAD_DIM * 2 + FA_VEC_NSG * (4 * FA_VEC_C) * 2 + FA_VEC_NSG * FA_HEAD_DIM * 2;
+    encoder.set_threadgroup_memory_length(0, smem_bytes);
+
+    let grid = MTLSize {
+        width: q_seq,
+        height: n_heads_q,
+        depth: b,
+    };
+    let group = MTLSize {
+        width: 32,
+        height: FA_VEC_NSG,
+        depth: 1,
+    };
+    encoder.dispatch_thread_groups(grid, group);
+    Ok(())
+}
+
+/// Fused KV cache append. Writes K and V src tensors into their respective
+/// cache slots at `dst_offset` in one dispatch. Both tensors must be
+/// contiguous and share shape [b=1, n_kv, src_seq, head_dim]; cache layout
+/// is [b=1, n_kv, max_seq, head_dim].
+#[allow(clippy::too_many_arguments)]
+pub fn call_kv_append_dual(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    dtype: DType,
+    k_src: &Buffer,
+    k_src_offset: usize,
+    v_src: &Buffer,
+    v_src_offset: usize,
+    k_dst: &Buffer,
+    v_dst: &Buffer,
+    head_dim: usize,
+    n_kv: usize,
+    src_seq: usize,
+    max_seq: usize,
+    dst_offset: usize,
+) -> Result<(), MetalKernelError> {
+    let name = match dtype {
+        DType::BF16 => "kv_append_dual_bf16",
+        DType::F16 => "kv_append_dual_f16",
+        DType::F32 => "kv_append_dual_f32",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::BF16, DType::F16, DType::F32],
+                got: other,
+            })
+        }
+    };
+    let pipeline = kernels.load_pipeline(device, name)?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    encoder.set_input_buffer(0, Some(k_src), k_src_offset);
+    encoder.set_input_buffer(1, Some(v_src), v_src_offset);
+    encoder.set_output_buffer(2, Some(k_dst), 0);
+    encoder.set_output_buffer(3, Some(v_dst), 0);
+    <i32 as EncoderParam>::set_param(encoder, 4, head_dim as i32);
+    <i32 as EncoderParam>::set_param(encoder, 5, n_kv as i32);
+    <i32 as EncoderParam>::set_param(encoder, 6, src_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 7, max_seq as i32);
+    <i32 as EncoderParam>::set_param(encoder, 8, dst_offset as i32);
+
+    let flat = n_kv * head_dim;
+    let group_w = 32usize.min(flat.max(1));
+    let group = MTLSize {
+        width: group_w,
+        height: 1,
+        depth: 1,
+    };
+    let grid = MTLSize {
+        width: flat.div_ceil(group_w),
+        height: src_seq,
+        depth: 2,
+    };
+    encoder.dispatch_thread_groups(grid, group);
     Ok(())
 }

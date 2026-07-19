@@ -9,6 +9,7 @@
 /// | Phi-4 Multimodal             | `microsoft/Phi-4-multimodal-instruct`                   |
 /// | LLaVA 1.5 *                  | `llava-hf/llava-1.5-7b-hf`                              |
 /// | LLaVA-NeXT                   | `llava-hf/llava-v1.6-mistral-7b-hf`                     |
+/// | LFM2.5-VL                    | `LiquidAI/LFM2.5-VL-450M`                                |
 /// | Idefics2                     | `HuggingFaceM4/idefics2-8b-chatty`                      |
 /// | Idefics3                     | `HuggingFaceM4/Idefics3-8B-Llama3`                      |
 /// | Qwen2-VL                     | `Qwen/Qwen2-VL-2B-Instruct`                             |
@@ -18,6 +19,7 @@
 /// | Gemma 3                      | `google/gemma-3-4b-it`                                   |
 /// | Gemma 3n                     | `google/gemma-3n-E4B-it`                                 |
 /// | Gemma 4                      | `google/gemma-4-E4B-it`                                  |
+/// | DiffusionGemma               | `google/diffusiongemma-26B-A4B-it`                       |
 /// | MiniCPM-o 2.6                | `openbmb/MiniCPM-o-2_6`                                 |
 /// | Mistral Small 3.1            | `mistralai/Mistral-Small-3.1-24B-Instruct-2503`         |
 /// | Llama 4 Scout                | `meta-llama/Llama-4-Scout-17B-16E-Instruct`             |

@@ -1,5 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -183,6 +184,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         paged_attn_meta,
                         flash_meta,
                         flash_meta_full: _,
+                        recurrent_batch_kind,
                     } = *inputs
                         .downcast::<text_models_inputs_processor::ModelInputs>()
                         .expect("Downcast failed.");
@@ -199,6 +201,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         }),
                         paged_attn_meta,
                         flash_meta,
+                        recurrent_batch_kind,
                     });
                     InputProcessorOutput {
                         inputs,
@@ -316,7 +319,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         seq.set_mm_features(build_mm_features_from_ranges(
                             &img_ranges,
                             &hashes,
-                            "img",
+                            MultimodalKind::Image,
                         ));
                     }
                 }
@@ -396,6 +399,11 @@ impl InputsProcessor for Phi3InputsProcessor {
                 }),
                 paged_attn_meta,
                 flash_meta,
+                recurrent_batch_kind: if is_prompt {
+                    crate::pipeline::RecurrentBatchKind::Prefill
+                } else {
+                    crate::pipeline::RecurrentBatchKind::Decode
+                },
             });
             InputProcessorOutput {
                 inputs,

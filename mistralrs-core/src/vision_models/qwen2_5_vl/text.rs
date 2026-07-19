@@ -13,8 +13,8 @@ use crate::{
     layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits, text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        NormalCache, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -64,14 +64,11 @@ impl Mlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.gate_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
+        let xs = xs.clone();
+        let lhs = self.gate_proj.forward(&xs)?;
         let rhs = self.up_proj.forward(&xs)?;
         self.down_proj
-            .forward(&(lhs * rhs)?)?
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act_fn)?)?
             .to_dtype(original_dtype)
     }
 }
@@ -111,7 +108,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -152,7 +149,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -172,20 +169,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = self.q_proj.forward(&xs)?;
-        let mut k = self.k_proj.forward(&xs)?;
-        let mut v = self.v_proj.forward(&xs)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let (q, k, v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         let (mut q, mut k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -230,18 +215,12 @@ impl Attention {
             .to_dtype(q.dtype())?
         };
 
-        if let Some(t) = self.q_proj.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = self.o_proj.forward(&attn_output)?;
-        if self.q_proj.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -409,13 +388,16 @@ impl Qwen2_5VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            ReplicatedLayer::from_linear(
+                candle_nn::Linear::new(
+                    mapper.cast_nm_device(
+                        embed_tokens.embeddings(),
+                        normal_loading_metadata.loading_isq,
+                    )?,
+                    None,
+                ),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
         };
         Ok(Self {
             embed_tokens,
@@ -454,8 +436,7 @@ impl Qwen2_5VLTextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        context_lens: Vec<(usize, usize)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
         let cos_sin = self.layers[0]
@@ -471,40 +452,17 @@ impl Qwen2_5VLTextModel {
                 &attention_mask.get(xs.device()),
                 &cos_sin,
                 &mut cache[i],
-                flash_params,
+                ctx.flash_params(),
             )?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.lm_head.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
 
 impl IsqModel for Qwen2_5VLTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
-            tensors.push((&mut layer.mlp.up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

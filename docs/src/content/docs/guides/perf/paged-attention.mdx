@@ -1,0 +1,159 @@
+---
+title: Paged attention
+description: Block-based KV caching for higher concurrency, plus the CUDA fast paths built on it.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. Paged attention splits the cache into fixed-size blocks and allocates them on demand from a central pool, so many concurrent sequences share a predictable VRAM budget.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+# Force on, with a specific KV cache memory budget in MB
+mistralrs serve --paged-attn on --pa-memory-mb 8192 -m Qwen/Qwen3-4B
+
+# Force off
+mistralrs serve --paged-attn off -m Qwen/Qwen3-4B
+```
+
+`--paged-attn` accepts `auto` (default), `on`, or `off`. `auto` enables paged attention on CUDA and disables it on Metal and CPU.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    pa_gpu_mem=8192,
+    pa_blk_size=32,
+)
+```
+
+`paged_attn=True` forces it on, `no_paged_attn=True` forces it off; the `pa_*` arguments mirror the CLI flags. [Full example](/mistral.rs/examples/python/paged-attention/).
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{IsqBits, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_auto_isq(IsqBits::Eight)
+    .with_paged_attn(
+        PagedAttentionMetaBuilder::default()
+            .with_block_size(32)
+            .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
+            .build()?,
+    )
+    .build()
+    .await?;
+```
+
+`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/mistral.rs/examples/rust/advanced/paged-attn/).
+
+</TabItem>
+</Tabs>
+
+Use paged attention when:
+
+- Serving more than a handful of concurrent requests.
+- Predictable VRAM usage is required.
+- Running long-context models (32k+) where standard caches would be enormous.
+- Using CUDA decode graphs (see below).
+
+## Memory budget
+
+The pool's size is set via one of three mutually exclusive flags:
+
+- `--pa-memory-mb <mb>`: KV cache budget in MB.
+- `--pa-memory-fraction <f>`: KV cache budget as a fraction of VRAM.
+- `--pa-context-len <n>`: allocate KV cache sized for this context length.
+
+When none are set, the pool defaults to 90% of available VRAM.
+
+Two more flags tune the cache itself:
+
+- `--pa-block-size <n>`: block size (default 32).
+- `--pa-cache-type`: KV cache quantization (`auto` or `f8e4m3`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
+
+See the [serve flag reference](/mistral.rs/reference/cli/serve/) for all `--pa-*` flags.
+
+## How it works
+
+The default block size is 32 tokens. Supported block sizes are 8, 16, and 32; other values fail to load because the attention kernel dispatches on block size explicitly.
+
+Each sequence holds a list of block pointers. On each decoding step, the scheduler checks whether the sequence has a free slot in its tail block; if not, it allocates a new block from the pool. When a sequence finishes, its blocks return to the pool.
+
+Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/mistral.rs/guides/perf/throughput-tuning/) when paged attention is on.
+
+MLA (Multi-head Latent Attention)'s latent cache is supported through a dedicated kernel path. Some models opt out of the FlashInfer paged cache layout (FlashInfer is NVIDIA's attention-kernel library; see [Flash attention vs FlashInfer](#flash-attention-vs-flashinfer) below) when their cache shape needs a different backend.
+
+## CUDA fast paths
+
+On CUDA, paged attention dispatches to one of three paths:
+
+- Default decode: FlashInfer-backed paged decode kernels, used when the model's KV-cache shape is compatible.
+- Eligible prefill chunks: also use FlashInfer.
+- Generic fallback: when a request falls outside those constraints, the runtime gathers blocks and then dispatches to the available attention backend.
+
+Long CUDA prompts are chunked internally with a 4096-token default chunk size. This keeps paged prefill throughput stable at long context and lets long prompts use the paged prefill kernels instead of one very large dispatch. Chunking is internal and does not change the visible prompt, logits, or generated text.
+
+To compare with the non-FlashInfer paged decode path, disable the FlashInfer cache layout:
+
+```bash
+MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
+```
+
+## Flash attention vs FlashInfer
+
+Paged attention and flash attention compose; both can be on simultaneously. They are not the same backend:
+
+- `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/mistral.rs/reference/cargo-features/).
+- FlashInfer paged decode and prefill kernels are built with the `cuda` feature as part of paged attention. They do not require the `flash-attn` Cargo feature.
+
+Set `MISTRALRS_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.
+
+## CUDA graphs
+
+CUDA graphs capture a fixed decode step once and replay it with new token and metadata inputs. This reduces CPU launch overhead during autoregressive decoding. It does not change model math, sampling, or output quality.
+
+They are enabled by default for supported CUDA decode paths. To disable them for comparison or debugging:
+
+```bash
+MISTRALRS_CUDA_GRAPHS=0 mistralrs serve --paged-attn on -m <model>
+```
+
+They require a CUDA build and a CUDA device, and they apply to decode, not prompt prefill.
+
+### Replay preconditions
+
+Graph replay is attempted only when all of these are true:
+
+- The model implementation declares CUDA decode graph support.
+- Paged attention is active.
+- The step is single-token decode (`q_len == 1`), not the initial prompt chunk or a prefix-cache hit.
+- The request is not using a speculative proposer path.
+- The graph key matches the input shape, dtype, cache metadata shapes, and context bucket.
+
+If any condition is not met, mistral.rs runs the normal CUDA path.
+
+<details>
+<summary>Capture and replay internals</summary>
+
+The first time a decode shape is seen, mistral.rs runs a normal warmup forward, captures a graph for that shape, uploads it, and caches it. Later matching decode steps copy the current input ids and paged-attention metadata into graph-owned buffers and replay the graph.
+
+The decode graph cache holds a small number of recent graph entries. New batch sizes, tensor shapes, or metadata layouts can trigger another capture.
+
+If capture or replay fails, CUDA graphs are disabled for that loaded pipeline and a warning is logged. Generation then continues through the normal CUDA path.
+
+</details>
+
+### When graphs help
+
+CUDA graphs help most when decode is limited by CPU launch overhead or many small kernels. They are most useful with paged attention because the paged metadata gives the graph stable tensor shapes while the values inside those tensors change from step to step. They usually do little for prompt prefill, where larger matrix and attention kernels dominate.
+
+For apples-to-apples benchmarking, keep the same prompt length, generation length, batch size, paged-attention mode, and FlashInfer setting across runs.

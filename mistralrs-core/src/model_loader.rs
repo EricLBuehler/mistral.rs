@@ -318,8 +318,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                             .collect::<Vec<_>>()
                     }),
                     max_edge,
-                    calibration_file,
-                    imatrix,
+                    calibration_file: calibration_file.clone(),
+                    imatrix: imatrix.clone(),
                     hf_cache_path: hf_cache_path.clone(),
                     matformer_config_path,
                     matformer_slice_name,
@@ -334,6 +334,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                             .map(|x| x.unwrap())
                             .collect::<Vec<_>>()
                     }),
+                    imatrix,
+                    calibration_file,
                     hf_cache_path: hf_cache_path.clone(),
                 },
                 args.chat_template,
@@ -676,6 +678,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             topology,
             write_uqff,
             from_uqff,
+            imatrix,
+            calibration_file,
             hf_cache_path,
         } => EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig {
@@ -687,6 +691,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         .map(|x| x.unwrap())
                         .collect::<Vec<_>>()
                 }),
+                imatrix,
+                calibration_file,
                 hf_cache_path,
             },
             tokenizer_json,

@@ -1,5 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, collections::HashSet, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -236,6 +237,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                         paged_attn_meta,
                         flash_meta,
                         flash_meta_full: _,
+                        recurrent_batch_kind,
                     } = *inputs
                         .downcast::<text_models_inputs_processor::ModelInputs>()
                         .expect("Downcast failed.");
@@ -257,6 +259,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                         }),
                         paged_attn_meta,
                         flash_meta,
+                        recurrent_batch_kind,
                     });
                     InputProcessorOutput {
                         inputs,
@@ -343,7 +346,11 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             seq.get_toks(),
                             IMAGE_SPECIAL_TOKEN_ID as u32,
                         );
-                        seq.set_mm_features(build_mm_features_from_ranges(&ranges, &hashes, "img"));
+                        seq.set_mm_features(build_mm_features_from_ranges(
+                            &ranges,
+                            &hashes,
+                            MultimodalKind::Image,
+                        ));
                     }
                 }
                 // Also include audio features in mm_features for prefix cache hashing
@@ -353,8 +360,11 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             seq.get_toks(),
                             AUDIO_SPECIAL_TOKEN_ID as u32,
                         );
-                        let audio_features =
-                            build_mm_features_from_ranges(&audio_ranges, &audio_hashes, "audio");
+                        let audio_features = build_mm_features_from_ranges(
+                            &audio_ranges,
+                            &audio_hashes,
+                            MultimodalKind::Audio,
+                        );
                         let mut features = seq.mm_features().to_vec();
                         features.extend(audio_features);
                         seq.set_mm_features(features);
@@ -444,6 +454,11 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 }),
                 paged_attn_meta,
                 flash_meta,
+                recurrent_batch_kind: if is_prompt {
+                    crate::pipeline::RecurrentBatchKind::Prefill
+                } else {
+                    crate::pipeline::RecurrentBatchKind::Decode
+                },
             });
             InputProcessorOutput {
                 inputs,

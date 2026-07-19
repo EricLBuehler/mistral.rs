@@ -3,14 +3,12 @@ use candle_metal_kernels::metal::{
     Buffer, ComputeCommandEncoder, ComputePipeline, ConstantValues, Device, Function, Library,
     Value,
 };
-use objc2_metal::{MTLCompileOptions, MTLDevice, MTLLanguageVersion, MTLMathMode, MTLSize};
+use objc2_metal::{MTLDevice, MTLSize};
 use std::sync::{OnceLock, RwLock};
 use std::{collections::HashMap, ffi::c_void};
 
 pub mod utils;
 use utils::{EncoderProvider, RawBytesEncoder};
-
-use crate::set_params;
 
 // Backward-compatible aliases to ease migration from the `metal` crate API.
 type ComputeCommandEncoderRef = ComputeCommandEncoder;
@@ -36,6 +34,8 @@ const KERNELS: &[u8] = include_bytes!(concat!(
     env!("OUT_DIR"),
     "/mistralrs_paged_attention_visionos.metallib"
 ));
+
+include!("source_set.rs");
 
 #[derive(thiserror::Error, Debug)]
 pub enum MetalKernelError {
@@ -111,188 +111,8 @@ impl Kernels {
     }
 
     fn compile_kernels_at_runtime(&self, device: &Device) -> Result<Library, MetalKernelError> {
-        use std::collections::{HashMap, HashSet};
-
-        // Create a virtual filesystem with all our Metal sources
-        let mut file_system = HashMap::new();
-        file_system.insert("copy_blocks.metal", include_str!("copy_blocks.metal"));
-        file_system.insert("pagedattention.metal", include_str!("pagedattention.metal"));
-        file_system.insert(
-            "reshape_and_cache.metal",
-            include_str!("reshape_and_cache.metal"),
-        );
-        file_system.insert(
-            "kv_scale_update.metal",
-            include_str!("kv_scale_update.metal"),
-        );
-        file_system.insert(
-            "gather_kv_cache.metal",
-            include_str!("gather_kv_cache.metal"),
-        );
-        file_system.insert("utils.metal", include_str!("utils.metal"));
-        file_system.insert("float8.metal", include_str!("float8.metal"));
-
-        // Recursive include preprocessor
-        fn preprocess_includes(
-            content: &str,
-            current_file: &str,
-            file_system: &HashMap<&str, &str>,
-            included_files: &mut HashSet<String>,
-            include_stack: &mut Vec<String>,
-        ) -> Result<String, String> {
-            // Check for circular includes
-            if include_stack.contains(&current_file.to_string()) {
-                return Err(format!(
-                    "Circular include detected: {} -> {}",
-                    include_stack.join(" -> "),
-                    current_file
-                ));
-            }
-
-            include_stack.push(current_file.to_string());
-
-            let mut result = String::new();
-            let lines = content.lines();
-
-            for line in lines {
-                let trimmed = line.trim();
-
-                // Check for #include directive
-                if trimmed.starts_with("#include") {
-                    // Extract the included filename
-                    if let Some(start) = trimmed.find('"') {
-                        if let Some(end) = trimmed[start + 1..].find('"') {
-                            let include_file = &trimmed[start + 1..start + 1 + end];
-
-                            // Check if this is one of our local files
-                            if let Some(included_content) = file_system.get(include_file) {
-                                // Only include each file once (like #pragma once)
-                                if !included_files.contains(include_file) {
-                                    included_files.insert(include_file.to_string());
-
-                                    // Recursively process the included file
-                                    let processed = preprocess_includes(
-                                        included_content,
-                                        include_file,
-                                        file_system,
-                                        included_files,
-                                        include_stack,
-                                    )?;
-
-                                    result.push_str(&format!(
-                                        "\n// ===== Start of {include_file} =====\n"
-                                    ));
-                                    result.push_str(&processed);
-                                    result.push_str(&format!(
-                                        "\n// ===== End of {include_file} =====\n"
-                                    ));
-                                }
-                                // Skip the original #include line
-                                continue;
-                            } else if !trimmed.contains('<') {
-                                // This is a quoted include but not one of our files
-                                // Skip it to avoid "file not found" errors
-                                continue;
-                            }
-                        }
-                    }
-                    // For system includes (with < >), keep them
-                    if trimmed.contains('<') {
-                        result.push_str(line);
-                        result.push('\n');
-                    }
-                } else if trimmed == "#pragma once" {
-                    // Skip #pragma once as we handle it differently
-                    continue;
-                } else {
-                    // Fix backslash-newline warnings by removing trailing spaces
-                    if line.ends_with("\\ ") || line.ends_with("\\\t") {
-                        let cleaned = line.trim_end();
-                        let without_backslash = cleaned.trim_end_matches('\\');
-                        result.push_str(without_backslash);
-                        result.push_str(" \\");
-                    } else {
-                        result.push_str(line);
-                    }
-                    result.push('\n');
-                }
-            }
-
-            include_stack.pop();
-            Ok(result)
-        }
-
-        // Start with a clean slate
-        let mut included_files = HashSet::new();
-        let mut include_stack = Vec::new();
-
-        // Build the main source file
-        let mut main_source = String::new();
-
-        // Add standard Metal includes first
-        main_source.push_str("#include <metal_stdlib>\n");
-        main_source.push_str("#include <metal_common>\n");
-        main_source.push_str("#include <metal_math>\n");
-        main_source.push_str("#include <metal_simdgroup>\n");
-        main_source.push_str("\nusing namespace metal;\n\n");
-
-        // Process all the main implementation files
-        // Order matters - we need to ensure dependencies are included first
-        let main_files = vec![
-            "float8.metal",      // Float8 types
-            "utils.metal",       // Utility functions (depends on float8)
-            "copy_blocks.metal", // Main implementations
-            "pagedattention.metal",
-            "reshape_and_cache.metal",
-            "kv_scale_update.metal",
-            "gather_kv_cache.metal",
-        ];
-
-        for file in main_files {
-            if !included_files.contains(file) {
-                if let Some(content) = file_system.get(file) {
-                    match preprocess_includes(
-                        content,
-                        file,
-                        &file_system,
-                        &mut included_files,
-                        &mut include_stack,
-                    ) {
-                        Ok(processed) => {
-                            main_source.push_str(&format!("\n// ===== {file} =====\n"));
-                            main_source.push_str(&processed);
-                        }
-                        Err(e) => {
-                            return Err(MetalKernelError::CompilationError(format!(
-                                "Failed to preprocess {file}: {e}"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Compile the preprocessed source with the correct Metal language version per platform.
-        // This must match the -std=metal* flags used in build.rs for precompiled metallibs:
-        //   - macOS / iOS / tvOS → Metal 3.1 (native bfloat16 via __HAVE_BFLOAT__)
-        //   - visionOS           → Metal 4.0 (minimum supported version on visionOS)
-        // See: https://support.apple.com/en-us/102894
-        let compile_options = {
-            let opts = MTLCompileOptions::new();
-            #[cfg(not(target_os = "visionos"))]
-            opts.setLanguageVersion(MTLLanguageVersion::Version3_1);
-            #[cfg(target_os = "visionos")]
-            opts.setLanguageVersion(MTLLanguageVersion::Version4_0);
-            opts.setMathMode(MTLMathMode::Fast);
-            opts
-        };
-        device
-            .new_library_with_source(&main_source, Some(&compile_options))
-            .map_err(|e| {
-                MetalKernelError::CompilationError(format!(
-                    "Failed to compile Metal kernels at runtime: {e}"
-                ))
-            })
+        mistralrs_metal_compile::compile_runtime_library(device, &PAGED_ATTENTION_METAL_SOURCE_SET)
+            .map_err(MetalKernelError::CompilationError)
     }
 
     fn load_function(
@@ -381,16 +201,12 @@ pub fn call_copy_blocks(
         numel_per_block_key, numel_per_block_value,
         "key and value blocks must be the same size"
     );
-    set_params!(
-        encoder,
-        (
-            (key_cache, key_cache_offset),
-            (value_cache, value_cache_offset),
-            (block_mapping, block_mapping_offset),
-            numel_per_block_key,
-            numel_per_block_value
-        )
-    );
+    // key_cache and value_cache are read+written by copy_blocks; mark as outputs.
+    encoder.set_output_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_output_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_input_buffer(2, Some(block_mapping), block_mapping_offset);
+    encoder.set_bytes(3, &numel_per_block_key);
+    encoder.set_bytes(4, &numel_per_block_value);
 
     let thread_groups_count = MTLSize {
         width: num_pairs as usize,
@@ -467,14 +283,14 @@ pub fn call_reshape_and_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key), key_offset);
-    encoder.set_buffer(1, Some(value), value_offset);
-    encoder.set_buffer(2, Some(key_cache), key_cache_offset);
-    encoder.set_buffer(3, Some(value_cache), value_cache_offset);
-    encoder.set_buffer(4, Some(slot_mapping), slot_mapping_offset);
+    encoder.set_input_buffer(0, Some(key), key_offset);
+    encoder.set_input_buffer(1, Some(value), value_offset);
+    encoder.set_output_buffer(2, Some(key_cache), key_cache_offset);
+    encoder.set_output_buffer(3, Some(value_cache), value_cache_offset);
+    encoder.set_input_buffer(4, Some(slot_mapping), slot_mapping_offset);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(5, Some(&k_scale), 0_usize);
-        encoder.set_buffer(6, Some(&v_scale), 0_usize);
+        encoder.set_input_buffer(5, Some(&k_scale), 0_usize);
+        encoder.set_input_buffer(6, Some(&v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         7,
@@ -586,13 +402,13 @@ pub fn call_paged_attention_v1(
     let shared_mem_size = logits_size.max(outputs_size);
     encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-    encoder.set_buffer(2, Some(output), 0_usize);
-    encoder.set_buffer(3, Some(q), q_offset);
-    encoder.set_buffer(4, Some(k_cache), k_cache_offset);
-    encoder.set_buffer(5, Some(v_cache), v_cache_offset);
+    encoder.set_output_buffer(2, Some(output), 0_usize);
+    encoder.set_input_buffer(3, Some(q), q_offset);
+    encoder.set_input_buffer(4, Some(k_cache), k_cache_offset);
+    encoder.set_input_buffer(5, Some(v_cache), v_cache_offset);
     if let Some((k_scale, v_scale)) = &k_v_scale {
-        encoder.set_buffer(6, Some(k_scale), 0_usize);
-        encoder.set_buffer(7, Some(v_scale), 0_usize);
+        encoder.set_input_buffer(6, Some(k_scale), 0_usize);
+        encoder.set_input_buffer(7, Some(v_scale), 0_usize);
     }
     encoder.set_bytes_raw(
         8,
@@ -609,15 +425,15 @@ pub fn call_paged_attention_v1(
         core::mem::size_of_val(&softcapping),
         &softcapping as *const _ as *const c_void,
     );
-    encoder.set_buffer(11, Some(block_tables), block_tables_offset);
-    encoder.set_buffer(12, Some(context_lens), context_lens_offset);
+    encoder.set_input_buffer(11, Some(block_tables), block_tables_offset);
+    encoder.set_input_buffer(12, Some(context_lens), context_lens_offset);
     encoder.set_bytes_raw(
         13,
         core::mem::size_of_val(&max_num_blocks_per_seq),
         &max_num_blocks_per_seq as *const _ as *const c_void,
     );
     if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-        encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
+        encoder.set_input_buffer(14, Some(alibi.buffer()), alibi_offset);
     }
     encoder.set_bytes_raw(
         15,
@@ -635,7 +451,7 @@ pub fn call_paged_attention_v1(
         &kv_head_stride as *const _ as *const c_void,
     );
     if let Some((sinks_buf, sinks_offset)) = sinks {
-        encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+        encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
     }
 
     let thread_groups_count = MTLSize {
@@ -727,15 +543,15 @@ pub fn call_paged_attention_v2(
         let shared_mem_size = logits_size.max(outputs_size);
         encoder.set_threadgroup_memory_length(0, shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(exp_sums), 0_usize);
-        encoder.set_buffer(1, Some(max_logits), 0_usize);
-        encoder.set_buffer(2, Some(tmp_out), 0_usize);
-        encoder.set_buffer(3, Some(q), q_offset);
-        encoder.set_buffer(4, Some(k_cache), k_cache_offset);
-        encoder.set_buffer(5, Some(v_cache), v_cache_offset);
+        encoder.set_output_buffer(0, Some(exp_sums), 0_usize);
+        encoder.set_output_buffer(1, Some(max_logits), 0_usize);
+        encoder.set_output_buffer(2, Some(tmp_out), 0_usize);
+        encoder.set_input_buffer(3, Some(q), q_offset);
+        encoder.set_input_buffer(4, Some(k_cache), k_cache_offset);
+        encoder.set_input_buffer(5, Some(v_cache), v_cache_offset);
         if let Some((k_scale, v_scale)) = &k_v_scale {
-            encoder.set_buffer(6, Some(k_scale), 0_usize);
-            encoder.set_buffer(7, Some(v_scale), 0_usize);
+            encoder.set_input_buffer(6, Some(k_scale), 0_usize);
+            encoder.set_input_buffer(7, Some(v_scale), 0_usize);
         }
         encoder.set_bytes_raw(
             8,
@@ -752,15 +568,15 @@ pub fn call_paged_attention_v2(
             core::mem::size_of_val(&softcapping),
             &softcapping as *const _ as *const c_void,
         );
-        encoder.set_buffer(11, Some(block_tables), block_tables_offset);
-        encoder.set_buffer(12, Some(context_lens), context_lens_offset);
+        encoder.set_input_buffer(11, Some(block_tables), block_tables_offset);
+        encoder.set_input_buffer(12, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             13,
             core::mem::size_of_val(&max_num_blocks_per_seq),
             &max_num_blocks_per_seq as *const _ as *const c_void,
         );
         if let Some((alibi, alibi_offset)) = alibi_storage_and_offset {
-            encoder.set_buffer(14, Some(alibi.buffer()), alibi_offset);
+            encoder.set_input_buffer(14, Some(alibi.buffer()), alibi_offset);
         }
         encoder.set_bytes_raw(
             15,
@@ -778,7 +594,7 @@ pub fn call_paged_attention_v2(
             &kv_head_stride as *const _ as *const c_void,
         );
         if let Some((sinks_buf, sinks_offset)) = sinks {
-            encoder.set_buffer(18, Some(sinks_buf), sinks_offset);
+            encoder.set_input_buffer(18, Some(sinks_buf), sinks_offset);
         }
 
         let thread_groups_count = MTLSize {
@@ -828,18 +644,18 @@ pub fn call_paged_attention_v2(
         let reduce_shared_mem_size = 2 * max_num_partitions * std::mem::size_of::<f32>() as i32;
         encoder.set_threadgroup_memory_length(0, reduce_shared_mem_size as usize);
 
-        encoder.set_buffer(0, Some(output), 0_usize);
-        encoder.set_buffer(1, Some(exp_sums), 0_usize);
-        encoder.set_buffer(2, Some(max_logits), 0_usize);
-        encoder.set_buffer(3, Some(tmp_out), 0_usize);
-        encoder.set_buffer(4, Some(context_lens), context_lens_offset);
+        encoder.set_output_buffer(0, Some(output), 0_usize);
+        encoder.set_input_buffer(1, Some(exp_sums), 0_usize);
+        encoder.set_input_buffer(2, Some(max_logits), 0_usize);
+        encoder.set_input_buffer(3, Some(tmp_out), 0_usize);
+        encoder.set_input_buffer(4, Some(context_lens), context_lens_offset);
         encoder.set_bytes_raw(
             5,
             core::mem::size_of_val(&max_num_partitions),
             &max_num_partitions as *const _ as *const c_void,
         );
         if let Some((sinks_buf, sinks_offset)) = sinks {
-            encoder.set_buffer(6, Some(sinks_buf), sinks_offset);
+            encoder.set_input_buffer(6, Some(sinks_buf), sinks_offset);
         }
 
         let thread_groups_count = MTLSize {
@@ -901,16 +717,16 @@ pub fn call_gather_kv_cache(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(key_cache), key_cache_offset);
-    encoder.set_buffer(1, Some(value_cache), value_cache_offset);
-    encoder.set_buffer(2, Some(k_out), k_out_offset);
-    encoder.set_buffer(3, Some(v_out), v_out_offset);
+    encoder.set_input_buffer(0, Some(key_cache), key_cache_offset);
+    encoder.set_input_buffer(1, Some(value_cache), value_cache_offset);
+    encoder.set_output_buffer(2, Some(k_out), k_out_offset);
+    encoder.set_output_buffer(3, Some(v_out), v_out_offset);
     if let Some((k_scale, v_scale)) = k_v_scale {
-        encoder.set_buffer(4, Some(k_scale), 0_usize);
-        encoder.set_buffer(5, Some(v_scale), 0_usize);
+        encoder.set_input_buffer(4, Some(k_scale), 0_usize);
+        encoder.set_input_buffer(5, Some(v_scale), 0_usize);
     }
-    encoder.set_buffer(6, Some(block_table), block_table_offset);
-    encoder.set_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
+    encoder.set_input_buffer(6, Some(block_table), block_table_offset);
+    encoder.set_input_buffer(7, Some(cu_seq_lens), cu_seq_lens_offset);
     encoder.set_bytes_raw(
         8,
         core::mem::size_of_val(&num_tokens),
@@ -992,10 +808,10 @@ pub fn call_kv_scale_update(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    encoder.set_buffer(0, Some(k), k_offset);
-    encoder.set_buffer(1, Some(v), v_offset);
-    encoder.set_buffer(2, Some(k_scale), 0);
-    encoder.set_buffer(3, Some(v_scale), 0);
+    encoder.set_input_buffer(0, Some(k), k_offset);
+    encoder.set_input_buffer(1, Some(v), v_offset);
+    encoder.set_output_buffer(2, Some(k_scale), 0);
+    encoder.set_output_buffer(3, Some(v_scale), 0);
     encoder.set_bytes_raw(
         4,
         core::mem::size_of_val(&num_elements),

@@ -12,13 +12,12 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, CausalMasker, MatMul, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{embedding, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
-        extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -114,26 +113,14 @@ impl DecoderAttention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let original_dtype = xs.dtype();
-        let mut xs = xs.clone();
-        if let Some(t) = self.wq.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let mut q = MatMul.qmethod_matmul(&xs, &*self.wq)?;
-        let mut k = MatMul.qmethod_matmul(&xs, &*self.wk)?;
-        let mut v = MatMul.qmethod_matmul(&xs, &*self.wv)?;
-        if self.wq.quantized_act_type().is_some() {
-            q = q.to_dtype(original_dtype)?;
-            k = k.to_dtype(original_dtype)?;
-            v = v.to_dtype(original_dtype)?;
-        }
-
+        let q = self.wq.forward(xs)?;
+        let k = self.wk.forward(xs)?;
+        let v = self.wv.forward(xs)?;
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -152,10 +139,15 @@ impl DecoderAttention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+            .clone();
+        let (q, k) = self.rotary_emb.forward(&q, &k, &positions)?;
 
         let (k, v) = kv_cache.append(&k, &v)?;
 
+        let flash_params = ctx.flash_params();
         let mut attn_output = Sdpa.run_attention(
             &q,
             &k,
@@ -165,18 +157,12 @@ impl DecoderAttention {
             &self.sdpa_params,
         )?;
 
-        if let Some(t) = self.wq.quantized_act_type() {
-            attn_output = attn_output.to_dtype(t)?;
-        }
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
             attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
         } else {
             attn_output.reshape((b_sz, q_len, ()))?
         };
-        let mut res = MatMul.qmethod_matmul(&attn_output, &*self.wo)?;
-        if self.wq.quantized_act_type().is_some() {
-            res = res.to_dtype(original_dtype)?;
-        }
+        let res = self.wo.forward(&attn_output)?;
         Ok(res)
     }
 }
@@ -206,24 +192,11 @@ impl DecoderMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let original_dtype = xs.dtype();
-        let mut xs_act = xs.clone();
-        if let Some(t) = self.w1.quantized_act_type() {
-            xs_act = xs_act.to_dtype(t)?;
-        }
-        let gate = MatMul.qmethod_matmul(&xs_act, &*self.w1)?;
-        let gate = candle_nn::ops::silu(&gate)?;
-        let up = MatMul.qmethod_matmul(&xs_act, &*self.w3)?;
-        let xs = (gate * up)?;
-        let res = MatMul.qmethod_matmul(&xs, &*self.w2)?;
-        if self.w1.quantized_act_type().is_some() {
-            return res.to_dtype(original_dtype);
-        }
+        let gate = self.w1.forward(xs)?;
+        let up = self.w3.forward(xs)?;
+        let xs = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+        let res = self.w2.forward(&xs)?;
         Ok(res)
-    }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.w1, &mut self.w3, &mut self.w2]
     }
 }
 
@@ -243,9 +216,9 @@ impl AdaptiveNorm {
     }
 
     fn forward(&self, t_cond: &Tensor) -> Result<Tensor> {
-        let xs = MatMul.qmethod_matmul(t_cond, &*self.w0)?;
+        let xs = self.w0.forward(t_cond)?;
         let xs = xs.gelu_erf()?;
-        MatMul.qmethod_matmul(&xs, &*self.w2)
+        self.w2.forward(&xs)
     }
 }
 
@@ -326,16 +299,13 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
         t_cond: Option<&Tensor>,
-        flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.attention_norm.forward(xs)?;
-        let xs =
-            self.attention
-                .forward(&xs, attention_mask, seqlen_offsets, kv_cache, flash_params)?;
+        let xs = self.attention.forward(&xs, attention_mask, ctx, kv_cache)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let mut ffn_in = self.ffn_norm.forward(&xs)?;
@@ -529,9 +499,7 @@ impl VoxtralModel {
     fn inner_forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         mel_features: Option<&Tensor>,
         n_delay_tokens: f32,
     ) -> Result<Tensor> {
@@ -574,7 +542,7 @@ impl VoxtralModel {
                 .expect("audio_embeds_cache lock");
             if let Some(ref audio_embeds) = *cache {
                 let audio_len = audio_embeds.dim(1)?;
-                let pos = seqlen_offsets[0];
+                let pos = ctx.seqlen_offsets()[0];
                 let seq_len = text_embeds.dim(1)?;
                 let end_pos = (pos + seq_len).min(audio_len);
                 if pos < end_pos {
@@ -618,9 +586,10 @@ impl VoxtralModel {
 
         // EitherCache::normal() returns MutexGuard via interior mutability
         let mut cache = self.cache.normal();
+        let mask_cache = ctx.mask_cache(&cache.0);
         let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
-            &cache.0 as &dyn PastKvLenCache,
+            &mask_cache as &dyn PastKvLenCache,
             input_embeds.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
@@ -639,52 +608,21 @@ impl VoxtralModel {
             xs = layer.forward(
                 &xs,
                 &attention_mask.get(xs.device()),
-                seqlen_offsets,
+                ctx,
                 &mut cache.0[i],
                 t_cond_mapped.as_ref(),
-                flash_params,
             )?;
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
 
-        let mut xs = extract_logits(&xs, context_lens)?;
-        if let Some(t) = self.output.quantized_act_type() {
-            xs = xs.to_dtype(t)?;
-        }
-        let logits = MatMul.qmethod_matmul(&xs, &*self.output)?;
+        let xs = ctx.logits(&xs)?;
+        let logits = self.output.forward(&xs)?;
         Ok(logits)
     }
 }
 
 impl IsqModel for VoxtralModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        // lm_head / output
-        tensors.push((&mut self.output, None));
-        // Decoder layers
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.attention.wq, Some(i)));
-            tensors.push((&mut layer.attention.wk, Some(i)));
-            tensors.push((&mut layer.attention.wv, Some(i)));
-            tensors.push((&mut layer.attention.wo, Some(i)));
-            tensors.extend(
-                layer
-                    .feed_forward
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -742,36 +680,19 @@ impl IsqModel for VoxtralModel {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        let mut names = Vec::new();
-        // output / lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            // w1=gate, w3=up, w2=down (matches get_isq_layers order)
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
-    }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for VoxtralModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for VoxtralModel {}
 
 impl MultimodalModel for VoxtralModel {
     fn forward(
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<VoxtralSpecificArgs>()
@@ -779,9 +700,7 @@ impl MultimodalModel for VoxtralModel {
 
         self.inner_forward(
             input_ids,
-            seqlen_offsets,
-            context_lens,
-            flash_params,
+            ctx,
             args.mel_features.as_ref(),
             args.n_delay_tokens.unwrap_or(0.0),
         )
@@ -802,11 +721,6 @@ impl MultimodalModel for VoxtralModel {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
-
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
-    }
-
     fn device(&self) -> &Device {
         &self.device
     }

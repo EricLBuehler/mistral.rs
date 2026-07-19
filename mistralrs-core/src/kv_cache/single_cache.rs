@@ -3,6 +3,11 @@ use candle_core::{Result, Tensor};
 use super::NormalCache;
 
 #[derive(Debug, Clone)]
+pub struct SingleCacheSnapshot {
+    pub current_seq_len: usize,
+}
+
+#[derive(Debug, Clone)]
 pub struct SingleCache {
     // all_data is an option on a Tensor, this makes it possible to only create the actual tensor
     // on the first call where the batch size is easily known.
@@ -48,6 +53,28 @@ impl SingleCache {
             Some(d) => Some(d.narrow(self.dim, 0, self.current_seq_len)?),
         };
         Ok(data)
+    }
+
+    pub fn snapshot(&self) -> SingleCacheSnapshot {
+        SingleCacheSnapshot {
+            current_seq_len: self.current_seq_len,
+        }
+    }
+
+    pub fn can_append_from_snapshot(
+        &self,
+        snapshot: &SingleCacheSnapshot,
+        append_len: usize,
+    ) -> bool {
+        snapshot.current_seq_len == self.current_seq_len
+            && snapshot
+                .current_seq_len
+                .checked_add(append_len)
+                .is_some_and(|len| len <= self.max_seq_len)
+    }
+
+    pub fn rollback_to(&mut self, keep_len: usize) -> candle_core::Result<()> {
+        self.set_len(keep_len)
     }
 
     pub fn reset(&mut self) {

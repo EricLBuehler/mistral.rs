@@ -26,14 +26,11 @@ use crate::{
     get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
-use crate::{
-    models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
-    xlora_models::XLoraQLlama,
-};
+use crate::{models::quantized_llama::ModelWeights as QLlama, xlora_models::XLoraQLlama};
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
 use candle_core::{Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -43,7 +40,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::{debug, info, trace, warn};
 
 enum Model {
     Llama(Box<QLlama>),
@@ -269,7 +266,7 @@ impl Loader for GGMLLoader {
             paged_attn_config = None;
         }
 
-        info!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+        debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
 
         info!(
             "Loading model `{}` on {}.",
@@ -286,7 +283,7 @@ impl Loader for GGMLLoader {
         let model = ggml_file::Content::read(&mut file, device)
             .map_err(|e| e.with_path(paths.get_weight_filenames().first().unwrap()))?;
 
-        info!("Model config: {:?}", model.hparams);
+        trace!("Model config: {:?}", model.hparams);
 
         if DEBUG.load(std::sync::atomic::Ordering::Relaxed) {
             let mut tensors = Vec::new();
@@ -402,6 +399,7 @@ impl Loader for GGMLLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
         })))
@@ -545,6 +543,7 @@ impl Pipeline for GGMLPipeline {
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
             flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            recurrent_batch_kind: _,
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
             Model::Llama(ref model) => {

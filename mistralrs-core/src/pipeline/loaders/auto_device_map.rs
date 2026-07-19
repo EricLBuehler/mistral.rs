@@ -228,10 +228,14 @@ pub fn get_device_layers(
             // below stays consistent. Utilization and ContextSize pass through
             // to calculate_cache_config which handles model weight subtraction.
             let effective_mem_gpu = match cfg.mem_gpu {
-                MemoryGpuConfig::MbAmount(user_mb) => {
+                MemoryGpuConfig::MbAmount(user_mb)
+                | MemoryGpuConfig::BestEffortMbAmount {
+                    target_mb: user_mb,
+                    min_mb: _,
+                } => {
                     // Clamp user's KV budget to available memory.
                     let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
@@ -243,7 +247,7 @@ pub fn get_device_layers(
                     // Cap the KV budget so model + activations + KV fits within
                     // the device capacity derived from *available* memory.
                     let primary_dev = &devices[0];
-                    let avail_bytes = MemoryUsage.get_memory_available(primary_dev)?;
+                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let budget_mb = ((cap as f64 * f as f64) as usize)
@@ -299,13 +303,13 @@ pub fn get_device_layers(
 
     let mut avail = Vec::new();
     for dev in devices {
-        let a = MemoryUsage.get_memory_available(dev)?;
+        let a = MemoryUsage.query(dev)?.available();
         avail.push((a, dev.clone()));
     }
     // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
     // Don't add CPU as a fallback device since it would double-count memory.
     if !has_unified_memory {
-        let a = MemoryUsage.get_memory_available(&Device::Cpu)?;
+        let a = MemoryUsage.query(&Device::Cpu)?.available();
         avail.push((a, Device::Cpu));
     }
 

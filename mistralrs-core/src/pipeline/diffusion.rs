@@ -90,7 +90,7 @@ impl Loader for DiffusionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            let api = ApiBuilder::new()
+            let api = ApiBuilder::from_env()
                 .with_progress(!silent)
                 .with_token(get_token(&token_source)?)
                 .build()?;
@@ -101,8 +101,8 @@ impl Loader for DiffusionLoader {
                 revision.clone(),
             ));
             let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, model_id)?;
-            let config_filenames = self.inner.get_config_filenames(&api, model_id)?;
+            let filenames = self.inner.get_model_paths(&api, model_id, &revision)?;
+            let config_filenames = self.inner.get_config_filenames(&api, model_id, &revision)?;
             Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
                 config_filenames,
                 filenames,
@@ -169,7 +169,7 @@ impl Loader for DiffusionLoader {
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            let WorkerTransferData::Init { worker_rank, .. } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
@@ -248,6 +248,7 @@ impl Loader for DiffusionLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Vision],
                 },
+                loaded_for_uqff_write: false,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
         })))

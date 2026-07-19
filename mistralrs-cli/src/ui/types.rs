@@ -8,15 +8,42 @@ use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
 pub struct UiModelInfo {
     pub name: String,
     pub kind: String,
+    /// Lowercased modality names: e.g. ["text", "vision"].
+    #[serde(default)]
+    pub input_modalities: Vec<String>,
+    #[serde(default)]
+    pub output_modalities: Vec<String>,
     pub generation_defaults: GenerationParams,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct ChatMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub videos: Option<Vec<String>>,
+    /// Rich display blocks (reasoning, tool calls with results/images) for UI rendering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<serde_json::Value>,
+    /// Finish reason from the model (stop, length, tool_calls, etc.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_ms: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -27,6 +54,12 @@ pub struct ChatFile {
     pub kind: String,
     pub created_at: String,
     pub messages: Vec<ChatMessage>,
+    /// Server-side agentic session ID. Full session lives in `chat_<id>.session.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Active leaf id. Walking `parent_id` from here yields the current conversation path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tail: Option<String>,
 }
 
 /// Default generation parameters
@@ -46,7 +79,7 @@ impl Default for GenerationParams {
             temperature: Some(0.7),
             top_p: Some(0.9),
             top_k: Some(40),
-            max_tokens: Some(2048),
+            max_tokens: Some(8192),
             repetition_penalty: Some(1.1),
             system_prompt: None,
         }
@@ -76,16 +109,16 @@ impl GenerationParams {
             params.temperature = Some(0.0);
             params.top_k = Some(1);
             params.top_p = Some(1.0);
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            params.temperature = Some(temperature);
-        }
-        if let Some(top_p) = defaults.top_p {
-            params.top_p = Some(top_p);
-        }
-        if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
-            params.top_k = Some(top_k);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                params.temperature = Some(temperature);
+            }
+            if let Some(top_p) = defaults.top_p {
+                params.top_p = Some(top_p);
+            }
+            if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
+                params.top_k = Some(top_k);
+            }
         }
         if let Some(max_tokens) = defaults.max_new_tokens {
             params.max_tokens = Some(max_tokens);
@@ -113,6 +146,12 @@ pub struct AppState {
     pub search_enabled: bool,
     /// Search embedding model to use (if enabled)
     pub search_embedding_model: Option<SearchEmbeddingModel>,
+    /// Whether code execution is enabled
+    pub code_execution_enabled: bool,
+    /// Whether shell execution is enabled
+    pub shell_enabled: bool,
+    /// Tool dispatch URL (if configured)
+    pub tool_dispatch_url: Option<String>,
 }
 
 // Request/Response types
@@ -140,4 +179,24 @@ pub struct LoadChatRequest {
 pub struct RenameChatRequest {
     pub id: String,
     pub title: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn do_sample_false_overrides_sampling_defaults() {
+        let params = GenerationParams::from_model_defaults(Some(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.6),
+            top_k: Some(20),
+            top_p: Some(0.9),
+            ..Default::default()
+        }));
+
+        assert_eq!(params.temperature, Some(0.0));
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, Some(1.0));
+    }
 }

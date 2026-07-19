@@ -7,7 +7,6 @@ mod vision;
 
 use std::{
     any::Any,
-    collections::HashMap,
     sync::{Arc, Mutex},
 };
 
@@ -19,21 +18,20 @@ use vision::MLlamaVisionModel;
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
-use mistralrs_quant::{CollectedImatrixData, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::ShardedVarBuilder;
 
 use crate::attention::AttentionMask;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     layers::{linear, GetFloatInfo},
     layers_masker::masked_fill,
     ops::RepeatInterleaveOp,
     paged_attention::{
-        encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -76,6 +74,36 @@ fn prepare_cross_attention_mask(
         .to_dtype(dtype)?;
 
     Ok((cross_attn_mask, full_text_row_masked_out_mask))
+}
+
+fn image_cache_keys(
+    image_hashes: &[Vec<u64>],
+    batch_size: usize,
+    max_num_images: usize,
+) -> Result<Vec<(usize, usize, u64)>> {
+    if image_hashes.len() != batch_size {
+        candle_core::bail!(
+            "image hash batch size {} does not match pixel batch size {batch_size}",
+            image_hashes.len()
+        );
+    }
+
+    let mut keys = Vec::new();
+    for (batch_idx, hashes) in image_hashes.iter().enumerate() {
+        if hashes.len() > max_num_images {
+            candle_core::bail!(
+                "image hash count {} exceeds padded image count {max_num_images}",
+                hashes.len()
+            );
+        }
+        keys.extend(
+            hashes
+                .iter()
+                .enumerate()
+                .map(|(image_idx, &hash)| (batch_idx, image_idx, hash)),
+        );
+    }
+    Ok(keys)
 }
 
 pub(crate) struct MLlamaModel {
@@ -121,6 +149,115 @@ impl MLlamaModel {
         })
     }
 
+    fn project_vision_outputs(&self, vision_outputs: &Tensor) -> Result<Tensor> {
+        let batch_size = vision_outputs.dim(0)?;
+        let num_images = vision_outputs.dim(1)?;
+        let num_tiles = vision_outputs.dim(2)?;
+        let num_patches = vision_outputs.dim(3)?;
+        self.multi_modal_projector
+            .forward(&vision_outputs.flatten(0, 1)?)?
+            .reshape((
+                batch_size,
+                num_images * num_tiles * num_patches,
+                self.hidden_size,
+            ))?
+            .to_dtype(self.dtype)
+    }
+
+    fn encode_image(
+        &self,
+        pixel_values: &Tensor,
+        aspect_ratio_ids: &Tensor,
+        aspect_ratio_mask: &Tensor,
+        batch_idx: usize,
+        image_idx: usize,
+    ) -> Result<Tensor> {
+        let pixel_values = pixel_values
+            .get(batch_idx)?
+            .get(image_idx)?
+            .unsqueeze(0)?
+            .unsqueeze(0)?;
+        let aspect_ratio_ids = aspect_ratio_ids
+            .get(batch_idx)?
+            .get(image_idx)?
+            .reshape((1, 1))?;
+        let aspect_ratio_mask =
+            aspect_ratio_mask
+                .get(batch_idx)?
+                .get(image_idx)?
+                .reshape((1, 1, ()))?;
+        let vision_outputs =
+            self.vision_model
+                .forward(&pixel_values, &aspect_ratio_ids, &aspect_ratio_mask)?;
+        self.project_vision_outputs(&vision_outputs)?.squeeze(0)
+    }
+
+    fn cached_cross_attention_states(
+        &self,
+        pixel_values: &Tensor,
+        aspect_ratio_ids: &Tensor,
+        aspect_ratio_mask: &Tensor,
+        image_hashes: &[Vec<u64>],
+    ) -> Result<Tensor> {
+        let batch_size = pixel_values.dim(0)?;
+        let max_num_images = pixel_values.dim(1)?;
+        let max_num_tiles = pixel_values.dim(2)?;
+        let keys = image_cache_keys(image_hashes, batch_size, max_num_images)?;
+        let mut states = image_hashes
+            .iter()
+            .map(|hashes| vec![None; hashes.len()])
+            .collect::<Vec<Vec<Option<Tensor>>>>();
+        let mut misses = Vec::new();
+
+        {
+            let mut cache = self
+                .encoder_cache
+                .lock()
+                .expect("encoder cache lock poisoned");
+            for &(batch_idx, image_idx, hash) in &keys {
+                if let Some(cached) = cache.get(CacheModality::Image, hash) {
+                    states[batch_idx][image_idx] = Some(cached[0].clone());
+                } else {
+                    misses.push((batch_idx, image_idx, hash));
+                }
+            }
+        }
+
+        for (batch_idx, image_idx, hash) in misses {
+            let state = self.encode_image(
+                pixel_values,
+                aspect_ratio_ids,
+                aspect_ratio_mask,
+                batch_idx,
+                image_idx,
+            )?;
+            self.encoder_cache
+                .lock()
+                .expect("encoder cache lock poisoned")
+                .insert(CacheModality::Image, hash, vec![state.clone()]);
+            states[batch_idx][image_idx] = Some(state);
+        }
+
+        let tokens_per_image = max_num_tiles * self.vision_model.num_patches;
+        let mut batch_states = Vec::with_capacity(batch_size);
+        for sample_states in states {
+            let num_images = sample_states.len();
+            let mut sample_states = sample_states
+                .into_iter()
+                .map(|state| state.expect("all image states should be resolved"))
+                .collect::<Vec<_>>();
+            for _ in num_images..max_num_images {
+                sample_states.push(Tensor::zeros(
+                    (tokens_per_image, self.hidden_size),
+                    self.dtype,
+                    pixel_values.device(),
+                )?);
+            }
+            batch_states.push(Tensor::cat(&sample_states, 0)?);
+        }
+        Tensor::stack(&batch_states, 0)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward_inner(
         &self,
@@ -129,9 +266,8 @@ impl MLlamaModel {
         aspect_ratio_mask: Option<&Tensor>,
         aspect_ratio_ids: Option<&Tensor>,
         cross_attn_mask: Option<&Tensor>,
-        image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
+        image_hashes: &[Vec<u64>],
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let cross_attn_states = if let Some(pixel_values) = pixel_values {
             let Some(aspect_ratio_mask) = aspect_ratio_mask else {
@@ -141,64 +277,18 @@ impl MLlamaModel {
                 candle_core::bail!("`aspect_ratio_ids` must be specified if `pixel_values` is.");
             };
 
-            let n_images = image_hashes.len();
-            if n_images > 0 {
-                let mut per_image: Vec<Tensor> = Vec::with_capacity(n_images);
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(hash) {
-                            per_image.push(cached[0].clone());
-                        } else {
-                            per_image.push(Tensor::zeros(
-                                1,
-                                candle_core::DType::F32,
-                                pixel_values.device(),
-                            )?);
-                            miss_indices.push(i);
-                        }
-                    }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_pv = pixel_values.get(idx)?.unsqueeze(0)?;
-                        let single_ar_mask = aspect_ratio_mask.get(idx)?.unsqueeze(0)?;
-                        let single_ar_ids = aspect_ratio_ids.get(idx)?.unsqueeze(0)?;
-                        let vision_outputs = self.vision_model.forward(
-                            &single_pv,
-                            &single_ar_ids,
-                            &single_ar_mask,
-                        )?;
-                        let feats = self
-                            .multi_modal_projector
-                            .forward(&vision_outputs.flatten(0, 1)?)?
-                            .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
-                            .to_dtype(self.dtype)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(image_hashes[idx], vec![feats.clone()]);
-                        }
-                        per_image[idx] = feats;
-                    }
-                }
-                Some(Tensor::cat(&per_image, 0)?)
+            if image_hashes.iter().any(|hashes| !hashes.is_empty()) {
+                Some(self.cached_cross_attention_states(
+                    pixel_values,
+                    aspect_ratio_ids,
+                    aspect_ratio_mask,
+                    image_hashes,
+                )?)
             } else {
                 let vision_outputs =
                     self.vision_model
                         .forward(pixel_values, aspect_ratio_ids, aspect_ratio_mask)?;
-                let cross_attention_states = self
-                    .multi_modal_projector
-                    .forward(&vision_outputs.flatten(0, 1)?)?
-                    .reshape(((), vision_outputs.dim(D::Minus2)?, self.hidden_size))?
-                    .to_dtype(self.dtype)?;
-                Some(cross_attention_states)
+                Some(self.project_vision_outputs(&vision_outputs)?)
             }
         } else {
             None
@@ -226,8 +316,7 @@ impl MLlamaModel {
             cross_attn_states.as_ref(),
             &cross_attn_mask_enum,
             full_text_row_masked_out_mask.as_ref(),
-            seqlen_offsets,
-            context_lens,
+            ctx,
         )
     }
 }
@@ -237,15 +326,16 @@ pub(crate) struct MLlamaSpecificArgs {
     pub aspect_ratio_ids: Option<Tensor>,
     pub aspect_ratio_mask: Option<Tensor>,
     pub cross_attn_mask: Option<Tensor>,
-    pub image_hashes: Vec<u64>,
+    pub image_hashes: Vec<Vec<u64>>,
 }
+
+impl crate::speculative::SpeculativeTargetMixin for MLlamaModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for MLlamaModel {}
 
 impl MultimodalModel for MLlamaModel {
     fn cache(&self) -> &EitherCache {
         &self.language_model.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.language_model.cache
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.language_model.cfg
@@ -260,12 +350,8 @@ impl MultimodalModel for MLlamaModel {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MLlamaSpecificArgs {
             aspect_ratio_ids,
@@ -282,8 +368,7 @@ impl MultimodalModel for MLlamaModel {
             aspect_ratio_ids.as_ref(),
             cross_attn_mask.as_ref(),
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
+            ctx,
         )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
@@ -305,22 +390,6 @@ impl MultimodalModel for MLlamaModel {
 }
 
 impl IsqModel for MLlamaModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (mut layers, mapper) = self.language_model.get_layers();
-        layers.extend(
-            self.vision_model
-                .get_isq_layers()
-                .into_iter()
-                .map(|layer| (layer, None)),
-        );
-        (layers, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -333,40 +402,23 @@ impl IsqModel for MLlamaModel {
 
         uvb.to_safetensors()
     }
-
-    // NOTE: We ONLY calibrate the text bits of these models, so we should only track/return those parts!!
-
-    /// This is used for imatrix generation internally. Begin stats tracking.
-    fn begin_track_stats(&mut self) -> anyhow::Result<()> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .map(|(layer, _)| layer)
-            .collect::<Vec<_>>();
-        for layer in layers {
-            Arc::get_mut(layer).unwrap().begin_track_stats()?;
-        }
-        Ok(())
-    }
-
-    /// End stats tracking and return the imatrix data
-    fn extract_imatrix_data(&mut self) -> candle_core::Result<CollectedImatrixData> {
-        let layers = self
-            .language_model
-            .get_layers()
-            .0
-            .into_iter()
-            .enumerate()
-            .map(|(i, (layer, _))| (i, layer))
-            .collect::<Vec<_>>();
-        let mut data = HashMap::new();
-        for (i, layer) in layers {
-            data.insert(i, Some(layer.end_track_stats()?.to_vec1::<f32>()?));
-        }
-        Ok(CollectedImatrixData(data))
-    }
 }
 
 impl AnyMoeBaseModelMixin for MLlamaModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::image_cache_keys;
+
+    #[test]
+    fn image_cache_keys_keep_batch_and_image_coordinates() {
+        let keys = image_cache_keys(&[vec![11, 12], vec![21]], 2, 2).unwrap();
+        assert_eq!(keys, vec![(0, 0, 11), (0, 1, 12), (1, 0, 21)]);
+    }
+
+    #[test]
+    fn image_cache_keys_reject_invalid_padding_layout() {
+        assert!(image_cache_keys(&[vec![11, 12]], 1, 1).is_err());
+        assert!(image_cache_keys(&[vec![11]], 2, 1).is_err());
+    }
+}

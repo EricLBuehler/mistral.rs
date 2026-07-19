@@ -1,40 +1,12 @@
 # syntax=docker/dockerfile:1
+#
+# Thin CUDA runtime image. The prebuilt CUDA package (the `mistralrs` binary plus its bundled
+# `lib/` and, for cutile builds, `bin/tileiras`) is staged into `dist/` by the release workflow
+# and copied in - not compiled here. BASE_TAG selects the CUDA runtime matching the binary's
+# toolkit. Build via .github/workflows/release.yml.
 
-# Stage 1: Build environment
-FROM nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04 AS builder
-SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
-
-ARG DEBIAN_FRONTEND=noninteractive
-RUN <<HEREDOC
-    apt-get update
-    apt-get install -y --no-install-recommends \
-        curl \
-        git \
-        libssl-dev \
-        pkg-config
-
-    rm -rf /var/lib/apt/lists/*
-HEREDOC
-
-RUN curl https://sh.rustup.rs -sSf | bash -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-RUN rustup update nightly && rustup default nightly
-
-WORKDIR /mistralrs
-COPY . .
-
-# Rayon threads are limited to minimize memory requirements in CI, avoiding OOM
-# Rust threads are increased with a nightly feature for faster compilation (single-threaded by default)
-ARG CUDA_COMPUTE_CAP=80
-ARG RAYON_NUM_THREADS=4
-ARG RUST_NUM_THREADS=4
-ARG RUSTFLAGS="-Z threads=${RUST_NUM_THREADS}"
-ARG WITH_FEATURES="cuda,cudnn"
-RUN cargo build --release --workspace --exclude mistralrs-pyo3 --features "${WITH_FEATURES}"
-
-
-# Stage 2: Minimal runtime environment
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+ARG BASE_TAG=12.8.1-cudnn
+FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -44,17 +16,25 @@ RUN <<HEREDOC
         libomp-dev \
         ca-certificates \
         libssl-dev \
-        curl \
-        pkg-config
+        curl
 
     rm -rf /var/lib/apt/lists/*
 HEREDOC
 
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-bench /usr/local/bin/mistralrs-bench
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-server /usr/local/bin/mistralrs-server
-COPY --chmod=755 --from=builder /mistralrs/target/release/mistralrs-web-chat /usr/local/bin/mistralrs-web-chat
-# Copy chat templates for users running models which may not include them
-COPY --from=builder /mistralrs/chat_templates /chat_templates
+# The binary carries rpath $ORIGIN/lib, so it finds its bundled CUDA libs beside it.
+# TARGETARCH (amd64/arm64) is set by buildx; the release workflow stages dist/<arch>/.
+ARG TARGETARCH
+COPY dist/${TARGETARCH}/ /opt/mistralrs/
+RUN ln -sf /opt/mistralrs/mistralrs /usr/local/bin/mistralrs && \
+    if [ -f /opt/mistralrs/bin/tileiras ]; then ln -sf /opt/mistralrs/bin/tileiras /usr/local/bin/tileiras; fi
+# Chat templates for models that ship without one
+COPY chat_templates /chat_templates
 
-ENV HUGGINGFACE_HUB_CACHE=/data \
-    PORT=80
+# hf-hub reads HF_HOME; mount a volume at /data to persist downloaded models
+ENV HF_HOME=/data
+
+# Default port of `mistralrs serve`
+EXPOSE 1234
+
+ENTRYPOINT ["mistralrs"]
+CMD ["--help"]

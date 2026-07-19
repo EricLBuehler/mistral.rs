@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::paged_attention::block_hash::MultimodalKind;
 use std::{any::Any, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
@@ -244,7 +245,9 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                                 .get_ids()[0];
                             let ranges = find_image_delimited_ranges(&input_ids, im_start, im_end);
                             seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges, &hashes, "img",
+                                &ranges,
+                                &hashes,
+                                MultimodalKind::Image,
                             ));
                         }
                     }
@@ -492,6 +495,11 @@ impl InputsProcessor for MiniCpmOImageProcessor {
             model_specific_args: Box::new(args),
             paged_attn_meta,
             flash_meta,
+            recurrent_batch_kind: if is_prompt {
+                crate::pipeline::RecurrentBatchKind::Prefill
+            } else {
+                crate::pipeline::RecurrentBatchKind::Decode
+            },
         });
         Ok(InputProcessorOutput {
             inputs,

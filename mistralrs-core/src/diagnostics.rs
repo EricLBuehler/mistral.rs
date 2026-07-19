@@ -50,6 +50,7 @@ pub struct DeviceInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildInfo {
+    pub version: String,
     pub cuda: bool,
     pub metal: bool,
     pub cudnn: bool,
@@ -58,6 +59,10 @@ pub struct BuildInfo {
     pub accelerate: bool,
     pub mkl: bool,
     pub git_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_toolkit_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_toolkit_version_code: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +116,7 @@ pub struct DoctorReport {
 
 fn build_info() -> BuildInfo {
     BuildInfo {
+        version: crate::MISTRALRS_VERSION.to_string(),
         cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),
@@ -119,6 +125,9 @@ fn build_info() -> BuildInfo {
         accelerate: cfg!(feature = "accelerate"),
         mkl: cfg!(feature = "mkl"),
         git_revision: crate::MISTRALRS_GIT_REVISION.to_string(),
+        cuda_toolkit_version: option_env!("MISTRALRS_BUILD_CUDA_VERSION").map(str::to_string),
+        cuda_toolkit_version_code: option_env!("MISTRALRS_BUILD_CUDA_VERSION_CODE")
+            .and_then(|s| s.parse().ok()),
     }
 }
 
@@ -142,41 +151,34 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
     #[cfg(feature = "cuda")]
     {
         let mut ord = 0;
-        loop {
-            match Device::new_cuda(ord) {
-                Ok(dev) => {
-                    let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                    let avail = MemoryUsage
-                        .get_memory_available(&dev)
-                        .ok()
-                        .map(|v| v as u64);
+        while let Ok(dev) = Device::new_cuda(ord) {
+            let mem = MemoryUsage.query(&dev).ok();
+            let total = mem.map(|m| m.total() as u64);
+            let avail = mem.map(|m| m.available() as u64);
 
-                    // Get compute capability
-                    let compute_cap = get_cuda_compute_capability(ord);
-                    let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
-                        // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
-                        major >= 8
-                    });
-                    let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
-                        // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
-                        major == 9 && minor == 0
-                    });
+            // Get compute capability
+            let compute_cap = get_cuda_compute_capability(ord);
+            let flash_attn_v2_ok = compute_cap.map(|(major, _minor)| {
+                // Flash Attention v2 requires compute capability >= 8.0 (Ampere+)
+                major >= 8
+            });
+            let flash_attn_v3_ok = compute_cap.map(|(major, minor)| {
+                // Flash Attention v3 requires compute capability == 9.0 (Hopper only)
+                major == 9 && minor == 0
+            });
 
-                    devices.push(DeviceInfo {
-                        kind: "cuda".to_string(),
-                        ordinal: Some(ord),
-                        name: None,
-                        total_memory_bytes: total,
-                        available_memory_bytes: avail,
-                        compute_capability: compute_cap,
-                        flash_attn_compatible: flash_attn_v2_ok,
-                        flash_attn_v3_compatible: flash_attn_v3_ok,
-                        unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
-                    });
-                    ord += 1;
-                }
-                Err(_) => break,
-            }
+            devices.push(DeviceInfo {
+                kind: "cuda".to_string(),
+                ordinal: Some(ord),
+                name: None,
+                total_memory_bytes: total,
+                available_memory_bytes: avail,
+                compute_capability: compute_cap,
+                flash_attn_compatible: flash_attn_v2_ok,
+                flash_attn_v3_compatible: flash_attn_v3_ok,
+                unified_memory: Some(crate::utils::normal::is_integrated_gpu(&dev)),
+            });
+            ord += 1;
         }
     }
 
@@ -185,11 +187,9 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         let total = candle_metal_kernels::metal::Device::all().len();
         for ord in 0..total {
             if let Ok(dev) = Device::new_metal(ord) {
-                let total = MemoryUsage.get_total_memory(&dev).ok().map(|v| v as u64);
-                let avail = MemoryUsage
-                    .get_memory_available(&dev)
-                    .ok()
-                    .map(|v| v as u64);
+                let mem = MemoryUsage.query(&dev).ok();
+                let total = mem.map(|m| m.total() as u64);
+                let avail = mem.map(|m| m.available() as u64);
                 devices.push(DeviceInfo {
                     kind: "metal".to_string(),
                     ordinal: Some(ord),
@@ -301,6 +301,18 @@ pub fn collect_system_info() -> SystemInfo {
 pub fn check_hf_gated_access() -> HfConnectivityInfo {
     let start = Instant::now();
 
+    if crate::pipeline::hf::is_hf_hub_offline() {
+        return HfConnectivityInfo {
+            reachable: false,
+            latency_ms: None,
+            token_valid_for_gated: None,
+            error: Some(format!(
+                "Skipped: `{}` is set; no network calls were made.",
+                crate::pipeline::hf::HF_HUB_OFFLINE_ENV
+            )),
+        };
+    }
+
     // Try to access a gated model (google/gemma-3-4b-it)
     let api_result = ApiBuilder::from_env()
         .with_progress(false)
@@ -362,6 +374,33 @@ fn disk_usage_for(path: &Path) -> Option<(u64, u64)> {
         }
     }
     best.map(|(_, avail, total)| (avail, total))
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_driver_version_code() -> Option<u32> {
+    let output = std::process::Command::new("nvidia-smi").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_cuda_driver_version_code(&stdout)
+}
+
+#[cfg(feature = "cuda")]
+fn parse_cuda_driver_version_code(output: &str) -> Option<u32> {
+    let version = output.split("CUDA Version:").nth(1)?.trim_start();
+    let version = version
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .next()?;
+    let mut parts = version.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().unwrap_or("0").parse().ok()?;
+    Some(major * 100 + minor)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_version_code_to_string(code: u32) -> String {
+    format!("{}.{}", code / 100, code % 100)
 }
 
 pub fn run_doctor() -> DoctorReport {
@@ -450,6 +489,67 @@ pub fn run_doctor() -> DoctorReport {
                 message: "Binary features match detected hardware.".to_string(),
                 suggestion: None,
             });
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    {
+        let has_cuda_device = system.devices.iter().any(|d| d.kind == "cuda");
+        if system.build.cuda && has_cuda_device {
+            match (
+                system.build.cuda_toolkit_version_code,
+                cuda_driver_version_code(),
+            ) {
+                (Some(build_code), Some(driver_code)) if build_code > driver_code => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Error,
+                        message: format!(
+                            "CUDA binary was built with CUDA {}, but the NVIDIA driver supports CUDA {}.",
+                            cuda_version_code_to_string(build_code),
+                            cuda_version_code_to_string(driver_code),
+                        ),
+                        suggestion: Some(
+                            "Install a matching prebuilt, rebuild with a CUDA toolkit no newer than the driver supports, or upgrade the NVIDIA driver."
+                                .to_string(),
+                        ),
+                    });
+                }
+                (Some(build_code), Some(driver_code)) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Ok,
+                        message: format!(
+                            "CUDA build/driver compatibility: build CUDA {}, driver supports CUDA {}.",
+                            cuda_version_code_to_string(build_code),
+                            cuda_version_code_to_string(driver_code),
+                        ),
+                        suggestion: None,
+                    });
+                }
+                (None, _) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Warn,
+                        message: "CUDA build toolkit version is unknown.".to_string(),
+                        suggestion: Some(
+                            "Rebuild with the current release so doctor can verify driver compatibility."
+                                .to_string(),
+                        ),
+                    });
+                }
+                (_, None) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Warn,
+                        message: "NVIDIA driver CUDA compatibility version could not be detected."
+                            .to_string(),
+                        suggestion: Some(
+                            "Check that nvidia-smi is available and working.".to_string(),
+                        ),
+                    });
+                }
+            }
         }
     }
 

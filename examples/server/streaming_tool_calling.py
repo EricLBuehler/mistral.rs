@@ -7,7 +7,7 @@ with finish_reason="tool_calls".
 
 Usage:
 ```
-cargo run --release --features cuda -- --port 1234 --isq Q4K plain -m meta-llama/Meta-Llama-3.1-8B-Instruct -a llama
+mistralrs serve --quant q4k -p 1234 -m meta-llama/Meta-Llama-3.1-8B-Instruct
 ```
 
 And then:
@@ -166,7 +166,7 @@ def execute_tool_calls(tool_calls):
                 results.append((tool_call, error_result))
         else:
             error_result = json.dumps({"error": f"Unknown function: {func_name}"})
-            print(f"  -> Error: Unknown function")
+            print("  -> Error: Unknown function")
             results.append((tool_call, error_result))
 
     return results

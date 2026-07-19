@@ -1,0 +1,134 @@
+---
+title: Generate images with diffusion models
+description: Running FLUX and similar image-generation models through the mistralrs OpenAI-compatible API.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/mistral.rs/reference/supported-models/).
+
+## Running FLUX
+
+```bash
+mistralrs serve -m black-forest-labs/FLUX.1-schnell
+```
+
+`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance: accept on the model page, then authenticate with `mistralrs login`.
+
+The CLI and server always load the fully-resident `Flux` path. To trade speed for a much smaller GPU footprint, use the `FluxOffloaded` loader, which is only selectable from the SDKs (see [Python SDK](#python-sdk)):
+
+| Loader | GPU footprint | Availability | Notes |
+|---|---|---|---|
+| `Flux` | Full model resident | CLI, server, SDK | Fully loaded path. Fastest. |
+| `FluxOffloaded` | Much smaller | SDK only | Offloads components to CPU; useful when the full model does not fit. |
+
+Generating an image:
+
+<Tabs>
+<TabItem label="HTTP">
+
+```bash
+curl http://localhost:1234/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "prompt": "A photograph of a golden retriever wearing a scarf in autumn leaves.",
+    "n": 1,
+    "height": 1024,
+    "width": 1024
+  }'
+```
+
+The response is JSON with a `data` array. Each entry has either `url` or `b64_json`, controlled by `response_format` (default `Url`); see [Request fields](#request-fields) and [Output handling](#output-handling).
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import (
+    DiffusionArchitecture,
+    ImageGenerationResponseFormat,
+    Runner,
+    Which,
+)
+
+runner = Runner(
+    which=Which.DiffusionPlain(
+        model_id="black-forest-labs/FLUX.1-schnell",
+        arch=DiffusionArchitecture.FluxOffloaded,
+    )
+)
+
+response = runner.generate_image(
+    "A vibrant sunset in the mountains, high quality.",
+    ImageGenerationResponseFormat.Url,
+)
+print(response.data[0].url)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{
+    DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder,
+    ImageGenerationResponseFormat,
+};
+
+let model = DiffusionModelBuilder::new(
+    "black-forest-labs/FLUX.1-schnell",
+    DiffusionLoaderType::FluxOffloaded,
+)
+.build()
+.await?;
+
+let response = model
+    .generate_image(
+        "A vibrant sunset in the mountains, high quality.".to_string(),
+        ImageGenerationResponseFormat::Url,
+        DiffusionGenerationParams::default(),
+        None,
+    )
+    .await?;
+println!("{}", response.data[0].url.as_ref().unwrap());
+```
+
+</TabItem>
+</Tabs>
+
+## Request fields
+
+| Field | Default | Notes |
+|---|---|---|
+| `prompt` | required | Text prompt. |
+| `n` | 1 | Number of images. |
+| `height` | 720 | Output height in pixels. |
+| `width` | 1280 | Output width in pixels. |
+| `response_format` | `"Url"` | `"Url"` (response carries a server-side filename in `url`) or `"B64Json"` (response carries a `data:image/png;base64,...` string in `b64_json`). |
+
+`size` (the OpenAI string form) is not supported. Use `height` and `width`.
+
+## Memory notes
+
+FLUX is memory-hungry at native precision: the model is roughly 12B parameters, and the T5 XXL text encoder adds a large memory footprint. For low-memory hosts, use the `FluxOffloaded` loader (SDK only) from the [Running FLUX](#running-flux) table.
+
+Diffusion models do not support [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). Load them at native precision instead of passing `--quant` or `--isq`; they are generally more sensitive to quantization than language models.
+
+## Output handling
+
+With `Url` (the default), the server writes the PNG to disk and returns its filename in `url`:
+
+```python
+import shutil
+shutil.copy(response.data[0].url, "out.png")
+```
+
+With `B64Json`, `b64_json` is a `data:image/png;base64,...` string. Strip the prefix before decoding:
+
+```python
+import base64, re
+
+payload = re.sub(r"^data:image/\w+;base64,", "", response.data[0].b64_json)
+with open("out.png", "wb") as f:
+    f.write(base64.b64decode(payload))
+```

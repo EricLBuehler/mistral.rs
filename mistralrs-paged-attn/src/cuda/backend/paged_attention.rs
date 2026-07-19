@@ -5,13 +5,59 @@ use crate::cuda::ffi::{
     paged_attention_v2_bf16, paged_attention_v2_f16, paged_attention_v2_f32,
 };
 use candle::backend::BackendStorage;
-use candle::cuda_backend::cudarc::driver::DevicePtr;
+use candle::cuda_backend::cudarc::driver::{CudaSlice, DevicePtr};
 use candle::{CpuStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor};
 use candle_core as candle;
 use candle_core::cuda::cudarc::driver::DeviceSlice;
 use float8::F8E4M3;
 use half::{bf16, f16};
+use std::collections::HashMap;
 use std::ffi::c_int;
+use std::sync::{Mutex, OnceLock};
+
+struct WorkspaceSlot {
+    slice: CudaSlice<u8>,
+    cap: usize,
+}
+
+type WsMap = Mutex<HashMap<candle::cuda_backend::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+
+static PAGED_ATTN_V2_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+
+fn align_up(value: usize, alignment: usize) -> usize {
+    value.div_ceil(alignment) * alignment
+}
+
+fn workspace_ensure(
+    dev: &candle::cuda_backend::CudaDevice,
+    bytes: usize,
+) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
+    let map = PAGED_ATTN_V2_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
+    let device_key = dev.id();
+    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&device_key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
+                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
+                    slice,
+                    cap: bytes.max(1),
+                })));
+                guard.insert(device_key, leaked);
+                leaked
+            }
+        }
+    };
+
+    let mut slot = device_mtx.lock().unwrap();
+    if slot.cap < bytes {
+        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
+        slot.cap = bytes;
+    }
+    let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
+    Ok((ptr, slot))
+}
 
 struct PagedAttention {
     softmax_scale: f32,
@@ -223,7 +269,9 @@ impl PagedAttention {
         let kv_head_stride = kc_l.stride()[1];
 
         let partition_size = 512;
-        let max_num_partitions = self.max_context_len.div_ceil(partition_size);
+        let effective_max_context_len =
+            (max_num_blocks_per_seq * block_size).min(self.max_context_len);
+        let max_num_partitions = effective_max_context_len.div_ceil(partition_size);
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
             && partition_size % block_size == 0;
 
@@ -255,7 +303,7 @@ impl PagedAttention {
                     bt_ptr as *const i32,
                     cl_ptr as *const i32,
                     block_size as c_int,
-                    self.max_context_len as c_int,
+                    effective_max_context_len as c_int,
                     num_seqs as c_int,
                     num_heads as c_int,
                     head_size as c_int,
@@ -273,13 +321,17 @@ impl PagedAttention {
         } else {
             let tmp_out_shape = Shape::from((num_seqs, num_heads, max_num_partitions, head_size));
             let exp_sums_shape = Shape::from((num_seqs, num_heads, max_num_partitions));
-            let tmp_out = unsafe { dev.alloc::<T>(tmp_out_shape.elem_count()) }?;
-            let exp_sums = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
-            let max_logits = unsafe { dev.alloc::<f32>(exp_sums_shape.elem_count()) }?;
+            let tmp_out_bytes = tmp_out_shape.elem_count() * std::mem::size_of::<T>();
+            let exp_sums_bytes = exp_sums_shape.elem_count() * std::mem::size_of::<f32>();
+            let tmp_out_offset = 0;
+            let exp_sums_offset = align_up(tmp_out_offset + tmp_out_bytes, 16);
+            let max_logits_offset = align_up(exp_sums_offset + exp_sums_bytes, 16);
+            let workspace_bytes = max_logits_offset + exp_sums_bytes;
+            let (workspace_ptr, _workspace_guard) = workspace_ensure(dev, workspace_bytes)?;
 
-            let (tmp_out_ptr, _tmp_out_guard) = tmp_out.device_ptr(tmp_out.stream());
-            let (exp_sums_ptr, _exp_sums_guard) = exp_sums.device_ptr(exp_sums.stream());
-            let (max_logits_ptr, _max_logits_guard) = max_logits.device_ptr(max_logits.stream());
+            let tmp_out_ptr = (workspace_ptr + tmp_out_offset as u64) as *mut std::ffi::c_void;
+            let exp_sums_ptr = (workspace_ptr + exp_sums_offset as u64) as *mut f32;
+            let max_logits_ptr = (workspace_ptr + max_logits_offset as u64) as *mut f32;
 
             let paged_attention_v2_func = match dtype {
                 DType::F16 => paged_attention_v2_f16,
@@ -303,7 +355,7 @@ impl PagedAttention {
                     bt_ptr as *const i32,
                     cl_ptr as *const i32,
                     block_size as c_int,
-                    self.max_context_len as c_int,
+                    effective_max_context_len as c_int,
                     num_seqs as c_int,
                     num_heads as c_int,
                     head_size as c_int,

@@ -131,8 +131,8 @@ impl<Backer: FcfsBacker> BucketingManager<Backer> for FixedBucketingManager {
         let running = if seq_buckets.len() <= 1 {
             // Full steam ahead or have everything
             seq_buckets
-                .into_iter()
-                .flat_map(|(_, x)| x)
+                .into_values()
+                .flatten()
                 .map(|s| s.reset_urgency())
                 .collect::<Vec<_>>()
         } else {
@@ -308,7 +308,11 @@ impl<Backer: FcfsBacker> DefaultScheduler<Backer> {
 }
 
 impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
-    fn schedule(&mut self, logger: &IntervalLogger) -> SchedulerOutput<'_> {
+    fn schedule(
+        &mut self,
+        logger: &IntervalLogger,
+        _prefix_validator: Option<&mut dyn crate::scheduler::PagedPrefixCacheValidator>,
+    ) -> SchedulerOutput<'_> {
         SchedulerOutput::DefaultScheduler {
             output: self.schedule(logger),
         }

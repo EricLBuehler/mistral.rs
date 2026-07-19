@@ -1,0 +1,194 @@
+---
+title: Distributed inference
+description: NCCL tensor parallelism, layer/P2P mapping, multi-node NCCL, and the ring backend.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs has four ways to spread one model beyond a single GPU. They solve different problems and use different communication paths.
+
+| Mode | Scope | Transport | Use when |
+|---|---|---|---|
+| NCCL tensor parallelism | One machine, multiple CUDA GPUs | NCCL collectives | You have similar local GPUs and want the default high-throughput CUDA path. |
+| Layer mapping with CUDA P2P | One machine, multiple devices | CUDA peer access when available, CPU staging otherwise | NCCL is unavailable, disabled, or the model/layout needs contiguous layer placement. |
+| Multi-node NCCL | Multiple machines, each with local CUDA GPUs | NCCL across all ranks, with mistral.rs coordinating node startup | You want tensor parallelism across machines and each node contributes one or more local CUDA ranks. |
+| Ring backend | Multiple machines | mistral.rs ring transport from `RING_CONFIG` | You explicitly want the ring backend instead of NCCL. |
+
+**Tensor parallelism** splits each layer across all GPUs: each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply, with an all-reduce per layer combining partial results. **Layer mapping** places different contiguous layer ranges on different devices; activations move only at layer-boundary device changes.
+
+## Selection flow
+
+With a CUDA build and no manual mapping:
+
+1. One visible GPU runs the model on that GPU.
+2. Multiple visible GPUs use NCCL tensor parallelism when the binary has `cuda nccl` and `MISTRALRS_NO_NCCL` is not set.
+3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping. CUDA pairs use P2P when the driver allows it; otherwise transfers stage through CPU.
+4. If `MISTRALRS_MN_GLOBAL_WORLD_SIZE` is set, NCCL tensor parallelism is extended across nodes.
+5. If `RING_CONFIG` is set and the binary has `ring`, the ring backend is available. If the binary also has NCCL, set `MISTRALRS_NO_NCCL=1` to force ring.
+
+The selected layout is printed in the startup logs at `INFO` level. When a topology file is in use, the logs list the device for each layer; `nvidia-smi` shows per-GPU memory at runtime.
+
+## Single machine, multiple GPUs
+
+Covers the NCCL tensor parallelism and layer mapping modes from the table above.
+
+### Build requirements
+
+Linux CUDA installs enable `nccl` when the installer or wheel builder finds `libnccl`.
+
+Manual Linux CUDA build with NCCL:
+
+```bash
+cargo install mistralrs-cli --features "cuda nccl flash-attn cudnn"
+```
+
+If NCCL is not installed, omit `nccl`. To force the installer decision, use `MISTRALRS_INSTALL_NCCL=1` or `MISTRALRS_INSTALL_NO_NCCL=1`. To disable NCCL at runtime without rebuilding:
+
+```bash
+MISTRALRS_NO_NCCL=1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
+```
+
+### Select GPUs
+
+Use `CUDA_VISIBLE_DEVICES` to restrict the GPU set before mistral.rs starts:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 mistralrs serve -m Qwen/Qwen3-32B --quant 4
+```
+
+The ordinals in `--device-layers` are the visible ordinals after `CUDA_VISIBLE_DEVICES` is applied.
+
+NCCL tensor parallelism uses all visible CUDA GPUs. The tensor-parallel size must be compatible with the model:
+
+- Attention heads must divide evenly across GPUs.
+- KV heads must either divide evenly across GPUs or be replicated evenly when there are fewer KV heads than GPUs.
+
+If the visible GPU count is incompatible, mistral.rs errors instead of selecting a smaller subset. Use `CUDA_VISIBLE_DEVICES` to choose a compatible subset.
+
+### Layer mapping (CUDA P2P)
+
+Assign explicit layer counts to devices. For uneven GPUs, put fewer layers on the smaller or busier GPU.
+
+<Tabs>
+<TabItem label="CLI">
+
+`-n`/`--device-layers` takes the format `ORD:NUM;...`:
+
+```bash
+mistralrs serve -n "0:32;1:32" -m <model>
+
+# Uneven split
+mistralrs serve -n "0:44;1:20" -m Qwen/Qwen3-32B --quant 4
+```
+
+</TabItem>
+<TabItem label="Python">
+
+`num_device_layers` takes a list of `"ORD:NUM"` strings:
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-32B"),
+    num_device_layers=["0:32", "1:32"],
+)
+```
+
+</TabItem>
+</Tabs>
+
+For per-layer or per-tensor placement, use the [topology guide](/mistral.rs/guides/perf/topology/).
+
+### Performance notes
+
+Use NCCL when possible for single-machine CUDA tensor parallelism. It keeps collective communication on the GPU path and is the expected path for multiple similar GPUs.
+
+Layer mapping moves activations only at layer-boundary device changes, so contiguous ranges matter. On CUDA, peer access is enabled for supported GPU pairs. If the driver reports that peer access is unavailable or cannot be enabled, those transfers stage through CPU and startup logs include a warning.
+
+For mixed GPU memory sizes, manually set `--device-layers`; the automatic split does not optimize for heterogeneous memory or PCIe/NVLink topology. Multi-socket servers with GPUs on different sockets pay a cross-socket transfer penalty. Auto-detection does not account for this and will use any visible GPU regardless of socket or interconnect topology.
+
+If the model does not fit even across GPUs, CPU offload places some layers on CPU. Device mapping and dtype are orthogonal, but CPU lacks bf16/fp16 hardware support, so CPU-offloaded layers run at f32 internally even with bf16 on-disk weights.
+
+On Apple Silicon there is no multi-GPU concept: CPU and GPU share unified memory and device mapping is a no-op. `mistralrs doctor` reports a single device on Apple hardware.
+
+## Multi-node NCCL
+
+Multi-node NCCL inference extends tensor parallelism across machines. Each node contributes one or more local CUDA ranks to one global NCCL communicator. It is selected by the `MISTRALRS_MN_*` environment variables and does not use `RING_CONFIG`.
+
+Build the same CUDA+NCCL binary on every node, and use the same model, dtype, quantization, and runtime arguments everywhere. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.
+
+Use the same local tensor-parallel (TP) size on every node:
+
+```text
+global world size = local TP size * number of nodes
+```
+
+The global tensor-parallel size must satisfy the same head-divisibility constraints as single-machine TP. Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
+
+The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/mistral.rs/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG` in this mode.
+
+Two nodes, four GPUs per node:
+
+Head node:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 \
+MISTRALRS_MN_LOCAL_WORLD_SIZE=4 \
+MISTRALRS_MN_HEAD_NUM_WORKERS=1 \
+MISTRALRS_MN_HEAD_PORT=9000 \
+mistralrs serve -m Qwen/Qwen3-32B --quant 4
+```
+
+Worker node:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+MISTRALRS_MN_GLOBAL_WORLD_SIZE=8 \
+MISTRALRS_MN_LOCAL_WORLD_SIZE=4 \
+MISTRALRS_MN_WORKER_SERVER_ADDR=10.0.0.1:9000 \
+MISTRALRS_MN_WORKER_ID=0 \
+mistralrs serve -m Qwen/Qwen3-32B --quant 4
+```
+
+Send client requests to the head node.
+
+The head port must be reachable from every worker.
+
+:::caution
+On multi-interface machines, NCCL may pick the wrong network interface between nodes and hang at startup. Set `NCCL_SOCKET_IFNAME` (and other NCCL networking variables as needed) in the shell before launching.
+:::
+
+## Ring backend
+
+The ring backend is a distributed transport selected by `RING_CONFIG`, available when the binary is compiled with the `ring` feature. Use it only when you intentionally want the `ring` transport; for CUDA tensor parallelism across machines, prefer multi-node NCCL.
+
+The `ring` feature must be compiled in:
+
+```bash
+cargo install mistralrs-cli --features "cuda flash-attn ring"
+```
+
+If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so the ring backend is selected.
+
+The ring backend reads its configuration from a JSON file pointed to by the `RING_CONFIG` environment variable. Each participant has its own `RING_CONFIG` with rank-specific values:
+
+```json
+{
+  "master_ip": "10.0.0.1",
+  "master_port": 9000,
+  "port": 9001,
+  "right_port": 9002,
+  "right_ip": "10.0.0.2",
+  "rank": 0,
+  "world_size": 2
+}
+```
+
+`world_size` must be a power of 2 (the ring backend rejects other values at startup). Non-master ranks (`rank != 0`) must specify `master_ip`. The master rank (`rank = 0`) is reachable via `master_ip`.
+
+## See also
+
+- [Topology](/mistral.rs/guides/perf/topology/): per-layer and per-tensor placement on one host.
+- [Environment variables](/mistral.rs/reference/environment-variables/): full `MISTRALRS_MN_*`, `MISTRALRS_NO_NCCL`, and `RING_CONFIG` registry.

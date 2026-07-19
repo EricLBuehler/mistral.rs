@@ -229,6 +229,24 @@ impl PrefixCacheManagerV2 {
         Some(out)
     }
 
+    pub fn get_longest_paged_recurrent_prefix(
+        &mut self,
+        block_hashes: &[BlockHash],
+        max_blocks: usize,
+    ) -> Option<(usize, Vec<RecurrentStateSnapshot>)> {
+        if self.no_prefix_cache || !self.has_paged_attention {
+            return None;
+        }
+
+        let max_blocks = max_blocks.min(block_hashes.len());
+        for n_blocks in (1..=max_blocks).rev() {
+            if let Some(snapshots) = self.get_paged_recurrent_prefix(&block_hashes[..n_blocks]) {
+                return Some((n_blocks, snapshots));
+            }
+        }
+        None
+    }
+
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
     pub fn search_for_matching_cache(
         &mut self,
@@ -313,6 +331,22 @@ impl PrefixCacheManagerV2 {
             let cached_video_count = v.video_hashes.as_ref().map_or(0, |h| h.len());
             let input_video_count = video_hashes.map_or(0, |h| h.len());
             if videos_match_until < input_video_count.min(cached_video_count) {
+                continue;
+            }
+
+            // The cache holds kv only for forwarded positions; a finished sequence's
+            // final sampled token has no kv row, so clamp the text match to coverage.
+            // Shared layers mirror their owner and always report zero, so skip them.
+            let cache_len = v
+                .cache
+                .iter()
+                .flatten()
+                .filter(|l| !matches!(l, KvCache::Shared { .. }))
+                .map(|l| l.current_seq_len())
+                .min()
+                .unwrap_or(0);
+            let match_len = match_len.min(cache_len);
+            if match_len == 0 {
                 continue;
             }
 
