@@ -132,8 +132,9 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
 
         let has_images = input_seqs.iter().all(|seq| seq.has_images());
 
-        // (padded input_ids_full, pixel_values [N,3,14,14], grid (t,h,w)). grid stays Some on decode
-        // too (via the cache) so the model's mrope `delta` recomputes identically each step.
+        // (padded input_ids_full, all rows' pixel_values concatenated [sum_N,3,14,14], one grid
+        // (t,h,w) per row). grids stay populated on decode too (via the cache) so the model's mrope
+        // `delta` recomputes identically each step.
         let (new_input, pixel_values, image_grid_thw) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut grid_accum: Vec<(usize, usize, usize)> = Vec::new();
@@ -216,10 +217,10 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             (
                 Some(Tensor::stack(&rows, 0).unwrap()),
                 Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                grid_accum.first().copied(),
+                grid_accum,
             )
         } else {
-            (None, None, None)
+            (None, None, Vec::new())
         };
 
         let text_models_inputs_processor::InnerInputProcessorOutput {

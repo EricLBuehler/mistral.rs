@@ -138,13 +138,13 @@ impl IsqModel for PaddleOcrVlModel {
     }
 }
 
-/// Model-specific args threaded alongside `input_ids` through the engine. Single image, no video:
-/// `input_ids_full` is the whole prompt (so mrope positions/`delta` are recomputed identically on
-/// every step, matching qwen3_vl's stateless scheme); `image_grid_thw` is that image's patch grid
-/// `(t, h, w)`, `None` for text-only prompts and all decode steps.
+/// Model-specific args threaded alongside `input_ids` through the engine. `input_ids_full` is each
+/// row's whole prompt (so mrope positions/`delta` recompute identically every step, matching
+/// qwen3_vl's stateless scheme); `image_grid_thw` is one `(t, h, w)` patch grid per batch row (one
+/// image per OCR request), empty for text-only prompts and all-text decode.
 pub(crate) struct PaddleOcrVlVisionSpecificArgs {
     pub input_ids_full: Tensor,
-    pub image_grid_thw: Option<(usize, usize, usize)>,
+    pub image_grid_thw: Vec<(usize, usize, usize)>,
 }
 
 impl MultimodalModel for PaddleOcrVlModel {
@@ -168,19 +168,13 @@ impl MultimodalModel for PaddleOcrVlModel {
         let seqlen_offsets = ctx.seqlen_offsets();
 
         // mrope: recompute full-sequence positions from input_ids_full each step (stateless, like
-        // qwen3_vl), then slice/continue the current window. Image prefill is batch-1; text/decode
-        // rows carry no image grid.
+        // qwen3_vl), then slice/continue the current window. One image grid per batch row (empty for
+        // text-only / all-text decode).
         let (batch, _full_len) = input_ids_full.dims2()?;
-        // `image_grid_thw` carries a single grid, so batched image prefill has no per-sequence grid;
-        // fail clearly instead of indexing past `grids` in get_rope_index_batched. Text/decode rows
-        // (no grid) batch fine.
-        let grids: Vec<Vec<(usize, usize, usize)>> = match image_grid_thw {
-            Some(_) if batch > 1 => candle_core::bail!(
-                "PaddleOCR-VL does not support batched image prefill (batch={batch} with an image); \
-                 send multimodal requests one at a time (batch size 1)"
-            ),
-            Some(grid) => vec![vec![grid]],
-            None => vec![Vec::new(); batch],
+        let grids: Vec<Vec<(usize, usize, usize)>> = if image_grid_thw.is_empty() {
+            vec![Vec::new(); batch]
+        } else {
+            image_grid_thw.iter().map(|&g| vec![g]).collect()
         };
         let (full_pos, deltas) =
             get_rope_index_batched(&input_ids_full, &grids, image_token_id, merge, dev)?;
@@ -191,16 +185,21 @@ impl MultimodalModel for PaddleOcrVlModel {
             seqlen_offsets,
         )?;
 
-        // Prefill-with-image runs vision -> connector -> masked-scatter merge (batch-1); text/decode
-        // is a pure on-device token embed of the current window.
+        // Prefill-with-image runs vision -> connector -> masked-scatter merge per batch row (each row
+        // its own image); `pixel_values` is every row's patches concatenated on dim 0, split back by
+        // each grid's t*h*w. Text/decode is a pure on-device token embed of the current window.
         let embeds = match pixel_values {
             Some(pv) => {
-                let (t, h, w) = image_grid_thw.expect("pixel_values require image_grid_thw");
-                let post_ln = self.vision.forward(&pv, t, h, w)?;
-                let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
-                self.merger
-                    .forward(&input_ids.flatten_all()?, &image_embeds)?
-                    .unsqueeze(0)?
+                let mut offset = 0;
+                let mut rows = Vec::with_capacity(batch);
+                for (b, &(t, h, w)) in image_grid_thw.iter().enumerate() {
+                    let post_ln = self.vision.forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
+                    offset += t * h * w;
+                    let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
+                    let row_ids = input_ids.narrow(0, b, 1)?.flatten_all()?;
+                    rows.push(self.merger.forward(&row_ids, &image_embeds)?);
+                }
+                Tensor::stack(&rows, 0)?
             }
             None => self.merger.embed_tokens(input_ids)?,
         };
@@ -247,7 +246,7 @@ impl MultimodalModel for PaddleOcrVlModel {
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(PaddleOcrVlVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
-            image_grid_thw: None,
+            image_grid_thw: Vec::new(),
         })
     }
 }
