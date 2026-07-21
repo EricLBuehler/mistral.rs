@@ -3,6 +3,7 @@
 # Automatic hardware detection and feature configuration
 
 $ErrorActionPreference = "Stop"
+$RemoteSizeTimeoutSec = 5
 
 # Color output functions
 function Write-Info { Write-Host "info: $args" -ForegroundColor Blue }
@@ -25,7 +26,7 @@ function Format-ByteSize([long]$Bytes) {
 # Content-Length of a URL after redirects; $null if it cannot be determined.
 function Get-RemoteDownloadSize($Url) {
     try {
-        $head = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -ErrorAction Stop
+        $head = Invoke-WebRequest -Uri $Url -Method Head -UseBasicParsing -TimeoutSec $RemoteSizeTimeoutSec -ErrorAction Stop
         $len = @($head.Headers['Content-Length']) | Select-Object -Last 1
         if ($len) { return [long]$len }
     } catch {}

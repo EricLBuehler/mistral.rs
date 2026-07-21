@@ -78,6 +78,35 @@ fn test_flash_attn_cpu_single_q() -> CandleResult<()> {
 }
 
 #[test]
+fn test_flash_attn_cpu_single_q_multiple_kv_chunks() -> CandleResult<()> {
+    let (b, h, d, kv_len) = (1, 4, 8, 1024);
+    let q = Tensor::from_vec(
+        (0..b * h * d)
+            .map(|x| (x % 17) as f32 / 17.0)
+            .collect::<Vec<_>>(),
+        (b, 1, h, d),
+        &Device::Cpu,
+    )?;
+    let k = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 19) as f32 / 19.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 23) as f32 / 23.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa(None))?;
+    assert_close(&out, &naive_attention(&q, &k, &v, None, None)?)
+}
+
+#[test]
 fn test_flash_attn_cpu_single_q_half_masks() -> CandleResult<()> {
     let (b, h, d, kv_len) = (1, 2, 4, 3);
     let q = Tensor::from_vec(
@@ -137,6 +166,168 @@ fn test_flash_attn_cpu_full_q() -> CandleResult<()> {
     let out = run_flash_attn_cpu::<f32>(&q, &k, &v, None, &sdpa(None))?;
     assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
     assert_close(&out, &naive_attention(&q, &k, &v, None, None)?)
+}
+
+#[test]
+fn test_flash_attn_cpu_full_q_respects_finite_mask_values() -> CandleResult<()> {
+    let (b, q_len, h, d, kv_len) = (1, 2, 2, 4, 4);
+    let q = Tensor::from_vec(
+        (0..b * q_len * h * d)
+            .map(|x| (x % 11) as f32 / 11.0)
+            .collect::<Vec<_>>(),
+        (b, q_len, h, d),
+        &Device::Cpu,
+    )?;
+    let k = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 13) as f32 / 13.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 17) as f32 / 17.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let mask = Tensor::from_vec(
+        vec![0.0f32, f32::MIN, 0.0, 0.0, 0.0, f32::MIN, 0.0, 0.0],
+        (1, q_len, kv_len),
+        &Device::Cpu,
+    )?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+    assert_close(&out, &naive_attention(&q, &k, &v, Some(&mask), None)?)
+}
+
+#[test]
+fn test_flash_attn_cpu_full_q_respects_noncontiguous_mask() -> CandleResult<()> {
+    let (b, q_len, h, d, kv_len) = (1, 2, 2, 4, 4);
+    let q = Tensor::from_vec(
+        (0..b * q_len * h * d)
+            .map(|x| (x % 11) as f32 / 11.0)
+            .collect::<Vec<_>>(),
+        (b, q_len, h, d),
+        &Device::Cpu,
+    )?;
+    let k = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 13) as f32 / 13.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 17) as f32 / 17.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let mask = Tensor::from_vec(
+        vec![
+            0.0f32,
+            f32::NEG_INFINITY,
+            0.0,
+            0.0,
+            0.0,
+            f32::NEG_INFINITY,
+            0.0,
+            0.0,
+        ],
+        (1, q_len, kv_len),
+        &Device::Cpu,
+    )?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+    assert_close(&out, &naive_attention(&q, &k, &v, Some(&mask), None)?)
+}
+
+#[test]
+fn test_flash_attn_cpu_full_q_respects_head_specific_mask_classes() -> CandleResult<()> {
+    let (b, q_len, h, d, kv_len) = (1, 2, 2, 4, 4);
+    let q = Tensor::from_vec(
+        (0..b * q_len * h * d)
+            .map(|x| (x % 11) as f32 / 11.0)
+            .collect::<Vec<_>>(),
+        (b, q_len, h, d),
+        &Device::Cpu,
+    )?;
+    let k = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 13) as f32 / 13.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 17) as f32 / 17.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let mask = Tensor::from_vec(
+        vec![
+            0.0,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            0.0,
+            0.0,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            0.0,
+            f32::MIN,
+            0.0,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            0.0,
+            f32::NEG_INFINITY,
+            0.0,
+        ],
+        (b, h, q_len, kv_len),
+        &Device::Cpu,
+    )?;
+    let expected_mask = mask.reshape((b * h, q_len, kv_len))?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+    assert_close(
+        &out,
+        &naive_attention(&q, &k, &v, Some(&expected_mask), None)?,
+    )
+}
+
+#[test]
+fn test_flash_attn_cpu_full_q_with_more_queries_than_keys() -> CandleResult<()> {
+    let (b, q_len, h, d, kv_len) = (1, 4, 2, 4, 2);
+    let q = Tensor::from_vec(
+        (0..b * q_len * h * d)
+            .map(|x| (x % 11) as f32 / 11.0)
+            .collect::<Vec<_>>(),
+        (b, q_len, h, d),
+        &Device::Cpu,
+    )?;
+    let k = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 13) as f32 / 13.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let v = Tensor::from_vec(
+        (0..b * kv_len * h * d)
+            .map(|x| (x % 17) as f32 / 17.0)
+            .collect::<Vec<_>>(),
+        (b, kv_len, h, d),
+        &Device::Cpu,
+    )?;
+    let mask = Tensor::zeros((1, q_len, kv_len), DType::F32, &Device::Cpu)?;
+
+    let out = run_flash_attn_cpu::<f32>(&q, &k, &v, Some(&mask), &sdpa(None))?;
+    assert_close(&out, &naive_attention(&q, &k, &v, Some(&mask), None)?)
 }
 
 #[test]

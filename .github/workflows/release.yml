@@ -92,11 +92,12 @@ jobs:
           - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,
               # v8.2 floor (Graviton2+, Pi 5, 2018+ phones): recovers autovec perf the
               # runtime-dispatched kernels cannot; the installer probes /proc/cpuinfo
-              rustflags: "-C target-cpu=generic -C target-feature=+dotprod,+fp16,+fhm" }
+              rustflags: "-C target-cpu=generic -C target-feature=+dotprod,+fp16,+fhm",
+              skip_wheel: true }
           - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,
-              # ARMv8.0 compat asset (Pi 4, Graviton1, A72-class SBCs); no wheel (the
-              # default aarch64 row already publishes it)
-              suffix: -v8_0, skip_wheel: true }
+              # ARMv8.0 compat asset and portable manylinux wheel (Pi 4, Graviton1,
+              # A72-class SBCs)
+              suffix: -v8_0 }
     env:
       RUSTFLAGS: ${{ matrix.rustflags || '-C target-cpu=generic' }}
     steps:
@@ -378,7 +379,7 @@ jobs:
             -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O amd64.tar.gz
           tar xzf amd64.tar.gz -C dist/amd64
           gh release download "$TAG" -R "${{ github.repository }}" \
-            -p mistralrs-cpu-aarch64-unknown-linux-gnu.tar.gz -O arm64.tar.gz
+            -p mistralrs-cpu-aarch64-unknown-linux-gnu-v8_0.tar.gz -O arm64.tar.gz
           tar xzf arm64.tar.gz -C dist/arm64
       - name: Version tag
         id: ver

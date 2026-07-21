@@ -131,23 +131,23 @@ impl SamplingParams {
             self.top_k = Some(1);
             self.top_p = None;
             self.min_p = None;
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            self.temperature = if temperature == 0.0 {
-                None
-            } else {
-                Some(temperature)
-            };
-        }
-        if let Some(top_k) = defaults.top_k {
-            self.top_k = if top_k == 0 { None } else { Some(top_k) };
-        }
-        if let Some(top_p) = defaults.top_p {
-            self.top_p = Some(top_p);
-        }
-        if let Some(min_p) = defaults.min_p {
-            self.min_p = Some(min_p);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                self.temperature = if temperature == 0.0 {
+                    None
+                } else {
+                    Some(temperature)
+                };
+            }
+            if let Some(top_k) = defaults.top_k {
+                self.top_k = if top_k == 0 { None } else { Some(top_k) };
+            }
+            if let Some(top_p) = defaults.top_p {
+                self.top_p = Some(top_p);
+            }
+            if let Some(min_p) = defaults.min_p {
+                self.min_p = Some(min_p);
+            }
         }
         if let Some(repetition_penalty) = defaults.repetition_penalty {
             self.repetition_penalty = Some(repetition_penalty);
@@ -314,6 +314,11 @@ pub struct Logprobs {
     pub top_logprobs: Option<Vec<TopLogprob>>,
 }
 
+pub(crate) struct SpeculativeProbs {
+    pub sampling: Vec<f32>,
+    pub reporting: Vec<f32>,
+}
+
 /// Comparator for descending order by probability (second element of tuple).
 #[inline]
 fn cmp_desc_by_prob(a: &(u32, f32), b: &(u32, f32)) -> std::cmp::Ordering {
@@ -432,7 +437,7 @@ impl Sampler {
         let mut probs_copy = probs.to_vec();
         let top_k = partial_sort_top_k(&mut probs_copy, k, false);
 
-        // Build the result vector with log10 of probabilities and optional decoding
+        // Build the result vector with natural log of probabilities and optional decoding
         let mut result = Vec::with_capacity(k);
         if let Some(tokenizer) = &self.tokenizer {
             for (token, prob) in top_k {
@@ -441,7 +446,7 @@ impl Sampler {
                     .map_err(|e| Error::Msg(e.to_string()))?;
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: Some(decoded),
                 });
             }
@@ -449,7 +454,7 @@ impl Sampler {
             for (token, prob) in top_k {
                 result.push(TopLogprob {
                     token,
-                    logprob: prob.log(10.0),
+                    logprob: prob.ln(),
                     bytes: None,
                 });
             }
@@ -460,7 +465,7 @@ impl Sampler {
     fn sample_argmax(&self, logits: Tensor, return_logprobs: bool) -> Result<Logprobs> {
         let probs: Vec<f32> = logits.to_vec1()?;
         let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
+        let logprob = probs[next_token as usize].ln();
 
         let top_logprobs = if return_logprobs {
             Some(self.get_top_logprobs(&probs)?)
@@ -495,6 +500,7 @@ impl Sampler {
         min_p: f32,
     ) -> Result<Logprobs> {
         let mut probs: Vec<f32> = logits.to_vec1()?;
+        let reporting_probs = probs.clone();
 
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
@@ -538,10 +544,10 @@ impl Sampler {
 
         // Find argmax directly on the Vec (O(n) scan, no Tensor creation)
         let next_token = argmax_f32(&probs);
-        let logprob = probs[next_token as usize].log(10.0);
+        let logprob = reporting_probs[next_token as usize].ln();
 
         let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(&probs)?)
+            Some(self.get_top_logprobs(&reporting_probs)?)
         } else {
             None
         };
@@ -566,14 +572,15 @@ impl Sampler {
 
     fn sample_multinomial(
         &self,
-        probs: &[f32],
+        sampling_probs: &[f32],
+        reporting_probs: &[f32],
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        let distr = match WeightedIndex::new(probs) {
+        let distr = match WeightedIndex::new(sampling_probs) {
             Ok(distr) => distr,
             Err(e) => {
-                if let Some((idx, prob)) = probs
+                if let Some((idx, prob)) = sampling_probs
                     .iter()
                     .enumerate()
                     .find(|(_, prob)| !prob.is_finite() || **prob < 0.0)
@@ -583,7 +590,7 @@ impl Sampler {
                     )));
                 }
 
-                let positive_weight_sum: f64 = probs
+                let positive_weight_sum: f64 = sampling_probs
                     .iter()
                     .copied()
                     .filter(|prob| prob.is_finite() && *prob > 0.0)
@@ -605,10 +612,10 @@ impl Sampler {
 
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let next_token = distr.sample(&mut mut_ref_rng); // "Find the first item which has a weight *higher* than the chosen weight."
-        let logprob = probs[next_token].log(10.0);
+        let logprob = reporting_probs[next_token].ln();
 
         let top_logprobs = if return_logprobs {
-            Some(self.get_top_logprobs(probs)?)
+            Some(self.get_top_logprobs(reporting_probs)?)
         } else {
             None
         };
@@ -795,14 +802,14 @@ impl Sampler {
                     cumsum += *prob;
                 }
             }
+        }
 
-            if self.min_p > 0.0 && self.min_p < 1.0 {
-                let max_p = probs.first().copied().unwrap_or(0.0);
-                let min_p_threshold = max_p * self.min_p as f32;
-                for prob in &mut probs {
-                    if min_p_threshold >= *prob {
-                        *prob = 0.0;
-                    }
+        if self.min_p > 0.0 && self.min_p < 1.0 {
+            let max_p = probs.first().copied().unwrap_or(0.0);
+            let min_p_threshold = max_p * self.min_p as f32;
+            for prob in &mut probs {
+                if min_p_threshold >= *prob {
+                    *prob = 0.0;
                 }
             }
         }
@@ -832,7 +839,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
 
         Ok(Logprobs {
             token: next_token,
@@ -932,13 +939,13 @@ impl Sampler {
                     cumsum += *prob;
                 }
             }
-            if self.min_p > 0.0 && self.min_p < 1.0 {
-                let max_p = probs.first().copied().unwrap_or(0.0);
-                let min_p_threshold = max_p * self.min_p as f32;
-                for prob in &mut probs {
-                    if min_p_threshold >= *prob {
-                        *prob = 0.0;
-                    }
+        }
+        if self.min_p > 0.0 && self.min_p < 1.0 {
+            let max_p = probs.first().copied().unwrap_or(0.0);
+            let min_p_threshold = max_p * self.min_p as f32;
+            for prob in &mut probs {
+                if min_p_threshold >= *prob {
+                    *prob = 0.0;
                 }
             }
         }
@@ -967,7 +974,7 @@ impl Sampler {
         let mut mut_ref_rng = &mut *rng.lock().expect("could not lock rng mutex");
         let selected = distr.sample(&mut mut_ref_rng);
         let next_token = top_indices[selected];
-        let logprob = probs[selected].log(10.0);
+        let logprob = probs[selected].ln();
         let bytes = if let Some(tokenizer) = &self.tokenizer {
             Some(
                 tokenizer
@@ -994,16 +1001,14 @@ impl Sampler {
 
         let idx_probs = partial_sort_top_k(probs, k, true);
 
-        if self.top_p <= 0.0 || self.top_p >= 1.0 {
-            return;
-        }
-
-        let mut cumsum = 0.0f32;
-        for (index, prob) in &idx_probs {
-            if cumsum >= self.top_p as f32 {
-                probs[*index as usize] = 0.0;
-            } else {
-                cumsum += prob;
+        if self.top_p > 0.0 && self.top_p < 1.0 {
+            let mut cumsum = 0.0f32;
+            for (index, prob) in &idx_probs {
+                if cumsum >= self.top_p as f32 {
+                    probs[*index as usize] = 0.0;
+                } else {
+                    cumsum += prob;
+                }
             }
         }
 
@@ -1043,7 +1048,7 @@ impl Sampler {
         &self,
         logits: Tensor,
         context: &[u32],
-    ) -> Result<Vec<f32>> {
+    ) -> Result<SpeculativeProbs> {
         self.speculative_probs(logits, context)
     }
 
@@ -1052,31 +1057,37 @@ impl Sampler {
         logits: Tensor,
         context: &[u32],
     ) -> Result<Vec<f32>> {
-        self.speculative_probs(logits, context)
+        Ok(self.speculative_probs(logits, context)?.sampling)
     }
 
-    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<Vec<f32>> {
+    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<SpeculativeProbs> {
         let logits = logits.to_vec1()?;
         let mut logits = self.apply_penalties(logits, context)?;
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
 
-        let mut probs = match self.temperature {
-            None => {
-                let logits = logits.to_vec1::<f32>()?;
-                let mut probs = vec![0.0; logits.len()];
-                probs[argmax_f32(&logits) as usize] = 1.0;
-                probs
-            }
+        let reporting = match self.temperature {
+            None => candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?,
             Some(temperature) => {
                 let logits = (&logits / temperature)?;
                 candle_nn::ops::softmax_last_dim(&logits)?.to_vec1::<f32>()?
             }
         };
-        self.filter_top_kp_min_p(&mut probs);
-        Self::normalize_probs(&mut probs)?;
-        Ok(probs)
+        let mut sampling = match self.temperature {
+            None => {
+                let mut sampling = vec![0.0; reporting.len()];
+                sampling[argmax_f32(&reporting) as usize] = 1.0;
+                sampling
+            }
+            Some(_) => reporting.clone(),
+        };
+        self.filter_top_kp_min_p(&mut sampling);
+        Self::normalize_probs(&mut sampling)?;
+        Ok(SpeculativeProbs {
+            sampling,
+            reporting,
+        })
     }
 
     pub(crate) fn logprobs_from_probs(
@@ -1087,7 +1098,7 @@ impl Sampler {
     ) -> Result<Logprobs> {
         let prob = probs.get(token as usize).copied().unwrap_or(0.0);
         let logprob = if prob > 0.0 {
-            prob.log(10.0)
+            prob.ln()
         } else {
             f32::NEG_INFINITY
         };
@@ -1115,55 +1126,48 @@ impl Sampler {
 
     pub(crate) fn sample_from_probs(
         &self,
-        probs: &[f32],
+        sampling_probs: &[f32],
+        reporting_probs: &[f32],
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        self.sample_multinomial(probs, return_logprobs, rng)
+        self.sample_multinomial(sampling_probs, reporting_probs, return_logprobs, rng)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn sample_top_kp_min_p(
         &self,
-        probs: &mut [f32],
+        reporting_probs: &[f32],
         top_k: i64,
         top_p: f32,
         min_p: f32,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
+        let mut sampling_probs = reporting_probs.to_vec();
         // Determine how many elements we need for partial sort
         let k = if top_k > 0 {
             top_k as usize
         } else {
-            probs.len()
+            sampling_probs.len()
         };
 
         // Get sorted top-k indices with partial sort, zeroing out rest
-        let idx_probs = partial_sort_top_k(probs, k, true);
+        let idx_probs = partial_sort_top_k(&mut sampling_probs, k, true);
 
-        if top_p <= 0.0 || top_p >= 1.0 {
-            return self.sample_multinomial(probs, return_logprobs, rng);
-        }
-
-        // TOP P
-
-        // top-p sampling (or "nucleus sampling") samples from the smallest set of
-        // tokens that exceed probability top_p. This way we never sample tokens that
-        // have very low probabilities and are less likely to go "off the rails".
-
-        // Clamp smaller probabilities to zero.
-        let mut cumsum = 0.;
-        for (index, prob) in &idx_probs {
-            if cumsum >= top_p {
-                probs[*index as usize] = 0.0;
-            } else {
-                cumsum += prob;
+        if top_p > 0.0 && top_p < 1.0 {
+            let mut cumsum = 0.;
+            for (index, prob) in &idx_probs {
+                if cumsum >= top_p {
+                    sampling_probs[*index as usize] = 0.0;
+                } else {
+                    cumsum += prob;
+                }
             }
         }
 
         if min_p <= 0.0 || min_p >= 1.0 {
-            return self.sample_multinomial(probs, return_logprobs, rng);
+            return self.sample_multinomial(&sampling_probs, reporting_probs, return_logprobs, rng);
         }
 
         // Get max_p from first sorted element
@@ -1178,12 +1182,12 @@ impl Sampler {
         let min_p_threshold = max_p * min_p;
         for (index, prob) in &idx_probs {
             if min_p_threshold >= *prob {
-                probs[*index as usize] = 0.0;
+                sampling_probs[*index as usize] = 0.0;
             }
         }
 
         // Sample with clamped probabilities.
-        self.sample_multinomial(probs, return_logprobs, rng)
+        self.sample_multinomial(&sampling_probs, reporting_probs, return_logprobs, rng)
     }
 
     fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
@@ -1387,7 +1391,7 @@ impl Sampler {
         let next_token = if sample_speculative {
             match self.temperature {
                 None => self.sample_speculative_top_kp_min_p(
-                    logits,
+                    candle_nn::ops::softmax_last_dim(&logits)?,
                     return_logprobs,
                     self.top_k,
                     self.top_p as f32,
@@ -1408,14 +1412,16 @@ impl Sampler {
             }
         } else {
             match self.temperature {
-                None => self.sample_argmax(logits, return_logprobs)?,
+                None => {
+                    self.sample_argmax(candle_nn::ops::softmax_last_dim(&logits)?, return_logprobs)?
+                }
                 Some(temperature) => {
                     let logits = (&logits / temperature)?;
                     let probs = candle_nn::ops::softmax_last_dim(&logits)?;
-                    let mut probs: Vec<f32> = probs.to_vec1()?;
+                    let probs: Vec<f32> = probs.to_vec1()?;
 
                     self.sample_top_kp_min_p(
-                        &mut probs,
+                        &probs,
                         self.top_k,
                         self.top_p as f32,
                         self.min_p as f32,
@@ -1458,21 +1464,21 @@ mod tests {
             vec![],
         )
         .unwrap();
-        let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
+        let logits = Tensor::from_vec(vec![-3.0f32, -1.0, -2.0], 3, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(
-                logits,
-                &(0..1024).collect::<Vec<_>>(),
-                false,
-                rng,
-                false,
-                false,
-            )
+            .sample(logits, &[0, 1, 2], true, rng, false, false)
             .unwrap();
-        assert_eq!(res.token, 1023);
-        assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        assert_eq!(res.token, 1);
+        let expected = -1.0f32 - ((-3.0f32).exp() + (-1.0f32).exp() + (-2.0f32).exp()).ln();
+        assert!((res.logprob - expected).abs() < 1e-6);
+        let selected = res
+            .top_logprobs
+            .unwrap()
+            .into_iter()
+            .find(|top| top.token == 1)
+            .unwrap();
+        assert!((selected.logprob - expected).abs() < 1e-6);
     }
 
     #[test]
@@ -1499,21 +1505,15 @@ mod tests {
             vec![],
         )
         .unwrap();
-        let logits = Tensor::arange(0f32, 1024f32, &Device::Cpu).unwrap();
+        let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(
-                logits,
-                &(0..1024).collect::<Vec<_>>(),
-                false,
-                rng,
-                true,
-                false,
-            )
+            .sample(logits, &[0, 1, 2], false, rng, true, false)
             .unwrap();
-        assert_eq!(res.token, 1023);
+        assert_eq!(res.token, 2);
         assert_eq!(res.top_logprobs, None);
-        assert_eq!(res.logprob, 1023f64.log(10.) as f32)
+        let expected = 2.0f32 - (0.0f32.exp() + 1.0f32.exp() + 2.0f32.exp()).ln();
+        assert!((res.logprob - expected).abs() < 1e-6);
     }
 
     #[test]
@@ -1545,8 +1545,85 @@ mod tests {
             .speculative_candidate_probs(logits, &context)
             .unwrap();
 
-        assert_eq!(candidate_probs, target_probs);
+        assert_eq!(candidate_probs, target_probs.sampling);
         assert_eq!(candidate_probs, vec![0.0, 0.0, 1.0]);
+        let expected = [
+            1.0f32 / (1.0 + 1.0f32.exp() + 2.0f32.exp()),
+            1.0f32.exp() / (1.0 + 1.0f32.exp() + 2.0f32.exp()),
+            2.0f32.exp() / (1.0 + 1.0f32.exp() + 2.0f32.exp()),
+        ];
+        for (actual, expected) in target_probs.reporting.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_min_p_applies_without_top_p() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+
+        let sampler = Sampler::new(
+            Some(1.0),
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            3,
+            1.0,
+            0.4,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let logits =
+            Tensor::from_vec(vec![0.0f32, 2.0f32.ln(), 4.0f32.ln()], 3, &Device::Cpu).unwrap();
+        let probs = sampler.speculative_candidate_probs(logits, &[0]).unwrap();
+
+        assert!((probs[0] - 0.0).abs() < 1e-6);
+        assert!((probs[1] - 1.0 / 3.0).abs() < 1e-6);
+        assert!((probs[2] - 2.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_top_logprobs_use_unfiltered_distribution() {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let sampler = Sampler::new(
+            Some(1.0),
+            3,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let logits =
+            Tensor::from_vec(vec![0.0f32, 2.0f32.ln(), 3.0f32.ln()], 3, &Device::Cpu).unwrap();
+        let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
+
+        let result = sampler
+            .sample(logits, &[0], true, rng, false, false)
+            .unwrap();
+
+        assert_eq!(result.token, 2);
+        let top = result.top_logprobs.unwrap();
+        assert_eq!(top.len(), 3);
+        let expected = [1.0f32 / 6.0, 2.0 / 6.0, 3.0 / 6.0];
+        for item in top {
+            assert!((item.logprob - expected[item.token as usize].ln()).abs() < 1e-6);
+        }
     }
 
     #[test]
@@ -1624,6 +1701,24 @@ mod tests {
         };
         params.apply_model_defaults(&ModelGenerationDefaults {
             do_sample: Some(false),
+            ..Default::default()
+        });
+
+        assert_eq!(params.temperature, None);
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, None);
+        assert_eq!(params.min_p, None);
+    }
+
+    #[test]
+    fn test_do_sample_false_overrides_sampling_defaults() {
+        let mut params = SamplingParams::neutral();
+        params.apply_model_defaults(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.6),
+            top_k: Some(20),
+            top_p: Some(0.9),
+            min_p: Some(0.05),
             ..Default::default()
         });
 

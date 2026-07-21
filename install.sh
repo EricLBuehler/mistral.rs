@@ -1,6 +1,9 @@
 #!/bin/sh
 set -e
 
+REMOTE_SIZE_CONNECT_TIMEOUT=3
+REMOTE_SIZE_MAX_TIME=5
+
 # mistral.rs Installation Script
 # Cross-platform installer for Linux and macOS with automatic hardware detection
 
@@ -51,7 +54,9 @@ human_size() {
 
 # Content-Length of a URL after redirects; empty if it cannot be determined.
 remote_download_size() {
-    curl --proto '=https' --tlsv1.2 -sfIL "$1" 2>/dev/null \
+    curl --proto '=https' --tlsv1.2 -sfIL \
+        --connect-timeout "$REMOTE_SIZE_CONNECT_TIMEOUT" \
+        --max-time "$REMOTE_SIZE_MAX_TIME" "$1" 2>/dev/null \
         | tr -d '\r' | awk 'tolower($1) == "content-length:" { len = $2 } END { if (len) print len }'
 }
 
@@ -546,9 +551,10 @@ detect_prebuilt_asset() {
         return 0
     fi
     if [ "$triple" = "aarch64-unknown-linux-gnu" ]; then
-        # the default aarch64 asset assumes ARMv8.2 (dotprod); A72-class boards
-        # (Pi 4, Graviton1) get the compat build
-        if ! grep -qw asimddp /proc/cpuinfo 2>/dev/null; then
+        # the default aarch64 asset requires dotprod, fp16, and fhm
+        if ! grep -qw asimddp /proc/cpuinfo 2>/dev/null \
+            || ! grep -qw asimdhp /proc/cpuinfo 2>/dev/null \
+            || ! grep -qw asimdfhm /proc/cpuinfo 2>/dev/null; then
             echo "mistralrs-cpu-${triple}-v8_0.tar.gz"
             return 0
         fi

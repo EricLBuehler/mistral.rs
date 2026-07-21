@@ -1792,10 +1792,10 @@ impl MultimodalModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
