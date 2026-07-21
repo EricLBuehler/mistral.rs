@@ -122,7 +122,7 @@ mod cuda_build {
                 let path = PathBuf::from(build_dir);
                 path.canonicalize().expect(&format!(
                     "Directory doesn't exists: {} (the current directory is {})",
-                    &path.display(),
+                    path.display(),
                     std::env::current_dir()?.display()
                 ))
             }
