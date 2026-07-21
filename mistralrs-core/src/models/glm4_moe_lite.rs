@@ -268,6 +268,7 @@ impl Attention {
             self.paged_attn.is_some(),
             q_nope.device(),
             &metadata,
+            self.kv_b_proj.as_ref(),
         );
 
         let mut attn_out = if use_mla_decode {
@@ -311,7 +312,11 @@ impl Attention {
             )?
             .contiguous()?;
 
-            let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
+            let use_mla_cache = should_use_mla_cache(
+                self.paged_attn.is_some(),
+                q.device(),
+                self.kv_b_proj.as_ref(),
+            );
 
             if use_mla_cache {
                 let seqlen_offsets = ctx.seqlen_offsets();

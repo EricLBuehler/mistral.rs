@@ -1,6 +1,6 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    get_adapter_paths, get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
     TokenSource,
 };
@@ -34,7 +34,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    LoraAdapterSpec, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -98,7 +98,7 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
 }
 
 #[derive(Clone, Default)]
@@ -212,7 +212,7 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
+            lora_adapters: None,
         })
     }
 }
@@ -255,7 +255,7 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
-            lora_adapter_ids: None,
+            lora_adapters: None,
         }
     }
 }
@@ -757,6 +757,7 @@ impl Pipeline for GGUFPipeline {
             flash_meta,
             flash_meta_full,
             recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {

@@ -30,6 +30,9 @@ use crate::{
         tune_model, unload_model,
     },
     image_generation::image_generation,
+    lora_adapters::{
+        list_lora_adapters, load_lora_adapter, unload_lora_adapter, LoraAdapterApiConfig,
+    },
     metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig, ObservabilityState},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
@@ -37,10 +40,12 @@ use crate::{
         CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
         CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
         CONTAINER_FILE_CONTENT_ROUTE, CONTAINER_FILE_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
-        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, MODELS_ROUTE,
-        MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE,
-        ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
-        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        LIST_LORA_ADAPTERS_ROUTE, LOAD_LORA_ADAPTER_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
+        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
+        SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
+        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE,
+        UNLOAD_MODEL_ROUTE,
     },
     skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
@@ -108,6 +113,7 @@ pub struct MistralRsServerRouterBuilder {
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
     observability: ObservabilityConfig,
+    lora_adapter_api: LoraAdapterApiConfig,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -124,6 +130,7 @@ impl Default for MistralRsServerRouterBuilder {
             agentic_defaults: AgenticDefaults::default(),
             skills_dir: None,
             observability: ObservabilityConfig::default(),
+            lora_adapter_api: LoraAdapterApiConfig::from_env(),
         }
     }
 }
@@ -250,6 +257,12 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Configures runtime LoRA management routes and their allowed adapter root.
+    pub fn with_lora_adapter_api_config(mut self, config: LoraAdapterApiConfig) -> Self {
+        self.lora_adapter_api = config;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -266,6 +279,7 @@ impl MistralRsServerRouterBuilder {
         if self.observability.metrics {
             crate::metrics::install_prometheus_recorder();
         }
+        let lora_adapter_api = self.lora_adapter_api.prepare()?;
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
@@ -284,6 +298,7 @@ impl MistralRsServerRouterBuilder {
             self.agentic_defaults,
             self.skills_dir,
             self.observability,
+            lora_adapter_api,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -313,6 +328,7 @@ fn init_router(
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
     observability: ObservabilityConfig,
+    lora_adapter_api: LoraAdapterApiConfig,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -347,7 +363,7 @@ fn init_router(
         .expose_headers([HeaderName::from_static("x-request-id")])
         .allow_origin(allow_origin);
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
         .route(ANTHROPIC_MESSAGES_ROUTE.path, post(anthropic_messages))
         .route(
@@ -357,6 +373,7 @@ fn init_router(
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
+        .route(LIST_LORA_ADAPTERS_ROUTE.path, get(list_lora_adapters))
         .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
         .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
         .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
@@ -399,12 +416,31 @@ fn init_router(
         .route(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
-        )
+        );
+
+    if lora_adapter_api.enabled() {
+        if let Some(root) = lora_adapter_api.allowed_root() {
+            tracing::warn!(
+                adapter_root = %root.display(),
+                "runtime LoRA adapter management is enabled; authorized clients can load adapter files from this root"
+            );
+        } else {
+            tracing::warn!(
+                "runtime LoRA adapter management is enabled without an adapter root; authorized clients can load any adapter path readable by the server"
+            );
+        }
+        router = router
+            .route(LOAD_LORA_ADAPTER_ROUTE.path, post(load_lora_adapter))
+            .route(UNLOAD_LORA_ADAPTER_ROUTE.path, post(unload_lora_adapter));
+    }
+
+    let router = router
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(skill_store))
         .layer(Extension(agentic_defaults))
+        .layer(Extension(lora_adapter_api))
         .with_state(state);
 
     Ok(router)

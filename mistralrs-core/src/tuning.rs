@@ -177,10 +177,7 @@ fn hf_cache_path_from_model(model: &ModelSelected) -> Option<PathBuf> {
 fn model_id_from_selected(model: &ModelSelected) -> String {
     match model {
         ModelSelected::Plain { model_id, .. }
-        | ModelSelected::Lora {
-            model_id: Some(model_id),
-            ..
-        }
+        | ModelSelected::Lora { model_id, .. }
         | ModelSelected::XLora {
             model_id: Some(model_id),
             ..

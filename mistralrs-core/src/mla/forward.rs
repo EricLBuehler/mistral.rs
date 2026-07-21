@@ -9,6 +9,11 @@ use crate::{
 
 use super::MlaWeights;
 
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
+fn supports_cached_mla_weights(kv_b_proj: &dyn mistralrs_quant::QuantMethod) -> bool {
+    !kv_b_proj.is_dynamic_lora_active()
+}
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::{DType, D};
 
@@ -37,6 +42,7 @@ fn is_mla_disabled() -> bool {
 /// - Paged attention is enabled
 /// - Running on CUDA
 /// - Paged KV indptr metadata is available
+/// - The KV projection does not have dynamic LoRA weights active
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub fn should_use_mla_decode(
     attention_mask: &AttentionMask,
@@ -44,12 +50,14 @@ pub fn should_use_mla_decode(
     paged_attn_enabled: bool,
     device: &Device,
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
 ) -> bool {
     !is_mla_disabled()
         && matches!(attention_mask, AttentionMask::None)
         && seq_len == 1
         && paged_attn_enabled
         && matches!(device, Device::Cuda(_))
+        && supports_cached_mla_weights(kv_b_proj)
         && metadata
             .as_ref()
             .and_then(|(_, meta)| meta.flashinfer.as_ref())
@@ -63,6 +71,7 @@ pub fn should_use_mla_decode(
     _paged_attn_enabled: bool,
     _device: &Device,
     _metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
 ) -> bool {
     false
 }
@@ -73,13 +82,25 @@ pub fn should_use_mla_decode(
 /// - `MISTRALRS_NO_MLA` is not set to "1"
 /// - Paged attention is enabled
 /// - Running on CUDA
+/// - The KV projection has no active dynamic LoRA weights
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-pub fn should_use_mla_cache(paged_attn_enabled: bool, device: &Device) -> bool {
-    !is_mla_disabled() && paged_attn_enabled && matches!(device, Device::Cuda(_))
+pub fn should_use_mla_cache(
+    paged_attn_enabled: bool,
+    device: &Device,
+    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+) -> bool {
+    !is_mla_disabled()
+        && paged_attn_enabled
+        && matches!(device, Device::Cuda(_))
+        && supports_cached_mla_weights(kv_b_proj)
 }
 
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
-pub fn should_use_mla_cache(_paged_attn_enabled: bool, _device: &Device) -> bool {
+pub fn should_use_mla_cache(
+    _paged_attn_enabled: bool,
+    _device: &Device,
+    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+) -> bool {
     false
 }
 
@@ -294,6 +315,9 @@ pub fn mla_cache_forward(
     bs: usize,
     seq_len: usize,
 ) -> Result<Tensor> {
+    if !supports_cached_mla_weights(kv_b_proj) {
+        candle_core::bail!("MLA cache cannot be used with an active dynamic LoRA KV projection");
+    }
     let mut key_cache = None;
     let mut value_cache = None;
     let mut input_metadata = None;
@@ -571,4 +595,62 @@ pub fn mla_cache_forward(
     _seq_len: usize,
 ) -> Result<Tensor> {
     candle_core::bail!("MLA cache requires CUDA support")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Tensor};
+    use candle_nn::Linear;
+    use mistralrs_quant::{
+        maybe_wrap_dynamic_lora, with_lora_execution, LoraExecution, LoraLayerRegistry,
+        LoraLinearSpec, LoraWeights, QuantMethod, QuantMethodConfig, ShardedSafeTensors,
+        UnquantLinear,
+    };
+
+    use super::supports_cached_mla_weights;
+
+    #[test]
+    fn cached_mla_weights_are_disabled_for_a_mixed_dynamic_lora_batch() -> candle_core::Result<()> {
+        let registry = Arc::new(LoraLayerRegistry::new());
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_lora_registry(registry.clone())
+                .pp("kv_b_proj");
+        let base: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(Tensor::new(&[[1f32, 0.], [0., 1.]], &Device::Cpu)?, None),
+            ))?);
+        let projection = maybe_wrap_dynamic_lora(&vb, base, LoraLinearSpec::replicated(2, 2))?;
+        registry.finalize()?;
+        let site = registry
+            .sites()
+            .into_iter()
+            .next()
+            .expect("registered KV projection");
+
+        assert!(supports_cached_mla_weights(projection.as_ref()));
+        let inactive_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0), None]);
+        let supported = with_lora_execution(Some(Arc::new(inactive_execution)), || {
+            supports_cached_mla_weights(projection.as_ref())
+        });
+        assert!(supported);
+
+        let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(0), None]);
+        execution.insert(
+            &site,
+            0,
+            LoraWeights::new(
+                Tensor::new(&[[1f32, 0.]], &Device::Cpu)?,
+                Tensor::new(&[[1f32], [0.]], &Device::Cpu)?,
+                1.0,
+            )?,
+        )?;
+        let supported = with_lora_execution(Some(Arc::new(execution)), || {
+            supports_cached_mla_weights(projection.as_ref())
+        });
+        assert!(!supported);
+        Ok(())
+    }
 }

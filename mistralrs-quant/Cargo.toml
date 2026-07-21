@@ -22,6 +22,7 @@ lazy_static.workspace = true
 paste.workspace = true
 tracing.workspace = true
 indicatif.workspace = true
+indexmap.workspace = true
 rayon.workspace = true
 libc.workspace = true
 byteorder.workspace = true

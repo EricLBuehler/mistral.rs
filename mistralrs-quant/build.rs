@@ -97,6 +97,7 @@ fn main() -> Result<(), String> {
 
         let mut builder = cudaforge::KernelBuilder::new()
             .source_glob("kernels/*/*.cu")
+            .watch(["kernels"])
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
             .arg("-O3")

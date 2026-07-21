@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::{
     kv_cache::RecurrentStateSnapshot, paged_attention::block_hash::BlockHash, pipeline::KvCache,
-    sequence::Sequence,
+    sequence::Sequence, AdapterGenerationId,
 };
 
 #[derive(PartialEq, Eq, Debug, Hash)]
@@ -25,6 +25,27 @@ impl Tokens {
 impl From<Vec<u32>> for Tokens {
     fn from(value: Vec<u32>) -> Self {
         Self(value)
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Hash)]
+struct CacheKey {
+    tokens: Tokens,
+    adapter_generation: Option<AdapterGenerationId>,
+}
+
+impl CacheKey {
+    fn new(tokens: Vec<u32>, adapter_generation: Option<AdapterGenerationId>) -> Self {
+        Self {
+            tokens: tokens.into(),
+            adapter_generation,
+        }
+    }
+}
+
+impl From<Vec<u32>> for CacheKey {
+    fn from(tokens: Vec<u32>) -> Self {
+        Self::new(tokens, None)
     }
 }
 
@@ -48,7 +69,7 @@ impl CacheElement {
 }
 
 pub struct PrefixCacheManagerV2 {
-    caches: IndexMap<Tokens, CacheElement>,
+    caches: IndexMap<CacheKey, CacheElement>,
     paged_recurrent_caches: IndexMap<Vec<BlockHash>, Vec<RecurrentStateSnapshot>>,
     n_on_device: usize,
     no_prefix_cache: bool,
@@ -103,7 +124,7 @@ impl PrefixCacheManagerV2 {
             let cache = seq.normal_cache().to_vec();
 
             self.caches.insert(
-                seq.get_toks().to_vec().into(),
+                CacheKey::new(seq.get_toks().to_vec(), seq.adapter_generation()),
                 CacheElement {
                     cache,
                     recurrent_snapshots,
@@ -251,6 +272,7 @@ impl PrefixCacheManagerV2 {
     pub fn search_for_matching_cache(
         &mut self,
         toks: &[u32],
+        adapter_generation: Option<AdapterGenerationId>,
         image_hashes: Option<&[u64]>,
         audio_hashes: Option<&[u64]>,
         video_hashes: Option<&[u64]>,
@@ -270,7 +292,10 @@ impl PrefixCacheManagerV2 {
 
         let mut best_match: Option<(usize, &CacheElement, usize, usize, usize)> = None;
         for (k, v) in &self.caches {
-            let match_len = toks.shared_prefix_len(k);
+            if k.adapter_generation != adapter_generation {
+                continue;
+            }
+            let match_len = toks.shared_prefix_len(&k.tokens);
             if match_len == 0 {
                 continue;
             }
@@ -429,8 +454,11 @@ impl PrefixCacheManagerV2 {
 mod tests {
     use candle_core::{DType, Device, Tensor};
 
-    use super::{CacheElement, MatchingCache, PrefixCacheManagerV2};
-    use crate::kv_cache::{KvCache, RotatingCache, SingleCache};
+    use super::{CacheElement, CacheKey, MatchingCache, PrefixCacheManagerV2};
+    use crate::{
+        kv_cache::{KvCache, RotatingCache, SingleCache},
+        AdapterGenerationId,
+    };
 
     fn make_cache_tensor(len: usize) -> candle_core::Result<Tensor> {
         Tensor::zeros((1, 1, len, 1), DType::F32, &Device::Cpu)
@@ -455,6 +483,41 @@ mod tests {
         k.append(&src)?;
         v.append(&src)?;
         Ok(KvCache::Normal { k, v })
+    }
+
+    fn generation(value: u8) -> AdapterGenerationId {
+        AdapterGenerationId::from_bytes([value; 32])
+    }
+
+    #[test]
+    fn adapter_generations_do_not_cross_hit() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        let generation_a = generation(1);
+        let generation_b = generation(2);
+
+        prefix_cacher.caches.insert(
+            CacheKey::new(vec![1, 2, 3], Some(generation_a)),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(3)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+
+        let query = [1, 2, 3, 4];
+        assert!(prefix_cacher
+            .search_for_matching_cache(&query, None, None, None, None)?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache(&query, Some(generation_b), None, None, None)?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache(&query, Some(generation_a), None, None, None)?
+            .is_some());
+
+        Ok(())
     }
 
     #[test]
@@ -484,6 +547,7 @@ mod tests {
 
         let hit = prefix_cacher.search_for_matching_cache(
             &[1, 2, 3, 4, 5, 6, 7, 99],
+            None,
             None,
             None,
             None,
@@ -517,6 +581,7 @@ mod tests {
 
         let hit = prefix_cacher.search_for_matching_cache(
             &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+            None,
             None,
             None,
             None,

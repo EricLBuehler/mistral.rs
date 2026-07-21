@@ -185,6 +185,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         flash_meta,
                         flash_meta_full: _,
                         recurrent_batch_kind,
+                        adapter_leases: _adapter_leases,
                     } = *inputs
                         .downcast::<text_models_inputs_processor::ModelInputs>()
                         .expect("Downcast failed.");

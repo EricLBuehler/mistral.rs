@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -20,7 +20,7 @@ use crate::{
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource,
+    LoraAdapterSpec, ModelPaths, Ordering, TokenSource,
 };
 
 // Match files against these
@@ -30,9 +30,12 @@ const CONSOLIDATED_SAFETENSOR_MATCH: &str = r"consolidated\.safetensors\b";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 #[derive(Clone, Debug)]
-pub struct LoraAdapterPaths {
-    pub lora_config: mistralrs_quant::LoraConfig,
-    pub adapter_path: PathBuf,
+pub struct ResolvedLoraAdapter {
+    pub alias: String,
+    pub source: String,
+    pub revision: Option<String>,
+    pub config_path: PathBuf,
+    pub weights_path: PathBuf,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -46,28 +49,28 @@ pub enum AdapterPaths {
         xlora_config: Option<XLoraConfig>,
         lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
     },
-    Lora(Vec<LoraAdapterPaths>),
+    Lora(Vec<ResolvedLoraAdapter>),
     None,
 }
 
-pub fn get_xlora_paths(
+pub fn get_adapter_paths(
     base_model_id: String,
     xlora_model_id: Option<&String>,
-    lora_adapter_ids: Option<&Vec<String>>,
+    lora_adapters: Option<&Vec<LoraAdapterSpec>>,
     token_source: &TokenSource,
-    revision: String,
+    base_revision: String,
     xlora_order: Option<&Ordering>,
 ) -> Result<AdapterPaths> {
-    match (lora_adapter_ids, xlora_model_id, xlora_order) {
+    match (lora_adapters, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
             let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
             let api = api.repo(Repo::with_revision(
                 xlora_id.clone(),
                 RepoType::Model,
-                revision.clone(),
+                base_revision.clone(),
             ));
             let model_id = Path::new(&xlora_id);
-            let dir_list = api_dir_list!(api, model_id, true, &revision).collect::<Vec<_>>();
+            let dir_list = api_dir_list!(api, model_id, true, &base_revision).collect::<Vec<_>>();
             // Get the path for the xlora classifier
             let xlora_classifier = &dir_list
                 .clone()
@@ -82,7 +85,12 @@ pub fn get_xlora_paths(
 
             let classifier_path = xlora_classifier
                 .map(|xlora_classifier| -> candle_core::Result<_> {
-                    Ok(api_get_file!(api, xlora_classifier, model_id, &revision))
+                    Ok(api_get_file!(
+                        api,
+                        xlora_classifier,
+                        model_id,
+                        &base_revision
+                    ))
                 })
                 .transpose()?;
 
@@ -103,7 +111,7 @@ pub fn get_xlora_paths(
                 if xlora_configs.len() != 1 {
                     warn!("Selecting config: `{}`", config_path);
                 }
-                let config_path = api_get_file!(api, config_path, model_id, &revision);
+                let config_path = api_get_file!(api, config_path, model_id, &base_revision);
                 let conf = fs::read_to_string(config_path)?;
                 let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
                 match deser {
@@ -149,10 +157,12 @@ pub fn get_xlora_paths(
             let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
             for (file, name) in adapter_files {
                 if let Some(paths) = adapters_paths.get_mut(&name) {
-                    paths.push(api_get_file!(api, &file, model_id, &revision));
+                    paths.push(api_get_file!(api, &file, model_id, &base_revision));
                 } else {
-                    adapters_paths
-                        .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
+                    adapters_paths.insert(
+                        name,
+                        vec![api_get_file!(api, &file, model_id, &base_revision)],
+                    );
                 }
             }
 
@@ -203,7 +213,7 @@ pub fn get_xlora_paths(
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
                         // Get the names and remote paths of the files associated with this adapter
-                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true, &revision)
+                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true, &base_revision)
                             .filter_map(|f| {
                                 if f.contains(&adapter.name) {
                                     Some((f, adapter.name.clone()))
@@ -219,10 +229,10 @@ pub fn get_xlora_paths(
                         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
                         for (file, name) in adapter_files {
                             if let Some(paths) = adapters_paths.get_mut(&name) {
-                                paths.push(api_get_file!(api, &file, model_id, &revision));
+                                paths.push(api_get_file!(api, &file, model_id, &base_revision));
                             } else {
                                 adapters_paths
-                                    .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
+                                    .insert(name, vec![api_get_file!(api, &file, model_id, &base_revision)]);
                             }
                         }
 
@@ -260,37 +270,74 @@ pub fn get_xlora_paths(
                 lora_preload_adapter_info,
             })
         }
-        (Some(adapter_ids), None, None) => {
+        (Some(adapters), None, None) => {
             let mut lora_adapter_paths = Vec::new();
-            for adapter_id in adapter_ids {
-                info!("Loading adapter at `{adapter_id}`");
+            let mut aliases = HashSet::new();
+            for adapter in adapters {
+                let alias = adapter.alias.trim();
+                let source = adapter.source.trim();
+                if alias.is_empty() {
+                    anyhow::bail!("LoRA adapter alias must not be empty");
+                }
+                if source.is_empty() {
+                    anyhow::bail!(
+                        "LoRA adapter source for alias `{}` must not be empty",
+                        adapter.alias
+                    );
+                }
+                if adapter.revision().is_empty() {
+                    anyhow::bail!(
+                        "LoRA adapter revision for alias `{}` must not be empty",
+                        adapter.alias
+                    );
+                }
+                if let Some(expected) = adapter.base_model_name.as_deref().map(str::trim) {
+                    if expected.is_empty() {
+                        anyhow::bail!(
+                            "LoRA adapter `{}` has an empty base_model_name",
+                            adapter.alias
+                        );
+                    }
+                }
+                if !aliases.insert(alias) {
+                    anyhow::bail!(
+                        "LoRA adapter alias `{}` is specified more than once",
+                        adapter.alias
+                    );
+                }
+                info!(
+                    "Loading LoRA adapter `{}` from `{}` at revision `{}`",
+                    alias,
+                    source,
+                    adapter.revision()
+                );
 
                 let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
                 let api = api.repo(Repo::with_revision(
-                    adapter_id.clone(),
+                    source.to_string(),
                     RepoType::Model,
-                    revision.clone(),
+                    adapter.revision().to_string(),
                 ));
 
-                let adapter_path_buf = std::path::Path::new(adapter_id);
+                let adapter_path_buf = std::path::Path::new(source);
                 let config_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_config.json",
-                    &revision,
+                    adapter.revision(),
                 )?;
-                let adapter_path = crate::pipeline::hf::get_file(
+                let weights_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_model.safetensors",
-                    &revision,
+                    adapter.revision(),
                 )?;
-                let lora_config: mistralrs_quant::LoraConfig =
-                    serde_json::from_str(&fs::read_to_string(config_path)?)?;
-
-                lora_adapter_paths.push(LoraAdapterPaths {
-                    lora_config,
-                    adapter_path,
+                lora_adapter_paths.push(ResolvedLoraAdapter {
+                    alias: alias.to_string(),
+                    source: source.to_string(),
+                    revision: (!adapter_path_buf.exists()).then(|| adapter.revision().to_string()),
+                    config_path,
+                    weights_path,
                 });
             }
 

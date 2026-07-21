@@ -105,6 +105,22 @@ impl Engine {
     }
 
     pub(super) async fn add_request(&self, request: NormalRequest) {
+        let adapter_lease = match request.adapter.as_ref() {
+            Some(selection) => match selection.lease() {
+                Some(lease) => Some(lease.clone()),
+                None => {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "request adapter selection was not pinned before admission".into(),
+                        ))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
+            },
+            None => None,
+        };
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
@@ -700,6 +716,9 @@ impl Engine {
                 request.return_raw_logits,
                 eos_toks,
             );
+            if let Some(adapter_lease) = &adapter_lease {
+                seq.bind_adapter(adapter_lease.clone());
+            }
 
             // Only "track" a new sequence if it is a traditional one
             if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
@@ -786,6 +805,7 @@ impl Engine {
             let prefill_cache = handle_seq_error!(
                 get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
                     seq.get_toks(),
+                    seq.adapter_generation(),
                     seq.image_hashes(),
                     seq.audio_hashes(),
                     seq.video_hashes(),

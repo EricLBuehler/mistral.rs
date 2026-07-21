@@ -4,10 +4,10 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
-    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
-    WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
+    speech_utils, AdapterSelection, AgentPermission, AgentToolKind, Constraint,
+    DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat, MessageContent,
+    MistralRs, ModelCategory, NormalRequest, Request, RequestMessage, Response, ResponseOk,
+    SamplingParams, Usage, WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
@@ -83,16 +83,24 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn build_prompt(do_search: bool, do_code_exec: bool, do_shell: bool) -> String {
+fn build_prompt(
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    adapter: Option<&str>,
+) -> String {
     let mut tags = Vec::new();
     if do_code_exec {
-        tags.push("code");
+        tags.push("code".to_string());
     }
     if do_shell {
-        tags.push("shell");
+        tags.push("shell".to_string());
     }
     if do_search {
-        tags.push("search");
+        tags.push("search".to_string());
+    }
+    if let Some(adapter) = adapter {
+        tags.push(format!("lora:{adapter}"));
     }
     if tags.is_empty() {
         "> ".to_string()
@@ -187,6 +195,15 @@ pub struct OneshotInput {
     pub audios: Vec<String>,
 }
 
+pub struct InteractiveConfig {
+    pub do_search: bool,
+    pub do_code_exec: bool,
+    pub do_shell: bool,
+    pub agent_permission: AgentPermission,
+    pub enable_thinking: Option<bool>,
+    pub adapter: Option<String>,
+}
+
 struct OneshotCtx {
     do_search: bool,
     do_code_exec: bool,
@@ -194,17 +211,22 @@ struct OneshotCtx {
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
+    adapter: Option<String>,
 }
 
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
     input: OneshotInput,
+    config: InteractiveConfig,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        adapter,
+    } = config;
     let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     let has_media =
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
@@ -215,6 +237,7 @@ pub async fn oneshot_mode(
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        adapter,
     };
 
     if has_media {
@@ -232,6 +255,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        adapter,
     } = ctx;
     let sender = mistralrs.get_sender(None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
@@ -276,6 +300,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: adapter.map(AdapterSelection::alias),
         truncate_sequence: false,
         files: None,
         input_files: Vec::new(),
@@ -306,6 +331,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        adapter: _,
     } = ctx;
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
@@ -451,6 +477,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: None,
         truncate_sequence: false,
         files: None,
         input_files: Vec::new(),
@@ -512,29 +539,21 @@ fn print_stats(
     }
 }
 
-pub async fn interactive_mode(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
-) {
-    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConfig) {
+    let agent_approval_callback = cli_agent_approval_callback(config.agent_permission);
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(
-                mistralrs,
+            text_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
+        }
+        Ok(ModelCategory::Multimodal { .. }) => {
+            let InteractiveConfig {
                 do_search,
                 do_code_exec,
                 do_shell,
                 agent_permission,
-                agent_approval_callback.clone(),
                 enable_thinking,
-            )
-            .await
-        }
-        Ok(ModelCategory::Multimodal { .. }) => {
+                adapter: _,
+            } = config;
             multimodal_interactive_mode(
                 mistralrs,
                 do_search,
@@ -547,6 +566,14 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Diffusion) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking: _,
+                adapter: _,
+            } = config;
             diffusion_interactive_mode(
                 mistralrs,
                 do_search,
@@ -558,6 +585,14 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Audio) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking,
+                adapter: _,
+            } = config;
             audio_interactive_mode(
                 mistralrs,
                 do_search,
@@ -570,6 +605,14 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Speech) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking: _,
+                adapter: _,
+            } = config;
             speech_interactive_mode(
                 mistralrs,
                 do_search,
@@ -595,6 +638,10 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `/system Always respond as a pirate.`
 - `/clear`: Clear the chat history.
+- `/adapter <alias>`: Use a loaded LoRA adapter for subsequent requests.
+- `/adapter use <alias>`: Select an alias named `none` or `list`.
+- `/adapter none`: Use the base model for subsequent requests.
+- `/adapter list`: List loaded LoRA adapters.
 - `/temperature <float>`: Set sampling temperature (0.0 to 2.0).
 - `/topk <int>`: Set top-k sampling value (>0).
 - `/topp <float>`: Set top-p sampling value in (0.0 to 1.0).
@@ -634,6 +681,7 @@ const HELP_CMD: &str = "/help";
 const EXIT_CMD: &str = "/exit";
 const SYSTEM_CMD: &str = "/system";
 const CLEAR_CMD: &str = "/clear";
+const ADAPTER_CMD: &str = "/adapter";
 const TEMPERATURE_CMD: &str = "/temperature";
 const TOPK_CMD: &str = "/topk";
 const TOPP_CMD: &str = "/topp";
@@ -741,15 +789,86 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
     false
 }
 
+async fn handle_adapter_command(
+    mistralrs: &MistralRs,
+    prompt: &str,
+    adapter: &mut Option<String>,
+) -> bool {
+    let Some(command) = parse_adapter_command(prompt) else {
+        return false;
+    };
+
+    match command {
+        AdapterCommand::Invalid => {
+            println!("Error: format is `{ADAPTER_CMD} <alias|none|list>`")
+        }
+        AdapterCommand::Base => {
+            *adapter = None;
+            info!("Using the base model.");
+        }
+        AdapterCommand::List => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.is_empty() => println!("No LoRA adapters are loaded."),
+            Ok(adapters) => {
+                println!("Loaded LoRA adapters:");
+                for loaded in adapters {
+                    let selected = adapter.as_deref() == Some(loaded.alias.as_str());
+                    let marker = if selected { " (selected)" } else { "" };
+                    println!("- {}{marker}", loaded.alias);
+                }
+            }
+            Err(error) => println!("Error: {error}"),
+        },
+        AdapterCommand::Select(alias) => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.iter().any(|loaded| loaded.alias == alias) => {
+                *adapter = Some(alias.to_string());
+                info!("Using LoRA adapter `{alias}`.");
+            }
+            Ok(_) => println!("Error: LoRA adapter alias `{alias}` is not loaded"),
+            Err(error) => println!("Error: {error}"),
+        },
+    }
+    true
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum AdapterCommand<'a> {
+    Invalid,
+    Base,
+    List,
+    Select(&'a str),
+}
+
+fn parse_adapter_command(prompt: &str) -> Option<AdapterCommand<'_>> {
+    let argument = if prompt == ADAPTER_CMD {
+        ""
+    } else {
+        prompt.strip_prefix("/adapter ")?.trim()
+    };
+    Some(match argument {
+        "" => AdapterCommand::Invalid,
+        "none" => AdapterCommand::Base,
+        "list" => AdapterCommand::List,
+        argument => match argument.strip_prefix("use ").map(str::trim) {
+            Some("") => AdapterCommand::Invalid,
+            Some(alias) => AdapterCommand::Select(alias),
+            None => AdapterCommand::Select(argument),
+        },
+    })
+}
+
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
+    config: InteractiveConfig,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        mut adapter,
+    } = config;
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let tool_session_id = uuid::Uuid::new_v4().to_string();
@@ -776,13 +895,19 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, adapter.as_deref()),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
             continue;
         }
         if handle_sampling_command(prompt_trimmed, &mut sampling_params) {
+            continue;
+        }
+        if handle_adapter_command(&mistralrs, prompt_trimmed, &mut adapter).await {
             continue;
         }
         match prompt_trimmed {
@@ -867,6 +992,7 @@ async fn text_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: adapter.clone().map(AdapterSelection::alias),
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1413,7 +1539,10 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1613,6 +1742,7 @@ async fn multimodal_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1718,7 +1848,10 @@ async fn diffusion_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1777,6 +1910,7 @@ async fn diffusion_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1837,7 +1971,10 @@ async fn speech_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1893,6 +2030,7 @@ async fn speech_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1937,5 +2075,21 @@ mod tests {
         let (urls, text) = parse_files_and_message(input, &regex);
         assert_eq!(urls, vec!["https://example.com/test.png"]);
         assert_eq!(text, "Look at this .");
+    }
+
+    #[test]
+    fn adapter_command_can_select_reserved_aliases() {
+        assert_eq!(
+            parse_adapter_command("/adapter use none"),
+            Some(AdapterCommand::Select("none"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter use list"),
+            Some(AdapterCommand::Select("list"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter none"),
+            Some(AdapterCommand::Base)
+        );
     }
 }

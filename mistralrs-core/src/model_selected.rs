@@ -7,7 +7,7 @@ use crate::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
         NormalLoaderType, UqffWriteConfig,
     },
-    DiffusionLoaderType, ModelDType, SpeechLoaderType,
+    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
 };
 
 // Default value functions for serde deserialization
@@ -269,17 +269,21 @@ pub enum ModelSelected {
 
     /// Select a LoRA architecture
     Lora {
-        /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
+        /// Base model ID. This may be a Hugging Face repository or a local path.
         #[arg(short, long)]
-        model_id: Option<String>,
+        model_id: String,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        #[arg(short, long)]
-        adapter_model_id: String,
+        /// LoRA adapters to preload, each formatted as ALIAS=SOURCE.
+        #[arg(long = "lora")]
+        adapters: Vec<LoraAdapterSpec>,
+
+        /// Dynamic LoRA runtime capacity and rank limits.
+        #[arg(skip)]
+        runtime_config: LoraRuntimeConfig,
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]

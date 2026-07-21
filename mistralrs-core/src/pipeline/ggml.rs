@@ -1,6 +1,6 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
+    get_adapter_paths, get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
     CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
 };
 use super::{
@@ -23,8 +23,8 @@ use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
-    TryIntoDType, DEBUG,
+    get_mut_arcmutex, get_paths, DeviceMapSetting, LoraAdapterSpec, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType, DEBUG,
 };
 use crate::{models::quantized_llama::ModelWeights as QLlama, xlora_models::XLoraQLlama};
 use anyhow::Result;
@@ -72,7 +72,7 @@ pub struct GGMLLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
 }
 
 #[derive(Clone, Default)]
@@ -189,7 +189,7 @@ impl GGMLLoaderBuilder {
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
+            lora_adapters: None,
         })
     }
 }
@@ -232,7 +232,7 @@ impl GGMLLoader {
             kind,
             tgt_non_granular_index,
             jinja_explicit,
-            lora_adapter_ids: None,
+            lora_adapters: None,
         }
     }
 }
@@ -544,6 +544,7 @@ impl Pipeline for GGMLPipeline {
             flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
             Model::Llama(ref model) => {

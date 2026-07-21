@@ -1,16 +1,15 @@
 use std::{fs::File, path::PathBuf, str::FromStr};
 
-use mistralrs_quant::MULTI_LORA_DELIMITER;
-use serde::Deserialize;
+use serde::{de, Deserialize, Deserializer};
 
 use crate::{
     amoe::AnyMoeConfig,
     pipeline::{EmbeddingLoaderType, IsqOrganization},
     AnyMoeLoader, AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
-    ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalSpecificConfig,
-    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Topology, UqffWriteConfig,
-    GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
+    LoraAdapterSpec, LoraRuntimeConfig, ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType,
+    MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
+    Topology, UqffWriteConfig, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -42,9 +41,10 @@ fn default_max_image_length() -> usize {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "kind")]
 pub enum TomlModelSelected {
     /// Select a plain model, without quantization or adapters
+    #[serde(rename = "plain")]
     Plain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         model_id: String,
@@ -89,6 +89,7 @@ pub enum TomlModelSelected {
     },
 
     /// Select an X-LoRA architecture
+    #[serde(rename = "xlora")]
     XLora {
         /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
         model_id: Option<String>,
@@ -132,12 +133,18 @@ pub enum TomlModelSelected {
     },
 
     /// Select a LoRA architecture
+    #[serde(rename = "lora")]
     Lora {
-        /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
-        model_id: Option<String>,
+        /// Base model ID. This may be a Hugging Face repository or a local path.
+        model_id: String,
 
-        /// Model IDs to load LoRA from. This may be a HF hub repo or a local path. Specify multiple with a semicolon.
-        adapter_model_ids: String,
+        /// LoRA adapters to preload.
+        #[serde(default)]
+        adapters: Vec<LoraAdapterSpec>,
+
+        /// Dynamic LoRA runtime capacity and rank limits.
+        #[serde(default)]
+        runtime_config: LoraRuntimeConfig,
 
         /// The architecture of the model.
         arch: Option<NormalLoaderType>,
@@ -169,6 +176,7 @@ pub enum TomlModelSelected {
 
     /// Select a GGUF model.
     #[allow(clippy::upper_case_acronyms)]
+    #[serde(rename = "gguf")]
     GGUF {
         /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
@@ -200,6 +208,7 @@ pub enum TomlModelSelected {
     },
 
     /// Select a GGUF model with X-LoRA.
+    #[serde(rename = "xlora_gguf")]
     XLoraGGUF {
         /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
@@ -240,7 +249,8 @@ pub enum TomlModelSelected {
         max_batch_size: usize,
     },
 
-    /// Select a GGUF model with LoRA.
+    /// Select a GGUF model with legacy LoRA.
+    #[serde(rename = "legacy_lora_gguf")]
     LoraGGUF {
         /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
@@ -279,6 +289,7 @@ pub enum TomlModelSelected {
 
     /// Select a GGML model.
     #[allow(clippy::upper_case_acronyms)]
+    #[serde(rename = "ggml")]
     GGML {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: String,
@@ -311,6 +322,7 @@ pub enum TomlModelSelected {
     },
 
     /// Select a GGML model with X-LoRA.
+    #[serde(rename = "xlora_ggml")]
     XLoraGGML {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
@@ -352,7 +364,8 @@ pub enum TomlModelSelected {
         max_batch_size: usize,
     },
 
-    /// Select a GGML model with LoRA.
+    /// Select a GGML model with legacy LoRA.
+    #[serde(rename = "legacy_lora_ggml")]
     LoraGGML {
         /// Model ID to load the tokenizer from. This may be a HF hub repo or a local path.
         tok_model_id: Option<String>,
@@ -391,6 +404,7 @@ pub enum TomlModelSelected {
     },
 
     /// Select a multimodal plain model, without quantization or adapters
+    #[serde(rename = "multimodal")]
     MultimodalPlain {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         model_id: String,
@@ -446,6 +460,7 @@ pub enum TomlModelSelected {
     },
 
     /// Select an embedding model, without quantization or adapters
+    #[serde(rename = "embedding")]
     Embedding {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         model_id: String,
@@ -480,6 +495,118 @@ pub enum TomlModelSelected {
     },
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum LegacyModelFamily {
+    XLora,
+    Lora,
+    LegacyLora,
+    Multimodal,
+    Embedding,
+}
+
+fn deserialize_model_selected<'de, D>(deserializer: D) -> Result<TomlModelSelected, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let mut value = toml::Value::deserialize(deserializer)?;
+    let table = value
+        .as_table_mut()
+        .ok_or_else(|| de::Error::custom("model selector must be a TOML table"))?;
+
+    if table.contains_key("adapter_model_ids") {
+        return Err(de::Error::custom(
+            "legacy `adapter_model_ids` is no longer supported; use `kind = \"lora\"` with `adapters`",
+        ));
+    }
+
+    if !table.contains_key("kind") {
+        let kind = infer_legacy_model_kind(table).map_err(de::Error::custom)?;
+        table.insert("kind".to_string(), toml::Value::String(kind.to_string()));
+    }
+
+    value.try_into().map_err(de::Error::custom)
+}
+
+fn infer_legacy_model_kind(table: &toml::Table) -> Result<&'static str, String> {
+    let quantized = [
+        "tok_model_id",
+        "quantized_model_id",
+        "quantized_filename",
+        "gqa",
+    ]
+    .iter()
+    .any(|key| table.contains_key(*key));
+    let has_gqa = table.contains_key("gqa");
+
+    let mut families = Vec::new();
+    if table.contains_key("xlora_model_id") || table.contains_key("tgt_non_granular_index") {
+        families.push(LegacyModelFamily::XLora);
+    }
+    if table.contains_key("adapters") || table.contains_key("runtime_config") {
+        families.push(LegacyModelFamily::Lora);
+    }
+    if table.contains_key("adapters_model_id") {
+        families.push(LegacyModelFamily::LegacyLora);
+    }
+    if ["max_edge", "max_num_images", "max_image_length"]
+        .iter()
+        .any(|key| table.contains_key(*key))
+    {
+        families.push(LegacyModelFamily::Multimodal);
+    }
+    if let Some(family) = infer_legacy_arch_family(table)? {
+        if !families.contains(&family) {
+            families.push(family);
+        }
+    }
+
+    if families.len() > 1 {
+        return Err(
+            "model selector without `kind` has conflicting fields; set `kind` explicitly"
+                .to_string(),
+        );
+    }
+
+    let family = families.first().copied();
+    match (family, quantized, has_gqa) {
+        (Some(LegacyModelFamily::XLora), false, _) => Ok("xlora"),
+        (Some(LegacyModelFamily::XLora), true, false) => Ok("xlora_gguf"),
+        (Some(LegacyModelFamily::XLora), true, true) => Ok("xlora_ggml"),
+        (Some(LegacyModelFamily::Lora), false, _) => Ok("lora"),
+        (Some(LegacyModelFamily::LegacyLora), true, false) => Ok("legacy_lora_gguf"),
+        (Some(LegacyModelFamily::LegacyLora), true, true) => Ok("legacy_lora_ggml"),
+        (Some(LegacyModelFamily::Multimodal), false, _) => Ok("multimodal"),
+        (Some(LegacyModelFamily::Embedding), false, _) => Ok("embedding"),
+        (None, true, false) => Ok("gguf"),
+        (None, true, true) => Ok("ggml"),
+        (None, false, _) => Ok("plain"),
+        _ => Err(
+            "model selector without `kind` mixes incompatible model fields; set `kind` explicitly"
+                .to_string(),
+        ),
+    }
+}
+
+fn infer_legacy_arch_family(table: &toml::Table) -> Result<Option<LegacyModelFamily>, String> {
+    let Some(arch) = table.get("arch") else {
+        return Ok(None);
+    };
+    if NormalLoaderType::deserialize(arch.clone()).is_ok() {
+        return Ok(None);
+    }
+
+    let multimodal = MultimodalLoaderType::deserialize(arch.clone()).is_ok();
+    let embedding = EmbeddingLoaderType::deserialize(arch.clone()).is_ok();
+    match (multimodal, embedding) {
+        (true, false) => Ok(Some(LegacyModelFamily::Multimodal)),
+        (false, true) => Ok(Some(LegacyModelFamily::Embedding)),
+        (true, true) => {
+            Err("model selector architecture is ambiguous; set `kind` explicitly".to_string())
+        }
+        (false, false) => Ok(None),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct AnyMoeTomlModelSelected {
     /// Config
@@ -508,6 +635,7 @@ pub struct TomlSelector {
     tokenizer_json: Option<String>,
 
     /// Selected model
+    #[serde(deserialize_with = "deserialize_model_selected")]
     model: TomlModelSelected,
 
     /// Legacy target/draft speculative decoding was removed. Keep this field
@@ -707,7 +835,8 @@ fn loader_from_selected(
         .build(arch)?,
         TomlModelSelected::Lora {
             model_id,
-            adapter_model_ids,
+            adapters,
+            runtime_config,
             arch,
             dtype: _,
             topology,
@@ -735,16 +864,11 @@ fn loader_from_selected(
             },
             args.chat_template,
             args.tokenizer_json,
-            model_id,
+            Some(model_id),
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(
-            adapter_model_ids
-                .split(MULTI_LORA_DELIMITER)
-                .map(ToString::to_string)
-                .collect(),
-        )
+        .with_lora(adapters, runtime_config)
         .build(arch)?,
         TomlModelSelected::GGUF {
             tok_model_id,
@@ -1010,6 +1134,11 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
                 "legacy target/draft speculative decoding in TOML configs was removed; use MTP through --mtp-model or the MTP API instead"
             );
         }
+        if matches!(&selector.model, TomlModelSelected::Lora { .. }) && selector.anymoe.is_some() {
+            anyhow::bail!(
+                "dynamic LoRA cannot be combined with AnyMoE in one TOML model configuration"
+            );
+        }
         let loader = loader_from_selected(args.clone(), selector.model)?;
         let loader = if let Some(AnyMoeTomlModelSelected {
             config,
@@ -1033,5 +1162,249 @@ impl TryInto<Box<dyn Loader>> for (TomlSelector, TomlLoaderArgs) {
             loader
         };
         Ok(loader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_lora_example_selects_lora() {
+        let selector: TomlSelector =
+            toml::from_str(include_str!("../../toml-selectors/lora.toml")).unwrap();
+
+        let TomlModelSelected::Lora {
+            model_id,
+            adapters,
+            runtime_config,
+            ..
+        } = selector.model
+        else {
+            panic!("explicit lora kind selected a different model variant");
+        };
+        assert_eq!(model_id, "mistralai/Mistral-7B-Instruct-v0.1");
+        assert_eq!(
+            adapters,
+            vec![LoraAdapterSpec::new("zephyr", "typeof/zephyr-7b-beta-lora")]
+        );
+        assert_eq!(runtime_config.max_adapters, 4);
+        assert_eq!(runtime_config.max_rank, 128);
+        assert_eq!(runtime_config.max_bytes, 2_147_483_648);
+    }
+
+    #[test]
+    fn legacy_plain_without_kind_is_supported() {
+        let selector = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "mistralai/Mistral-7B-Instruct-v0.1"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(selector.model, TomlModelSelected::Plain { .. }));
+    }
+
+    #[test]
+    fn legacy_quantized_models_without_kind_are_inferred() {
+        let gguf = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.gguf"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(gguf.model, TomlModelSelected::GGUF { .. }));
+
+        let ggml = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.bin"
+                gqa = 8
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(ggml.model, TomlModelSelected::GGML { .. }));
+    }
+
+    #[test]
+    fn legacy_xlora_models_without_kind_are_inferred() {
+        let normal = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "base"
+                xlora_model_id = "adapter"
+                order = "order.json"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(normal.model, TomlModelSelected::XLora { .. }));
+
+        let gguf = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.gguf"
+                xlora_model_id = "adapter"
+                order = "order.json"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(gguf.model, TomlModelSelected::XLoraGGUF { .. }));
+
+        let ggml = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.bin"
+                xlora_model_id = "adapter"
+                order = "order.json"
+                gqa = 8
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(ggml.model, TomlModelSelected::XLoraGGML { .. }));
+    }
+
+    #[test]
+    fn legacy_quantized_lora_models_without_kind_are_inferred() {
+        let gguf = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.gguf"
+                adapters_model_id = "adapter"
+                order = "order.json"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(gguf.model, TomlModelSelected::LoraGGUF { .. }));
+
+        let ggml = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                tok_model_id = "tokenizer"
+                quantized_model_id = "weights"
+                quantized_filename = "model.bin"
+                adapters_model_id = "adapter"
+                order = "order.json"
+                gqa = 8
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(ggml.model, TomlModelSelected::LoraGGML { .. }));
+    }
+
+    #[test]
+    fn legacy_specialized_models_without_kind_are_inferred() {
+        let multimodal = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "vision-model"
+                arch = "qwen2vl"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(
+            multimodal.model,
+            TomlModelSelected::MultimodalPlain { .. }
+        ));
+
+        let embedding = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "embedding-model"
+                arch = "qwen3embedding"
+                tokenizer_json = "tokenizer.json"
+            "#,
+        )
+        .unwrap();
+        assert!(matches!(
+            embedding.model,
+            TomlModelSelected::Embedding { .. }
+        ));
+    }
+
+    #[test]
+    fn legacy_nested_tokenizer_json_keeps_plain_default() {
+        let selector = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "text-model"
+                tokenizer_json = "tokenizer.json"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(selector.model, TomlModelSelected::Plain { .. }));
+    }
+
+    #[test]
+    fn explicit_kind_is_authoritative() {
+        let selector = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                kind = "multimodal"
+                model_id = "vision-model"
+            "#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            selector.model,
+            TomlModelSelected::MultimodalPlain { .. }
+        ));
+    }
+
+    #[test]
+    fn legacy_selector_with_conflicting_discriminators_is_rejected() {
+        let error = toml::from_str::<TomlSelector>(
+            r#"
+                [model]
+                model_id = "ambiguous-model"
+                max_edge = 1024
+                arch = "qwen3embedding"
+            "#,
+        )
+        .err()
+        .expect("conflicting model fields should not parse");
+
+        assert!(error.to_string().contains("conflicting fields"));
+    }
+
+    #[test]
+    fn dynamic_lora_and_anymoe_are_rejected_together() {
+        let (_, anymoe) = include_str!("../../toml-selectors/anymoe_lora.toml")
+            .split_once("[anymoe]")
+            .unwrap();
+        let source = format!(
+            "{}\n[anymoe]{}",
+            include_str!("../../toml-selectors/lora.toml"),
+            anymoe
+        );
+        let selector: TomlSelector = toml::from_str(&source).unwrap();
+        let result: anyhow::Result<Box<dyn Loader>> = (
+            selector,
+            TomlLoaderArgs {
+                chat_template: None,
+                no_kv_cache: false,
+                jinja_explicit: None,
+            },
+        )
+            .try_into();
+
+        assert!(result
+            .err()
+            .expect("dynamic LoRA and AnyMoE must be rejected")
+            .to_string()
+            .contains("dynamic LoRA cannot be combined with AnyMoE"));
     }
 }

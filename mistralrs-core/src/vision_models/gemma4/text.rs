@@ -329,12 +329,12 @@ impl Attention {
             };
             let merged_qkv_proj = if let Some(v_proj) = v_proj.as_ref() {
                 crate::ops::MergedDenseProjection::new(&[
-                    q_proj.as_ref(),
-                    k_proj.as_ref(),
-                    v_proj.as_ref(),
+                    q_proj.clone(),
+                    k_proj.clone(),
+                    v_proj.clone(),
                 ])?
             } else {
-                crate::ops::MergedDenseProjection::new(&[q_proj.as_ref(), k_proj.as_ref()])?
+                crate::ops::MergedDenseProjection::new(&[q_proj.clone(), k_proj.clone()])?
             };
             let k_norm = RmsNorm::new(
                 head_dim,

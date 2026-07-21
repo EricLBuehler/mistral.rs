@@ -19,6 +19,18 @@ There is none. The server accepts and ignores `Authorization: Bearer ...` (OpenA
 
 The request `model` field selects among loaded models. `"default"` (or omitting the field) targets the configured default model; with a single `-m` model that is the only model. `GET /v1/models` lists real ids plus per-model `status` (`loaded`, `unloaded`, `reloading`), `tools_available`, `mcp_tools_count`, and `mcp_servers_connected`. See [multiple models](/mistral.rs/guides/serve/multiple-models/).
 
+## LoRA adapter routing and management
+
+Chat Completions, Completions, and Responses requests can select dynamic LoRA with the top-level `adapter` field. A string selects a loaded alias; `{"generation":"<generation-id>"}` selects one exact resident generation. Resolution pins the immutable generation for the lifetime of the request. Replacing or unloading an alias therefore does not change an in-flight request, and generation-specific prefix-cache entries cannot be reused by another adapter.
+
+The read-only status route is always registered. The `mistralrs serve` mutation routes are registered only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is enabled. Embedded servers can instead configure `LoraAdapterApiConfig` on `MistralRsServerRouterBuilder`:
+
+- `POST /v1/load_lora_adapter` loads an alias from a local adapter directory; replacing one requires `load_inplace: true` and may use `expected_generation` for compare-and-set safety.
+- `GET /v1/lora_adapters` is always available and lists aliases, configured limits, and complete resident capacity usage, including retired generations pinned by in-flight requests. Sources are redacted unless mutation is enabled.
+- `POST /v1/unload_lora_adapter` removes an alias and reclaims its generation after in-flight requests release it; `expected_generation` prevents stale removal.
+
+Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its ancestors, and every selected adapter directory writable only by the service operator. Publish adapters at new immutable directory paths instead of replacing an existing selected path. Loads are serialized; concurrent attempts return 429. An admitted load continues if its client disconnects, so verify the generation through the list endpoint after a timeout. These routes have no built-in authentication and should not be exposed without an authenticated reverse proxy. Request schemas and response objects are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/); stable error-code recovery, setup, and support boundaries are in the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/).
+
 ## Streaming
 
 Three endpoints stream, each in its own event dialect:
@@ -154,7 +166,7 @@ Uploading skills does not require shell execution, but running a Responses reque
 - `http_requests_in_flight` (gauge): requests currently running, labeled by `method`, `path`, and `model`.
 - `http_request_body_bytes` (histogram): request body size when the body size is known, labeled by `method`, `path`, and `model`.
 
-The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
+The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, reads the `model` query parameter for `GET /v1/lora_adapters`, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when a required request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
 
 ## Response headers
 

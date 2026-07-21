@@ -4,8 +4,6 @@ use std::{
     str::FromStr,
 };
 
-use mistralrs_quant::MULTI_LORA_DELIMITER;
-
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{
@@ -460,7 +458,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         ModelSelected::Lora {
             model_id,
             tokenizer_json,
-            adapter_model_id,
+            adapters,
+            runtime_config,
             arch,
             dtype: _,
             topology,
@@ -488,16 +487,11 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             },
             args.chat_template,
             tokenizer_json,
-            model_id,
+            Some(model_id),
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(
-            adapter_model_id
-                .split(MULTI_LORA_DELIMITER)
-                .map(ToString::to_string)
-                .collect(),
-        )
+        .with_lora(adapters, runtime_config)
         .build(arch)?,
         ModelSelected::GGUF {
             tok_model_id,

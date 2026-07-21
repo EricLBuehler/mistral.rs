@@ -24,6 +24,8 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `presence_penalty`, `frequency_penalty`
 - `n` (multiple completions)
 
+Loaded dynamic LoRA aliases are exposed as stable `<base-model>::<alias>` model cards by `GET /v1/models` and may be sent as `model`. A unique short alias is also accepted for vLLM-style routing. The card's `parent` identifies the base model, `root` uses the public adapter alias rather than a local filesystem path, and `adapter_generation` identifies the current immutable generation. The explicit `adapter` extension below is available when callers need separate base-model routing or an exact generation.
+
 ### Implemented with deviation
 
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools. Function-tool obligations are enforced by the tool-call lifecycle; hosted tools such as web search, code execution, and shell are handled by the agentic runtime.
@@ -57,6 +59,11 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `agent_permission`, `code_execution_permission`: per-request permission tightening for server-executed tools.
 - `max_tool_rounds`: cap server-side tool loop rounds for one request.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
+- `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
+
+`GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state. Adapter source is redacted unless runtime mutation is enabled. `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; read-only discovery does not.
+
+Chat Completions and Completions responses expose the exact resolved generation as `adapter_generation`, including streaming chunks. Completed Responses resources expose the same field. The field is omitted for base-model requests.
 
 ## Responses API
 
@@ -115,7 +122,7 @@ Uploaded skill versions are stored under the server's skills directory (`--skill
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
 
 Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
@@ -135,7 +142,7 @@ Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X P
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 

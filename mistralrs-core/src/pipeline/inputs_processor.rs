@@ -83,6 +83,7 @@ pub mod text_models_inputs_processor {
         },
         pipeline::RecurrentBatchKind,
         sequence::Sequence,
+        AdapterLease,
     };
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
@@ -1828,6 +1829,18 @@ pub mod text_models_inputs_processor {
         pub flash_meta: FlashParams,
         pub flash_meta_full: Option<FlashParams>,
         pub recurrent_batch_kind: RecurrentBatchKind,
+        pub adapter_leases: Arc<[Option<AdapterLease>]>,
+    }
+
+    fn adapter_leases(
+        input_seqs: &[&mut Sequence],
+        seq_indices: &[usize],
+    ) -> Arc<[Option<AdapterLease>]> {
+        seq_indices
+            .iter()
+            .map(|&index| input_seqs[index].adapter_lease().cloned())
+            .collect::<Vec<_>>()
+            .into()
     }
 
     pub struct TextInputsProcessor;
@@ -1901,6 +1914,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices: _,
                 } = completion;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: Some(input_ids_full),
@@ -1912,6 +1926,7 @@ pub mod text_models_inputs_processor {
                     flash_meta,
                     flash_meta_full: Some(flash_meta_full),
                     recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -1943,6 +1958,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
                     input_ids_full: Some(input_ids),
@@ -1954,6 +1970,7 @@ pub mod text_models_inputs_processor {
                     flash_meta: flash_meta.clone(),
                     flash_meta_full: Some(flash_meta),
                     recurrent_batch_kind: RecurrentBatchKind::Prefill,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -1985,6 +2002,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
@@ -1996,6 +2014,7 @@ pub mod text_models_inputs_processor {
                     flash_meta,
                     flash_meta_full: None,
                     recurrent_batch_kind: RecurrentBatchKind::Prefill,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -2028,6 +2047,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
@@ -2039,6 +2059,7 @@ pub mod text_models_inputs_processor {
                     flash_meta,
                     flash_meta_full: None,
                     recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,

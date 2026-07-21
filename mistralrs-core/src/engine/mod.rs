@@ -1,6 +1,6 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{compute_block_hashes, BlockHash},
+    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -338,6 +338,40 @@ impl Engine {
         scheduler.free_finished_sequence_groups();
     }
 
+    fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
+        let Request::Normal(request) = request else {
+            return Ok(());
+        };
+        let Some(selection) = request.adapter.as_mut() else {
+            return Ok(());
+        };
+        if selection.is_pinned() {
+            return Ok(());
+        }
+
+        let runtime = get_mut_arcmutex!(self.pipeline)
+            .adapter_runtime()
+            .ok_or_else(|| {
+                "request selected an adapter, but this pipeline has no dynamic LoRA runtime"
+                    .to_string()
+            })?;
+        selection.pin(&runtime).map_err(|err| err.to_string())
+    }
+
+    async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
+        if let Err(error) = self.resolve_adapter_generation(&mut request) {
+            if let Request::Normal(request) = request {
+                request
+                    .response
+                    .send(crate::Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| tracing::warn!("Receiver disconnected"));
+            }
+            return None;
+        }
+        Some(request)
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -370,6 +404,9 @@ impl Engine {
 
                 match next_request {
                     Ok(request) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -418,6 +455,9 @@ impl Engine {
 
                 match event {
                     WaitEvent::Request(Some(request)) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -588,12 +628,13 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
-                            match seq.sequence_stepping_type() {
-                                SeqStepType::OneShot => {
-                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
-                                }
-                                SeqStepType::PromptAndDecode => {
-                                    seq.set_state(SequenceState::RunningCompletion)
+                            if !seq.is_finished_paged_attn() {
+                                match seq.sequence_stepping_type() {
+                                    SeqStepType::OneShot => seq
+                                        .set_state(SequenceState::Done(StopReason::GeneratedImage)),
+                                    SeqStepType::PromptAndDecode => {
+                                        seq.set_state(SequenceState::RunningCompletion)
+                                    }
                                 }
                             }
                             seq.finish_prompt_timing(prompt_exec_time);
@@ -802,11 +843,13 @@ impl Engine {
                                     }
 
                                     let num_blocks = encoded_len / block_size;
+                                    let adapter_key =
+                                        adapter_generation_key(seq.adapter_generation());
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
                                         seq.mm_features(),
-                                        &[],
+                                        adapter_key.as_slice(),
                                     );
                                     if block_hashes.len() < num_blocks {
                                         continue;

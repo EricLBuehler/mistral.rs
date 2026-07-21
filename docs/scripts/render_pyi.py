@@ -33,19 +33,31 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner", "CalibrationStatus"],
+        [
+            "Runner",
+            "CalibrationStatus",
+            "LoraAdapterError",
+            "LoraAdapterInfo",
+            "LoraResidentGenerationInfo",
+            "LoraRuntimeStatus",
+        ],
     ),
     (
         "Which",
         "which",
         "Variants that select which kind of model to load.",
-        ["Which"],
+        ["LoraAdapter", "Which"],
     ),
     (
         "Requests",
         "requests",
         "Request dataclasses passed to Runner methods.",
-        ["ChatCompletionRequest", "CompletionRequest", "EmbeddingRequest"],
+        [
+            "LoraAdapterGeneration",
+            "ChatCompletionRequest",
+            "CompletionRequest",
+            "EmbeddingRequest",
+        ],
     ),
     (
         "Responses",
@@ -151,6 +163,26 @@ def _unparse(node) -> str:
         return ast.unparse(node)
     except Exception:
         return ""
+
+
+def _field_default(node: ast.expr | None) -> str:
+    if not isinstance(node, ast.Call):
+        return _unparse(node) if node is not None else ""
+    if not isinstance(node.func, ast.Name) or node.func.id != "field":
+        return _unparse(node)
+
+    values = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+    default = values.get("default")
+    if default is None and "default_factory" in values:
+        rendered = f"factory: {_unparse(values['default_factory'])}"
+    else:
+        rendered = _unparse(default)
+    if (
+        isinstance(values.get("kw_only"), ast.Constant)
+        and values["kw_only"].value is True
+    ):
+        return f"{rendered} (keyword-only)"
+    return rendered
 
 
 def _is_enum(cls: ast.ClassDef) -> bool:
@@ -425,7 +457,7 @@ def _render_class(
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             name = item.target.id
             ftype = _unparse(item.annotation)
-            value = _unparse(item.value) if item.value is not None else ""
+            value = _field_default(item.value)
             fields.append((name, ftype, value))
         elif isinstance(item, ast.Assign):
             for t in item.targets:

@@ -94,8 +94,8 @@ pub(crate) fn get_device_layers_for_loader(
 use mistralrs_quant::IsqType;
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
-pub use paths::{AdapterPaths, LoraAdapterPaths};
+pub(crate) use paths::{get_adapter_paths, get_chat_template, get_model_paths};
+pub use paths::{AdapterPaths, ResolvedLoraAdapter};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -113,7 +113,9 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
-use crate::paged_attention::block_hash::{compute_block_hashes, MultimodalAttentionPolicy};
+use crate::paged_attention::block_hash::{
+    adapter_generation_key, compute_block_hashes, MultimodalAttentionPolicy,
+};
 use crate::sequence::Sequence;
 
 use prompt_chunks::build_prompt_chunk_plan;
@@ -964,6 +966,10 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
+        None
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -1025,7 +1031,13 @@ pub trait Pipeline:
         if snapshots.is_empty() {
             return Ok(());
         }
-        let block_hashes = compute_block_hashes(seq.get_toks(), block_size, seq.mm_features(), &[]);
+        let adapter_key = adapter_generation_key(seq.adapter_generation());
+        let block_hashes = compute_block_hashes(
+            seq.get_toks(),
+            block_size,
+            seq.mm_features(),
+            adapter_key.as_slice(),
+        );
         let n_blocks = cached_tokens / block_size;
         if block_hashes.len() >= n_blocks {
             prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);

@@ -5,7 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    AudioInput, ChatCompletionResponse, Usage, VideoInput,
+    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -656,6 +656,7 @@ pub struct Sequence {
     pub(crate) return_raw_logits: bool,
     token_offset: usize,
     eos_tokens: Vec<u32>,
+    adapter: Option<AdapterLease>,
 
     // Multimodal data (images, diffusion settings, pixel caches)
     pub multimodal: MultimodalData,
@@ -831,6 +832,7 @@ impl Sequence {
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
+            adapter: None,
             total_prompt_time: None,
             total_completion_time: None,
             step_start_instant: None,
@@ -906,6 +908,20 @@ impl Sequence {
 
     pub fn id(&self) -> &usize {
         &self.id
+    }
+
+    pub(crate) fn bind_adapter(&mut self, adapter: AdapterLease) {
+        assert!(self.adapter.is_none(), "sequence adapter is already bound");
+        self.adapter = Some(adapter);
+        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn adapter_lease(&self) -> Option<&AdapterLease> {
+        self.adapter.as_ref()
+    }
+
+    pub fn adapter_generation(&self) -> Option<AdapterGenerationId> {
+        self.adapter.as_ref().map(AdapterLease::generation)
     }
 
     pub fn is_running(&self) -> bool {
@@ -1925,6 +1941,9 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                     usage: usage_opt,
+                    adapter_generation: seq
+                        .adapter_generation()
+                        .map(|generation| generation.to_string()),
                     session_id: None,
                 }))
                 .await?;
@@ -1944,6 +1963,9 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "text_completion".to_string(),
+                    adapter_generation: seq
+                        .adapter_generation()
+                        .map(|generation| generation.to_string()),
                 }))
                 .await?;
         }

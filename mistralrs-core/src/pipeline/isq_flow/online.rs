@@ -269,9 +269,10 @@ pub(crate) fn requantize_from_source(
                 } else {
                     None
                 };
+                let replacement = quantize_source_tensor(w, b, ty, device, imatrix, guard)?;
                 module
                     .ct
-                    .replace(quantize_source_tensor(w, b, ty, device, imatrix, guard)?);
+                    .replace(resident.preserve_dynamic_lora(replacement));
                 Ok(())
             };
             job().map_err(|e| candle_core::Error::msg(format!("{e:#}")))
@@ -395,6 +396,73 @@ mod tests {
             .max_all()?
             .to_scalar::<f32>()?;
         assert!(diff < 0.05, "max diff {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn from_source_preserves_dynamic_lora() -> Result<()> {
+        use mistralrs_quant::{
+            maybe_wrap_dynamic_lora, with_lora_execution, LoraExecution, LoraLayerRegistry,
+            LoraLinearSpec, LoraWeights, QuantMethod, Shard, ShardedSafeTensors, TrackedModule,
+            UnquantLinear,
+        };
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let source_weight = Tensor::zeros((2, 32), DType::F32, &Device::Cpu)?;
+        candle_core::safetensors::save(
+            &[("m.lin.weight".to_string(), source_weight)]
+                .into_iter()
+                .collect(),
+            &file,
+        )?;
+
+        let registry = std::sync::Arc::new(LoraLayerRegistry::new());
+        let vb = ShardedSafeTensors::wrap_with_dummy_regexes(
+            HashMap::<String, Tensor>::new(),
+            DType::F32,
+            Device::Cpu,
+            None,
+        )
+        .with_lora_registry(registry.clone())
+        .pp("m.lin");
+        let base = std::sync::Arc::new(UnquantLinear::new(
+            mistralrs_quant::QuantMethodConfig::Unquantized(candle_nn::Linear::new(
+                Tensor::zeros((2, 32), DType::F32, &Device::Cpu)?,
+                None,
+            )),
+        )?) as std::sync::Arc<dyn QuantMethod>;
+        let resident = maybe_wrap_dynamic_lora(&vb, base, LoraLinearSpec::replicated(32, 2))?;
+        let site = registry.sites().pop().expect("registered LoRA site");
+        registry.finalize()?;
+
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))
+            .unwrap();
+        let ct = std::sync::Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
+        let module = TrackedModule {
+            key: "m.lin".to_string(),
+            ct: ct.clone(),
+            ty: Some(IsqType::Q8_0),
+            shard: Some(Shard::default()),
+        };
+
+        requantize_from_source(&[module], &[file], IsqType::Q8_0, &HashMap::new())?;
+
+        let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
+        execution.insert(
+            &site,
+            0,
+            LoraWeights::new(
+                Tensor::ones((1, 32), DType::F32, &Device::Cpu)?,
+                Tensor::ones((2, 1), DType::F32, &Device::Cpu)?,
+                1.0,
+            )?,
+        )?;
+        let input = Tensor::ones((1, 32), DType::F32, &Device::Cpu)?;
+        let output =
+            with_lora_execution(Some(std::sync::Arc::new(execution)), || ct.forward(&input))?;
+        assert_eq!(output.to_vec2::<f32>()?, vec![vec![32.0, 32.0]]);
         Ok(())
     }
 

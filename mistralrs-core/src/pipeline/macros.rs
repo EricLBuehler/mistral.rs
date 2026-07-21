@@ -77,10 +77,10 @@ macro_rules! get_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_xlora_paths(
+        let adapter_paths = get_adapter_paths(
             $this.model_id.clone(),
             $this.xlora_model_id.as_ref(),
-            $this.lora_adapter_ids.as_ref(),
+            $this.lora_adapters.as_ref(),
             &$token_source,
             revision.clone(),
             $this.xlora_order.as_ref(),
@@ -232,10 +232,10 @@ macro_rules! get_embedding_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_xlora_paths(
+        let adapter_paths = get_adapter_paths(
             $this.model_id.clone(),
             None, // no xlora
-            $this.lora_adapter_ids.as_ref(),
+            $this.lora_adapters.as_ref(),
             &$token_source,
             revision.clone(),
             None, // no xlora
@@ -472,10 +472,10 @@ macro_rules! get_paths_gguf {
         )?;
 
         tracing::debug!("GGUF file(s) {:?}", filenames);
-        let adapter_paths = get_xlora_paths(
+        let adapter_paths = get_adapter_paths(
             this_model_id.clone(),
             $this.xlora_model_id.as_ref(),
-            $this.lora_adapter_ids.as_ref(),
+            $this.lora_adapters.as_ref(),
             &$token_source,
             revision.clone(),
             $this.xlora_order.as_ref(),
@@ -968,6 +968,8 @@ macro_rules! lora_model_loader {
         $multi_progress:expr,
         $matformer_config:expr,
         $uqff_reader:expr,
+        $runtime_config:expr,
+        $live_updates:expr,
     ) => {{
         let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
@@ -1003,31 +1005,10 @@ macro_rules! lora_model_loader {
         } else {
             vb
         };
+        let lora_layers = std::sync::Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let vb = vb.with_lora_registry(lora_layers.clone());
 
         let tracker = vb.tracker().clone();
-
-        for $crate::pipeline::LoraAdapterPaths {
-            adapter_path,
-            lora_config,
-        } in lora_adapter_paths
-        {
-            let lora_vb = from_mmaped_safetensors(
-                vec![adapter_path.clone()],
-                Vec::new(),
-                $dtype,
-                $device,
-                $layer_devices,
-                $silent,
-                None,
-                |_| true,
-                get_device_for_tensor.clone(),
-            )?;
-
-            mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
-                config: lora_config.clone(),
-                weights: lora_vb,
-            });
-        }
 
         let model = $loader.load(
             &$config,
@@ -1041,7 +1022,37 @@ macro_rules! lora_model_loader {
             },
             $attention_mechanism,
         )?;
+        lora_layers.finalize()?;
 
-        (model, tracker)
+        let dynamic_lora = std::sync::Arc::new($crate::DynamicLoraRuntime::new(
+            lora_layers,
+            $runtime_config,
+            $live_updates,
+        )?);
+        for $crate::pipeline::ResolvedLoraAdapter {
+            alias,
+            source,
+            revision,
+            config_path,
+            weights_path,
+        } in lora_adapter_paths
+        {
+            let info = dynamic_lora.load_from_safetensors(
+                alias.clone(),
+                source.clone(),
+                revision.clone(),
+                config_path,
+                weights_path,
+            )?;
+            tracing::info!(
+                alias = %info.alias,
+                generation = %info.generation,
+                rank = info.rank,
+                bytes = info.bytes,
+                "LoRA adapter preloaded"
+            );
+        }
+
+        (model, tracker, Some(dynamic_lora))
     }};
 }
