@@ -1,8 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_adapter_paths, get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
-    TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
@@ -364,7 +363,13 @@ impl Loader for NormalLoader {
             None,
             None,
             silent,
-            self.config.from_uqff.is_some()
+            self.config.from_uqff.is_some(),
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: self.xlora_model_id.as_ref(),
+                lora_adapters: self.lora_adapters.as_deref(),
+                xlora_order: self.xlora_order.as_ref(),
+                xlora_preload: crate::pipeline::XLoraPreload::Skip,
+            }
         );
         *self
             .token_source

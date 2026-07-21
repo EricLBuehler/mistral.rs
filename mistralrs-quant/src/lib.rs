@@ -110,7 +110,6 @@ pub use lora::{
     plan_dynamic_lora_weights, with_lora_execution, DynamicLoraLoadPlan, LoraAdapterWeights,
     LoraConfig, LoraExecution, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle,
     LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, StaticLoraConfig,
-    MULTI_LORA_DELIMITER,
 };
 pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};

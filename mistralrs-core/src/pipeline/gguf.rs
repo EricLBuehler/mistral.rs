@@ -1,8 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_adapter_paths, get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
-    TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -34,7 +33,7 @@ use crate::utils::tokenizer::get_tokenizer;
 use crate::xlora_models::NonGranularState;
 use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
-    LoraAdapterSpec, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
@@ -98,7 +97,6 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
-    lora_adapters: Option<Vec<LoraAdapterSpec>>,
 }
 
 #[derive(Clone, Default)]
@@ -212,7 +210,6 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
-            lora_adapters: None,
         })
     }
 }
@@ -255,7 +252,6 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
-            lora_adapters: None,
         }
     }
 }

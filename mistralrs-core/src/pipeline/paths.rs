@@ -53,14 +53,32 @@ pub enum AdapterPaths {
     None,
 }
 
-pub fn get_adapter_paths(
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum XLoraPreload {
+    Skip,
+    Load,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AdapterPathOptions<'a> {
+    pub(crate) xlora_model_id: Option<&'a String>,
+    pub(crate) lora_adapters: Option<&'a [LoraAdapterSpec]>,
+    pub(crate) xlora_order: Option<&'a Ordering>,
+    pub(crate) xlora_preload: XLoraPreload,
+}
+
+pub(crate) fn get_adapter_paths(
     base_model_id: String,
-    xlora_model_id: Option<&String>,
-    lora_adapters: Option<&Vec<LoraAdapterSpec>>,
+    options: AdapterPathOptions<'_>,
     token_source: &TokenSource,
     base_revision: String,
-    xlora_order: Option<&Ordering>,
 ) -> Result<AdapterPaths> {
+    let AdapterPathOptions {
+        xlora_model_id,
+        lora_adapters,
+        xlora_order,
+        xlora_preload,
+    } = options;
     match (lora_adapters, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
             let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
@@ -207,21 +225,21 @@ pub fn get_adapter_paths(
                 );
             }
 
-            let lora_preload_adapter_info =
-                // If preload adapters are specified, get their metadata like above
+            let lora_preload_adapter_info = if matches!(xlora_preload, XLoraPreload::Load) {
                 if let Some(preload_adapters) = &xlora_order.preload_adapters {
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
                         // Get the names and remote paths of the files associated with this adapter
-                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true, &base_revision)
-                            .filter_map(|f| {
-                                if f.contains(&adapter.name) {
-                                    Some((f, adapter.name.clone()))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                        let adapter_files =
+                            api_dir_list!(api, &adapter.adapter_model_id, true, &base_revision)
+                                .filter_map(|f| {
+                                    if f.contains(&adapter.name) {
+                                        Some((f, adapter.name.clone()))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>();
                         if adapter_files.is_empty() {
                             anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
                         }
@@ -231,8 +249,10 @@ pub fn get_adapter_paths(
                             if let Some(paths) = adapters_paths.get_mut(&name) {
                                 paths.push(api_get_file!(api, &file, model_id, &base_revision));
                             } else {
-                                adapters_paths
-                                    .insert(name, vec![api_get_file!(api, &file, model_id, &base_revision)]);
+                                adapters_paths.insert(
+                                    name,
+                                    vec![api_get_file!(api, &file, model_id, &base_revision)],
+                                );
                             }
                         }
 
@@ -259,7 +279,10 @@ pub fn get_adapter_paths(
                     Some(output)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             Ok(AdapterPaths::XLora {
                 adapter_configs: Some(adapters_configs),

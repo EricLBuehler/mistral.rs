@@ -9,6 +9,8 @@ LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without m
 
 X-LoRA is a separate execution path. It uses a learned scaling head to mix several adapters at each token rather than selecting one adapter for a request.
 
+Raw GGUF/GGML LoRA and X-LoRA remain supported through their existing execution paths. They do not use the dynamic LoRA runtime.
+
 | Mode | Configuration | Per-request behavior | Hot-swap |
 |---|---|---|---|
 | Dynamic LoRA | `--lora`, `Which.Lora`, `LoraModelBuilder` | Zero or one selected adapter | Yes |
@@ -312,13 +314,13 @@ The CLI benchmark uses streaming responses to report wall-clock TTFT and TPOT fo
 
 Full examples: [lora](/mistral.rs/examples/python/lora/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust), and [adapter-chat](/mistral.rs/examples/server/adapter-chat/) (HTTP).
 
-## Migrating from mistral.rs 0.8
+## Migrating from mistral.rs 0.9.0 and older
 
-Dynamic LoRA replaces the previous ordinary-LoRA API in 0.9. The old path loaded one or more adapters as one static stack; the new path assigns every adapter an alias and selects zero or one adapter for each request.
+Dynamic LoRA replaces the ordinary-LoRA API from mistral.rs 0.9.0 and older. The previous path loaded one or more adapters as one static stack; the current path assigns every adapter an alias and selects zero or one adapter for each request.
 
-| 0.8 | 0.9 |
+| mistral.rs 0.9.0 and older | Current API |
 |---|---|
-| `--lora repo-a;repo-b` | Repeat `--lora alias=repo` and select one alias with `--adapter`, the request `adapter` field, or an adapter model ID. |
+| `--lora "repo-a;repo-b"` | Repeat `--lora alias=repo` and select one alias with `--adapter`, the request `adapter` field, or an adapter model ID. |
 | TOML `lora = "repo"` | Use the structured `adapter.lora` list shown in the [TOML reference](/mistral.rs/reference/cli-toml-config/). |
 | Python `Which.Lora(adapter_model_ids, model_id=...)` | `Which.Lora(model_id, adapters=[LoraAdapter(alias=..., source=...)])`. |
 | Rust `LoraModelBuilder::from_text_model_builder(builder, adapter_ids)` | Start with `LoraModelBuilder::from_text_model_builder(builder)`, then call `with_adapter` or `with_adapter_revision`. |

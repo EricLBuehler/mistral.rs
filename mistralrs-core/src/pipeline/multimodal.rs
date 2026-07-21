@@ -3,12 +3,12 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_adapter_paths, get_model_paths, AnyMoePipelineMixin, AutoMultimodalLoader, CacheManager,
-    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
-    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
-    MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer, Phi4MMLoader,
-    PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
-    Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    get_model_paths, AnyMoePipelineMixin, AutoMultimodalLoader, CacheManager, CacheManagerMixin,
+    EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata, IsqPipelineMixin, Loader,
+    MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, MultimodalModel,
+    MultimodalModelLoader, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource,
+    VLlama4Loader, VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
@@ -58,8 +58,8 @@ use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
     api_dir_list, api_get_file, get_paths, get_uqff_paths, multimodal_normal_model_loader,
-    multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, LoraAdapterSpec,
-    Ordering, PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
@@ -107,14 +107,11 @@ pub struct MultimodalLoader {
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
-    xlora_model_id: Option<String>,
-    xlora_order: Option<Ordering>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapters: Option<Vec<LoraAdapterSpec>>,
 }
 
 #[derive(Default)]
@@ -201,14 +198,11 @@ impl MultimodalLoaderBuilder {
             kind: self.kind,
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
-            xlora_model_id: None,
-            xlora_order: None,
             jinja_explicit: self.jinja_explicit,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapters: None,
         })
     }
 }
@@ -242,7 +236,13 @@ impl Loader for MultimodalLoader {
             None,
             None,
             silent,
-            self.config.from_uqff.is_some()
+            self.config.from_uqff.is_some(),
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: None,
+                lora_adapters: None,
+                xlora_order: None,
+                xlora_preload: crate::pipeline::XLoraPreload::Skip,
+            }
         );
         *self
             .token_source

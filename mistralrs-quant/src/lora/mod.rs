@@ -16,8 +16,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 pub use static_lora::linear_no_bias_static_lora;
 
-pub const MULTI_LORA_DELIMITER: &str = ";";
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StaticLoraConfig {
     pub layer: String,
@@ -36,8 +34,6 @@ pub enum LoraTargetModules {
 pub struct LoraConfig {
     #[serde(default)]
     pub peft_type: Option<String>,
-    #[serde(default)]
-    pub base_model_name_or_path: Option<String>,
     #[serde(rename = "r")]
     pub rank: usize,
     #[serde(rename = "lora_alpha")]
@@ -66,8 +62,6 @@ pub struct LoraConfig {
     pub alora_invocation_tokens: Option<Vec<u32>>,
     #[serde(default)]
     pub use_qalora: bool,
-    #[serde(default = "default_qalora_group_size")]
-    pub qalora_group_size: usize,
     #[serde(default)]
     pub layer_replication: Option<Vec<[usize; 2]>>,
     #[serde(default)]
@@ -92,10 +86,6 @@ fn default_lora_bias_mode() -> String {
 
 fn default_init_lora_weights() -> serde_json::Value {
     serde_json::Value::Bool(true)
-}
-
-fn default_qalora_group_size() -> usize {
-    16
 }
 
 fn target_regex(pattern: &str) -> std::result::Result<Regex, regex::Error> {
@@ -315,6 +305,7 @@ mod tests {
     fn config_accepts_single_target_and_rs_lora_patterns() -> Result<()> {
         let config: LoraConfig = serde_json::from_str(
             r#"{
+                "base_model_name_or_path": "org/base",
                 "r": 8,
                 "lora_alpha": 16,
                 "target_modules": "q_proj",

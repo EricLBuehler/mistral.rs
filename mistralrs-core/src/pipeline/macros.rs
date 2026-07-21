@@ -31,7 +31,8 @@ macro_rules! get_paths {
         $quantized_model_id:expr,
         $quantized_filename:expr,
         $silent:expr,
-        $loading_uqff:expr
+        $loading_uqff:expr,
+        $adapter_options:expr
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
@@ -77,13 +78,11 @@ macro_rules! get_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_adapter_paths(
+        let adapter_paths = $crate::pipeline::get_adapter_paths(
             $this.model_id.clone(),
-            $this.xlora_model_id.as_ref(),
-            $this.lora_adapters.as_ref(),
+            $adapter_options,
             &$token_source,
             revision.clone(),
-            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
@@ -232,14 +231,7 @@ macro_rules! get_embedding_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_adapter_paths(
-            $this.model_id.clone(),
-            None, // no xlora
-            $this.lora_adapters.as_ref(),
-            &$token_source,
-            revision.clone(),
-            None, // no xlora
-        )?;
+        let adapter_paths = $crate::pipeline::AdapterPaths::None;
 
         let mut parsed_modules = Vec::new();
         let is_local = std::path::Path::new(&$this.model_id).exists();
@@ -472,13 +464,16 @@ macro_rules! get_paths_gguf {
         )?;
 
         tracing::debug!("GGUF file(s) {:?}", filenames);
-        let adapter_paths = get_adapter_paths(
+        let adapter_paths = $crate::pipeline::get_adapter_paths(
             this_model_id.clone(),
-            $this.xlora_model_id.as_ref(),
-            $this.lora_adapters.as_ref(),
+            $crate::pipeline::AdapterPathOptions {
+                xlora_model_id: $this.xlora_model_id.as_ref(),
+                lora_adapters: None,
+                xlora_order: $this.xlora_order.as_ref(),
+                xlora_preload: $crate::pipeline::XLoraPreload::Load,
+            },
             &$token_source,
             revision.clone(),
-            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
@@ -883,14 +878,13 @@ macro_rules! xlora_model_loader {
         $matformer_config:expr,
         $uqff_reader:expr,
     ) => {{
-        // TODO: remove lora_preload_adapter_info
         let $crate::pipeline::AdapterPaths::XLora {
             adapter_configs,
             adapter_safetensors,
             classifier_path,
             xlora_order,
             xlora_config,
-            lora_preload_adapter_info: _,
+            ..
         } = $paths.get_adapter_paths()
         else {
             unreachable!()
