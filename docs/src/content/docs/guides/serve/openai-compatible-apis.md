@@ -66,7 +66,7 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `POST /v1/files` | Upload OpenAI-compatible user files. |
 | `GET /v1/files` | List uploaded and generated files. |
 | `POST /v1/load_lora_adapter` | Load a local LoRA adapter, or atomically replace one with `load_inplace`. Available only when runtime updating is enabled. |
-| `GET /v1/lora_adapters` | List loaded LoRA aliases, generations, and capacity. Always available; use `?model=<model-id>` in a multi-model server. |
+| `GET /v1/lora_adapters` | List loaded LoRA aliases, generations, and capacity. The route is always registered, but the target model must have dynamic LoRA enabled. Use `?model=<model-id>` in a multi-model server. |
 | `POST /v1/unload_lora_adapter` | Unload a LoRA alias. Available only when runtime updating is enabled. |
 
 Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).

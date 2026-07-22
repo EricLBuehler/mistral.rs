@@ -23,10 +23,10 @@ The request `model` field selects among loaded models. `"default"` (or omitting 
 
 Chat Completions, Completions, and Responses requests can select dynamic LoRA with the top-level `adapter` field. A string selects a loaded alias; `{"generation":"<generation-id>"}` selects one exact generation. Replacing or unloading an alias does not change an in-flight request.
 
-The read-only status endpoint is always available. `mistralrs serve` enables mutation endpoints only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is set. Embedded servers can instead configure `LoraAdapterApiConfig` on `MistralRsServerRouterBuilder`:
+The read-only status route is always registered, even when mutation is disabled. It returns status only when the target model has a dynamic LoRA runtime; for `mistralrs serve`, enable one with `--enable-lora` or a preload. Otherwise it returns 409 with `lora_runtime_unavailable`. `mistralrs serve` enables mutation endpoints only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is `1`, `true`, `yes`, or `on`. Embedded servers can instead configure `LoraAdapterApiConfig` on `MistralRsServerRouterBuilder`:
 
 - `POST /v1/load_lora_adapter` loads an alias from a local adapter directory; replacing one requires `load_inplace: true` and may use `expected_generation` for compare-and-set safety.
-- `GET /v1/lora_adapters` is always available and lists aliases, generation IDs, capacity, and configured limits. Sources are redacted unless mutation is enabled.
+- `GET /v1/lora_adapters` lists aliases, generation IDs, capacity, and configured limits for a dynamic LoRA model. Sources are redacted unless mutation is enabled.
 - `POST /v1/unload_lora_adapter` removes an alias without interrupting in-flight requests; `expected_generation` prevents stale removal.
 
 Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its ancestors, and every selected adapter directory writable only by the service operator. Publish adapters at new immutable directory paths instead of replacing an existing selected path. Loads are serialized; concurrent attempts return 429. An admitted load continues if its client disconnects, so verify the generation through the list endpoint after a timeout. These routes have no built-in authentication and should not be exposed without an authenticated reverse proxy. Request schemas and response objects are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/); stable error-code recovery, setup, and support boundaries are in the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/).
@@ -74,11 +74,12 @@ Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_p
 
 ## Chat response extensions
 
-Non-streaming chat responses carry three mistral.rs fields beyond the OpenAI shape (omitted when empty):
+Non-streaming chat responses carry four mistral.rs fields beyond the OpenAI shape (omitted when empty):
 
 - `session_id` (string): reuse in later requests to keep agentic state across messages.
 - `agentic_tool_calls` (array): ordered record of tool calls made during the agentic loop. Each entry has `round`, opaque `name`, `arguments`, `result_content`, plus `result_images_base64` and `file_ids` when present.
 - `files` (array of `File` objects): see [file wire schemas](#file-wire-schemas-and-semantics).
+- `adapter_generation` (string): exact immutable LoRA generation used for the response; omitted for base-model requests.
 
 The `usage` object is a superset of OpenAI's, adding timing fields such as `avg_tok_per_sec`, `avg_prompt_tok_per_sec`, `avg_compl_tok_per_sec`, and total prompt/completion times.
 

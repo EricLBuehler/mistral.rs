@@ -96,7 +96,7 @@ pub struct AdapterOptions {
     #[serde(default)]
     pub lora: Vec<LoraAdapterSpec>,
 
-    /// Maximum number of loaded adapter versions
+    /// Maximum loaded LoRA aliases and, independently, resident adapter generations
     #[arg(
         long,
         default_value_t = DEFAULT_LORA_MAX_ADAPTERS,

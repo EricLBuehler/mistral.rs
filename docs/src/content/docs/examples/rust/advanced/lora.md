@@ -9,12 +9,28 @@ sidebar:
 
 Load and run a model with a LoRA adapter.
 
-Run with: `cargo run --release --example lora -p mistralrs`
+> This example targets the current source API. The crates.io release does not
+> include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
+> until the next release.
+
+Run with:
+
+~~~bash
+cargo run --release --example lora -p mistralrs
+~~~
 
 ```rust
 //! Load and run a model with a LoRA adapter.
 //!
-//! Run with: `cargo run --release --example lora -p mistralrs`
+//! > This example targets the current source API. The crates.io release does not
+//! > include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
+//! > until the next release.
+//!
+//! Run with:
+//!
+//! ~~~bash
+//! cargo run --release --example lora -p mistralrs
+//! ~~~
 
 use anyhow::Result;
 use mistralrs::{

@@ -41,7 +41,7 @@ Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
 | CUDA 12.8+ | `cuda128-sm{cc}` |
 
-cuTile is available only on the supported CUDA lanes listed below. Install `tileiras` as described
+cuTile is available only on the supported CUDA lanes listed above. Install `tileiras` as described
 in [cuTile setup](/mistral.rs/developer/moe-backends/).
 
 CUDA compute capability variants (SM80+):

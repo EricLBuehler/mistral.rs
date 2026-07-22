@@ -1,29 +1,38 @@
 """Run the complete dynamic LoRA lifecycle on a small public model.
 
-The example downloads pinned adapter files, loads them into an initially empty
-runtime, routes base, alias, and exact-generation requests, performs a
-CAS-protected reload, and unloads the alias.
+> This example targets the current source API. Published v0.9.0 packages do not
+> include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
+> until the next release.
+
+Run with:
+
+~~~bash
+python examples/python/lora.py
+~~~
+
+The example downloads two pinned adapters, loads one into an initially empty
+runtime, routes base, alias, and exact-generation requests, replaces the alias,
+checks stale-CAS rejection, and unloads it.
 """
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.request import urlretrieve
 
-from mistralrs import ChatCompletionRequest, Runner, Which
+from mistralrs import ChatCompletionRequest, LoraAdapterError, Runner, Which
 
 
 BASE_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 ADAPTER_REPO = "closestfriend/brie-qwen2.5-0.5b"
 ADAPTER_REVISION = "acad7d767bece1486f2e6644820f784b3bcb6b5e"
+REPLACEMENT_REPO = "axel-datos/qwen2.5-0.5b-instruct_MATH_qlora"
+REPLACEMENT_REVISION = "0fd79bf6bfcc41446ccbb38e3304ea079af034ab"
 ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors")
 
 
-def download_adapter(directory: Path) -> None:
+def download_adapter(repo: str, revision: str, directory: Path) -> None:
     for filename in ADAPTER_FILES:
-        url = (
-            f"https://huggingface.co/{ADAPTER_REPO}/resolve/"
-            f"{ADAPTER_REVISION}/{filename}"
-        )
+        url = f"https://huggingface.co/{repo}/resolve/{revision}/{filename}"
         urlretrieve(url, directory / filename)
 
 
@@ -34,8 +43,8 @@ def generate(runner: Runner, label: str, adapter=None):
                 {
                     "role": "user",
                     "content": (
-                        "Explain Heidegger's idea of being-in-the-world using "
-                        "one concrete everyday example."
+                        "Explain why checking intermediate steps is useful "
+                        "when solving a difficult problem."
                     ),
                 }
             ],
@@ -53,10 +62,14 @@ def generate(runner: Runner, label: str, adapter=None):
 runner = Runner(which=Which.Lora(model_id=BASE_MODEL))
 
 with TemporaryDirectory(prefix="mistralrs-lora-") as directory:
-    adapter_dir = Path(directory)
-    download_adapter(adapter_dir)
+    adapter_dir = Path(directory) / "initial"
+    replacement_dir = Path(directory) / "replacement"
+    adapter_dir.mkdir()
+    replacement_dir.mkdir()
+    download_adapter(ADAPTER_REPO, ADAPTER_REVISION, adapter_dir)
+    download_adapter(REPLACEMENT_REPO, REPLACEMENT_REVISION, replacement_dir)
 
-    loaded = runner.load_lora_adapter("philosophy", adapter_dir)
+    loaded = runner.load_lora_adapter("production", adapter_dir)
     status = runner.lora_adapter_status()
     assert len(status.adapters) == 1
     assert status.adapters[0].generation == loaded.generation
@@ -72,11 +85,25 @@ with TemporaryDirectory(prefix="mistralrs-lora-") as directory:
 
     replaced = runner.load_lora_adapter(
         loaded.alias,
-        adapter_dir,
+        replacement_dir,
         load_inplace=True,
         expected_generation=loaded.generation,
     )
-    assert replaced.generation == loaded.generation
+    assert replaced.generation != loaded.generation
+    replacement = generate(runner, "replacement", replaced.alias)
+    assert replacement.adapter_generation == replaced.generation
+
+    try:
+        runner.load_lora_adapter(
+            loaded.alias,
+            adapter_dir,
+            load_inplace=True,
+            expected_generation=loaded.generation,
+        )
+    except LoraAdapterError as error:
+        assert error.code == "lora_generation_mismatch"
+    else:
+        raise AssertionError("stale generation unexpectedly replaced the adapter")
 
     unloaded = runner.unload_lora_adapter(
         loaded.alias,

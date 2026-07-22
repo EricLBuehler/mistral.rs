@@ -24,7 +24,7 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `presence_penalty`, `frequency_penalty`
 - `n` (multiple completions)
 
-Loaded dynamic LoRA aliases are exposed as stable `<base-model>::<alias>` model cards by `GET /v1/models` and may be sent as `model`. A unique short alias is also accepted for vLLM-style routing. The card's `parent` identifies the base model, `root` uses the public adapter alias rather than a local filesystem path, and `adapter_generation` identifies the current immutable generation. The explicit `adapter` extension below is available when callers need separate base-model routing or an exact generation.
+Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v1/models` and may be sent as `model`. Use the exact returned ID rather than constructing one; reserved characters are escaped and collisions receive a suffix. A unique short alias is also accepted for vLLM-style routing. The card's `parent` identifies the base model, `root` uses the public adapter alias rather than a local filesystem path, and `adapter_generation` identifies the current immutable generation. The explicit `adapter` extension below is available when callers need separate base-model routing or an exact generation.
 
 ### Implemented with deviation
 
@@ -61,7 +61,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
 - `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
 
-`GET /v1/lora_adapters` is always available and returns detailed alias, generation, and capacity state. Adapter source is redacted unless runtime mutation is enabled. `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; read-only discovery does not.
+`GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state for models started with dynamic LoRA. A model without that runtime returns 409 with `lora_runtime_unavailable`. Adapter source is redacted unless runtime mutation is enabled. With `mistralrs serve`, `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; embedded servers configure mutation through `LoraAdapterApiConfig`. Read-only discovery does not require mutation access.
 
 Chat Completions and Completions responses expose the exact resolved generation as `adapter_generation`, including streaming chunks. Completed Responses resources expose the same field. The field is omitted for base-model requests.
 

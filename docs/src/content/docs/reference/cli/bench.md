@@ -25,7 +25,7 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
@@ -86,7 +86,7 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
@@ -136,7 +136,7 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
