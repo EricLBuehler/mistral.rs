@@ -379,6 +379,7 @@ mod tests {
             key: "m.lin".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(Shard::Simple {
                 dim: 0,
                 rank: 1,
@@ -444,6 +445,7 @@ mod tests {
             key: "m.lin".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(Shard::default()),
         };
 
@@ -500,6 +502,7 @@ mod tests {
             key: "m.experts.gate_proj".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(mistralrs_quant::Shard::default()),
         };
 

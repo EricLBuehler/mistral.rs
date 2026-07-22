@@ -41,6 +41,10 @@ CPU, CUDA, and Metal. This policy applies to token embeddings, quantized per-lay
 keeping PLE projections at the model default and norms dense. Gemma 3n PLE remains dense because its
 MatFormer slicing path reshapes the embedding table directly.
 
+Each supported model loader declares the exact language embedding and output-head paths that receive
+this policy. A similarly named tensor in a vision, audio, or auxiliary subtree is not promoted merely
+because its name ends in `embed_tokens`, `word_embeddings`, or `lm_head`.
+
 A tied output head reuses the effective embedding instead of storing a second copy. An explicit
 per-tensor ISQ type in a [topology](/mistral.rs/guides/perf/topology/) takes precedence over these
 defaults.

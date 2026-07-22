@@ -159,9 +159,41 @@ pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
     pub executor: IsqExecutor,
     pub capture: IsqCaptureMode,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqConfig {
+    pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
+    pub overrides: Vec<ImmediateIsqOverride>,
+    pub capture: IsqCaptureMode,
+}
+
+impl ImmediateIsqConfig {
+    pub fn new(ty: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) -> Self {
+        Self {
+            ty,
+            predicates,
+            promoted_predicates: Vec::new(),
+            overrides: Vec::new(),
+            capture,
+        }
+    }
+
+    pub fn with_promoted_predicates(mut self, promoted_predicates: Vec<Regex>) -> Self {
+        self.promoted_predicates = promoted_predicates;
+        self
+    }
+
+    pub fn with_overrides(mut self, overrides: Vec<ImmediateIsqOverride>) -> Self {
+        self.overrides = overrides;
+        self
+    }
 }
 
 /// Whether load-time ISQ quantizes layers or captures them unquantized for later quantization.
@@ -214,6 +246,7 @@ pub fn layer_index_from_prefix(prefix: &str) -> Option<usize> {
 pub struct ImmediateIsqMatch {
     pub ty: Option<IsqType>,
     pub device: Option<Device>,
+    pub promote_default: bool,
 }
 
 thread_local! {
@@ -232,14 +265,22 @@ pub fn set_immediate_isq_with_executor(
     capture: IsqCaptureMode,
     executor: IsqExecutor,
 ) {
+    set_immediate_isq_config(
+        ImmediateIsqConfig::new(isq, predicates, capture).with_overrides(overrides),
+        executor,
+    );
+}
+
+pub fn set_immediate_isq_config(config: ImmediateIsqConfig, executor: IsqExecutor) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
-            ty: isq,
-            predicates,
-            overrides,
+            ty: config.ty,
+            predicates: config.predicates,
+            promoted_predicates: config.promoted_predicates,
+            overrides: config.overrides,
             executor,
-            capture,
+            capture: config.capture,
         });
     });
 }
@@ -304,7 +345,17 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
-    let default_ty = params.ty.map(|ty| ty.resolve_for_tensor(prefix));
+    let promote_default = params
+        .promoted_predicates
+        .iter()
+        .any(|predicate| predicate.is_match(prefix));
+    let default_ty = params.ty.map(|ty| {
+        if promote_default {
+            ty.promote_for_sensitive_tensor()
+        } else {
+            ty
+        }
+    });
     if params.capture == IsqCaptureMode::CaptureAll {
         // Capture everything; topology overrides still pin per-layer ty/device.
         if let Some(override_hit) = params
@@ -315,11 +366,13 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             return Some(ImmediateIsqMatch {
                 ty: override_hit.ty.or(default_ty),
                 device: override_hit.device.clone(),
+                promote_default,
             });
         }
         return Some(ImmediateIsqMatch {
             ty: None,
             device: None,
+            promote_default,
         });
     }
 
@@ -334,6 +387,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             return Some(ImmediateIsqMatch {
                 ty,
                 device: override_hit.device.clone(),
+                promote_default,
             });
         }
         return None;
@@ -348,6 +402,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             return Some(ImmediateIsqMatch {
                 ty: Some(ty),
                 device: None,
+                promote_default,
             });
         }
     }
@@ -799,29 +854,6 @@ impl IsqType {
             | Self::Q8_0
             | Self::Q8_1 => Self::Q8_0,
             ty => ty,
-        }
-    }
-
-    pub fn resolve_for_tensor(self, tensor_name: &str) -> Self {
-        let module_name = tensor_name
-            .strip_suffix(".weight")
-            .or_else(|| tensor_name.strip_suffix(".bias"))
-            .unwrap_or(tensor_name);
-        let final_segment = module_name.rsplit('.').next().unwrap_or(module_name);
-        let is_sensitive = matches!(
-            final_segment,
-            "embed_tokens"
-                | "embed_tokens_per_layer"
-                | "tok_embeddings"
-                | "wte"
-                | "word_embeddings"
-                | "lm_head"
-        ) || module_name == "output";
-
-        if is_sensitive {
-            self.promote_for_sensitive_tensor()
-        } else {
-            self
         }
     }
 
@@ -2049,6 +2081,9 @@ mod tests {
             guard: QuantizeOntoGuard::new(),
             ty,
             predicates: vec![Regex::new(r"\.weight$").unwrap()],
+            promoted_predicates: vec![
+                Regex::new(r"^model\.embed_tokens\.(?:weight|bias)$").unwrap()
+            ],
             overrides,
             executor,
             capture: IsqCaptureMode::Immediate,
@@ -2087,38 +2122,15 @@ mod tests {
     }
 
     #[test]
-    fn sensitive_tensor_matcher_is_narrow() {
-        let sensitive = [
-            "model.embed_tokens.weight",
-            "model.embed_tokens_per_layer.weight",
-            "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
-            "transformer.wte.weight",
-            "bert.embeddings.word_embeddings.weight",
-            "lm_head.weight",
-            "language_model.lm_head.bias",
-            "output.weight",
-        ];
-        for name in sensitive {
-            assert_eq!(
-                IsqType::AFQ4.resolve_for_tensor(name),
-                IsqType::AFQ6,
-                "{name}"
-            );
-        }
+    fn immediate_isq_promotion_requires_an_explicit_predicate() {
+        let params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, Some(IsqType::AFQ6));
+        assert!(promoted.promote_default);
 
-        let regular = [
-            "vision.position_embedding.weight",
-            "layers.0.self_attn.output.weight",
-            "output.proj.weight",
-            "layers.0.mlp.down_proj.weight",
-        ];
-        for name in regular {
-            assert_eq!(
-                IsqType::AFQ4.resolve_for_tensor(name),
-                IsqType::AFQ4,
-                "{name}"
-            );
-        }
+        let lookalike = resolve_immediate_isq(&params, "vision.embed_tokens.weight").unwrap();
+        assert_eq!(lookalike.ty, Some(IsqType::AFQ4));
+        assert!(!lookalike.promote_default);
     }
 
     #[test]
@@ -2135,6 +2147,7 @@ mod tests {
 
         let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
         assert_eq!(matched.ty, Some(IsqType::AFQ2));
+        assert!(matched.promote_default);
     }
 
     #[test]
@@ -2167,6 +2180,21 @@ mod tests {
 
         let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
         assert_eq!(matched.ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn capture_all_records_promotion_without_pinning_a_type() {
+        let mut params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        params.capture = IsqCaptureMode::CaptureAll;
+
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, None);
+        assert!(promoted.promote_default);
+
+        let regular =
+            resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+        assert_eq!(regular.ty, None);
+        assert!(!regular.promote_default);
     }
 
     #[test]

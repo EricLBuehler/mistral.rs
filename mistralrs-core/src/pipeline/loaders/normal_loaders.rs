@@ -401,6 +401,10 @@ impl NormalModelLoader for AutoNormalLoader {
 }
 
 impl IsqModelLoader for AutoNormalLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.promoted_isq_predicates(config)
+    }
+
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.immediate_isq_predicates(config)
     }
@@ -521,6 +525,13 @@ impl NormalModelLoader for MistralLoader {
 }
 
 impl IsqModelLoader for MistralLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -727,6 +738,13 @@ impl NormalModelLoader for GemmaLoader {
 }
 
 impl IsqModelLoader for GemmaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -787,7 +805,7 @@ impl DeviceMappedModelLoader for GemmaLoader {
         let cfg: crate::models::gemma::Config = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens_pack_factor = super::tied_quantized_tensor_pack_factor(
+            let embed_tokens_pack_factor = super::tied_promoted_tensor_pack_factor(
                 _quantization,
                 "model.embed_tokens.weight",
                 "lm_head.weight",
@@ -931,6 +949,13 @@ impl NormalModelLoader for LlamaLoader {
 }
 
 impl IsqModelLoader for LlamaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1135,6 +1160,13 @@ impl NormalModelLoader for MixtralLoader {
 }
 
 impl IsqModelLoader for MixtralLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1347,6 +1379,13 @@ impl NormalModelLoader for Phi2Loader {
 }
 
 impl IsqModelLoader for Phi2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1549,6 +1588,13 @@ impl NormalModelLoader for Phi3Loader {
 }
 
 impl IsqModelLoader for Phi3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1740,6 +1786,13 @@ impl NormalModelLoader for Qwen2Loader {
 }
 
 impl IsqModelLoader for Qwen2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1952,6 +2005,13 @@ impl NormalModelLoader for Gemma2Loader {
 }
 
 impl IsqModelLoader for Gemma2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2012,7 +2072,7 @@ impl DeviceMappedModelLoader for Gemma2Loader {
         let cfg: crate::models::gemma2::Config = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens_pack_factor = super::tied_quantized_tensor_pack_factor(
+            let embed_tokens_pack_factor = super::tied_promoted_tensor_pack_factor(
                 _quantization,
                 "model.embed_tokens.weight",
                 "lm_head.weight",
@@ -2157,6 +2217,13 @@ impl NormalModelLoader for Starcoder2Loader {
 }
 
 impl IsqModelLoader for Starcoder2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2216,7 +2283,7 @@ impl DeviceMappedModelLoader for Starcoder2Loader {
         let cfg: crate::models::starcoder2::Config = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens_pack_factor = super::tied_quantized_tensor_pack_factor(
+            let embed_tokens_pack_factor = super::tied_promoted_tensor_pack_factor(
                 _quantization,
                 "model.embed_tokens.weight",
                 "lm_head.weight",
@@ -2356,6 +2423,13 @@ impl NormalModelLoader for Phi3_5MoELoader {
 }
 
 impl IsqModelLoader for Phi3_5MoELoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2570,6 +2644,13 @@ impl NormalModelLoader for DeepSeekV2Loader {
 }
 
 impl IsqModelLoader for DeepSeekV2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2907,6 +2988,13 @@ impl NormalModelLoader for DeepSeekV3Loader {
 }
 
 impl IsqModelLoader for DeepSeekV3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3246,6 +3334,13 @@ impl NormalModelLoader for Qwen3Loader {
 }
 
 impl IsqModelLoader for Qwen3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3443,6 +3538,13 @@ impl NormalModelLoader for HunYuanDenseV1Loader {
 }
 
 impl IsqModelLoader for HunYuanDenseV1Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3639,6 +3741,13 @@ impl NormalModelLoader for HunYuanMoEV1Loader {
 }
 
 impl IsqModelLoader for HunYuanMoEV1Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3864,6 +3973,13 @@ impl NormalModelLoader for GLM4Loader {
 }
 
 impl IsqModelLoader for GLM4Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4054,6 +4170,13 @@ impl NormalModelLoader for GLM4MoeLiteLoader {
 }
 
 impl IsqModelLoader for GLM4MoeLiteLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4388,6 +4511,13 @@ impl NormalModelLoader for GLM4MoeLoader {
 }
 
 impl IsqModelLoader for GLM4MoeLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let mut data = vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4722,6 +4852,13 @@ impl NormalModelLoader for Qwen3MoELoader {
 }
 
 impl IsqModelLoader for Qwen3MoELoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4944,6 +5081,13 @@ impl NormalModelLoader for SmolLm3Loader {
 }
 
 impl IsqModelLoader for SmolLm3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5142,6 +5286,13 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
 }
 
 impl IsqModelLoader for GraniteMoeHybridLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5335,6 +5486,13 @@ impl NormalModelLoader for GptOssLoader {
 }
 
 impl IsqModelLoader for GptOssLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // Only attention layers are ISQ-able - MoE experts are already MXFP4 quantized
         Ok(vec![
@@ -5556,6 +5714,13 @@ impl NormalModelLoader for Qwen3NextLoader {
 }
 
 impl IsqModelLoader for Qwen3NextLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5783,6 +5948,13 @@ impl NormalModelLoader for Lfm2Loader {
 }
 
 impl IsqModelLoader for Lfm2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5954,5 +6126,94 @@ impl DeviceMappedModelLoader for Lfm2Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PROMOTED_TENSORS: [&str; 3] = [
+        "model.embed_tokens.weight",
+        "lm_head.weight",
+        "lm_head.bias",
+    ];
+    const NON_PROMOTED_TENSORS: [&str; 10] = [
+        "embed_tokens.weight",
+        "prefix.model.embed_tokens.weight",
+        "model.embed_tokens.bias",
+        "model.embed_tokens.extra.weight",
+        "model.embed_tokens.weight.extra",
+        "model.layers.0.model.embed_tokens.weight",
+        "model.lm_head.weight",
+        "lm_head",
+        "lm_head.weight.extra",
+        "model.layers.0.lm_head.weight",
+    ];
+
+    fn assert_promoted_isq_predicates(
+        loader_name: &str,
+        loader: &dyn IsqModelLoader,
+        config: &str,
+    ) {
+        let predicates = loader.promoted_isq_predicates(config).unwrap();
+
+        for tensor in PROMOTED_TENSORS {
+            assert!(
+                predicates
+                    .iter()
+                    .any(|predicate| predicate.is_match(tensor)),
+                "{loader_name} did not promote {tensor}"
+            );
+        }
+        for tensor in NON_PROMOTED_TENSORS {
+            assert!(
+                predicates
+                    .iter()
+                    .all(|predicate| !predicate.is_match(tensor)),
+                "{loader_name} promoted lookalike tensor {tensor}"
+            );
+        }
+    }
+
+    #[test]
+    fn concrete_normal_loaders_scope_promoted_isq_tensors() {
+        let loaders: [(&str, &dyn IsqModelLoader); 24] = [
+            ("MistralLoader", &MistralLoader),
+            ("GemmaLoader", &GemmaLoader),
+            ("LlamaLoader", &LlamaLoader),
+            ("MixtralLoader", &MixtralLoader),
+            ("Phi2Loader", &Phi2Loader),
+            ("Phi3Loader", &Phi3Loader),
+            ("Qwen2Loader", &Qwen2Loader),
+            ("Gemma2Loader", &Gemma2Loader),
+            ("Starcoder2Loader", &Starcoder2Loader),
+            ("Phi3_5MoELoader", &Phi3_5MoELoader),
+            ("DeepSeekV2Loader", &DeepSeekV2Loader),
+            ("DeepSeekV3Loader", &DeepSeekV3Loader),
+            ("Qwen3Loader", &Qwen3Loader),
+            ("HunYuanDenseV1Loader", &HunYuanDenseV1Loader),
+            ("HunYuanMoEV1Loader", &HunYuanMoEV1Loader),
+            ("GLM4Loader", &GLM4Loader),
+            ("GLM4MoeLiteLoader", &GLM4MoeLiteLoader),
+            ("GLM4MoeLoader", &GLM4MoeLoader),
+            ("Qwen3MoELoader", &Qwen3MoELoader),
+            ("SmolLm3Loader", &SmolLm3Loader),
+            ("GraniteMoeHybridLoader", &GraniteMoeHybridLoader),
+            ("GptOssLoader", &GptOssLoader),
+            ("Qwen3NextLoader", &Qwen3NextLoader),
+            ("Lfm2Loader", &Lfm2Loader),
+        ];
+
+        for (loader_name, loader) in loaders {
+            assert_promoted_isq_predicates(loader_name, loader, "");
+        }
+    }
+
+    #[test]
+    fn auto_normal_loader_delegates_promoted_isq_predicates() {
+        let config = r#"{"architectures":["LlamaForCausalLM"]}"#;
+
+        assert_promoted_isq_predicates("AutoNormalLoader", &AutoNormalLoader, config);
     }
 }

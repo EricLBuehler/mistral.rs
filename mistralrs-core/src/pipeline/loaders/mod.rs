@@ -424,15 +424,31 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         }
     }
 
-    pub fn pack_factor_for(&self, name: &str, dtype: DType, fallback: usize) -> Result<usize> {
-        self.pack_factor_for_candidates(&[name], dtype, fallback)
+    #[cfg(test)]
+    fn unpromoted_pack_factor_for(
+        &self,
+        name: &str,
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        self.pack_factor_for_candidates(&[name], dtype, fallback, false)
     }
 
-    pub fn pack_factor_for_candidates(
+    pub fn promoted_pack_factor_for(
+        &self,
+        name: &str,
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        self.pack_factor_for_candidates(&[name], dtype, fallback, true)
+    }
+
+    fn pack_factor_for_candidates(
         &self,
         names: &[&str],
         dtype: DType,
         fallback: usize,
+        promote_default: bool,
     ) -> Result<usize> {
         match self.source {
             AutoDeviceMapQuantizationSource::Uqff(reader) => {
@@ -444,7 +460,6 @@ impl<'a> AutoDeviceMapQuantization<'a> {
                 Ok(1)
             }
             AutoDeviceMapQuantizationSource::Isq(default) => {
-                let name = names.first().copied().unwrap_or_default();
                 let ty = names
                     .iter()
                     .find_map(|name| {
@@ -452,25 +467,33 @@ impl<'a> AutoDeviceMapQuantization<'a> {
                             .and_then(|topology| topology.match_for_name(name))
                             .and_then(|topology| topology.isq)
                     })
-                    .or_else(|| default.map(|ty| ty.resolve_for_tensor(name)));
+                    .or_else(|| {
+                        default.map(|ty| {
+                            if promote_default {
+                                ty.promote_for_sensitive_tensor()
+                            } else {
+                                ty
+                            }
+                        })
+                    });
                 Ok(ty.map(|ty| ty.pack_factor(dtype)).unwrap_or(fallback))
             }
         }
     }
 }
 
-fn quantized_tensor_pack_factor(
+fn promoted_tensor_pack_factor(
     quantization: Option<&AutoDeviceMapQuantization<'_>>,
     name: &str,
     dtype: DType,
     fallback: usize,
 ) -> Result<usize> {
     quantization.map_or(Ok(fallback), |quantization| {
-        quantization.pack_factor_for(name, dtype, fallback)
+        quantization.promoted_pack_factor_for(name, dtype, fallback)
     })
 }
 
-fn tied_quantized_tensor_pack_factor(
+fn tied_promoted_tensor_pack_factor(
     quantization: Option<&AutoDeviceMapQuantization<'_>>,
     embedding_name: &str,
     legacy_head_name: &str,
@@ -482,9 +505,10 @@ fn tied_quantized_tensor_pack_factor(
             &[embedding_name, legacy_head_name],
             dtype,
             fallback,
+            true,
         ),
         AutoDeviceMapQuantizationSource::Isq(_) => {
-            quantization.pack_factor_for(embedding_name, dtype, fallback)
+            quantization.promoted_pack_factor_for(embedding_name, dtype, fallback)
         }
     })
 }
@@ -498,11 +522,11 @@ fn language_model_pack_factors(
     fallback: usize,
 ) -> Result<(usize, usize)> {
     let embedding = if tied {
-        tied_quantized_tensor_pack_factor(quantization, embedding_name, head_name, dtype, fallback)?
+        tied_promoted_tensor_pack_factor(quantization, embedding_name, head_name, dtype, fallback)?
     } else {
-        quantized_tensor_pack_factor(quantization, embedding_name, dtype, fallback)?
+        promoted_tensor_pack_factor(quantization, embedding_name, dtype, fallback)?
     };
-    let head = quantized_tensor_pack_factor(quantization, head_name, dtype, fallback)?;
+    let head = promoted_tensor_pack_factor(quantization, head_name, dtype, fallback)?;
     Ok((embedding, head))
 }
 
@@ -523,13 +547,13 @@ fn language_model_pack_factors_with_aliases(
         {
             let mut candidates = embedding_names.to_vec();
             candidates.extend_from_slice(head_names);
-            quantization.pack_factor_for_candidates(&candidates, dtype, fallback)
+            quantization.pack_factor_for_candidates(&candidates, dtype, fallback, true)
         } else {
-            quantization.pack_factor_for_candidates(embedding_names, dtype, fallback)
+            quantization.pack_factor_for_candidates(embedding_names, dtype, fallback, true)
         }
     })?;
     let head = quantization.map_or(Ok(fallback), |quantization| {
-        quantization.pack_factor_for_candidates(head_names, dtype, fallback)
+        quantization.pack_factor_for_candidates(head_names, dtype, fallback, true)
     })?;
     Ok((embedding, head))
 }
@@ -542,7 +566,7 @@ mod auto_device_map_quantization_tests {
     const HEAD: &str = "lm_head.weight";
 
     #[test]
-    fn sensitive_defaults_and_topology_overrides_resolve_in_estimates() -> Result<()> {
+    fn explicit_promotion_and_topology_overrides_resolve_in_estimates() -> Result<()> {
         let dtype = DType::BF16;
         for (default, sensitive) in [
             (IsqType::AFQ4, IsqType::AFQ6),
@@ -552,12 +576,21 @@ mod auto_device_map_quantization_tests {
         ] {
             let automatic = AutoDeviceMapQuantization::isq(Some(default), None);
             assert_eq!(
-                automatic.pack_factor_for(EMBEDDING, dtype, 1)?,
+                automatic.promoted_pack_factor_for(EMBEDDING, dtype, 1)?,
                 sensitive.pack_factor(dtype),
                 "{default}"
             );
             assert_eq!(
-                automatic.pack_factor_for("model.layers.0.mlp.down_proj.weight", dtype, 1)?,
+                automatic.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
+                default.pack_factor(dtype),
+                "{default}"
+            );
+            assert_eq!(
+                automatic.unpromoted_pack_factor_for(
+                    "model.layers.0.mlp.down_proj.weight",
+                    dtype,
+                    1,
+                )?,
                 default.pack_factor(dtype),
                 "{default}"
             );
@@ -568,15 +601,15 @@ mod auto_device_map_quantization_tests {
         )?;
         let overridden = AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology));
         assert_eq!(
-            overridden.pack_factor_for(EMBEDDING, dtype, 1)?,
+            overridden.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
             IsqType::Q2K.pack_factor(dtype)
         );
         assert_eq!(
-            overridden.pack_factor_for(HEAD, dtype, 1)?,
+            overridden.unpromoted_pack_factor_for(HEAD, dtype, 1)?,
             IsqType::Q8_0.pack_factor(dtype)
         );
         assert_eq!(
-            tied_quantized_tensor_pack_factor(Some(&overridden), EMBEDDING, HEAD, dtype, 1,)?,
+            tied_promoted_tensor_pack_factor(Some(&overridden), EMBEDDING, HEAD, dtype, 1,)?,
             IsqType::Q2K.pack_factor(dtype)
         );
         Ok(())
@@ -588,10 +621,10 @@ mod auto_device_map_quantization_tests {
         let topology = Topology::from_str("'/^model\\.embed_tokens\\.weight$/':\n  isq: AFQ8\n")?;
         let quantization = AutoDeviceMapQuantization::isq(None, Some(&topology));
         assert_eq!(
-            quantization.pack_factor_for(EMBEDDING, dtype, 1)?,
+            quantization.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
             IsqType::AFQ8.pack_factor(dtype)
         );
-        assert_eq!(quantization.pack_factor_for(HEAD, dtype, 3)?, 3);
+        assert_eq!(quantization.unpromoted_pack_factor_for(HEAD, dtype, 3)?, 3);
         Ok(())
     }
 }

@@ -1494,18 +1494,18 @@ mod tests {
 
     use super::{validate_tp_head_layout, ReplicatedLayer};
     use crate::{
-        create_isq_executor, set_immediate_isq_with_executor, ImmediateIsqOverride, IsqCaptureMode,
-        IsqExecutorConfig, IsqType, ShardedSafeTensors,
+        create_isq_executor, set_immediate_isq_config, ImmediateIsqConfig, ImmediateIsqOverride,
+        IsqCaptureMode, IsqExecutorConfig, IsqType, ShardedSafeTensors,
     };
 
     fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
         let ty = Some(ty);
         let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
-        set_immediate_isq_with_executor(
-            ty,
-            vec![Regex::new(r"^model\.embed_tokens\.weight$").unwrap()],
-            overrides,
-            IsqCaptureMode::Immediate,
+        let promoted = Regex::new(r"^model\.embed_tokens\.weight$").unwrap();
+        set_immediate_isq_config(
+            ImmediateIsqConfig::new(ty, vec![promoted.clone()], IsqCaptureMode::Immediate)
+                .with_promoted_predicates(vec![promoted])
+                .with_overrides(overrides),
             executor,
         );
     }

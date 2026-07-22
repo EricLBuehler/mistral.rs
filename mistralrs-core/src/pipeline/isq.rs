@@ -893,6 +893,9 @@ pub trait IsqModel {
 
 /// Trait for loading models with ISQ.
 pub(crate) trait IsqModelLoader {
+    /// Exact checkpoint tensor paths whose default ISQ type should be promoted.
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>>;
+
     /// Regex to match layers which will have standard *immediate* ISQ applied.
     ///
     /// Only called on non-adapter models!

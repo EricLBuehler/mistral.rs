@@ -460,6 +460,10 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
 }
 
 impl IsqModelLoader for AutoMultimodalLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.promoted_isq_predicates(config)
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
     }
@@ -653,6 +657,13 @@ impl MultimodalModelLoader for Phi3VLoader {
 }
 
 impl IsqModelLoader for Phi3VLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -942,6 +953,13 @@ impl MultimodalModelLoader for Idefics2Loader {
 }
 
 impl IsqModelLoader for Idefics2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.text_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1298,6 +1316,13 @@ impl MultimodalModelLoader for LLaVANextLoader {
 }
 
 impl IsqModelLoader for LLaVANextLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1410,13 +1435,13 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
                 _quantization,
                 "language_model.model.embed_tokens.weight",
                 dtype,
                 weight_pack_factor,
             )?;
-            let lm_head_pack_factor = super::quantized_tensor_pack_factor(
+            let lm_head_pack_factor = super::promoted_tensor_pack_factor(
                 _quantization,
                 "language_model.lm_head.weight",
                 dtype,
@@ -1581,6 +1606,13 @@ impl MultimodalModelLoader for LLaVALoader {
 }
 
 impl IsqModelLoader for LLaVALoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1685,13 +1717,13 @@ impl DeviceMappedModelLoader for LLaVALoader {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
                 _quantization,
                 "language_model.model.embed_tokens.weight",
                 dtype,
                 weight_pack_factor,
             )?;
-            let lm_head_pack_factor = super::quantized_tensor_pack_factor(
+            let lm_head_pack_factor = super::promoted_tensor_pack_factor(
                 _quantization,
                 "language_model.lm_head.weight",
                 dtype,
@@ -1856,6 +1888,13 @@ impl MultimodalModelLoader for VLlamaLoader {
 }
 
 impl IsqModelLoader for VLlamaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let cross_attn_layers = &config.text_config.cross_attention_layers;
@@ -2257,6 +2296,13 @@ impl MultimodalModelLoader for Qwen2VLLoader {
 }
 
 impl IsqModelLoader for Qwen2VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2569,6 +2615,13 @@ impl MultimodalModelLoader for Idefics3Loader {
 }
 
 impl IsqModelLoader for Idefics3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.text_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2900,6 +2953,13 @@ impl MultimodalModelLoader for MiniCpmOLoader {
 }
 
 impl IsqModelLoader for MiniCpmOLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^llm\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^llm\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"llm.lm_head\.(weight|bias)$")?,
@@ -3212,6 +3272,13 @@ impl MultimodalModelLoader for Phi4MMLoader {
 }
 
 impl IsqModelLoader for Phi4MMLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3550,6 +3617,13 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
 }
 
 impl IsqModelLoader for Qwen2_5VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3857,6 +3931,13 @@ impl MultimodalModelLoader for Gemma3Loader {
 }
 
 impl IsqModelLoader for Gemma3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^(lm_head|language_model\.lm_head)\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4204,6 +4285,13 @@ impl MultimodalModelLoader for Mistral3Loader {
 }
 
 impl IsqModelLoader for Mistral3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4539,6 +4627,13 @@ impl MultimodalModelLoader for VLlama4Loader {
 }
 
 impl IsqModelLoader for VLlama4Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4962,6 +5057,13 @@ impl MultimodalModelLoader for Gemma3nLoader {
 }
 
 impl IsqModelLoader for Gemma3nLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5255,8 +5357,8 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
             let (embed_tokens_pack_factor, lm_head_pack_factor) =
                 super::language_model_pack_factors(
                     quantization,
-                    "language_model.embed_tokens.weight",
-                    "language_model.lm_head.weight",
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
                     text_cfg.tie_word_embeddings,
                     dtype,
                     weight_pack_factor,
@@ -5836,6 +5938,13 @@ impl MultimodalModelLoader for Qwen3VLLoader {
 }
 
 impl IsqModelLoader for Qwen3VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6170,6 +6279,13 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
 }
 
 impl IsqModelLoader for Qwen3VLMoELoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6562,6 +6678,13 @@ impl MultimodalModelLoader for Qwen3_5Loader {
 }
 
 impl IsqModelLoader for Qwen3_5Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6927,6 +7050,13 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
 }
 
 impl IsqModelLoader for Qwen3_5MoeLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -7371,6 +7501,13 @@ impl MultimodalModelLoader for VoxtralLoader {
 }
 
 impl IsqModelLoader for VoxtralLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^mm_streams_embeddings\.embedding_module\.tok_embeddings\.weight$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             // Output / lm_head (tied with tok_embeddings)
@@ -7646,6 +7783,14 @@ impl MultimodalModelLoader for Gemma4Loader {
 }
 
 impl IsqModelLoader for Gemma4Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.language_model\.embed_tokens_per_layer\.weight$")?,
+            Regex::new(r"^model\.language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
@@ -7835,7 +7980,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
             let ple_dim = tc.hidden_size_per_layer_input.unwrap_or(0);
             let ple_vocab = tc.vocab_size_per_layer_input.unwrap_or(tc.vocab_size);
-            let ple_embedding_pack_factor = super::quantized_tensor_pack_factor(
+            let ple_embedding_pack_factor = super::promoted_tensor_pack_factor(
                 _quantization,
                 "model.language_model.embed_tokens_per_layer.weight",
                 dtype,
@@ -8202,6 +8347,13 @@ impl MultimodalModelLoader for Lfm2VlLoader {
 }
 
 impl IsqModelLoader for Lfm2VlLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -8518,6 +8670,13 @@ impl MultimodalModelLoader for DiffusionGemmaLoader {
 }
 
 impl IsqModelLoader for DiffusionGemmaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.decoder\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.decoder\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -8777,6 +8936,333 @@ mod tests {
         regexes.iter().any(|regex| regex.is_match(name))
     }
 
+    struct PromotedIsqCase {
+        name: &'static str,
+        architecture: &'static str,
+        loader: Box<dyn IsqModelLoader>,
+        accepted: Vec<&'static str>,
+    }
+
+    fn promoted_isq_cases() -> Vec<PromotedIsqCase> {
+        vec![
+            PromotedIsqCase {
+                name: "phi3v",
+                architecture: "Phi3VForCausalLM",
+                loader: Box::new(Phi3VLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "idefics2",
+                architecture: "Idefics2ForConditionalGeneration",
+                loader: Box::new(Idefics2Loader),
+                accepted: vec![
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llava_next",
+                architecture: "LlavaNextForConditionalGeneration",
+                loader: Box::new(LLaVANextLoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llava",
+                architecture: "LlavaForConditionalGeneration",
+                loader: Box::new(LLaVALoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "lfm2vl",
+                architecture: "Lfm2VlForConditionalGeneration",
+                loader: Box::new(Lfm2VlLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "vllama",
+                architecture: "MllamaForConditionalGeneration",
+                loader: Box::new(VLlamaLoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen2vl",
+                architecture: "Qwen2VLForConditionalGeneration",
+                loader: Box::new(Qwen2VLLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "idefics3",
+                architecture: "Idefics3ForConditionalGeneration",
+                loader: Box::new(Idefics3Loader),
+                accepted: vec![
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "minicpmo",
+                architecture: "MiniCPMO",
+                loader: Box::new(MiniCpmOLoader),
+                accepted: vec![
+                    "llm.model.embed_tokens.weight",
+                    "llm.lm_head.weight",
+                    "llm.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "phi4mm",
+                architecture: "Phi4MMForCausalLM",
+                loader: Box::new(Phi4MMLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen2_5vl",
+                architecture: "Qwen2_5_VLForConditionalGeneration",
+                loader: Box::new(Qwen2_5VLLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma3",
+                architecture: "Gemma3ForConditionalGeneration",
+                loader: Box::new(Gemma3Loader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "mistral3",
+                architecture: "Mistral3ForConditionalGeneration",
+                loader: Box::new(Mistral3Loader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llama4",
+                architecture: "Llama4ForConditionalGeneration",
+                loader: Box::new(VLlama4Loader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma3n",
+                architecture: "Gemma3nForConditionalGeneration",
+                loader: Box::new(Gemma3nLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
+                    "model.language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3vl",
+                architecture: "Qwen3VLForConditionalGeneration",
+                loader: Box::new(Qwen3VLLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3vlmoe",
+                architecture: "Qwen3VLMoeForConditionalGeneration",
+                loader: Box::new(Qwen3VLMoELoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3_5",
+                architecture: "Qwen3_5ForConditionalGeneration",
+                loader: Box::new(Qwen3_5Loader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3_5moe",
+                architecture: "Qwen3_5MoeForConditionalGeneration",
+                loader: Box::new(Qwen3_5MoeLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "voxtral",
+                architecture: "VoxtralForConditionalGeneration",
+                loader: Box::new(VoxtralLoader),
+                accepted: vec![
+                    "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+                    "output.weight",
+                    "output.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma4",
+                architecture: "Gemma4ForConditionalGeneration",
+                loader: Box::new(Gemma4Loader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.embed_tokens_per_layer.weight",
+                    "model.language_model.lm_head.weight",
+                    "model.language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "diffusiongemma",
+                architecture: "DiffusionGemmaForBlockDiffusion",
+                loader: Box::new(DiffusionGemmaLoader),
+                accepted: vec![
+                    "model.decoder.embed_tokens.weight",
+                    "model.decoder.lm_head.weight",
+                    "model.decoder.lm_head.bias",
+                ],
+            },
+        ]
+    }
+
+    fn assert_model_scoped_promoted_predicates(case: &PromotedIsqCase, predicates: &[Regex]) {
+        for name in &case.accepted {
+            assert!(
+                matches_any(predicates, name),
+                "{} did not promote {name}",
+                case.name
+            );
+            for lookalike in [format!("vision_tower.{name}"), format!("{name}.shadow")] {
+                assert!(
+                    !matches_any(predicates, &lookalike),
+                    "{} promoted lookalike {lookalike}",
+                    case.name
+                );
+            }
+        }
+
+        for lookalike in [
+            "model.vision_tower.embed_tokens.weight",
+            "model.vision_tower.embed_tokens_per_layer.weight",
+            "model.vision_tower.lm_head.weight",
+            "vision_model.embeddings.word_embeddings.weight",
+            "transformer.wte.weight",
+        ] {
+            assert!(
+                !matches_any(predicates, lookalike),
+                "{} promoted lookalike {lookalike}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn multimodal_promoted_isq_predicates_are_model_scoped() -> Result<()> {
+        for case in promoted_isq_cases() {
+            let predicates = case.loader.promoted_isq_predicates("")?;
+            assert_model_scoped_promoted_predicates(&case, &predicates);
+        }
+
+        let gemma4 = Gemma4Loader.promoted_isq_predicates("")?;
+        assert!(matches_any(
+            &gemma4,
+            "model.language_model.embed_tokens_per_layer.weight"
+        ));
+        for name in [
+            "model.language_model.per_layer_model_projection.weight",
+            "model.language_model.layers.0.per_layer_projection.weight",
+            "model.language_model.per_layer_projection_norm.weight",
+        ] {
+            assert!(!matches_any(&gemma4, name), "Gemma4 promoted {name}");
+        }
+
+        let gemma3n = Gemma3nLoader.promoted_isq_predicates("")?;
+        for name in [
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.lm_head.weight",
+        ] {
+            assert!(matches_any(&gemma3n, name), "Gemma3n missed {name}");
+        }
+        assert!(!matches_any(
+            &gemma3n,
+            "model.language_model.embed_tokens_per_layer.weight"
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn auto_multimodal_delegates_promoted_isq_predicates() -> Result<()> {
+        let auto = AutoMultimodalLoader;
+        for case in promoted_isq_cases() {
+            let config = format!(r#"{{"architectures":["{}"]}}"#, case.architecture);
+            let direct = case.loader.promoted_isq_predicates(&config)?;
+            let delegated = auto.promoted_isq_predicates(&config)?;
+            assert_eq!(
+                delegated.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                direct.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert_model_scoped_promoted_predicates(&case, &delegated);
+        }
+
+        Ok(())
+    }
+
     #[test]
     fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
         let loader = Qwen3_5MoeLoader;
@@ -8798,22 +9284,21 @@ mod tests {
     }
 
     #[test]
-    fn gemma4_uqff_keeps_old_dense_embeddings_out_of_isq_layers() -> Result<()> {
+    fn gemma4_uqff_keeps_legacy_dense_embeddings_out_of_dummy_layer_regexes() -> Result<()> {
         let loader = Gemma4Loader;
-        let residual_names = ["embed_tokens.weight", "embed_tokens_per_layer.weight"];
-        let immediate_names = [
+        let embeddings = [
             "model.language_model.embed_tokens.weight",
             "model.language_model.embed_tokens_per_layer.weight",
         ];
 
         let isq_layers = loader.isq_layer_regexes("")?;
-        for name in residual_names {
+        for name in embeddings {
             assert!(!matches_any(&isq_layers, name), "{name} was matched");
         }
 
-        let immediate = loader.immediate_isq_predicates("")?;
-        for name in immediate_names {
-            assert!(matches_any(&immediate, name), "{name} was not matched");
+        let promoted = loader.promoted_isq_predicates("")?;
+        for name in embeddings {
+            assert!(matches_any(&promoted, name), "{name} was not promoted");
         }
 
         Ok(())

@@ -970,7 +970,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
         super::isq_flow::requantize_and_swap(
             &self.tracked_modules,
             dtype,
-            |module| dtype.resolve_for_tensor(module.key.as_str()),
+            |module| module.default_type(dtype),
             &|_| None,
         )
     }
