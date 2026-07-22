@@ -28,11 +28,11 @@ Loaded dynamic LoRA aliases are exposed as stable `<base-model>::<alias>` model 
 
 ### Implemented with deviation
 
-- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools. Function-tool obligations are enforced by the tool-call lifecycle; hosted tools such as web search, code execution, and shell are handled by the agentic runtime.
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
 - `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
-- `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
+- `response_format` with `json_schema`: supported; output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/mistral.rs/guides/serve/structured-output/).
 
 ### Silently ignored
 
@@ -61,7 +61,7 @@ Accepted alongside OpenAI fields. OpenAI ignores them:
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
 - `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
 
-`GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state. Adapter source is redacted unless runtime mutation is enabled. `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; read-only discovery does not.
+`GET /v1/lora_adapters` is always available and returns detailed alias, generation, and capacity state. Adapter source is redacted unless runtime mutation is enabled. `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; read-only discovery does not.
 
 Chat Completions and Completions responses expose the exact resolved generation as `adapter_generation`, including streaming chunks. Completed Responses resources expose the same field. The field is omitted for base-model requests.
 
@@ -101,7 +101,7 @@ Responses `tools` accepts:
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
 - `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
 
-`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is rejected because those tools run through the server-side agentic runtime rather than the grammar-constrained function-tool path.
+`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is not supported.
 
 ### Skills API
 
@@ -109,7 +109,7 @@ Responses `tools` accepts:
 - `GET /v1/skills`: list uploaded skills for the current server process and skills directory.
 - `POST /v1/skills/{skill_id}/versions`: upload a new version for an existing skill.
 
-Uploaded skill versions are stored under the server's skills directory (`--skills-dir`, or a system temp directory by default). When a Responses request references a skill, mistral.rs copies that skill version into the shell session working directory at `skills/<skill-name>/`.
+Uploaded skill versions remain available from the server's skills directory (`--skills-dir`, or a system temporary directory by default). Referenced skills are made available to the shell session.
 
 ### Rejected non-default values
 

@@ -21,13 +21,13 @@ The request `model` field selects among loaded models. `"default"` (or omitting 
 
 ## LoRA adapter routing and management
 
-Chat Completions, Completions, and Responses requests can select dynamic LoRA with the top-level `adapter` field. A string selects a loaded alias; `{"generation":"<generation-id>"}` selects one exact resident generation. Resolution pins the immutable generation for the lifetime of the request. Replacing or unloading an alias therefore does not change an in-flight request, and generation-specific prefix-cache entries cannot be reused by another adapter.
+Chat Completions, Completions, and Responses requests can select dynamic LoRA with the top-level `adapter` field. A string selects a loaded alias; `{"generation":"<generation-id>"}` selects one exact generation. Replacing or unloading an alias does not change an in-flight request.
 
-The read-only status route is always registered. The `mistralrs serve` mutation routes are registered only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is enabled. Embedded servers can instead configure `LoraAdapterApiConfig` on `MistralRsServerRouterBuilder`:
+The read-only status endpoint is always available. `mistralrs serve` enables mutation endpoints only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is set. Embedded servers can instead configure `LoraAdapterApiConfig` on `MistralRsServerRouterBuilder`:
 
 - `POST /v1/load_lora_adapter` loads an alias from a local adapter directory; replacing one requires `load_inplace: true` and may use `expected_generation` for compare-and-set safety.
-- `GET /v1/lora_adapters` is always available and lists aliases, configured limits, and complete resident capacity usage, including retired generations pinned by in-flight requests. Sources are redacted unless mutation is enabled.
-- `POST /v1/unload_lora_adapter` removes an alias and reclaims its generation after in-flight requests release it; `expected_generation` prevents stale removal.
+- `GET /v1/lora_adapters` is always available and lists aliases, generation IDs, capacity, and configured limits. Sources are redacted unless mutation is enabled.
+- `POST /v1/unload_lora_adapter` removes an alias without interrupting in-flight requests; `expected_generation` prevents stale removal.
 
 Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its ancestors, and every selected adapter directory writable only by the service operator. Publish adapters at new immutable directory paths instead of replacing an existing selected path. Loads are serialized; concurrent attempts return 429. An admitted load continues if its client disconnects, so verify the generation through the list endpoint after a timeout. These routes have no built-in authentication and should not be exposed without an authenticated reverse proxy. Request schemas and response objects are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/); stable error-code recovery, setup, and support boundaries are in the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/).
 
@@ -102,7 +102,7 @@ Permission levels and how they combine across CLI, HTTP, Python, and Rust are on
 
 ## File wire schemas and semantics
 
-Agentic runs return typed file outputs as first-class objects. Chat Completions and Anthropic Messages use a `files[]` array in non-streaming responses and `file_produced` events in streams. Responses uses OpenAI-style `container_file_citation` annotations on assistant `output_text` content. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These shapes are serialized from an internal type and do not all appear in the OpenAPI document, so they are normative here. (The `/v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
+Agentic runs return typed file outputs as first-class objects. Chat Completions and Anthropic Messages use a `files[]` array in non-streaming responses and `file_produced` events in streams. Responses uses OpenAI-style `container_file_citation` annotations on assistant `output_text` content. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These schemas are normative because they do not all appear in the OpenAPI document. (The `/v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
 
 Requesting files (`files` on chat, Responses, and Anthropic Messages requests):
 

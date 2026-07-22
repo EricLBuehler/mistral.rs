@@ -161,7 +161,7 @@ lora_max_rank = 256
 lora_max_bytes = 8589934592
 ```
 
-`revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit resident generations admitted by that model's runtime.
+`revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit loaded adapters.
 
 ## Multi-model example
 

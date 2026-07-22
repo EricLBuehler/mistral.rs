@@ -23,11 +23,11 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
-| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
@@ -113,11 +113,11 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
-| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
@@ -163,11 +163,11 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded adapter versions |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
-| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |

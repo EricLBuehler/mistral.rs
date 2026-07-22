@@ -45,5 +45,5 @@ Agentic requests are stateful; state lives in an in-memory session store. Matchi
 ## See also
 
 - [Session memory](/mistral.rs/developer/session-memory/).
-- [MoE expert backends](/mistral.rs/developer/moe-backends/).
+- [cuTile setup](/mistral.rs/developer/moe-backends/).
 - [The multimodal pipeline](/mistral.rs/developer/multimodal-pipeline/).

@@ -75,9 +75,8 @@ pub enum ModelFormat {
 /// Adapter options (LoRA/X-LoRA)
 #[derive(Args, Clone, Deserialize)]
 pub struct AdapterOptions {
-    /// Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary
-    /// text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection;
-    /// vision-tower adapters are unsupported.
+    /// Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE
+    /// requires automatic model selection; vision-tower adapters are unsupported.
     #[arg(long, conflicts_with = "xlora")]
     #[serde(default)]
     pub enable_lora: bool,
@@ -97,7 +96,7 @@ pub struct AdapterOptions {
     #[serde(default)]
     pub lora: Vec<LoraAdapterSpec>,
 
-    /// Maximum number of loaded LoRA aliases and resident generations
+    /// Maximum number of loaded adapter versions
     #[arg(
         long,
         default_value_t = DEFAULT_LORA_MAX_ADAPTERS,
@@ -116,7 +115,7 @@ pub struct AdapterOptions {
     #[serde(default = "default_lora_max_rank")]
     pub lora_max_rank: usize,
 
-    /// Maximum total bytes held by resident LoRA adapter tensors
+    /// Maximum memory used by loaded adapters
     #[arg(
         long,
         value_parser = parse_lora_bytes,

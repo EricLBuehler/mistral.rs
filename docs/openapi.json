@@ -4227,12 +4227,6 @@
             "description": "Replace only if the alias still points at this generation.",
             "example": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
           },
-          "is_3d_lora_weight": {
-            "type": "boolean",
-            "description": "Accepted for vLLM compatibility. The adapter files determine the LoRA tensor layout.",
-            "default": false,
-            "example": true
-          },
           "load_inplace": {
             "type": "boolean",
             "description": "Atomically replace an existing alias. Defaults to false, matching vLLM.",

@@ -48,12 +48,12 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 
 ## Dynamic LoRA
 
-- [ ] Declare adapters that must survive restart as preloads. Runtime load, swap, and unload state is process-local and must otherwise be replayed.
+- [ ] Declare adapters that must survive restart as preloads. Runtime changes do not survive a restart and must otherwise be replayed.
 - [ ] Pin remote adapter revisions, preferably to commit SHAs. The CLI accepts `--lora-modules '{"name":"production","path":"org/adapter","revision":"<commit>"}'`.
 - [ ] Keep HTTP mutation behind authentication and set `MISTRALRS_LORA_ADAPTER_ROOT` to an operator-owned directory. Read-only discovery does not need mutation enabled.
-- [ ] Size `--lora-max-adapters` and `--lora-max-bytes` for old-plus-new swap headroom and for retired generations held by in-flight requests.
+- [ ] Size `--lora-max-adapters` and `--lora-max-bytes` with enough headroom to replace an adapter without interrupting in-flight requests.
 - [ ] Use `expected_generation` on replacement and unload operations, then verify the published generation through `GET /v1/lora_adapters`.
-- [ ] Keep live mutation out of tensor-parallel deployments. If the dedicated CUDA path is required, cap rank at 128; higher accepted ranks, Metal, and CPU use the reference path.
+- [ ] Keep live mutation out of tensor-parallel deployments; preload adapters instead.
 
 See [LoRA and X-LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for rollout, rollback, errors, and the vLLM migration table.
 

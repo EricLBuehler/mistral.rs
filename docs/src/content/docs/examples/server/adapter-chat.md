@@ -12,8 +12,7 @@ Compare a base model and its preloaded LoRA adapters without mixing history.
 Start the server with one or more aliases, for example:
 `mistralrs serve -m <base-model> --lora code=<adapter-repo>`.
 For a supported text MoE model, the same example works with a routed expert
-adapter. The CLI's `--lora-modules` JSON accepts `"is_3d_lora_weight": true`
-as a vLLM compatibility hint, but mistral.rs detects the layout from the files.
+adapter.
 The example discovers valid model IDs and keeps a separate conversation for each.
 
 ```python
@@ -22,8 +21,7 @@ The example discovers valid model IDs and keeps a separate conversation for each
 Start the server with one or more aliases, for example:
 `mistralrs serve -m <base-model> --lora code=<adapter-repo>`.
 For a supported text MoE model, the same example works with a routed expert
-adapter. The CLI's `--lora-modules` JSON accepts `"is_3d_lora_weight": true`
-as a vLLM compatibility hint, but mistral.rs detects the layout from the files.
+adapter.
 The example discovers valid model IDs and keeps a separate conversation for each.
 """
 

@@ -436,10 +436,9 @@ pub struct LoadLoraAdapterRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>, example = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")]
     pub expected_generation: Option<mistralrs_core::AdapterGenerationId>,
-    /// Accepted for vLLM compatibility. The adapter files determine the LoRA tensor layout.
     #[serde(default)]
-    #[schema(default = false, example = true)]
-    pub is_3d_lora_weight: bool,
+    #[schema(ignore)]
+    is_3d_lora_weight: bool,
     #[serde(default)]
     pub model: Option<String>,
 }

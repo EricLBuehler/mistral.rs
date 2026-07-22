@@ -41,9 +41,8 @@ Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
 | CUDA 12.8+ | `cuda128-sm{cc}` |
 
-cuTile support is compiled only on lanes whose CUDA toolkit supports that SM. Activating it also
-requires the separately installed NVIDIA `tileiras` tool described in the
-[MoE backend guide](/mistral.rs/developer/moe-backends/).
+cuTile is available only on the supported CUDA lanes listed below. Install `tileiras` as described
+in [cuTile setup](/mistral.rs/developer/moe-backends/).
 
 CUDA compute capability variants (SM80+):
 - `80` (A100)
@@ -71,7 +70,7 @@ For production, pin a version or sha tag rather than `*-latest`. Model ids also 
 
 ## Enabling cuTile in a published image
 
-The thin release image does not include Python or NVIDIA's JIT package. Install the official package
+The published image does not include Python or `tileiras`. Install the official package
 in a derived image. For Ampere, Ada, or Blackwell:
 
 ```dockerfile
@@ -104,8 +103,8 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-13.0-ubi9 \
 ```
 
 - `Dockerfile.cuda-13.0-ubi9` builds from source on Red Hat UBI 9 and accepts `CUDA_COMPUTE_CAP` and `WITH_FEATURES`.
-- `Dockerfile.cuda-all` is the thin published-image recipe. The release workflow stages a prebuilt archive under `dist/<arch>` and selects its matching `BASE_TAG`; it is not a source-build Dockerfile.
-- Release images are cutile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [MoE expert backends](/mistral.rs/developer/moe-backends/) to activate cuTile; otherwise the image uses native CUDA routed-LoRA and CUTLASS MoE fallbacks.
+- `Dockerfile.cuda-all` is not a source-build Dockerfile.
+- Release images are cuTile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [cuTile setup](/mistral.rs/developer/moe-backends/) to activate cuTile.
 - Building with `flash-attn` is slow the first time; later builds use the layer cache.
 
 ## Production deployment notes
