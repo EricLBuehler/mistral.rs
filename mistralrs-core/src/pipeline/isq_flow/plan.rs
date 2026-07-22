@@ -33,19 +33,12 @@ pub(crate) struct IsqLoadPlan {
     pub load_device: Device,
 }
 
-fn add_token_embedding_predicates(mut predicates: Vec<Regex>) -> Result<Vec<Regex>> {
-    predicates.push(Regex::new(r"^embed_tokens\.weight$")?);
-    predicates.push(Regex::new(r"^model\.embed_tokens\.weight$")?);
+fn add_sensitive_tensor_predicates(mut predicates: Vec<Regex>) -> Result<Vec<Regex>> {
     predicates.push(Regex::new(
-        r"^language_model\.model\.embed_tokens\.weight$",
+        r"(?:^|\.)(?:embed_tokens|embed_tokens_per_layer|tok_embeddings|wte|word_embeddings)\.weight$",
     )?);
-    predicates.push(Regex::new(
-        r"^model\.language_model\.embed_tokens\.weight$",
-    )?);
-    predicates.push(Regex::new(r"^model\.decoder\.embed_tokens\.weight$")?);
-    predicates.push(Regex::new(
-        r"^mm_streams_embeddings\.embedding_module\.tok_embeddings\.weight$",
-    )?);
+    predicates.push(Regex::new(r"(?:^|\.)lm_head\.(?:weight|bias)$")?);
+    predicates.push(Regex::new(r"^output\.(?:weight|bias)$")?);
     Ok(predicates)
 }
 
@@ -108,12 +101,17 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         let immediate_predicates = if matches!(i.organization, IsqOrganization::MoeExpertsOnly) {
             i.loader.immediate_isq_predicates_moqe(i.config)?
         } else {
-            add_token_embedding_predicates(i.loader.immediate_isq_predicates(i.config)?)?
+            add_sensitive_tensor_predicates(i.loader.immediate_isq_predicates(i.config)?)?
         };
         if let Some(types) = &write_types {
             info!("Preparing UQFF output for [{}].", format_isq_types(types));
         } else if let Some(ty) = i.in_situ_quant {
-            info!("Quantizing model weights to {ty}.");
+            let sensitive_ty = ty.promote_for_sensitive_tensor();
+            if sensitive_ty == ty {
+                info!("Quantizing model weights to {ty}.");
+            } else {
+                info!("Quantizing model weights to {ty}, with sensitive tensors using {sensitive_ty}.");
+            }
         }
         if immediate_predicates.is_empty() {
             tracing::warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -186,5 +184,44 @@ fn capture_mode(has_write_uqff: bool, wants_imatrix: bool) -> mistralrs_quant::I
         mistralrs_quant::IsqCaptureMode::CaptureMatches
     } else {
         mistralrs_quant::IsqCaptureMode::Immediate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_tensor_predicates_cover_language_boundaries() -> Result<()> {
+        let predicates = add_sensitive_tensor_predicates(Vec::new())?;
+        let sensitive = [
+            "model.embed_tokens.weight",
+            "model.embed_tokens_per_layer.weight",
+            "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+            "transformer.wte.weight",
+            "bert.embeddings.word_embeddings.weight",
+            "language_model.lm_head.weight",
+            "output.weight",
+        ];
+        for name in sensitive {
+            assert!(
+                predicates.iter().any(|predicate| predicate.is_match(name)),
+                "{name}"
+            );
+        }
+
+        let regular = [
+            "vision.position_embedding.weight",
+            "layers.0.self_attn.output.weight",
+            "output.proj.weight",
+        ];
+        for name in regular {
+            assert!(
+                predicates.iter().all(|predicate| !predicate.is_match(name)),
+                "{name}"
+            );
+        }
+
+        Ok(())
     }
 }

@@ -11,8 +11,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::Module;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
-    UnquantLinear,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -20,9 +19,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{
-        embedding, linear_no_bias as linear, Activation, CausalMasker, MatMul, RmsNorm, Sdpa,
-    },
+    layers::{embedding, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -432,9 +429,11 @@ impl Llama {
             ),
             &cfg.quantization_config,
         )?;
-        let lm_head = linear(
+        let lm_head = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.vocab_size,
+            &None,
+            false,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         let ln_f = RmsNorm::new(
@@ -485,7 +484,7 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             dtype,
             kv_cache: crate::pipeline::EitherCache::Full(crate::pipeline::Cache::new(
                 cfg.num_hidden_layers,

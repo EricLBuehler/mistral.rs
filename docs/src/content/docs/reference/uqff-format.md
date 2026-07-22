@@ -35,6 +35,7 @@ Safetensors metadata includes informational producer fields: `uqff.producer`, `u
 Because every layer self-describes, a single file may mix quantization types. Two cases produce a mixed file:
 
 - Topology-pinned layers (assigned a specific type by a [topology](/mistral.rs/guides/perf/topology/) config) keep their pinned type.
+- AFQ token embeddings and output heads use the higher-precision AFQ default documented in [quantization types](/mistral.rs/reference/quantization-types/). For example, an `afq4` shard set stores those tensors as AFQ6.
 - Layers whose shape cannot support the requested type fall back per-layer. For example, AFQ layers whose input dimension is not divisible by the AFQ group size are stored unquantized.
 
 ## Sharding

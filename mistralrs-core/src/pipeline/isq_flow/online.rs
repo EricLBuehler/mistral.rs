@@ -108,7 +108,7 @@ pub(crate) fn apply_calibration(
         tracing::warn!(
             "No source weights available; requantizing from resident quantized weights (reduced quality)."
         );
-        requantize_and_swap(modules, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {
+        requantize_and_swap(modules, pool_ty, |m| m.resolve_type(pool_ty), &|key| {
             map.get(key).cloned()
         })?;
     } else {
@@ -327,7 +327,7 @@ pub(crate) fn requantize_from_source(
     }
 
     if !fallback.is_empty() {
-        requantize_and_swap(&fallback, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {
+        requantize_and_swap(&fallback, pool_ty, |m| m.resolve_type(pool_ty), &|key| {
             imatrix_map.get(key).cloned()
         })?;
     }

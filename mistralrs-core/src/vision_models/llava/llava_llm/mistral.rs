@@ -6,8 +6,7 @@ use std::sync::Arc;
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
-    UnquantLinear,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -15,7 +14,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{self, linear_no_bias, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{self, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -494,16 +493,18 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
+        let lm_head = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.vocab_size,
+            &None,
+            false,
             mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
             dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,

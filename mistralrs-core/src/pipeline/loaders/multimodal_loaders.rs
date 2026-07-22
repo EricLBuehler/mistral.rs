@@ -494,12 +494,14 @@ impl DeviceMappedModelLoader for AutoMultimodalLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_size_in_bytes(
             config,
             dtype,
             weight_pack_factor,
+            quantization,
             _matformer_config,
         )
     }
@@ -735,13 +737,23 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -1028,6 +1040,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
@@ -1035,9 +1048,18 @@ impl DeviceMappedModelLoader for Idefics2Loader {
             let tie_word_embeddings = cfg.tie_word_embeddings;
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -1382,13 +1404,26 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "language_model.model.embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let lm_head_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "language_model.lm_head.weight",
+                dtype,
+                1,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -1644,13 +1679,26 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "language_model.model.embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let lm_head_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "language_model.lm_head.weight",
+                dtype,
+                1,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -1955,14 +2003,24 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &config.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * (cfg.vocab_size + 8) / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -2296,13 +2354,26 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let text_elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -2612,14 +2683,28 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if cfg.tie_word_embeddings {
+                0
+            } else {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+            };
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -2902,14 +2987,28 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "llm.model.embed_tokens.weight",
+                    "llm.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if cfg.tie_word_embeddings {
+                0
+            } else {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+            };
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -3209,13 +3308,23 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -3534,13 +3643,26 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         let text_elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -3845,6 +3967,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
@@ -3854,9 +3977,21 @@ impl DeviceMappedModelLoader for Gemma3Loader {
                 Gemma3Config::Text(cfg) => cfg,
                 Gemma3Config::WithVision { text_config, .. } => text_config,
             };
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight", "language_model.lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -4197,6 +4332,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
@@ -4204,9 +4340,18 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !cfg.tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -4564,15 +4709,25 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Llama4Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
 
         let text_elems = {
-            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    tcfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tcfg.tie_word_embeddings {
-                tcfg.hidden_size * tcfg.vocab_size
+                tcfg.hidden_size * tcfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -5069,6 +5224,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
@@ -5096,14 +5252,24 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Text components that are not device-mapped
         let text_elems = {
             // Embeddings
-            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    quantization,
+                    "language_model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    text_cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens =
+                text_cfg.hidden_size * text_cfg.vocab_size / embed_tokens_pack_factor;
             let embed_tokens_per_layer = text_cfg.num_hidden_layers
                 * text_cfg.hidden_size_per_layer_input
                 * text_cfg.vocab_size_per_layer_input;
 
             // LM head (if not tied)
             let lm_head = if !text_cfg.tie_word_embeddings {
-                text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
+                text_cfg.hidden_size * text_cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -5768,15 +5934,28 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6125,15 +6304,28 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6478,15 +6670,28 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6882,15 +7087,28 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -7157,6 +7375,7 @@ impl IsqModelLoader for VoxtralLoader {
         Ok(vec![
             // Output / lm_head (tied with tok_embeddings)
             Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
             // Decoder attention (Mistral-native naming)
             Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
@@ -7171,6 +7390,7 @@ impl IsqModelLoader for VoxtralLoader {
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"tok_embeddings\.(weight|bias)$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
             // Decoder attention
             Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
@@ -7230,7 +7450,8 @@ impl DeviceMappedModelLoader for VoxtralLoader {
         &self,
         config: &str,
         dtype: DType,
-        _weight_pack_factor: usize,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: VoxtralConfig = serde_json::from_str(config)?;
@@ -7257,10 +7478,22 @@ impl DeviceMappedModelLoader for VoxtralLoader {
 
         let total_encoder = conv1 + conv2 + enc_layers + enc_final_norm + adapter;
 
-        // Decoder embeddings
-        let embeddings = cfg.vocab_size * cfg.dim;
+        let (embedding_pack_factor, output_pack_factor) = super::language_model_pack_factors(
+            _quantization,
+            "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+            "output.weight",
+            cfg.tied_embeddings,
+            dtype,
+            weight_pack_factor,
+        )?;
+        let embeddings = cfg.vocab_size * cfg.dim / embedding_pack_factor;
+        let output = if cfg.tied_embeddings {
+            0
+        } else {
+            cfg.vocab_size * cfg.dim / output_pack_factor
+        };
 
-        Ok((total_encoder + embeddings) * elem)
+        Ok((total_encoder + embeddings + output) * elem)
     }
 
     fn layer_sizes_in_bytes(
@@ -7571,20 +7804,30 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
         let text_elems = {
+            let (resolved_embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
+                    tc.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
             let embed_tokens_pack_factor =
                 if tc.tie_word_embeddings && tc.keep_tied_lm_head_unquantized {
                     1
                 } else {
-                    weight_pack_factor
+                    resolved_embed_tokens_pack_factor
                 };
             let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tc.tie_word_embeddings {
-                tc.hidden_size * tc.vocab_size / weight_pack_factor
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -7592,8 +7835,14 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
             let ple_dim = tc.hidden_size_per_layer_input.unwrap_or(0);
             let ple_vocab = tc.vocab_size_per_layer_input.unwrap_or(tc.vocab_size);
+            let ple_embedding_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "model.language_model.embed_tokens_per_layer.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
             let embed_tokens_per_layer = if ple_dim > 0 {
-                ple_vocab * tc.num_hidden_layers * ple_dim / weight_pack_factor
+                ple_vocab * tc.num_hidden_layers * ple_dim / ple_embedding_pack_factor
             } else {
                 0
             };
@@ -8049,16 +8298,27 @@ impl DeviceMappedModelLoader for Lfm2VlLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
         let text = {
             let tc = &cfg.text_config;
-            let embed_tokens = tc.hidden_size * tc.vocab_size / weight_pack_factor;
-            let lm_head = if tc.tie_word_embeddings() {
+            let tied = tc.tie_word_embeddings();
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.language_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    tied,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if tied {
                 0
             } else {
-                tc.hidden_size * tc.vocab_size / weight_pack_factor
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
             };
             embed_tokens + lm_head + tc.hidden_size
         };
@@ -8364,19 +8624,29 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
         let text_elems = {
+            let (resolved_embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.decoder.embed_tokens.weight",
+                    "model.decoder.lm_head.weight",
+                    tc.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
             let embed_tokens_pack_factor = if tc.tie_word_embeddings {
                 1
             } else {
-                weight_pack_factor
+                resolved_embed_tokens_pack_factor
             };
             let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tc.tie_word_embeddings {
-                tc.hidden_size * tc.vocab_size / weight_pack_factor
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -8499,7 +8769,9 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
 
 #[cfg(test)]
 mod tests {
+    use super::super::AutoDeviceMapQuantization;
     use super::*;
+    use mistralrs_quant::IsqType;
 
     fn matches_any(regexes: &[Regex], name: &str) -> bool {
         regexes.iter().any(|regex| regex.is_match(name))
@@ -8543,6 +8815,70 @@ mod tests {
         for name in immediate_names {
             assert!(matches_any(&immediate, name), "{name} was not matched");
         }
+
+        Ok(())
+    }
+
+    fn gemma4_estimator_config(tie_word_embeddings: bool) -> String {
+        format!(
+            r#"{{
+                "architectures": ["Gemma4ForCausalLM"],
+                "text_config": {{
+                    "hidden_size": 12,
+                    "intermediate_size": 24,
+                    "num_hidden_layers": 2,
+                    "sliding_window": 16,
+                    "final_logit_softcapping": null,
+                    "vocab_size": 24,
+                    "tie_word_embeddings": {tie_word_embeddings},
+                    "layer_types": ["sliding_attention", "full_attention"],
+                    "hidden_size_per_layer_input": 6,
+                    "vocab_size_per_layer_input": 18
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn gemma4_estimator_promotes_tied_untied_and_ple_embeddings() -> Result<()> {
+        let loader = Gemma4Loader;
+        let dtype = DType::BF16;
+
+        let afq4 = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ4), None);
+        let afq4_tied = loader.non_mapped_size_in_bytes(
+            &gemma4_estimator_config(true),
+            dtype,
+            IsqType::AFQ4.pack_factor(dtype),
+            Some(&afq4),
+            None,
+        )?;
+        let afq4_untied = loader.non_mapped_size_in_bytes(
+            &gemma4_estimator_config(false),
+            dtype,
+            IsqType::AFQ4.pack_factor(dtype),
+            Some(&afq4),
+            None,
+        )?;
+        assert_eq!(afq4_tied, 444);
+        assert_eq!(afq4_untied, 636);
+
+        let afq6 = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ6), None);
+        let afq6_tied = loader.non_mapped_size_in_bytes(
+            &gemma4_estimator_config(true),
+            dtype,
+            IsqType::AFQ6.pack_factor(dtype),
+            Some(&afq6),
+            None,
+        )?;
+        let afq6_untied = loader.non_mapped_size_in_bytes(
+            &gemma4_estimator_config(false),
+            dtype,
+            IsqType::AFQ6.pack_factor(dtype),
+            Some(&afq6),
+            None,
+        )?;
+        assert_eq!(afq6_tied, 636);
+        assert_eq!(afq6_untied, 924);
 
         Ok(())
     }

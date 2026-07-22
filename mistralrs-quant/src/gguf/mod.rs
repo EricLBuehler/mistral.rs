@@ -122,6 +122,13 @@ impl GgufMatMul {
         IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
     }
 
+    pub(crate) fn is_float_uqff_dtype(dtype: u32) -> Result<bool> {
+        Ok(matches!(
+            ggml_dtype_from_uqff_code(dtype)?,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16
+        ))
+    }
+
     pub(crate) fn block_size_from_uqff_dtype(dtype: u32) -> Result<usize> {
         Ok(ggml_dtype_from_uqff_code(dtype)?.block_size())
     }

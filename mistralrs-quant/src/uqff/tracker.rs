@@ -13,6 +13,13 @@ pub struct TrackedModule {
     pub shard: Option<crate::Shard>,
 }
 
+impl TrackedModule {
+    pub fn resolve_type(&self, default: crate::IsqType) -> crate::IsqType {
+        self.ty
+            .unwrap_or_else(|| default.resolve_for_tensor(self.key.as_str()))
+    }
+}
+
 #[derive(Clone)]
 pub struct Tracker {
     modules: Arc<Mutex<Vec<TrackedModule>>>,
@@ -21,6 +28,39 @@ pub struct Tracker {
 impl Default for Tracker {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn module(key: &str, ty: Option<crate::IsqType>) -> TrackedModule {
+        let (_tx, rx) = crate::pending_isq_channel();
+        TrackedModule {
+            key: key.to_string(),
+            ct: Arc::new(crate::PendingIsqLayer::new(rx)),
+            ty,
+            shard: None,
+        }
+    }
+
+    #[test]
+    fn default_type_uses_sensitive_tensor_policy() {
+        let module = module("model.embed_tokens", None);
+        assert_eq!(
+            module.resolve_type(crate::IsqType::AFQ4),
+            crate::IsqType::AFQ6
+        );
+    }
+
+    #[test]
+    fn explicit_type_wins_over_sensitive_tensor_policy() {
+        let module = module("model.embed_tokens", Some(crate::IsqType::AFQ2));
+        assert_eq!(
+            module.resolve_type(crate::IsqType::AFQ4),
+            crate::IsqType::AFQ2
+        );
     }
 }
 

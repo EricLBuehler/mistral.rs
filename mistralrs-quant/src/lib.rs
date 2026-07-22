@@ -304,6 +304,7 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    let default_ty = params.ty.map(|ty| ty.resolve_for_tensor(prefix));
     if params.capture == IsqCaptureMode::CaptureAll {
         // Capture everything; topology overrides still pin per-layer ty/device.
         if let Some(override_hit) = params
@@ -312,7 +313,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             .find(|override_entry| override_entry.matches(prefix))
         {
             return Some(ImmediateIsqMatch {
-                ty: override_hit.ty.or(params.ty),
+                ty: override_hit.ty.or(default_ty),
                 device: override_hit.device.clone(),
             });
         }
@@ -327,7 +328,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
         .iter()
         .find(|override_entry| override_entry.matches(prefix))
     {
-        let ty = override_hit.ty.or(params.ty);
+        let ty = override_hit.ty.or(default_ty);
         // Device-only overrides still need a match so the layer gets relocated
         if ty.is_some() || override_hit.device.is_some() {
             return Some(ImmediateIsqMatch {
@@ -338,7 +339,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
         return None;
     }
 
-    if let Some(ty) = params.ty {
+    if let Some(ty) = default_ty {
         if params
             .predicates
             .iter()
@@ -785,6 +786,37 @@ impl std::fmt::Display for IsqType {
 }
 
 impl IsqType {
+    pub fn promote_for_sensitive_tensor(self) -> Self {
+        match self {
+            Self::AFQ2 | Self::AFQ3 | Self::AFQ4 => Self::AFQ6,
+            Self::AFQ6 | Self::AFQ8 => Self::AFQ8,
+            ty => ty,
+        }
+    }
+
+    pub fn resolve_for_tensor(self, tensor_name: &str) -> Self {
+        let module_name = tensor_name
+            .strip_suffix(".weight")
+            .or_else(|| tensor_name.strip_suffix(".bias"))
+            .unwrap_or(tensor_name);
+        let final_segment = module_name.rsplit('.').next().unwrap_or(module_name);
+        let is_sensitive = matches!(
+            final_segment,
+            "embed_tokens"
+                | "embed_tokens_per_layer"
+                | "tok_embeddings"
+                | "wte"
+                | "word_embeddings"
+                | "lm_head"
+        ) || module_name == "output";
+
+        if is_sensitive {
+            self.promote_for_sensitive_tensor()
+        } else {
+            self
+        }
+    }
+
     /// Factor by which the weight size is reduced over the given dtype.
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
@@ -1998,6 +2030,110 @@ mod tests {
             Device::Cpu,
             make_dummy_regexes,
         )
+    }
+
+    fn immediate_params(
+        ty: Option<IsqType>,
+        overrides: Vec<ImmediateIsqOverride>,
+    ) -> ImmediateIsqParams {
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        ImmediateIsqParams {
+            guard: QuantizeOntoGuard::new(),
+            ty,
+            predicates: vec![Regex::new(r"\.weight$").unwrap()],
+            overrides,
+            executor,
+            capture: IsqCaptureMode::Immediate,
+        }
+    }
+
+    #[test]
+    fn afq_sensitive_tensor_policy_promotes_expected_types() {
+        for ty in [IsqType::AFQ2, IsqType::AFQ3, IsqType::AFQ4] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ6);
+        }
+        for ty in [IsqType::AFQ6, IsqType::AFQ8] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ8);
+        }
+        assert_eq!(IsqType::Q4K.promote_for_sensitive_tensor(), IsqType::Q4K);
+    }
+
+    #[test]
+    fn afq_sensitive_tensor_matcher_is_narrow() {
+        let sensitive = [
+            "model.embed_tokens.weight",
+            "model.embed_tokens_per_layer.weight",
+            "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+            "transformer.wte.weight",
+            "bert.embeddings.word_embeddings.weight",
+            "lm_head.weight",
+            "language_model.lm_head.bias",
+            "output.weight",
+        ];
+        for name in sensitive {
+            assert_eq!(
+                IsqType::AFQ4.resolve_for_tensor(name),
+                IsqType::AFQ6,
+                "{name}"
+            );
+        }
+
+        let regular = [
+            "vision.position_embedding.weight",
+            "layers.0.self_attn.output.weight",
+            "output.proj.weight",
+            "layers.0.mlp.down_proj.weight",
+        ];
+        for name in regular {
+            assert_eq!(
+                IsqType::AFQ4.resolve_for_tensor(name),
+                IsqType::AFQ4,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn immediate_isq_explicit_type_wins_over_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ2));
+    }
+
+    #[test]
+    fn immediate_isq_uses_sensitive_default_only_for_sensitive_tensors() {
+        let params = immediate_params(Some(IsqType::AFQ6), Vec::new());
+
+        let embedding = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(embedding.ty, Some(IsqType::AFQ8));
+        let projection =
+            resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+        assert_eq!(projection.ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn immediate_isq_device_only_override_keeps_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: None,
+                device: Some(Device::Cpu),
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ6));
     }
 
     #[test]

@@ -480,7 +480,7 @@ pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> 
         )?;
         report_outputs.push(output_report);
     }
-    info!("In-memory model is quantized as {runtime_ty}.");
+    info!("In-memory model is quantized with {runtime_ty} as its default type.");
     write_uqff_metadata(&metadata_parent, residual, full_ser)?;
     let report = mistralrs_quant::UqffReport {
         schema: 1,
@@ -564,7 +564,7 @@ fn write_uqff_type(
     let handles = mistralrs_quant::requantize_tracked(
         layers,
         ty,
-        |m| m.ty.unwrap_or(ty),
+        |m| m.resolve_type(ty),
         &|key| imatrix.get(key).cloned(),
         mistralrs_quant::IsqConsumer::UqffWrite,
         MAX_UQFF_SIZE_BYTES,
@@ -574,7 +574,7 @@ fn write_uqff_type(
     for (module, rx) in layers.iter().zip(handles.receivers) {
         bar.set_message(module.key.clone());
         bar.tick();
-        let resolved_ty = module.ty.unwrap_or(ty);
+        let resolved_ty = module.resolve_type(ty);
         let output = rx
             .recv()
             .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;

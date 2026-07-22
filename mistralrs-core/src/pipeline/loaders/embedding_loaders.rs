@@ -326,12 +326,14 @@ impl DeviceMappedModelLoader for AutoEmbeddingLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_size_in_bytes(
             config,
             dtype,
             weight_pack_factor,
+            quantization,
             _matformer_config,
         )
     }
@@ -463,12 +465,19 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + norm
         };
@@ -642,11 +651,18 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::quantized_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + norm
         };

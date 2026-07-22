@@ -93,6 +93,11 @@ A [topology](/mistral.rs/guides/perf/topology/) can pin specific layers to a dif
 (e.g. keep `lm_head` at `q8_0` in an otherwise Q4K file); pins are preserved in every output
 variant.
 
+AFQ variants automatically promote token embeddings and output heads: AFQ2/3/4 uses AFQ6 for
+those tensors, while AFQ6/8 uses AFQ8. The filename still names the default model type, and
+`uqff_report.json` records the effective type for each tensor. Explicit topology pins take
+precedence.
+
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 

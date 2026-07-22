@@ -38,6 +38,19 @@ Affine quantization, optimized for Apple Silicon. Runs on Metal (native kernels)
 | `afq6` | 6 |
 | `afq8` | 8 |
 
+AFQ automatically keeps token embeddings and output heads at a higher precision than the
+default model type:
+
+| Default AFQ type | Embeddings and output heads |
+|---|---|
+| AFQ2, AFQ3, AFQ4 | AFQ6 |
+| AFQ6, AFQ8 | AFQ8 |
+
+This applies to token embeddings, per-layer token embeddings, `lm_head`, and the top-level
+`output` head. A tied output head reuses the promoted embedding instead of storing a second
+copy. An explicit per-tensor ISQ type in a [topology](/mistral.rs/guides/perf/topology/)
+takes precedence over this default.
+
 ### Q*K family
 
 GGML K-quant formats. Supported on all backends.
