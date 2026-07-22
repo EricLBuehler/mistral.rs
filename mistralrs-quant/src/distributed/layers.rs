@@ -1498,8 +1498,8 @@ mod tests {
         IsqExecutorConfig, IsqType, ShardedSafeTensors,
     };
 
-    fn install_immediate(overrides: Vec<ImmediateIsqOverride>) {
-        let ty = Some(IsqType::AFQ4);
+    fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
+        let ty = Some(ty);
         let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
         set_immediate_isq_with_executor(
             ty,
@@ -1521,7 +1521,7 @@ mod tests {
         let tracker = vb.tracker().clone();
         let linear = candle_nn::Linear::new(
             candle_core::Tensor::zeros(
-                (64, 64),
+                (64, 256),
                 candle_core::DType::F32,
                 &candle_core::Device::Cpu,
             )
@@ -1536,19 +1536,48 @@ mod tests {
 
     #[test]
     fn replicated_from_linear_uses_sensitive_default() {
-        install_immediate(Vec::new());
+        install_immediate(IsqType::AFQ4, Vec::new());
         assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ6));
     }
 
     #[test]
     fn replicated_from_linear_preserves_explicit_type() {
-        install_immediate(vec![ImmediateIsqOverride {
-            predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
-            layer_range: None,
-            ty: Some(IsqType::AFQ2),
-            device: None,
-        }]);
+        install_immediate(
+            IsqType::AFQ4,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
         assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ2));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q4k_sensitive_default() {
+        install_immediate(IsqType::Q4K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q6K));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q6k_sensitive_default() {
+        install_immediate(IsqType::Q6K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q8_0));
+    }
+
+    #[test]
+    fn replicated_from_linear_preserves_explicit_q_type() {
+        install_immediate(
+            IsqType::Q4K,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::Q4_0),
+                device: None,
+            }],
+        );
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q4_0));
     }
 
     #[test]

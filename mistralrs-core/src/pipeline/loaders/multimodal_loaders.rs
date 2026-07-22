@@ -8844,41 +8844,97 @@ mod tests {
         let loader = Gemma4Loader;
         let dtype = DType::BF16;
 
-        let afq4 = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ4), None);
-        let afq4_tied = loader.non_mapped_size_in_bytes(
-            &gemma4_estimator_config(true),
-            dtype,
-            IsqType::AFQ4.pack_factor(dtype),
-            Some(&afq4),
-            None,
-        )?;
-        let afq4_untied = loader.non_mapped_size_in_bytes(
-            &gemma4_estimator_config(false),
-            dtype,
-            IsqType::AFQ4.pack_factor(dtype),
-            Some(&afq4),
-            None,
-        )?;
-        assert_eq!(afq4_tied, 444);
-        assert_eq!(afq4_untied, 636);
+        for (default, tied, untied) in [
+            (IsqType::AFQ4, 444, 636),
+            (IsqType::AFQ6, 636, 924),
+            (IsqType::Q4K, 444, 636),
+            (IsqType::Q5K, 636, 924),
+            (IsqType::Q6K, 636, 924),
+        ] {
+            let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
+            let pack_factor = default.pack_factor(dtype);
+            assert_eq!(
+                loader.non_mapped_size_in_bytes(
+                    &gemma4_estimator_config(true),
+                    dtype,
+                    pack_factor,
+                    Some(&quantization),
+                    None,
+                )?,
+                tied,
+                "{default} tied"
+            );
+            assert_eq!(
+                loader.non_mapped_size_in_bytes(
+                    &gemma4_estimator_config(false),
+                    dtype,
+                    pack_factor,
+                    Some(&quantization),
+                    None,
+                )?,
+                untied,
+                "{default} untied"
+            );
+        }
 
-        let afq6 = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ6), None);
-        let afq6_tied = loader.non_mapped_size_in_bytes(
-            &gemma4_estimator_config(true),
-            dtype,
-            IsqType::AFQ6.pack_factor(dtype),
-            Some(&afq6),
-            None,
-        )?;
-        let afq6_untied = loader.non_mapped_size_in_bytes(
-            &gemma4_estimator_config(false),
-            dtype,
-            IsqType::AFQ6.pack_factor(dtype),
-            Some(&afq6),
-            None,
-        )?;
-        assert_eq!(afq6_tied, 636);
-        assert_eq!(afq6_untied, 924);
+        Ok(())
+    }
+
+    fn gemma3n_estimator_config(ple_vocab_size: usize) -> String {
+        format!(
+            r#"{{
+                "text_config": {{
+                    "hidden_size": 12,
+                    "intermediate_size": 24,
+                    "num_hidden_layers": 2,
+                    "num_kv_shared_layers": 0,
+                    "vocab_size": 24,
+                    "sliding_window": 16,
+                    "tie_word_embeddings": true,
+                    "rope_scaling": null,
+                    "vocab_size_per_layer_input": {ple_vocab_size},
+                    "hidden_size_per_layer_input": 6,
+                    "altup_num_inputs": 2,
+                    "layer_types": ["sliding_attention", "full_attention"],
+                    "altup_active_idx": 0,
+                    "altup_coef_clip": null,
+                    "laurel_rank": 4,
+                    "altup_correct_scale": true,
+                    "activation_sparsity_pattern": [0.0, 0.0],
+                    "final_logit_softcapping": null
+                }},
+                "vision_config": {{}},
+                "audio_config": {{}},
+                "audio_soft_tokens_per_image": 0
+            }}"#
+        )
+    }
+
+    #[test]
+    fn gemma3n_estimator_keeps_ple_embedding_dense_for_q_defaults() -> Result<()> {
+        let loader = Gemma3nLoader;
+        let dtype = DType::BF16;
+        let expected_ple_vocab_delta = 2 * 6 * dtype.size_in_bytes();
+
+        for default in [IsqType::Q4K, IsqType::Q5K, IsqType::Q6K] {
+            let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
+            let pack_factor = default.pack_factor(dtype);
+            let base = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(18),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                None,
+            )?;
+            let expanded = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(19),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                None,
+            )?;
+            assert_eq!(expanded - base, expected_ple_vocab_delta, "{default}");
+        }
 
         Ok(())
     }

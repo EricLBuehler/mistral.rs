@@ -23,6 +23,28 @@ mistral.rs resolves N to a format based on the detected backend (see table). Thi
 | `6` | AFQ6 | Q6K |
 | `8` | AFQ8 | Q8_0 |
 
+## Sensitive tensor precision
+
+Token embeddings and output heads use a higher-precision default than the rest of an aggressively
+quantized model:
+
+| Default model type | Effective embedding and output-head type |
+|---|---|
+| AFQ2, AFQ3, AFQ4 | AFQ6 |
+| AFQ6, AFQ8 | AFQ8 |
+| Q2K, Q3K, Q4K, Q4_0, Q4_1 | Q6K |
+| Q5K, Q6K, Q8K, Q5_0, Q5_1, Q8_0, Q8_1 | Q8_0 |
+
+Q8_0 is the common high-precision Q target because quantized embedding kernels support it across
+CPU, CUDA, and Metal. This policy applies to token embeddings, quantized per-layer token embeddings,
+`lm_head`, and the top-level `output` head. Gemma 4 applies it to the PLE token-embedding table while
+keeping PLE projections at the model default and norms dense. Gemma 3n PLE remains dense because its
+MatFormer slicing path reshapes the embedding table directly.
+
+A tied output head reuses the effective embedding instead of storing a second copy. An explicit
+per-tensor ISQ type in a [topology](/mistral.rs/guides/perf/topology/) takes precedence over these
+defaults.
+
 ## Format-specific types
 
 ### AFQ family
@@ -38,22 +60,10 @@ Affine quantization, optimized for Apple Silicon. Runs on Metal (native kernels)
 | `afq6` | 6 |
 | `afq8` | 8 |
 
-AFQ automatically keeps token embeddings and output heads at a higher precision than the
-default model type:
-
-| Default AFQ type | Embeddings and output heads |
-|---|---|
-| AFQ2, AFQ3, AFQ4 | AFQ6 |
-| AFQ6, AFQ8 | AFQ8 |
-
-This applies to token embeddings, per-layer token embeddings, `lm_head`, and the top-level
-`output` head. A tied output head reuses the promoted embedding instead of storing a second
-copy. An explicit per-tensor ISQ type in a [topology](/mistral.rs/guides/perf/topology/)
-takes precedence over this default.
-
 ### Q*K family
 
-GGML K-quant formats. Supported on all backends.
+GGML K-quant formats. Q2K through Q6K are supported on all backends; Q8K is available where the
+backend supports it.
 
 | Type | Bits |
 |---|---|
@@ -62,6 +72,7 @@ GGML K-quant formats. Supported on all backends.
 | `q4k` | 4 |
 | `q5k` | 5 |
 | `q6k` | 6 |
+| `q8k` | 8 |
 
 ### Legacy GGML types
 
@@ -71,7 +82,7 @@ Supported for GGUF compatibility:
 |---|---|
 | `q4_0`, `q4_1` | 4 |
 | `q5_0`, `q5_1` | 5 |
-| `q8_0` | 8 |
+| `q8_0`, `q8_1` | 8 |
 
 ### FP8
 

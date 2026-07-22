@@ -62,6 +62,28 @@ mod tests {
             crate::IsqType::AFQ2
         );
     }
+
+    #[test]
+    fn q_defaults_use_sensitive_tensor_policy() {
+        let module = module("model.embed_tokens", None);
+        assert_eq!(
+            module.resolve_type(crate::IsqType::Q4K),
+            crate::IsqType::Q6K
+        );
+        assert_eq!(
+            module.resolve_type(crate::IsqType::Q6K),
+            crate::IsqType::Q8_0
+        );
+    }
+
+    #[test]
+    fn explicit_q_type_wins_over_sensitive_tensor_policy() {
+        let module = module("model.embed_tokens", Some(crate::IsqType::Q4_0));
+        assert_eq!(
+            module.resolve_type(crate::IsqType::Q4K),
+            crate::IsqType::Q4_0
+        );
+    }
 }
 
 impl Tracker {

@@ -790,6 +790,14 @@ impl IsqType {
         match self {
             Self::AFQ2 | Self::AFQ3 | Self::AFQ4 => Self::AFQ6,
             Self::AFQ6 | Self::AFQ8 => Self::AFQ8,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q4_0 | Self::Q4_1 => Self::Q6K,
+            Self::Q5K
+            | Self::Q6K
+            | Self::Q8K
+            | Self::Q5_0
+            | Self::Q5_1
+            | Self::Q8_0
+            | Self::Q8_1 => Self::Q8_0,
             ty => ty,
         }
     }
@@ -2048,18 +2056,38 @@ mod tests {
     }
 
     #[test]
-    fn afq_sensitive_tensor_policy_promotes_expected_types() {
+    fn sensitive_tensor_policy_promotes_expected_types() {
         for ty in [IsqType::AFQ2, IsqType::AFQ3, IsqType::AFQ4] {
             assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ6);
         }
         for ty in [IsqType::AFQ6, IsqType::AFQ8] {
             assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ8);
         }
-        assert_eq!(IsqType::Q4K.promote_for_sensitive_tensor(), IsqType::Q4K);
+        for ty in [
+            IsqType::Q2K,
+            IsqType::Q3K,
+            IsqType::Q4K,
+            IsqType::Q4_0,
+            IsqType::Q4_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q6K);
+        }
+        for ty in [
+            IsqType::Q5K,
+            IsqType::Q6K,
+            IsqType::Q8K,
+            IsqType::Q5_0,
+            IsqType::Q5_1,
+            IsqType::Q8_0,
+            IsqType::Q8_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q8_0);
+        }
+        assert_eq!(IsqType::HQQ4.promote_for_sensitive_tensor(), IsqType::HQQ4);
     }
 
     #[test]
-    fn afq_sensitive_tensor_matcher_is_narrow() {
+    fn sensitive_tensor_matcher_is_narrow() {
         let sensitive = [
             "model.embed_tokens.weight",
             "model.embed_tokens_per_layer.weight",
@@ -2111,13 +2139,18 @@ mod tests {
 
     #[test]
     fn immediate_isq_uses_sensitive_default_only_for_sensitive_tensors() {
-        let params = immediate_params(Some(IsqType::AFQ6), Vec::new());
-
-        let embedding = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
-        assert_eq!(embedding.ty, Some(IsqType::AFQ8));
-        let projection =
-            resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
-        assert_eq!(projection.ty, Some(IsqType::AFQ6));
+        for (base, sensitive) in [
+            (IsqType::AFQ6, IsqType::AFQ8),
+            (IsqType::Q4K, IsqType::Q6K),
+            (IsqType::Q6K, IsqType::Q8_0),
+        ] {
+            let params = immediate_params(Some(base), Vec::new());
+            let embedding = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+            assert_eq!(embedding.ty, Some(sensitive));
+            let projection =
+                resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+            assert_eq!(projection.ty, Some(base));
+        }
     }
 
     #[test]

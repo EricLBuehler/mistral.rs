@@ -542,33 +542,42 @@ mod auto_device_map_quantization_tests {
     const HEAD: &str = "lm_head.weight";
 
     #[test]
-    fn sensitive_afq_defaults_and_topology_overrides_resolve_in_estimates() -> Result<()> {
+    fn sensitive_defaults_and_topology_overrides_resolve_in_estimates() -> Result<()> {
         let dtype = DType::BF16;
-        let automatic = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ4), None);
-        assert_eq!(
-            automatic.pack_factor_for(EMBEDDING, dtype, 1)?,
-            IsqType::AFQ6.pack_factor(dtype)
-        );
-        assert_eq!(
-            automatic.pack_factor_for("model.layers.0.mlp.down_proj.weight", dtype, 1)?,
-            IsqType::AFQ4.pack_factor(dtype)
-        );
+        for (default, sensitive) in [
+            (IsqType::AFQ4, IsqType::AFQ6),
+            (IsqType::Q4K, IsqType::Q6K),
+            (IsqType::Q5K, IsqType::Q8_0),
+            (IsqType::Q6K, IsqType::Q8_0),
+        ] {
+            let automatic = AutoDeviceMapQuantization::isq(Some(default), None);
+            assert_eq!(
+                automatic.pack_factor_for(EMBEDDING, dtype, 1)?,
+                sensitive.pack_factor(dtype),
+                "{default}"
+            );
+            assert_eq!(
+                automatic.pack_factor_for("model.layers.0.mlp.down_proj.weight", dtype, 1)?,
+                default.pack_factor(dtype),
+                "{default}"
+            );
+        }
 
         let topology = Topology::from_str(
-            "'/^model\\.embed_tokens\\.weight$/':\n  isq: AFQ2\n'/^lm_head\\.weight$/':\n  isq: AFQ8\n",
+            "'/^model\\.embed_tokens\\.weight$/':\n  isq: Q2K\n'/^lm_head\\.weight$/':\n  isq: Q8_0\n",
         )?;
-        let overridden = AutoDeviceMapQuantization::isq(Some(IsqType::AFQ4), Some(&topology));
+        let overridden = AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology));
         assert_eq!(
             overridden.pack_factor_for(EMBEDDING, dtype, 1)?,
-            IsqType::AFQ2.pack_factor(dtype)
+            IsqType::Q2K.pack_factor(dtype)
         );
         assert_eq!(
             overridden.pack_factor_for(HEAD, dtype, 1)?,
-            IsqType::AFQ8.pack_factor(dtype)
+            IsqType::Q8_0.pack_factor(dtype)
         );
         assert_eq!(
             tied_quantized_tensor_pack_factor(Some(&overridden), EMBEDDING, HEAD, dtype, 1,)?,
-            IsqType::AFQ2.pack_factor(dtype)
+            IsqType::Q2K.pack_factor(dtype)
         );
         Ok(())
     }
