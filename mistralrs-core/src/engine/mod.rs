@@ -1,17 +1,16 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{compute_block_hashes, BlockHash},
+    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
         CacheBackendMetadata, CacheInstruction,
     },
     prefix_cacher::PrefixCacheManagerV2,
-    response::CompletionChoice,
     scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
-    tools, CompletionResponse, SchedulerConfig, DEBUG,
+    tools, SchedulerConfig, DEBUG,
 };
 use interprocess::local_socket::{traits::Listener, ListenerOptions};
 use llguidance::ParserFactory;
@@ -46,7 +45,9 @@ use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
     pipeline::{ModelCategory, Pipeline},
     request::Request,
-    response::{ChatCompletionResponse, Choice, ResponseMessage},
+    response::{
+        ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
+    },
     sequence::{SequenceRecognizer, SequenceState},
     Constraint,
 };
@@ -337,6 +338,40 @@ impl Engine {
         scheduler.free_finished_sequence_groups();
     }
 
+    fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
+        let Request::Normal(request) = request else {
+            return Ok(());
+        };
+        let Some(selection) = request.adapter.as_mut() else {
+            return Ok(());
+        };
+        if selection.is_pinned() {
+            return Ok(());
+        }
+
+        let runtime = get_mut_arcmutex!(self.pipeline)
+            .adapter_runtime()
+            .ok_or_else(|| {
+                "request selected an adapter, but this pipeline has no dynamic LoRA runtime"
+                    .to_string()
+            })?;
+        selection.pin(&runtime).map_err(|err| err.to_string())
+    }
+
+    async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
+        if let Err(error) = self.resolve_adapter_generation(&mut request) {
+            if let Request::Normal(request) = request {
+                request
+                    .response
+                    .send(crate::Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| tracing::warn!("Receiver disconnected"));
+            }
+            return None;
+        }
+        Some(request)
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -369,6 +404,9 @@ impl Engine {
 
                 match next_request {
                     Ok(request) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -417,6 +455,9 @@ impl Engine {
 
                 match event {
                     WaitEvent::Request(Some(request)) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -587,12 +628,13 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
-                            match seq.sequence_stepping_type() {
-                                SeqStepType::OneShot => {
-                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
-                                }
-                                SeqStepType::PromptAndDecode => {
-                                    seq.set_state(SequenceState::RunningCompletion)
+                            if !seq.is_finished_paged_attn() {
+                                match seq.sequence_stepping_type() {
+                                    SeqStepType::OneShot => seq
+                                        .set_state(SequenceState::Done(StopReason::GeneratedImage)),
+                                    SeqStepType::PromptAndDecode => {
+                                        seq.set_state(SequenceState::RunningCompletion)
+                                    }
                                 }
                             }
                             seq.finish_prompt_timing(prompt_exec_time);
@@ -648,6 +690,22 @@ impl Engine {
 
                         let mut guards_mut =
                             guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
+                        let staged_width =
+                            crate::speculative::staging::staged_batch_width(&guards_mut);
+                        let num_computed_before_step = guards_mut
+                            .iter()
+                            .map(|seq| seq.num_computed_tokens())
+                            .collect::<Vec<_>>();
+                        let scheduled_token_counts = guards_mut
+                            .iter()
+                            .map(|seq| {
+                                let staged = staged_width
+                                    .map(|_| seq.active_staged_speculative_len())
+                                    .unwrap_or_default();
+                                seq.num_uncomputed_tokens().saturating_add(staged)
+                            })
+                            .collect::<Vec<_>>();
 
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
@@ -729,6 +787,15 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        for ((seq, before), scheduled) in guards_mut
+                            .iter_mut()
+                            .zip(num_computed_before_step)
+                            .zip(scheduled_token_counts.iter().copied())
+                        {
+                            if seq.num_computed_tokens() == before {
+                                seq.advance_num_computed_tokens(scheduled);
+                            }
+                        }
                         for seq in guards_mut.iter_mut() {
                             if is_prompt {
                                 seq.finish_prompt_timing(step_exec_time);
@@ -737,16 +804,7 @@ impl Engine {
                             }
                         }
 
-                        let total_processed_tokens: usize = guards_mut
-                            .iter()
-                            .map(|seq| {
-                                if seq.is_prompt() {
-                                    seq.get_toks().len()
-                                } else {
-                                    1
-                                }
-                            })
-                            .sum();
+                        let total_processed_tokens: usize = scheduled_token_counts.iter().sum();
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         // Capture recurrent states at full-block boundaries so hybrid models can
@@ -759,8 +817,8 @@ impl Engine {
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
 
                                 for seq in guards_mut.iter() {
-                                    let seq_len = seq.get_toks().len();
-                                    if seq_len == 0 || seq_len % block_size != 0 {
+                                    let encoded_len = seq.num_computed_tokens();
+                                    if encoded_len == 0 || encoded_len % block_size != 0 {
                                         continue;
                                     }
 
@@ -784,12 +842,14 @@ impl Engine {
                                         continue;
                                     }
 
-                                    let num_blocks = seq_len / block_size;
+                                    let num_blocks = encoded_len / block_size;
+                                    let adapter_key =
+                                        adapter_generation_key(seq.adapter_generation());
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
                                         seq.mm_features(),
-                                        &[],
+                                        adapter_key.as_slice(),
                                     );
                                     if block_hashes.len() < num_blocks {
                                         continue;

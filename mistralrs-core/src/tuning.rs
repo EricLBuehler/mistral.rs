@@ -145,7 +145,7 @@ fn select_devices(force_cpu: bool) -> Result<Vec<Device>> {
         return Ok(vec![Device::Cpu]);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(feature = "cuda")]
     {
         if let Ok(dev) = Device::new_cuda(0) {
             return Ok(crate::device_map::get_all_similar_devices(&dev)?);
@@ -177,10 +177,7 @@ fn hf_cache_path_from_model(model: &ModelSelected) -> Option<PathBuf> {
 fn model_id_from_selected(model: &ModelSelected) -> String {
     match model {
         ModelSelected::Plain { model_id, .. }
-        | ModelSelected::Lora {
-            model_id: Some(model_id),
-            ..
-        }
+        | ModelSelected::Lora { model_id, .. }
         | ModelSelected::XLora {
             model_id: Some(model_id),
             ..

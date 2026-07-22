@@ -338,6 +338,9 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
         cmd.extend(["--auditwheel", "skip"])
 
     env = os.environ.copy()
+    # empty (not generic) suppresses .cargo/config.toml target-cpu=native while keeping the
+    # target baseline; generic drops aes/sha2 on aarch64-apple-darwin, breaking ring's asserts
+    env["RUSTFLAGS"] = ""
 
     # macOS-specific settings for Metal builds
     if plat.os == OS.DARWIN and "metal" in features:

@@ -479,4 +479,21 @@ mod tests {
             json!({"city":"Paris"}).to_string()
         );
     }
+
+    #[test]
+    fn hunyuan_partial_prefix_activates_before_merged_array_token() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Auto,
+            Some(&tools),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+
+        let grammar = state
+            .maybe_activate_continuation_grammar(Some("<tool_calls"))
+            .expect("Hunyuan grammar must activate before the merged `>[` token");
+
+        assert!(lark(&grammar).contains(r#"start: ">" @json_body "</tool_calls>""#));
+    }
 }

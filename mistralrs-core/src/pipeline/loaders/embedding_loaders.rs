@@ -86,7 +86,7 @@ pub trait EmbeddingModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModel
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
 /// The architecture to load the embedding model as.
 pub enum EmbeddingLoaderType {
     #[serde(rename = "embeddinggemma")]
@@ -647,14 +647,8 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
-            } else {
-                0
-            };
             let norm = cfg.hidden_size;
-            embed_tokens + lm_head + norm
+            embed_tokens + norm
         };
         Ok(elems * dtype.size_in_bytes())
     }

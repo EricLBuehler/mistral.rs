@@ -16,8 +16,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, DeepSeekV2RopeConfig,
+        DeepSeekV2RopeScaling, DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
     layers_masker::masked_fill,
     mla::{
@@ -305,6 +305,7 @@ impl Attention {
             self.paged_attn.is_some(),
             q_nope.device(),
             &metadata,
+            self.kv_b_proj.as_ref(),
         );
 
         let mut attn_out = if use_mla_decode {
@@ -348,7 +349,11 @@ impl Attention {
             )?
             .contiguous()?;
 
-            let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
+            let use_mla_cache = should_use_mla_cache(
+                self.paged_attn.is_some(),
+                q.device(),
+                self.kv_b_proj.as_ref(),
+            );
 
             if use_mla_cache {
                 mla_cache_forward(
@@ -452,6 +457,7 @@ impl Attention {
 
 struct MoeGate {
     weight: Tensor,
+    lora_site: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     cfg: DeepSeekV3Config,
     top_k: usize,
     n_routed_experts: usize,
@@ -461,6 +467,10 @@ struct MoeGate {
 impl MoeGate {
     fn new(cfg: &DeepSeekV3Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
+        let lora_site = mistralrs_quant::register_dynamic_lora_site(
+            &vb.clone().set_dtype(DType::F32),
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, n_routed_experts),
+        )?;
         let e_score_correction_bias = if matches!(cfg.topk_method, TopkMethod::NoAuxTc) {
             Some(vb.get_with_hints_dtype(
                 n_routed_experts,
@@ -473,6 +483,7 @@ impl MoeGate {
         };
         Ok(Self {
             weight,
+            lora_site,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
             n_routed_experts,
@@ -484,10 +495,12 @@ impl MoeGate {
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
-        let xs = xs.reshape(((), h))?;
-        let logits = xs
-            .to_dtype(DType::F32)?
-            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let xs = xs.reshape(((), h))?.to_dtype(DType::F32)?;
+        let logits = xs.broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let logits = match &self.lora_site {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs, logits)?,
+            None => logits,
+        };
         if matches!(self.cfg.topk_method, TopkMethod::Greedy) {
             let topk = crate::ops::moe_router_topk(
                 &logits,
@@ -627,6 +640,7 @@ impl Moe {
             num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         // Use the optimized MoEExperts with automatic backend selection
@@ -820,10 +834,13 @@ impl DeepSeekV3 {
         let mapper = normal_loading_metadata.mapper;
         let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {

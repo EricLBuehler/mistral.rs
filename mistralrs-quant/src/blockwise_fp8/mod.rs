@@ -213,6 +213,16 @@ impl QuantMethod for BlockwiseFP8Linear {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.dequant_dtype,
+            self.weight.device().clone(),
+            self.weight.dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
@@ -389,8 +399,7 @@ impl QuantizedSerde for BlockwiseFP8Linear {
     }
 }
 
-/// Create a BlockwiseFP8Linear for MoE with 3D weights [num_experts, N, K].
-/// This is used by PreQuantizedExperts to enable gather_forward with native FP8 GEMM.
+/// Creates a blockwise FP8 layer for MoE models.
 pub fn blockwise_fp8_moe(
     weight: Tensor,
     weight_scale_inv: Tensor,

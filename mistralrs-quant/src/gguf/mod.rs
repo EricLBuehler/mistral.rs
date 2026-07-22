@@ -1,5 +1,4 @@
-#[cfg(not(feature = "cuda"))]
-mod cpu;
+pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
@@ -347,10 +346,14 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        #[cfg(feature = "cuda")]
-        let res = cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?;
-
         // For CPU and Metal: use dequantize-then-matmul approach
+        #[cfg(feature = "cuda")]
+        let res = if x.device().is_cuda() {
+            cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
+        } else {
+            cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
+        };
+
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
@@ -361,7 +364,6 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         match &self.w {
             candle_core::quantized::QMatMul::QTensor(qt) => Some(qt.clone()),
@@ -373,6 +375,12 @@ impl QuantMethod for GgufMatMul {
         #[cfg(feature = "cuda")]
         {
             if self.uses_fast_mmvq() {
+                return None;
+            }
+        }
+        // cpu handles bf16 activations natively (widened once inside the packed matmul)
+        if let QMatMul::QTensor(qt) = &self.w {
+            if qt.device().is_cpu() {
                 return None;
             }
         }
@@ -426,6 +434,16 @@ impl QuantMethod for GgufMatMul {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let (dtype, device, shape) = match &self.w {
+            QMatMul::QTensor(q) => (DType::F32, q.device(), q.shape().dims().to_vec()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
+                (t.dtype(), t.device().clone(), t.dims().to_vec())
+            }
+        };
+        Ok(crate::plan_weight_isq(dtype, device, shape, request, true))
     }
 
     fn apply_isq(

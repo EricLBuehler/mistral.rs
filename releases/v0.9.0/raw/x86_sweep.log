@@ -1,0 +1,41 @@
+mrs q4k │ Prefill (128 tokens)        ┆ 161.6 ± 0.2 ┆ 792.00 ms (prefill)   │
+mrs q4k │ Prefill (512 tokens)        ┆ 274.5 ± 0.7 ┆ 1865.00 ms (prefill)  │
+mrs q4k │ Prefill (2048 tokens)       ┆ 239.2 ± 0.1 ┆ 8563.00 ms (prefill)  │
+mrs q4k │ Prefill (8192 tokens)       ┆ 140.6 ± 0.8 ┆ 58249.00 ms (prefill) │
+mrs q4k │ Decode (128 tokens @ d128)  ┆ 33.6 ± 0.0  ┆ 29.73 ms/T            │
+mrs q4k │ Decode (128 tokens @ d512)  ┆ 32.4 ± 0.0  ┆ 30.90 ms/T            │
+mrs q4k │ Decode (128 tokens @ d2048) ┆ 29.2 ± 0.1  ┆ 34.24 ms/T            │
+mrs q4k │ Decode (128 tokens @ d8192) ┆ 21.5 ± 0.1  ┆ 46.45 ms/T            │
+mrs q8_0 │ Prefill (128 tokens)        ┆ 260.0 ± 5.5 ┆ 492.50 ms (prefill)   │
+mrs q8_0 │ Prefill (512 tokens)        ┆ 280.2 ± 0.1 ┆ 1827.50 ms (prefill)  │
+mrs q8_0 │ Prefill (2048 tokens)       ┆ 233.8 ± 0.2 ┆ 8761.50 ms (prefill)  │
+mrs q8_0 │ Prefill (8192 tokens)       ┆ 136.7 ± 0.7 ┆ 59950.00 ms (prefill) │
+mrs q8_0 │ Decode (128 tokens @ d128)  ┆ 25.7 ± 0.0  ┆ 38.94 ms/T            │
+mrs q8_0 │ Decode (128 tokens @ d512)  ┆ 24.9 ± 0.0  ┆ 40.18 ms/T            │
+mrs q8_0 │ Decode (128 tokens @ d2048) ┆ 23.3 ± 0.1  ┆ 42.89 ms/T            │
+mrs q8_0 │ Decode (128 tokens @ d8192) ┆ 18.2 ± 0.0  ┆ 54.99 ms/T            │
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |           pp128 |        381.49 ± 3.46 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |           pp512 |        396.92 ± 3.69 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |          pp2048 |        302.99 ± 3.69 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |          pp8192 |        163.96 ± 0.84 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |    tg128 @ d128 |         31.84 ± 0.01 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |    tg128 @ d512 |         30.33 ± 0.34 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |   tg128 @ d2048 |         26.02 ± 0.02 |
+lcp q4k | qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |   tg128 @ d8192 |         12.71 ± 0.02 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |           pp128 |        329.94 ± 4.10 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |           pp512 |        425.63 ± 1.58 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |          pp2048 |        325.25 ± 2.32 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |          pp8192 |        168.20 ± 0.15 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |    tg128 @ d128 |         30.70 ± 0.01 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |    tg128 @ d512 |         29.54 ± 0.01 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |   tg128 @ d2048 |         25.20 ± 0.13 |
+lcp q8_0 | qwen3 4B Q8_0                  |   3.98 GiB |     4.02 B | CPU        |      16 |   tg128 @ d8192 |         12.27 ± 0.04 |
+recall: 1
+FINAL_SWEEP_DONE
+│ Decode (128 tokens @ d16384) ┆ 15.9 ± 0.1  ┆ 62.72 ms/T          │
+| qwen3 4B Q4_K - Medium         |   2.32 GiB |     4.02 B | CPU        |      16 |  tg128 @ d16384 |          6.30 ± 0.02 |
+# fa=0 reference rows (llama.cpp flash-attn CPU inverts at depth on x86; best-per-point policy)
+lcp q4k fa0 tg128 d128 31.63 | d512 29.30 | d2048 24.21 | d8192 14.07 | d16384 8.76
+lcp q4k fa1 tg128 d16384 6.30
+lcp q8_0 fa0 tg128 d512 28.45 | d2048 23.58 | d8192 13.73
+mrs q4k tg128 d16384 15.9

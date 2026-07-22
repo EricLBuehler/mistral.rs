@@ -63,6 +63,7 @@ export default defineConfig({
     // SDKs + customize ( /guides/python/ , /guides/rust/ , /guides/customize/ keep real index pages)
     '/guides/customize/anymoe/': '/mistral.rs/guides/customize/lora-adapters/',
     '/guides/customize/matformer/': '/mistral.rs/guides/models/model-family-notes/#matformer',
+    '/examples/python/lora-zephyr/': '/mistral.rs/examples/python/lora/',
     '/explanation/mla/': '/mistral.rs/guides/models/model-family-notes/',
     // Reference + developer
     '/reference/server-config/': '/mistral.rs/reference/cli-toml-config/',

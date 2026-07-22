@@ -675,10 +675,10 @@ static __global__ void moe_dispatch_scatter_kernel(
   }
 }
 
-template <typename T>
+template <typename InputT, typename OutputT>
 static __global__ void moe_weighted_reduce_flat_kernel(
-    const float *__restrict__ inputs, const float *__restrict__ topk_weights,
-    T *__restrict__ outputs, const int num_tokens, const int hidden,
+    const InputT *__restrict__ inputs, const float *__restrict__ topk_weights,
+    OutputT *__restrict__ outputs, const int num_tokens, const int hidden,
     const int topk) {
   const int token = blockIdx.x;
   const int h = blockIdx.y * blockDim.x + threadIdx.x;
@@ -697,9 +697,9 @@ static __global__ void moe_weighted_reduce_flat_kernel(
   const size_t input_base = (size_t)token * topk * hidden + h;
   float acc = 0.0f;
   for (int slot = 0; slot < topk; ++slot) {
-    acc += inputs[input_base + (size_t)slot * hidden] * weights[slot];
+    acc += (float)inputs[input_base + (size_t)slot * hidden] * weights[slot];
   }
-  outputs[(size_t)token * hidden + h] = (T)acc;
+  outputs[(size_t)token * hidden + h] = (OutputT)acc;
 }
 
 // ============== Tiled MoE GEMM kernel (all quant types) ==============
@@ -1131,26 +1131,53 @@ extern "C" void launch_moe_dispatch(
   }
 }
 
-extern "C" void launch_moe_weighted_reduce_flat(const float *inputs,
-                                                const float *topk_weights,
-                                                float *outputs, int num_tokens,
-                                                int hidden, int topk,
-                                                void *stream) {
+extern "C" int launch_moe_weighted_reduce_flat(const float *inputs,
+                                               const float *topk_weights,
+                                               float *outputs, int num_tokens,
+                                               int hidden, int topk,
+                                               void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
   const int threads = 256;
-  dim3 grid(num_tokens, (hidden + threads - 1) / threads);
+  dim3 grid(num_tokens, 1 + (hidden - 1) / threads);
   moe_weighted_reduce_flat_kernel<<<grid, threads, topk * sizeof(float), s>>>(
       inputs, topk_weights, outputs, num_tokens, hidden, topk);
+  return static_cast<int>(cudaGetLastError());
 }
 
-extern "C" void launch_moe_weighted_reduce_flat_bf16(
-    const float *inputs, const float *topk_weights, __nv_bfloat16 *outputs,
+extern "C" int launch_moe_weighted_reduce_flat_bf16(const float *inputs,
+                                                    const float *topk_weights,
+                                                    __nv_bfloat16 *outputs,
+                                                    int num_tokens, int hidden,
+                                                    int topk, void *stream) {
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  const int threads = 256;
+  dim3 grid(num_tokens, 1 + (hidden - 1) / threads);
+  moe_weighted_reduce_flat_kernel<<<grid, threads, topk * sizeof(float), s>>>(
+      inputs, topk_weights, outputs, num_tokens, hidden, topk);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_moe_weighted_reduce_flat_f16_input(
+    const half *inputs, const float *topk_weights, half *outputs,
     int num_tokens, int hidden, int topk, void *stream) {
   cudaStream_t s = static_cast<cudaStream_t>(stream);
   const int threads = 256;
-  dim3 grid(num_tokens, (hidden + threads - 1) / threads);
+  dim3 grid(num_tokens, 1 + (hidden - 1) / threads);
   moe_weighted_reduce_flat_kernel<<<grid, threads, topk * sizeof(float), s>>>(
       inputs, topk_weights, outputs, num_tokens, hidden, topk);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_moe_weighted_reduce_flat_bf16_input(
+    const __nv_bfloat16 *inputs, const float *topk_weights,
+    __nv_bfloat16 *outputs, int num_tokens, int hidden, int topk,
+    void *stream) {
+  cudaStream_t s = static_cast<cudaStream_t>(stream);
+  const int threads = 256;
+  dim3 grid(num_tokens, 1 + (hidden - 1) / threads);
+  moe_weighted_reduce_flat_kernel<<<grid, threads, topk * sizeof(float), s>>>(
+      inputs, topk_weights, outputs, num_tokens, hidden, topk);
+  return static_cast<int>(cudaGetLastError());
 }
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))

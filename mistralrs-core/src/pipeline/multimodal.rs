@@ -3,21 +3,21 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader,
-    CacheManager, CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    get_model_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader, CacheManager,
+    CacheManagerMixin, EitherCache, ForwardInputsResult, Gemma3Loader, GeneralMetadata,
+    IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths,
+    MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer, Phi4MMLoader,
+    PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader,
+    Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader, Qwen2_5VLLoader,
-    VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader,
+    Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, use_ring, WorkerTransferData};
+use crate::distributed::{self, WorkerTransferData};
 #[cfg(feature = "cuda")]
 use crate::kv_cache::RecurrentStateSnapshot;
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
@@ -57,9 +57,10 @@ use crate::vision_models::preprocessor_config::PreProcessorConfig;
 use crate::vision_models::processor_config::ProcessorConfig;
 use crate::vision_models::ModelInputs;
 use crate::{
-    api_dir_list, api_get_file, get_paths, get_uqff_paths, multimodal_normal_model_loader,
-    multimodal_normal_model_loader_sharded, AnyMoeExpertType, DeviceMapSetting, Ordering,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    api_dir_list, api_get_file, get_paths, get_uqff_paths, lora_model_loader,
+    multimodal_normal_model_loader, multimodal_normal_model_loader_sharded, AnyMoeExpertType,
+    DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig,
+    Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
@@ -97,6 +98,7 @@ pub struct MultimodalPipeline {
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     source_weight_files: Vec<std::path::PathBuf>,
+    dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
 /// A loader for a multimodal (non-quantized) model.
@@ -107,14 +109,14 @@ pub struct MultimodalLoader {
     kind: ModelKind,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
-    xlora_model_id: Option<String>,
-    xlora_order: Option<Ordering>,
     token_source: RwLock<Option<TokenSource>>,
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    lora_runtime_config: Option<LoraRuntimeConfig>,
+    loader_type: Option<MultimodalLoaderType>,
 }
 
 #[derive(Default)]
@@ -127,7 +129,8 @@ pub struct MultimodalLoaderBuilder {
     tokenizer_json: Option<String>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    lora_runtime_config: Option<LoraRuntimeConfig>,
 }
 
 #[derive(Clone, Default)]
@@ -161,8 +164,22 @@ impl MultimodalLoaderBuilder {
             jinja_explicit,
             kind: ModelKind::Normal,
             hf_cache_path: None,
-            ..Default::default()
+            lora_adapters: None,
+            lora_runtime_config: None,
         }
+    }
+
+    pub fn with_lora(
+        mut self,
+        adapters: Vec<LoraAdapterSpec>,
+        runtime_config: LoraRuntimeConfig,
+    ) -> Self {
+        self.kind = ModelKind::Adapter {
+            adapter: AdapterKind::Lora,
+        };
+        self.lora_adapters = Some(adapters);
+        self.lora_runtime_config = Some(runtime_config);
+        self
     }
 
     pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
@@ -170,20 +187,14 @@ impl MultimodalLoaderBuilder {
         self
     }
 
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
-        self.kind = ModelKind::Adapter {
-            adapter: AdapterKind::Lora,
-        };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
-        self
-    }
-
     pub fn build(self, loader: Option<MultimodalLoaderType>) -> Box<dyn Loader> {
+        let loader_type = loader.clone();
         let loader: Box<dyn MultimodalModelLoader> = match loader {
             Some(MultimodalLoaderType::Phi3V) => Box::new(Phi3VLoader),
             Some(MultimodalLoaderType::Idefics2) => Box::new(Idefics2Loader),
             Some(MultimodalLoaderType::LLaVANext) => Box::new(LLaVANextLoader),
             Some(MultimodalLoaderType::LLaVA) => Box::new(LLaVALoader),
+            Some(MultimodalLoaderType::Lfm2Vl) => Box::new(Lfm2VlLoader),
             Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
@@ -210,15 +221,32 @@ impl MultimodalLoaderBuilder {
             kind: self.kind,
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
-            xlora_model_id: None,
-            xlora_order: None,
             jinja_explicit: self.jinja_explicit,
             token_source: RwLock::new(None),
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapter_ids: self.lora_adapter_ids,
+            lora_adapters: self.lora_adapters,
+            lora_runtime_config: self.lora_runtime_config,
+            loader_type,
         })
+    }
+}
+
+impl MultimodalLoader {
+    fn validate_dynamic_lora(&self) -> Result<()> {
+        super::validate_lora_loader_config(
+            self.lora_adapters.as_deref(),
+            self.lora_runtime_config,
+        )?;
+        if self.lora_adapters.is_some()
+            && self.loader_type.as_ref() != Some(&MultimodalLoaderType::Qwen3_5Moe)
+        {
+            anyhow::bail!(
+                "dynamic LoRA for multimodal pipelines is supported only for the Qwen3.5/3.6 MoE text submodel; vision-tower adapters and other multimodal architectures are not supported"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -236,6 +264,7 @@ impl Loader for MultimodalLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        self.validate_dynamic_lora()?;
         let cache = self
             .hf_cache_path
             .clone()
@@ -251,7 +280,13 @@ impl Loader for MultimodalLoader {
             None,
             None,
             silent,
-            self.config.from_uqff.is_some()
+            self.config.from_uqff.is_some(),
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: None,
+                lora_adapters: self.lora_adapters.as_deref(),
+                xlora_order: None,
+                xlora_preload: crate::pipeline::XLoraPreload::Skip,
+            }
         );
         *self
             .token_source
@@ -284,6 +319,7 @@ impl Loader for MultimodalLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        self.validate_dynamic_lora()?;
         let config = std::fs::read_to_string(paths.get_config_filename())?;
 
         if !self.inner.supports_paged_attention(&config) {
@@ -294,12 +330,17 @@ impl Loader for MultimodalLoader {
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let write_uqff = self.config.write_uqff.is_some();
-        let use_distributed = (use_nccl || use_ring()) && !write_uqff;
+        let tensor_parallelism = distributed::resolve_tensor_parallelism(
+            self.inner.model_config(&config)?.as_ref(),
+            use_nccl,
+            write_uqff,
+        )?;
+        let use_distributed = tensor_parallelism.is_enabled();
         let device = device.clone();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            let WorkerTransferData::Init { worker_rank, .. } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_distributed {
             vec![candle_core::Device::new_cuda(0)?]
@@ -470,7 +511,12 @@ impl Loader for MultimodalLoader {
             let device = mapper.device_for(layer, false).cloned();
             layer_devices.push(device);
         }
-        let dtype = mapper.get_min_dtype(dtype)?;
+        let dtype = super::isq_flow::resolve_weight_load_dtype(
+            dtype,
+            mapper.as_ref(),
+            &available_devices,
+            write_uqff,
+        )?;
 
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
@@ -528,11 +574,12 @@ impl Loader for MultimodalLoader {
             .message("model")
         );
 
-        let (model, tracker) = if use_distributed {
+        let (model, tracker, dynamic_lora) = if use_distributed {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
                 &available_devices,
+                tensor_parallelism.world_size(),
                 silent,
                 &config,
                 loading_isq,
@@ -550,23 +597,72 @@ impl Loader for MultimodalLoader {
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
-                ModelKind::Normal => multimodal_normal_model_loader_sharded!(
-                    sharded_vb,
+                ModelKind::Normal => {
+                    let (model, tracker) = multimodal_normal_model_loader_sharded!(
+                        sharded_vb,
+                        config,
+                        self.inner,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        attention_mechanism,
+                        multi_progress.clone(),
+                        matformer_slicing_config.clone(),
+                        uqff_reader.clone(),
+                    );
+                    (model, tracker, None)
+                }
+                ModelKind::Adapter {
+                    adapter: AdapterKind::Lora,
+                } => lora_model_loader!(
+                    paths,
+                    Some(dtype),
+                    &load_device,
+                    layer_devices.clone(),
                     config,
                     self.inner,
+                    silent,
                     mapper,
                     loading_isq,
+                    self.config.from_uqff.is_some(),
                     device.clone(),
                     attention_mechanism,
+                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
                     uqff_reader.clone(),
+                    self.lora_runtime_config
+                        .expect("LoRA loaders have a runtime config"),
+                    false,
                 ),
                 _ => unreachable!(),
             }
         } else {
             match self.kind {
-                ModelKind::Normal => multimodal_normal_model_loader!(
+                ModelKind::Normal => {
+                    let (model, tracker) = multimodal_normal_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        self.config.from_uqff.is_some(),
+                        device.clone(),
+                        attention_mechanism,
+                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                        multi_progress,
+                        matformer_slicing_config.clone(),
+                        uqff_reader.clone(),
+                    );
+                    (model, tracker, None)
+                }
+                ModelKind::Adapter {
+                    adapter: AdapterKind::Lora,
+                } => lora_model_loader!(
                     paths,
                     Some(dtype),
                     &load_device,
@@ -583,6 +679,9 @@ impl Loader for MultimodalLoader {
                     multi_progress,
                     matformer_slicing_config.clone(),
                     uqff_reader.clone(),
+                    self.lora_runtime_config
+                        .expect("LoRA loaders have a runtime config"),
+                    true,
                 ),
                 _ => unreachable!(),
             }
@@ -740,10 +839,6 @@ impl Loader for MultimodalLoader {
 
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            anyhow::ensure!(
-                !matches!(self.kind, ModelKind::Adapter { .. }),
-                "PagedAttention does not support adapter models."
-            );
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
@@ -816,6 +911,7 @@ impl Loader for MultimodalLoader {
                 cache_engine,
                 model_metadata: Some(model_metadata),
                 modalities: self.inner.modalities(&config)?,
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             processor,
             prefixer: self.inner.prefixer(&config),
@@ -826,6 +922,7 @@ impl Loader for MultimodalLoader {
             tracked_modules,
             source_weight_files,
             mapper: pipeline_mapper,
+            dynamic_lora,
         })))
     }
 
@@ -997,6 +1094,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         input_meta: InputMetadata,
     ) -> candle_core::Result<Box<dyn Any>> {
         let model_specific_args = self.model.default_model_specific_args(&input_meta.input);
+        let adapter_leases = vec![None; input_meta.input.dim(0)?].into();
         Ok(Box::new(ModelInputs {
             input_ids: input_meta.input,
             seqlen_offsets: input_meta.positions,
@@ -1007,11 +1105,45 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             paged_attn_meta: input_meta.paged_attn_meta,
             flash_meta: input_meta.flash_meta,
             recurrent_batch_kind: RecurrentBatchKind::Decode,
+            adapter_leases,
         }))
     }
 }
 
+fn lora_batch_shape<T>(
+    input_ids: &Tensor,
+    adapter_leases: &[Option<T>],
+) -> candle_core::Result<Option<(usize, usize)>> {
+    let (batch, sequence_length) = input_ids.dims2()?;
+    if adapter_leases.len() != batch {
+        candle_core::bail!(
+            "adapter lease count {} does not match model batch size {batch}",
+            adapter_leases.len()
+        );
+    }
+    if adapter_leases.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    Ok(Some((batch, sequence_length)))
+}
+
 impl MultimodalPipeline {
+    fn lora_execution(
+        &self,
+        input_ids: &Tensor,
+        adapter_leases: &[Option<crate::AdapterLease>],
+    ) -> candle_core::Result<Option<Arc<mistralrs_quant::LoraExecution>>> {
+        let Some((_, sequence_length)) = lora_batch_shape(input_ids, adapter_leases)? else {
+            return Ok(None);
+        };
+        let runtime = self.dynamic_lora.as_ref().ok_or_else(|| {
+            candle_core::Error::msg(
+                "request selected an adapter on a pipeline without dynamic LoRA",
+            )
+        })?;
+        runtime.execution(adapter_leases, sequence_length).map(Some)
+    }
+
     fn recurrent_batch_kind(
         &self,
         input_ids: &Tensor,
@@ -1231,6 +1363,10 @@ impl MultimodalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
+    fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
+        self.dynamic_lora.clone()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -1246,7 +1382,9 @@ impl Pipeline for MultimodalPipeline {
             paged_attn_meta,
             flash_meta,
             recurrent_batch_kind,
+            adapter_leases,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
+        let lora_execution = self.lora_execution(&input_ids, &adapter_leases)?;
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
@@ -1266,7 +1404,7 @@ impl Pipeline for MultimodalPipeline {
             recurrent_batch_kind,
         )?;
         #[cfg(feature = "cuda")]
-        if !return_raw_logits && pixel_values.is_none() {
+        if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
             match self.try_cuda_decode_graph_forward(
                 &input_ids,
                 &seqlen_offsets,
@@ -1291,9 +1429,10 @@ impl Pipeline for MultimodalPipeline {
         )
         .with_recurrent_batch_kind(recurrent_batch_kind)
         .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-        let logits = self
-            .model
-            .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)?;
+        let logits = mistralrs_quant::with_lora_execution(lora_execution, || {
+            self.model
+                .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)
+        })?;
         if self.model.is_block_diffusion() && !return_raw_logits {
             return Ok(ForwardInputsResult::BlockGeneration {
                 token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
@@ -1311,6 +1450,9 @@ impl Pipeline for MultimodalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> candle_core::Result<()> {
+        if self.dynamic_lora.is_some() {
+            candle_core::bail!("dynamic LoRA does not support speculative decoding");
+        }
         if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
             && self.get_metadata().cache_engine.is_none()
         {
@@ -1539,5 +1681,32 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lora_batch_shape;
+    use candle_core::{Device, Tensor};
+
+    #[test]
+    fn lora_batch_shape_accepts_base_and_mixed_batches() -> candle_core::Result<()> {
+        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &Device::Cpu)?;
+        assert_eq!(lora_batch_shape(&input_ids, &[None::<()>, None])?, None);
+        assert_eq!(
+            lora_batch_shape(&input_ids, &[Some(()), None])?,
+            Some((2, 3))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lora_batch_shape_rejects_missing_base_lease() -> candle_core::Result<()> {
+        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &Device::Cpu)?;
+        let error = lora_batch_shape(&input_ids, &[None::<()>]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("adapter lease count 1 does not match model batch size 2"));
+        Ok(())
     }
 }

@@ -20,7 +20,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
+        RotaryEmbedding, Sdpa,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
         block_hash::MultimodalAttentionPolicy, AttentionBackendKind, AttentionImplementation,
@@ -237,7 +240,7 @@ impl Gemma4Router {
 
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
+    k_proj: Option<Arc<dyn QuantMethod>>,
     v_proj: Option<Arc<dyn QuantMethod>>,
     merged_qkv_proj: Option<crate::ops::MergedDenseProjection>,
     o_proj: Arc<dyn QuantMethod>,
@@ -250,8 +253,8 @@ struct Attention {
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
-    k_norm: RmsNorm,
-    v_norm_rms: RmsNorm,
+    k_norm: Option<RmsNorm>,
+    v_norm_rms: Option<RmsNorm>,
     kv_shared_layer_index: Option<usize>,
     layer_idx: usize,
 }
@@ -295,39 +298,62 @@ impl Attention {
             comm,
             vb.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
-        let k_proj = ColumnParallelLayer::new_with_shard(
-            hidden_sz,
-            num_kv_heads * head_dim,
-            &cfg.quantization_config,
-            bias,
-            comm,
-            kv_shard,
-            vb.pp("k_proj"),
-        )?;
 
-        let is_k_eq_v = !sliding && cfg.attention_k_eq_v;
-        let v_proj = if is_k_eq_v {
-            None
+        let is_shared = kv_shared_layer_index.is_some();
+        let (k_proj, v_proj, merged_qkv_proj, k_norm, v_norm_rms) = if is_shared {
+            (None, None, None, None, None)
         } else {
-            Some(ColumnParallelLayer::new_with_shard(
+            let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
+            let k_proj = ColumnParallelLayer::new_with_shard(
                 hidden_sz,
                 num_kv_heads * head_dim,
                 &cfg.quantization_config,
                 bias,
                 comm,
                 kv_shard,
-                vb.pp("v_proj"),
-            )?)
-        };
-        let merged_qkv_proj = if kv_shared_layer_index.is_none() {
-            if let Some(v_proj) = v_proj.as_ref() {
-                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj, &**v_proj])?
+                vb.pp("k_proj"),
+            )?;
+
+            let is_k_eq_v = !sliding && cfg.attention_k_eq_v;
+            let v_proj = if is_k_eq_v {
+                None
             } else {
-                crate::ops::MergedDenseProjection::new(&[&*q_proj, &*k_proj])?
-            }
-        } else {
-            None
+                Some(ColumnParallelLayer::new_with_shard(
+                    hidden_sz,
+                    num_kv_heads * head_dim,
+                    &cfg.quantization_config,
+                    bias,
+                    comm,
+                    kv_shard,
+                    vb.pp("v_proj"),
+                )?)
+            };
+            let merged_qkv_proj = if let Some(v_proj) = v_proj.as_ref() {
+                crate::ops::MergedDenseProjection::new(&[
+                    q_proj.clone(),
+                    k_proj.clone(),
+                    v_proj.clone(),
+                ])?
+            } else {
+                crate::ops::MergedDenseProjection::new(&[q_proj.clone(), k_proj.clone()])?
+            };
+            let k_norm = RmsNorm::new(
+                head_dim,
+                cfg.rms_norm_eps,
+                mapper.set_device(layer_idx, vb.pp("k_norm"), false),
+            )?;
+            let v_dev = mapper
+                .device_for(layer_idx, false)
+                .unwrap_or(&candle_core::Device::Cpu);
+            let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
+            let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
+            (
+                Some(k_proj),
+                v_proj,
+                merged_qkv_proj,
+                Some(k_norm),
+                Some(v_norm_rms),
+            )
         };
 
         let o_proj = RowParallelLayer::new(
@@ -350,17 +376,6 @@ impl Attention {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("q_norm"), false),
         )?;
-        let k_norm = RmsNorm::new(
-            head_dim,
-            cfg.rms_norm_eps,
-            mapper.set_device(layer_idx, vb.pp("k_norm"), false),
-        )?;
-        // V norm: fused RmsNorm with weight=1.0 (no learned parameter)
-        let v_dev = mapper
-            .device_for(layer_idx, false)
-            .unwrap_or(&candle_core::Device::Cpu);
-        let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
-        let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
         let num_heads = num_heads / comm.world_size();
         let num_kv_heads = (num_kv_heads / comm.world_size()).max(1);
 
@@ -422,12 +437,15 @@ impl Attention {
                 let v = parts.next().unwrap_or_else(|| k.clone());
                 Some((q, k, v))
             } else {
-                self.v_proj
-                    .as_ref()
-                    .map(|v_proj| {
-                        crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &**v_proj)
-                    })
-                    .transpose()?
+                match (self.k_proj.as_ref(), self.v_proj.as_ref()) {
+                    (Some(k_proj), Some(v_proj)) => Some(crate::ops::qkv_projections(
+                        xs,
+                        self.q_proj.as_ref(),
+                        k_proj.as_ref(),
+                        v_proj.as_ref(),
+                    )?),
+                    _ => None,
+                }
             }
         } else {
             None
@@ -451,7 +469,11 @@ impl Attention {
             let (k, v) = if let Some((_, k, v)) = qkv {
                 (k, v)
             } else {
-                let k = self.k_proj.forward(xs)?;
+                let k_proj = self
+                    .k_proj
+                    .as_ref()
+                    .expect("Gemma4 non-shared attention missing k_proj");
+                let k = k_proj.forward(xs)?;
                 let v = if let Some(ref v_proj) = self.v_proj {
                     v_proj.forward(xs)?
                 } else {
@@ -479,16 +501,24 @@ impl Attention {
 
         if self.is_sliding {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let k_norm = self
+                    .k_norm
+                    .as_ref()
+                    .expect("Gemma4 non-shared attention missing k_norm");
+                let v_norm_rms = self
+                    .v_norm_rms
+                    .as_ref()
+                    .expect("Gemma4 non-shared attention missing v_norm");
                 let (q_rot, k_rot, v_norm) = self.rotary_emb_local.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
                     self.q_norm.weight(),
-                    self.k_norm.weight(),
-                    self.v_norm_rms.weight(),
+                    k_norm.weight(),
+                    v_norm_rms.weight(),
                     self.q_norm.eps(),
-                    self.k_norm.eps(),
-                    self.v_norm_rms.eps(),
+                    k_norm.eps(),
+                    v_norm_rms.eps(),
                     rope_positions,
                 )?;
                 q = q_rot;
@@ -504,16 +534,24 @@ impl Attention {
             }
         } else {
             if let (Some(k_val), Some(v_val)) = (k.take(), v.take()) {
+                let k_norm = self
+                    .k_norm
+                    .as_ref()
+                    .expect("Gemma4 non-shared attention missing k_norm");
+                let v_norm_rms = self
+                    .v_norm_rms
+                    .as_ref()
+                    .expect("Gemma4 non-shared attention missing v_norm");
                 let (q_rot, k_rot, v_norm) = self.rotary_emb_global.forward_qkv_norm(
                     &q,
                     &k_val,
                     &v_val,
                     self.q_norm.weight(),
-                    self.k_norm.weight(),
-                    self.v_norm_rms.weight(),
+                    k_norm.weight(),
+                    v_norm_rms.weight(),
                     self.q_norm.eps(),
-                    self.k_norm.eps(),
-                    self.v_norm_rms.eps(),
+                    k_norm.eps(),
+                    v_norm_rms.eps(),
                     rope_positions,
                 )?;
                 q = q_rot;
@@ -699,7 +737,11 @@ impl Attention {
             let v = parts.next().unwrap_or_else(|| k.clone());
             (q, k, v)
         } else {
-            let k = self.k_proj.forward(xs)?;
+            let k_proj = self
+                .k_proj
+                .as_ref()
+                .expect("Gemma4 canvas attention missing k_proj");
+            let k = k_proj.forward(xs)?;
             let v = if let Some(ref v_proj) = self.v_proj {
                 v_proj.forward(xs)?
             } else {
@@ -718,29 +760,45 @@ impl Attention {
             .transpose(1, 2)?;
 
         let (q, mut k, mut v) = if self.is_sliding {
+            let k_norm = self
+                .k_norm
+                .as_ref()
+                .expect("Gemma4 canvas attention missing k_norm");
+            let v_norm_rms = self
+                .v_norm_rms
+                .as_ref()
+                .expect("Gemma4 canvas attention missing v_norm");
             self.rotary_emb_local.forward_qkv_norm(
                 &q,
                 &k,
                 &v,
                 self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.v_norm_rms.weight(),
+                k_norm.weight(),
+                v_norm_rms.weight(),
                 self.q_norm.eps(),
-                self.k_norm.eps(),
-                self.v_norm_rms.eps(),
+                k_norm.eps(),
+                v_norm_rms.eps(),
                 rope_positions,
             )?
         } else {
+            let k_norm = self
+                .k_norm
+                .as_ref()
+                .expect("Gemma4 canvas attention missing k_norm");
+            let v_norm_rms = self
+                .v_norm_rms
+                .as_ref()
+                .expect("Gemma4 canvas attention missing v_norm");
             self.rotary_emb_global.forward_qkv_norm(
                 &q,
                 &k,
                 &v,
                 self.q_norm.weight(),
-                self.k_norm.weight(),
-                self.v_norm_rms.weight(),
+                k_norm.weight(),
+                v_norm_rms.weight(),
                 self.q_norm.eps(),
-                self.k_norm.eps(),
-                self.v_norm_rms.eps(),
+                k_norm.eps(),
+                v_norm_rms.eps(),
                 rope_positions,
             )?
         };
@@ -914,6 +972,7 @@ impl DecoderLayer {
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
+                expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
             };
             let moe = MoEExperts::new_direct(
                 &moe_cfg,
@@ -1462,7 +1521,7 @@ impl TextModel {
 
         let vb_m = vb;
         let embed_tokens_scale = (cfg.hidden_size as f64).sqrt();
-        let embed_tokens_in_residual = cfg.keep_tied_lm_head_unquantized;
+        let embed_tokens_in_residual = cfg.tie_word_embeddings && cfg.keep_tied_lm_head_unquantized;
         let embed_tokens: Arc<dyn QuantMethod> = if embed_tokens_in_residual {
             let weight = mapper
                 .set_nm_device(vb_m.pp("embed_tokens"), false)
@@ -1475,12 +1534,14 @@ impl TextModel {
                 Linear::new(weight, None),
             ))?)
         } else {
-            ReplicatedLayer::new(
-                cfg.hidden_size,
+            embedding_with_legacy_tied_uqff(
                 cfg.vocab_size,
-                &cfg.quantization_config,
-                false,
+                cfg.hidden_size,
                 mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+                cfg.tie_word_embeddings.then(|| {
+                    mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq)
+                }),
+                &cfg.quantization_config,
             )?
         };
 
@@ -1535,7 +1596,7 @@ impl TextModel {
                 normal_loading_metadata.loading_isq,
                 &cfg.quantization_config,
                 cfg.hidden_activation,
-            );
+            )?;
         }
         let vb_l = vb_m.pp("layers");
         let layers = NiceProgressBar::<_, 'b'>(
@@ -1606,15 +1667,14 @@ impl TextModel {
         let ple_vocab = cfg.vocab_size_per_layer_input.unwrap_or(cfg.vocab_size);
         let (embed_tokens_per_layer, per_layer_model_projection, per_layer_projection_norm) =
             if ple_dim > 0 {
-                let ple_emb = ReplicatedLayer::new(
-                    cfg.num_hidden_layers * ple_dim,
+                let ple_emb = embedding(
                     ple_vocab,
-                    &cfg.quantization_config,
-                    false,
+                    cfg.num_hidden_layers * ple_dim,
                     mapper.set_nm_device(
                         vb_m.pp("embed_tokens_per_layer"),
                         normal_loading_metadata.loading_isq,
                     ),
+                    &cfg.quantization_config,
                 )?;
 
                 let ple_proj = mistralrs_quant::linear_no_bias(
@@ -2386,10 +2446,9 @@ impl IsqModel for TextModel {
                 .pp("self_attn")
                 .pp("q_norm")
                 .add(&layer.self_attn.q_norm);
-            uvb_l
-                .pp("self_attn")
-                .pp("k_norm")
-                .add(&layer.self_attn.k_norm);
+            if let Some(ref k_norm) = layer.self_attn.k_norm {
+                uvb_l.pp("self_attn").pp("k_norm").add(k_norm);
+            }
             uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
             uvb_l
                 .pp("post_attention_layernorm")

@@ -48,6 +48,29 @@ pub fn dense_embedding(
     Ok(Embedding::new(embeddings, out_size))
 }
 
+fn contains_tensor_or_uqff_with(
+    residual_contains: bool,
+    prefix: &str,
+    name: &str,
+    uqff_contains: impl Fn(&str) -> bool,
+) -> bool {
+    if residual_contains {
+        return true;
+    }
+    let name = if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    };
+    uqff_contains(&name)
+}
+
+pub fn contains_tensor_or_uqff(vb: &ShardedVarBuilder, name: &str) -> bool {
+    contains_tensor_or_uqff_with(vb.contains_tensor(name), &vb.prefix(), name, |name| {
+        vb.uqff_reader().is_some_and(|reader| reader.contains(name))
+    })
+}
+
 pub fn embedding(
     in_size: usize,
     out_size: usize,
@@ -65,6 +88,32 @@ pub fn embedding(
             QuantMethodConfig::Unquantized(Linear::new(weight, None)),
         )?))
     }
+}
+
+fn use_legacy_tied_uqff_head(
+    embedding_prefix: &str,
+    lm_head_prefix: &str,
+    contains: impl Fn(&str) -> bool,
+) -> bool {
+    !contains(&format!("{embedding_prefix}.weight"))
+        && contains(&format!("{lm_head_prefix}.weight"))
+}
+
+pub fn embedding_with_legacy_tied_uqff(
+    in_size: usize,
+    out_size: usize,
+    vb: ShardedVarBuilder,
+    legacy_lm_head_vb: Option<ShardedVarBuilder>,
+    config: &Option<QuantizedConfig>,
+) -> Result<Arc<dyn QuantMethod>> {
+    if let (Some(reader), Some(lm_head_vb)) = (vb.uqff_reader(), legacy_lm_head_vb) {
+        if use_legacy_tied_uqff_head(&vb.prefix(), &lm_head_vb.prefix(), |name| {
+            reader.contains(name)
+        }) {
+            return ReplicatedLayer::new(out_size, in_size, &None, false, lm_head_vb);
+        }
+    }
+    embedding(in_size, out_size, vb, config)
 }
 
 pub fn layer_norm<C: Into<LayerNormConfig>>(
@@ -3160,7 +3209,7 @@ impl Mlp {
             comm,
             vb.pp("up_proj"),
         )?;
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Self {
             gate,
@@ -3201,7 +3250,7 @@ impl Mlp {
 
         let gate = gate_up_projs[0].to_owned();
         let up = gate_up_projs[1].to_owned();
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Self {
             gate,
@@ -3290,7 +3339,7 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Box::new(Self {
             gate,
@@ -3427,5 +3476,53 @@ impl Module for ScaledEmbedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let embedding = Embedding::new(self.embedding.clone(), self.embedding.dim(D::Minus1)?);
         xs.apply(&embedding)? * self.scale
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_tensor_or_uqff_with, use_legacy_tied_uqff_head};
+    use std::collections::HashSet;
+
+    #[test]
+    fn legacy_tied_uqff_head_is_only_used_without_a_packed_embedding() {
+        let embedding = "model.embed_tokens.weight";
+        let lm_head = "lm_head.weight";
+
+        for (names, expected) in [
+            (HashSet::from([lm_head]), true),
+            (HashSet::from([embedding, lm_head]), false),
+            (HashSet::from([embedding]), false),
+            (HashSet::new(), false),
+        ] {
+            assert_eq!(
+                use_legacy_tied_uqff_head("model.embed_tokens", "lm_head", |name| {
+                    names.contains(name)
+                }),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn tensor_presence_checks_residual_and_prefixed_uqff_names() {
+        assert!(contains_tensor_or_uqff_with(
+            true,
+            "model",
+            "embed_tokens.weight",
+            |_| false,
+        ));
+        assert!(contains_tensor_or_uqff_with(
+            false,
+            "model",
+            "embed_tokens.weight",
+            |name| name == "model.embed_tokens.weight",
+        ));
+        assert!(!contains_tensor_or_uqff_with(
+            false,
+            "model",
+            "embed_tokens.weight",
+            |name| name == "embed_tokens.weight",
+        ));
     }
 }

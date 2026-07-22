@@ -7,10 +7,12 @@ fmt:
 docs-regen:
 	cargo test -p mistralrs-cli regenerate_cli_reference -- --ignored
 	cargo test -p mistralrs-server-core regenerate_openapi -- --ignored
+	cargo test -p mistralrs-core regenerate_supported_models -- --ignored
 	python3 docs/scripts/render_pyi.py
 	python3 docs/scripts/render_examples.py
 
 docs-check:
 	cargo test -p mistralrs-cli docgen::cli_reference_matches_committed
 	cargo test -p mistralrs-server-core openapi_matches_committed
+	cargo test -p mistralrs-core supported_models_matches_committed
 	python3 docs/scripts/render_pyi.py --check

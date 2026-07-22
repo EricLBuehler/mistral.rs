@@ -5,7 +5,8 @@ use std::{collections::HashMap, ops::Deref};
 use anyhow::{bail, Result};
 use either::Either;
 use mistralrs_core::{
-    AgentPermission, AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
+    AdapterGenerationId, AdapterSelection as CoreAdapterSelection, AgentPermission,
+    AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
     ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
     ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
     WebSearchReturnTokenBudget, WebSearchUserLocation,
@@ -327,6 +328,36 @@ pub enum StopTokens {
     Multi(Vec<String>),
     /// Single stop sequence
     Single(String),
+}
+
+/// An exact immutable LoRA adapter generation.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AdapterGenerationSelection {
+    /// The 64-character hexadecimal generation ID returned by the adapter management API.
+    #[schema(
+        value_type = String,
+        example = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+    )]
+    pub generation: AdapterGenerationId,
+}
+
+/// A request-scoped LoRA adapter alias or exact immutable generation.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum AdapterSelection {
+    /// Resolve this alias when the request is admitted.
+    Alias(String),
+    /// Pin this exact resident generation.
+    Generation(AdapterGenerationSelection),
+}
+
+impl From<AdapterSelection> for CoreAdapterSelection {
+    fn from(selection: AdapterSelection) -> Self {
+        match selection {
+            AdapterSelection::Alias(alias) => Self::alias(alias),
+            AdapterSelection::Generation(selection) => Self::generation(selection.generation),
+        }
+    }
 }
 
 /// Default value helper
@@ -1035,6 +1066,9 @@ pub struct ChatCompletionRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     /// Bias added to the logits of these token IDs before sampling.
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
@@ -1174,6 +1208,15 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    /// Public source identifier for this model card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Base model that owns this adapter, when the card represents a LoRA adapter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Current immutable LoRA generation for adapter model cards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Model status: "loaded", "unloaded", or "reloading"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -1195,6 +1238,122 @@ pub struct ModelObjects {
     pub data: Vec<ModelObject>,
 }
 
+#[derive(Debug, ToSchema)]
+pub struct CompletionUsageResponse {
+    pub completion_tokens: usize,
+    pub prompt_tokens: usize,
+    pub total_tokens: usize,
+    pub avg_tok_per_sec: f32,
+    pub avg_prompt_tok_per_sec: f32,
+    pub avg_compl_tok_per_sec: f32,
+    pub total_time_sec: f32,
+    pub total_prompt_time_sec: f32,
+    pub total_completion_time_sec: f32,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionResponseMessage {
+    pub content: Option<String>,
+    pub role: String,
+    pub tool_calls: Option<Vec<Value>>,
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionResponseChoice {
+    pub finish_reason: String,
+    pub index: usize,
+    pub message: ChatCompletionResponseMessage,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = ChatCompletionResponse)]
+pub struct ChatCompletionResponseBody {
+    pub id: String,
+    pub choices: Vec<ChatCompletionResponseChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: CompletionUsageResponse,
+    pub adapter_generation: Option<String>,
+    pub agentic_tool_calls: Option<Vec<Value>>,
+    pub files: Option<Vec<Value>>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionChunkDelta {
+    pub content: Option<String>,
+    pub role: String,
+    pub tool_calls: Option<Vec<Value>>,
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionChunkChoice {
+    pub finish_reason: Option<String>,
+    pub index: usize,
+    pub delta: ChatCompletionChunkDelta,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = ChatCompletionChunkResponse)]
+pub struct ChatCompletionChunkResponseBody {
+    pub id: String,
+    pub choices: Vec<ChatCompletionChunkChoice>,
+    pub created: u128,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: Option<CompletionUsageResponse>,
+    pub adapter_generation: Option<String>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct CompletionResponseChoice {
+    pub finish_reason: String,
+    pub index: usize,
+    pub text: String,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = CompletionResponse)]
+pub struct CompletionResponseBody {
+    pub id: String,
+    pub choices: Vec<CompletionResponseChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: CompletionUsageResponse,
+    pub adapter_generation: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct CompletionChunkChoice {
+    pub text: String,
+    pub index: usize,
+    pub logprobs: Option<Value>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = CompletionChunkResponse)]
+pub struct CompletionChunkResponseBody {
+    pub id: String,
+    pub choices: Vec<CompletionChunkChoice>,
+    pub created: u128,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub adapter_generation: Option<String>,
+}
+
 /// Legacy OpenAI compatible text completion request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
@@ -1202,6 +1361,9 @@ pub struct CompletionRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     #[schema(example = "Say this is a test.")]
     pub prompt: String,
     #[schema(example = 1)]
@@ -1591,6 +1753,9 @@ pub struct ResponsesCreateRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     /// Input messages or a single raw prompt string.
     pub input: ResponsesMessages,
     /// System instructions prepended to the conversation.
@@ -1844,6 +2009,25 @@ pub struct ResponsesDeltaContent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn adapter_selection_accepts_alias_and_exact_generation() {
+        let alias: AdapterSelection = serde_json::from_value(json!("production")).unwrap();
+        let alias: CoreAdapterSelection = alias.into();
+        assert_eq!(serde_json::to_value(alias).unwrap(), json!("production"));
+
+        let generation = AdapterGenerationId::from_bytes([0x5a; 32]);
+        let wire = json!({"generation": generation.to_string()});
+        let exact: AdapterSelection = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&exact).unwrap(), wire);
+        let exact: CoreAdapterSelection = exact.into();
+        assert_eq!(exact.resolved_generation(), Some(generation));
+
+        assert!(serde_json::from_value::<AdapterSelection>(json!({
+            "generation": "not-a-generation"
+        }))
+        .is_err());
+    }
 
     fn assert_tool_roundtrips(value: serde_json::Value) -> OpenAiTool {
         let tool: OpenAiTool = serde_json::from_value(value.clone()).unwrap();

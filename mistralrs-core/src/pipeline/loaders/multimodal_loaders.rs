@@ -48,6 +48,7 @@ use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::image_processor::ImagePreProcessor;
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
+use crate::vision_models::lfm2_vl::{Config as Lfm2VlConfig, Lfm2VlModel, Lfm2VlProcessor};
 use crate::vision_models::llama4::{
     self, Llama4Config, Llama4ImageProcessor, Llama4Model, Llama4Processor,
 };
@@ -179,7 +180,7 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
 /// The architecture to load the multimodal model as.
 pub enum MultimodalLoaderType {
     #[serde(rename = "phi3v")]
@@ -190,6 +191,8 @@ pub enum MultimodalLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
+    #[serde(rename = "lfm2vl")]
+    Lfm2Vl,
     #[serde(rename = "vllama")]
     VLlama,
     #[serde(rename = "qwen2vl")]
@@ -234,6 +237,7 @@ impl MultimodalLoaderType {
             "Idefics2ForConditionalGeneration" => Ok(Self::Idefics2),
             "LlavaNextForConditionalGeneration" => Ok(Self::LLaVANext),
             "LlavaForConditionalGeneration" => Ok(Self::LLaVA),
+            "Lfm2VlForConditionalGeneration" => Ok(Self::Lfm2Vl),
             "MllamaForConditionalGeneration" => Ok(Self::VLlama),
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
@@ -270,6 +274,7 @@ impl FromStr for MultimodalLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
+            "lfm2vl" | "lfm2_vl" => Ok(Self::Lfm2Vl),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
@@ -287,7 +292,7 @@ impl FromStr for MultimodalLoaderType {
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -299,6 +304,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Idefics2 => "idefics2",
             MultimodalLoaderType::LLaVANext => "llava_next",
             MultimodalLoaderType::LLaVA => "llava",
+            MultimodalLoaderType::Lfm2Vl => "lfm2vl",
             MultimodalLoaderType::VLlama => "vllama",
             MultimodalLoaderType::Qwen2VL => "qwen2vl",
             MultimodalLoaderType::Idefics3 => "idefics3",
@@ -358,6 +364,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Idefics2 => Box::new(Idefics2Loader),
             MultimodalLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             MultimodalLoaderType::LLaVA => Box::new(LLaVALoader),
+            MultimodalLoaderType::Lfm2Vl => Box::new(Lfm2VlLoader),
             MultimodalLoaderType::VLlama => Box::new(VLlamaLoader),
             MultimodalLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             MultimodalLoaderType::Idefics3 => Box::new(Idefics3Loader),
@@ -733,8 +740,7 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -1785,10 +1791,10 @@ impl MultimodalModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
@@ -1955,8 +1961,7 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         let text_elems = {
             let cfg = &config.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -2296,8 +2301,7 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let text_elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -3210,8 +3214,7 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
         let elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -3536,8 +3539,7 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         let text_elems = {
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -3853,8 +3855,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
                 Gemma3Config::WithVision { text_config, .. } => text_config,
             };
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -4204,8 +4205,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
             let cfg = &cfg.text_config;
 
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !cfg.tie_word_embeddings {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -5096,13 +5096,13 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Text components that are not device-mapped
         let text_elems = {
             // Embeddings
-            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size;
+            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor;
             let embed_tokens_per_layer = text_cfg.num_hidden_layers
                 * text_cfg.hidden_size_per_layer_input
                 * text_cfg.vocab_size_per_layer_input;
 
             // LM head (if not tied)
-            let lm_head = if !text_cfg.tie_word_embeddings || weight_pack_factor != 1 {
+            let lm_head = if !text_cfg.tie_word_embeddings {
                 text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -5209,10 +5209,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                 in_chs = *out_channels;
                             }
                             BlockType::MultiQueryAttention {
-                                num_heads,
-                                kv_dim,
-                                kv_stride: _,
-                                ..
+                                num_heads, kv_dim, ..
                             } => {
                                 // MMQA: all Conv2d layers, not quantizable
                                 let dw_kernel_size = 3; // Default dw_kernel_size for MMQA
@@ -5778,8 +5775,7 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !tie || weight_pack_factor != 1 {
+            let lm_head = if !tie {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -6136,8 +6132,7 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !tie || weight_pack_factor != 1 {
+            let lm_head = if !tie {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -6383,7 +6378,19 @@ impl IsqModelLoader for Qwen3_5Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6478,7 +6485,7 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !tie || weight_pack_factor != 1 {
+            let lm_head = if !tie {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -6580,12 +6587,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                 }
                 crate::vision_models::qwen3_5::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
@@ -6593,7 +6598,14 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 
@@ -6718,7 +6730,19 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6865,7 +6889,7 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         let text_elems = {
             let cfg = &cfg.text_config;
             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !tie || weight_pack_factor != 1 {
+            let lm_head = if !tie {
                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
             } else {
                 0
@@ -6967,12 +6991,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                 }
                 crate::vision_models::qwen3_5_moe::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
@@ -6983,7 +7005,14 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 
@@ -7387,8 +7416,6 @@ impl IsqModelLoader for Gemma4Loader {
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
-            Regex::new(r"embed_tokens\.weight$")?,
-            Regex::new(r"embed_tokens_per_layer\.weight$")?,
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
@@ -7549,7 +7576,13 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
         let text_elems = {
-            let embed_tokens = tc.hidden_size * tc.vocab_size;
+            let embed_tokens_pack_factor =
+                if tc.tie_word_embeddings && tc.keep_tied_lm_head_unquantized {
+                    1
+                } else {
+                    weight_pack_factor
+                };
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tc.tie_word_embeddings {
                 tc.hidden_size * tc.vocab_size / weight_pack_factor
             } else {
@@ -7560,7 +7593,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
             let ple_dim = tc.hidden_size_per_layer_input.unwrap_or(0);
             let ple_vocab = tc.vocab_size_per_layer_input.unwrap_or(tc.vocab_size);
             let embed_tokens_per_layer = if ple_dim > 0 {
-                ple_vocab * tc.num_hidden_layers * ple_dim
+                ple_vocab * tc.num_hidden_layers * ple_dim / weight_pack_factor
             } else {
                 0
             };
@@ -7782,7 +7815,361 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     }
 }
 
-// ── DiffusionGemma ─────────────────────────────────────────────────────────
+// ======================== LFM2-VL loader
+
+/// [`MultimodalLoader`] for an LFM2-VL model.
+///
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+pub struct Lfm2VlLoader;
+
+pub struct Lfm2VlPrefixer;
+
+impl MultimodalPromptPrefixer for Lfm2VlPrefixer {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+}
+
+impl Lfm2VlLoader {
+    fn max_image_seq_len(cfg: &Lfm2VlConfig) -> usize {
+        let num_patches = cfg.tile_size / cfg.encoder_patch_size;
+        let downsampled_patches = num_patches.div_ceil(cfg.downsample_factor);
+        let tokens_per_tile = downsampled_patches * downsampled_patches;
+        if cfg.do_image_splitting {
+            cfg.max_tiles * tokens_per_tile
+                + if cfg.use_thumbnail {
+                    cfg.max_image_tokens
+                } else {
+                    0
+                }
+        } else {
+            cfg.max_image_tokens
+        }
+    }
+
+    fn max_num_patches(cfg: &Lfm2VlConfig) -> usize {
+        let max_thumbnail_image_patches = cfg.max_image_tokens * cfg.downsample_factor.pow(2);
+        let tile_size_patches = if cfg.do_image_splitting {
+            (cfg.tile_size / cfg.encoder_patch_size).pow(2)
+        } else {
+            0
+        };
+        max_thumbnail_image_patches.max(tile_size_patches)
+    }
+
+    fn max_crops_per_image(cfg: &Lfm2VlConfig) -> usize {
+        if cfg.do_image_splitting {
+            cfg.max_tiles + if cfg.use_thumbnail { 1 } else { 0 }
+        } else {
+            1
+        }
+    }
+}
+
+impl MultimodalModelLoader for Lfm2VlLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(Lfm2VlModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: Lfm2VlConfig =
+            serde_json::from_str(model_config).expect("Failed to parse LFM2-VL config");
+        Arc::new(Lfm2VlProcessor::new(&cfg, &preprocessor_config))
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Lfm2VlPrefixer)
+    }
+
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        if loading_isq {
+            Ok(Arc::new(|_| DeviceForLoadTensor::Base))
+        } else {
+            let re = Regex::new(r"model\.language_model\.layers\.(\d+)\.").unwrap();
+            let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+            let num_layers = cfg.text_config.num_hidden_layers;
+            Ok(Arc::new(move |name: String| {
+                if let Some(captures) = re.captures(&name) {
+                    captures
+                        .get(1)
+                        .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(|l| l.min(num_layers))
+                        .map(DeviceForLoadTensor::Idx)
+                        .unwrap_or(DeviceForLoadTensor::Base)
+                } else {
+                    DeviceForLoadTensor::Base
+                }
+            }))
+        }
+    }
+}
+
+impl IsqModelLoader for Lfm2VlLoader {
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.out_proj\.(weight|bias)$",
+            )?,
+            Regex::new(r"(model\.)?language_model\.layers\.(\d+)\.conv\.in_proj\.(weight|bias)$")?,
+            Regex::new(r"(model\.)?language_model\.layers\.(\d+)\.conv\.out_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w2\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w3\.(weight|bias)$",
+            )?,
+            Regex::new(r"model\.multi_modal_projector\.linear_1\.(weight|bias)$")?,
+            Regex::new(r"model\.multi_modal_projector\.linear_2\.(weight|bias)$")?,
+        ])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for Lfm2VlLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let seq_len =
+            max_seq_len.min(&ATTENTION_CHUNK_SIZE) + Self::max_image_seq_len(&cfg) * max_num_images;
+        Ok(max_batch_size * cfg.text_config.num_attention_heads * seq_len * seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let max_crops = max_num_images * Self::max_crops_per_image(&cfg);
+        let max_patches = Self::max_num_patches(&cfg);
+        let max_vision_attn = max_batch_size
+            * max_crops
+            * cfg.vision_config.num_attention_heads
+            * max_patches
+            * max_patches;
+        let max_vision_hidden = max_batch_size
+            * max_crops
+            * max_patches
+            * cfg
+                .vision_config
+                .hidden_size
+                .max(cfg.vision_config.intermediate_size);
+        Ok(max_vision_attn.max(max_vision_hidden))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let text = {
+            let tc = &cfg.text_config;
+            let embed_tokens = tc.hidden_size * tc.vocab_size / weight_pack_factor;
+            let lm_head = if tc.tie_word_embeddings() {
+                0
+            } else {
+                tc.hidden_size * tc.vocab_size / weight_pack_factor
+            };
+            embed_tokens + lm_head + tc.hidden_size
+        };
+        let vision = {
+            let vc = &cfg.vision_config;
+            let patch_embedding =
+                (vc.num_channels * vc.patch_size * vc.patch_size * vc.hidden_size
+                    / weight_pack_factor)
+                    + vc.hidden_size;
+            let position_embedding = vc.num_patches * vc.hidden_size;
+            let post_layernorm = 2 * vc.hidden_size;
+            let layer = {
+                let attn =
+                    4 * (vc.hidden_size * vc.hidden_size / weight_pack_factor + vc.hidden_size);
+                let mlp = vc.hidden_size * vc.intermediate_size / weight_pack_factor
+                    + vc.intermediate_size
+                    + vc.intermediate_size * vc.hidden_size / weight_pack_factor
+                    + vc.hidden_size;
+                let norms = 4 * vc.hidden_size;
+                attn + mlp + norms
+            };
+            patch_embedding + position_embedding + post_layernorm + vc.num_hidden_layers * layer
+        };
+        let projector = {
+            let in_channels = cfg.vision_config.hidden_size * cfg.downsample_factor.pow(2);
+            let linears = in_channels * cfg.projector_hidden_size / weight_pack_factor
+                + cfg.projector_hidden_size * cfg.text_config.hidden_size / weight_pack_factor;
+            let bias = if cfg.projector_bias {
+                cfg.projector_hidden_size + cfg.text_config.hidden_size
+            } else {
+                0
+            };
+            let norm = if cfg.projector_use_layernorm {
+                2 * in_channels
+            } else {
+                0
+            };
+            linears + bias + norm
+        };
+        Ok((text + vision + projector) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let cfg = cfg.text_config;
+        let head_dim = cfg.head_dim();
+        let hidden = cfg.hidden_size;
+        let intermediate = cfg.intermediate_size();
+        let mut sizes = Vec::with_capacity(cfg.num_hidden_layers);
+
+        for layer_type in cfg.layer_types() {
+            let operator_norm = hidden;
+            let ffn_norm = hidden;
+            let feed_forward = 3 * hidden * intermediate / weight_pack_factor;
+            let operator = match layer_type {
+                crate::models::lfm2::LayerType::Attention => {
+                    let q_dim = cfg.num_attention_heads * head_dim;
+                    let kv_dim = cfg.num_key_value_heads * head_dim;
+                    let projections = (hidden * q_dim + hidden * kv_dim * 2 + q_dim * hidden)
+                        / weight_pack_factor;
+                    projections + 2 * head_dim
+                }
+                crate::models::lfm2::LayerType::Conv => {
+                    let projections = (hidden * 3 * hidden + hidden * hidden) / weight_pack_factor;
+                    let conv = hidden * cfg.conv_l_cache;
+                    let bias = if cfg.conv_bias { 5 * hidden } else { 0 };
+                    projections + conv + bias
+                }
+            };
+
+            sizes
+                .push((operator_norm + ffn_norm + operator + feed_forward) * dtype.size_in_bytes());
+        }
+
+        Ok(sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let tc = cfg.text_config;
+        let head_dim = tc.head_dim();
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
+    }
+}
+
+// ======================== DiffusionGemma loader
 
 pub struct DiffusionGemmaLoader;
 
@@ -7982,8 +8369,13 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
         let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
         let text_elems = {
-            let embed_tokens = tc.hidden_size * tc.vocab_size;
-            let lm_head = if !tc.tie_word_embeddings || weight_pack_factor != 1 {
+            let embed_tokens_pack_factor = if tc.tie_word_embeddings {
+                1
+            } else {
+                weight_pack_factor
+            };
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tc.tie_word_embeddings {
                 tc.hidden_size * tc.vocab_size / weight_pack_factor
             } else {
                 0
@@ -8128,6 +8520,28 @@ mod tests {
             for name in names {
                 assert!(matches_any(&regexes, name), "{name} was not matched");
             }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn gemma4_uqff_keeps_old_dense_embeddings_out_of_isq_layers() -> Result<()> {
+        let loader = Gemma4Loader;
+        let residual_names = ["embed_tokens.weight", "embed_tokens_per_layer.weight"];
+        let immediate_names = [
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.embed_tokens_per_layer.weight",
+        ];
+
+        let isq_layers = loader.isq_layer_regexes("")?;
+        for name in residual_names {
+            assert!(!matches_any(&isq_layers, name), "{name} was matched");
+        }
+
+        let immediate = loader.immediate_isq_predicates("")?;
+        for name in immediate_names {
+            assert!(matches_any(&immediate, name), "{name} was not matched");
         }
 
         Ok(())

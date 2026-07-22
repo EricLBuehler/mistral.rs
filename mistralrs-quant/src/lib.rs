@@ -1,7 +1,7 @@
 use std::{
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
@@ -20,6 +20,9 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(test)]
+#[path = "build_support/cuda_headers.rs"]
+mod cuda_headers;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -31,6 +34,7 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod isq_executor;
 mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
@@ -46,7 +50,6 @@ mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
 pub use uqff::{
@@ -72,8 +75,8 @@ pub use blockwise_fp8::{
 };
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, PreQuantizedExperts,
-        ReplicatedLayer, RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, validate_tp_head_layout, ColumnParallelLayer,
+        PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
@@ -84,24 +87,49 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
+    quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
     ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
 #[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
+#[cfg(feature = "cuda")]
 pub use gguf::fast_mmq::{
-    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
-    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
+    grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
+    grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
+pub use isq_executor::{
+    conservative_plan, elem_count, estimate_output_bytes, ggml_output_bytes, plan_weight_isq,
+    tensor_bytes, IsqConsumer, IsqExecutor, IsqExecutorConfig, IsqJobOutput, IsqKernelKind,
+    IsqPlanParams, IsqRequest, IsqResourceEstimate,
+};
 pub use lora::{
-    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
-    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
+    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
+    register_dynamic_lora_site, with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights,
+    LoraAdapterWeights, LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats,
+    LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection,
+    LoraExpertProjectionNames, LoraExpertProjectionWeights, LoraExpertSiteHandle,
+    LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec,
+    LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules,
+    LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode, RoutedLoraMetadataLayout,
+    RoutedLoraProjectionLayout, StaticLoraConfig, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
+    ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use lora::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
@@ -119,62 +147,12 @@ pub use utils::isq::{
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
-pub use utils::{fused_glu, GluActivationType};
+pub use utils::{fused_glu, fused_split_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
-
-/// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
-///
-/// Without backpressure, MoE models (e.g. Gemma4 with 128 experts × 30 layers)
-/// queue BF16 tensor data in the rayon pool faster than the pool can quantize,
-/// causing OOM on memory-constrained systems like macOS Metal with unified memory.
-pub struct IsqBackpressure {
-    count: Mutex<usize>,
-    cvar: Condvar,
-    max: usize,
-}
-
-impl IsqBackpressure {
-    pub fn new(max: usize) -> Self {
-        Self {
-            count: Mutex::new(0),
-            cvar: Condvar::new(),
-            max,
-        }
-    }
-
-    /// Block until a slot is available, then increment the outstanding count.
-    pub fn acquire(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        while *count >= self.max {
-            count = self
-                .cvar
-                .wait(count)
-                .expect("ISQ backpressure lock poisoned");
-        }
-        *count += 1;
-    }
-
-    /// Decrement the outstanding count and wake a blocked loader thread.
-    pub fn release(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        *count = count.saturating_sub(1);
-        self.cvar.notify_one();
-    }
-}
-
-impl Debug for IsqBackpressure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.count.lock().map(|c| *c).unwrap_or(0);
-        f.debug_struct("IsqBackpressure")
-            .field("outstanding", &count)
-            .field("max", &self.max)
-            .finish()
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
@@ -182,9 +160,7 @@ pub struct ImmediateIsqParams {
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
-    pub pool: Arc<rayon::ThreadPool>,
-    /// Backpressure to limit outstanding async ISQ jobs.
-    pub backpressure: Arc<IsqBackpressure>,
+    pub executor: IsqExecutor,
     pub capture: IsqCaptureMode,
 }
 
@@ -245,28 +221,24 @@ thread_local! {
 }
 
 pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
-    let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), capture, pool);
+    let (executor, _) = create_isq_executor(IsqExecutorConfig::new(isq));
+    set_immediate_isq_with_executor(isq, predicates, Vec::new(), capture, executor);
 }
 
-pub fn set_immediate_isq_with_pool(
+pub fn set_immediate_isq_with_executor(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
     capture: IsqCaptureMode,
-    pool: rayon::ThreadPool,
+    executor: IsqExecutor,
 ) {
-    // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
-    // (load next tensor while pool quantizes current) without unbounded growth.
-    let max_outstanding = pool.current_num_threads() + 1;
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
             ty: isq,
             predicates,
             overrides,
-            backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
-            pool: Arc::new(pool),
+            executor,
             capture,
         });
     });
@@ -281,12 +253,8 @@ unsafe fn set_isq_thread_affinity() {
 #[cfg(not(target_os = "macos"))]
 unsafe fn set_isq_thread_affinity() {}
 
-/// Create a rayon thread pool for parallel immediate ISQ.
-/// Returns `(pool, num_threads)` so callers can log the thread count.
-///
-/// Thread count is based on the quantization type:
-/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
-/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+/// Legacy Rayon pool helper for callers that still need raw pool semantics.
+/// New ISQ scheduling should use `create_isq_executor`.
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1
@@ -306,6 +274,12 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
         .build()
         .expect("Failed to create ISQ thread pool");
     (pool, num_threads)
+}
+
+pub fn create_isq_executor(config: IsqExecutorConfig) -> (IsqExecutor, usize) {
+    let executor = IsqExecutor::new(config);
+    let num_threads = executor.worker_threads();
+    (executor, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
@@ -1269,8 +1243,7 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Get the underlying QTensor if this is a GGUF quantized layer.
-    /// Used for direct kernel access in the grouped MoE prefill path.
-    #[cfg(feature = "cuda")]
+    /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
     }
@@ -1287,6 +1260,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Weight dtype and device
     fn dtype_and_device(&self) -> (DType, Device);
 
+    fn plan_isq(&self, request: &IsqRequest) -> Result<IsqPlanParams>;
+
     /// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
 
@@ -1302,6 +1277,14 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         None
+    }
+
+    fn is_dynamic_lora_active(&self) -> bool {
+        false
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        replacement
     }
 
     fn has_bias(&self) -> bool {
@@ -1351,6 +1334,9 @@ pub fn try_fused_quantized_gate_up(
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if gate.has_bias() || up.has_bias() {
         return Ok(None);
     }
@@ -1391,6 +1377,29 @@ pub fn try_fused_quantized_gate_up(
     )?))
 }
 
+/// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
+/// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
+pub fn try_fused_gemv_shared_lhs_cpu(
+    xs: &Tensor,
+    ws: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if !xs.device().is_cpu() || xs.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if ws.iter().any(|w| w.has_bias()) {
+        return Ok(None);
+    }
+    let mut qs = Vec::with_capacity(ws.len());
+    for w in ws {
+        let Some(q) = w.get_qtensor() else {
+            return Ok(None);
+        };
+        qs.push(q);
+    }
+    let refs: Vec<&candle_core::quantized::QTensor> = qs.iter().map(|a| a.as_ref()).collect();
+    candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
+}
+
 #[cfg(feature = "cuda")]
 pub fn try_fused_quantized_qkv(
     xs: &Tensor,
@@ -1398,6 +1407,9 @@ pub fn try_fused_quantized_qkv(
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }
@@ -1806,7 +1818,11 @@ pub fn linear_no_bias(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1816,7 +1832,6 @@ pub fn linear_no_bias(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1856,9 +1871,6 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1866,13 +1878,9 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear(
@@ -1887,7 +1895,11 @@ pub fn linear(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1897,7 +1909,6 @@ pub fn linear(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1937,9 +1948,6 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1948,13 +1956,9 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear_b(

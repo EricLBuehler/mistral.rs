@@ -56,6 +56,7 @@ pub struct BuildInfo {
     pub cudnn: bool,
     pub flash_attn: bool,
     pub flash_attn_v3: bool,
+    pub cutile: bool,
     pub accelerate: bool,
     pub mkl: bool,
     pub git_revision: String,
@@ -122,6 +123,7 @@ fn build_info() -> BuildInfo {
         cudnn: cfg!(feature = "cudnn"),
         flash_attn: cfg!(feature = "flash-attn"),
         flash_attn_v3: cfg!(feature = "flash-attn-v3"),
+        cutile: cfg!(feature = "cutile"),
         accelerate: cfg!(feature = "accelerate"),
         mkl: cfg!(feature = "mkl"),
         git_revision: crate::MISTRALRS_GIT_REVISION.to_string(),
@@ -629,6 +631,47 @@ pub fn run_doctor() -> DoctorReport {
                     });
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "cutile")]
+    {
+        for dev in system.devices.iter().filter(|d| d.kind == "cuda") {
+            let Some(ord) = dev.ordinal else {
+                continue;
+            };
+            let Ok(device) = Device::new_cuda(ord) else {
+                continue;
+            };
+            let Ok(cuda) = device.as_cuda_device() else {
+                continue;
+            };
+            let (status, message, suggestion) = if !mistralrs_quant::cutile::device_supported(cuda)
+            {
+                (
+                    DoctorStatus::Warn,
+                    format!("GPU {ord}: cuTile is compiled in but this CUDA/SM pair is unsupported."),
+                    Some("Use a supported release artifact or rebuild with the required CUDA toolkit.".to_string()),
+                )
+            } else if mistralrs_quant::cutile::jit_available(cuda) {
+                (
+                    DoctorStatus::Ok,
+                    format!("GPU {ord}: cuTile runtime tooling and tileiras target are ready."),
+                    None,
+                )
+            } else {
+                (
+                    DoctorStatus::Warn,
+                    format!("GPU {ord}: cuTile runtime tooling is unavailable; native CUDA and CUTLASS fallbacks remain active."),
+                    Some("Install NVIDIA tileiras and put it on PATH or set CUTILE_TILEIRAS_PATH.".to_string()),
+                )
+            };
+            checks.push(DoctorCheck {
+                name: format!("cuda_{ord}_cutile_jit"),
+                status,
+                message,
+                suggestion,
+            });
         }
     }
 

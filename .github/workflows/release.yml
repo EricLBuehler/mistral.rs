@@ -38,6 +38,9 @@ env:
 jobs:
   metal:
     runs-on: macos-15
+    env:
+      # empty (not generic) so the apple-m1 baseline stays: ring asserts static aes/sha2 on aarch64-apple-darwin
+      RUSTFLAGS: ""
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,9 +89,17 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-latest, triple: x86_64-unknown-linux-gnu }
-          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,
+              # v8.2 floor (Graviton2+, Pi 5, 2018+ phones): recovers autovec perf the
+              # runtime-dispatched kernels cannot; the installer probes /proc/cpuinfo
+              rustflags: "-C target-cpu=generic -C target-feature=+dotprod,+fp16,+fhm",
+              skip_wheel: true }
+          - { runner: ubuntu-24.04-arm, triple: aarch64-unknown-linux-gnu,
+              # ARMv8.0 compat asset and portable manylinux wheel (Pi 4, Graviton1,
+              # A72-class SBCs)
+              suffix: -v8_0 }
     env:
-      RUSTFLAGS: "-C target-cpu=generic"
+      RUSTFLAGS: ${{ matrix.rustflags || '-C target-cpu=generic' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,7 +115,7 @@ jobs:
       - name: Build
         run: cargo build --release --locked --offline -p mistralrs-cli
       - name: Package
-        run: tar czf mistralrs-cpu-${{ matrix.triple }}.tar.gz -C target/release mistralrs
+        run: tar czf mistralrs-cpu-${{ matrix.triple }}${{ matrix.suffix }}.tar.gz -C target/release mistralrs
       - uses: softprops/action-gh-release@v2
         id: upload_release_asset
         if: ${{ !inputs.dry_run }}
@@ -112,14 +123,15 @@ jobs:
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+          files: mistralrs-cpu-${{ matrix.triple }}${{ matrix.suffix }}.tar.gz
       - uses: softprops/action-gh-release@v2
         if: ${{ !inputs.dry_run && steps.upload_release_asset.outcome == 'failure' }}
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           prerelease: ${{ contains(inputs.tag || github.ref_name, '-') }}
-          files: mistralrs-cpu-${{ matrix.triple }}.tar.gz
+          files: mistralrs-cpu-${{ matrix.triple }}${{ matrix.suffix }}.tar.gz
       - name: Build wheel (manylinux)
+        if: ${{ !matrix.skip_wheel }}
         uses: PyO3/maturin-action@v1
         with:
           working-directory: mistralrs-pyo3
@@ -127,6 +139,7 @@ jobs:
           args: --release --out dist
           manylinux: auto
       - uses: actions/upload-artifact@v4
+        if: ${{ !matrix.skip_wheel }}
         with:
           name: wheel-${{ matrix.triple }}
           path: mistralrs-pyo3/dist/*.whl
@@ -138,42 +151,46 @@ jobs:
       matrix:
         # cudnn is intentionally omitted so the binary stays self-contained (no CUDA toolkit
         # needed at runtime); flash-attn covers the attention path. Bundled libs come from ldd.
-        # aarch64 covers the Grace parts only (GH200/GB200/GB10); the cuda image is multi-arch.
+        # aarch64 covers the Grace parts only (GH200/GB200/GB10); image manifests follow this matrix.
         # cuda_asset is part of the artifact contract: installers choose the newest asset whose
         # toolkit version is not newer than the driver-reported CUDA version from nvidia-smi.
         include:
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.9.1", cuda_asset: "129", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl", cutile: false }
-          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile", cutile: true }
-          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile", cutile: true }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.8.1", cuda_asset: "128", features: "cuda flash-attn nccl" }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "12.9.1", cuda_asset: "129", features: "cuda flash-attn nccl" }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.0.0", cuda_asset: "130", features: "cuda flash-attn nccl" }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.1.2", cuda_asset: "131", features: "cuda flash-attn nccl" }
+          - { sm: "80", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "86", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "89", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "100", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "120", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "100", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "121", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.2.0", cuda_asset: "132", features: "cuda flash-attn nccl cutile" }
+          - { sm: "90", runner: namespace-profile-cuda-x86-64, triple: x86_64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile" }
+          - { sm: "90", runner: namespace-profile-cuda-arm64, triple: aarch64-unknown-linux-gnu, cuda: "13.3.0", cuda_asset: "133", features: "cuda flash-attn nccl cutile" }
     container:
       image: docker.io/nvidia/cuda:${{ matrix.cuda }}-cudnn-devel-ubuntu22.04
     env:
@@ -230,15 +247,6 @@ jobs:
             | sort -u | xargs -r -I{} cp -Lv {} package/lib/ || true
           cp "$bin" package/mistralrs
           patchelf --set-rpath '$ORIGIN/lib' package/mistralrs
-      - name: Bundle tileiras (cutile JIT assembler)
-        if: ${{ matrix.cutile }}
-        run: |
-          set -eux
-          # cutile JITs at runtime via `tileiras`; bundle it so the prebuilt binary can
-          # use cutile without a CUDA toolkit. install.sh points CUTILE_TILEIRAS_PATH here.
-          mkdir -p package/bin
-          t=$(command -v tileiras || find / -name tileiras -type f 2>/dev/null | head -1)
-          if [ -n "$t" ]; then cp -v "$t" package/bin/tileiras; else echo "WARNING: tileiras not found in toolkit"; fi
       - name: Package
         run: |
           set -eux
@@ -261,9 +269,9 @@ jobs:
           files: ${{ env.ASSET }}
       # CUDA wheel -> release asset (PyPI has no compute-capability or CUDA-toolkit axis). The
       # +cudaNNN.smNN local version keeps wheels distinct and lets pip select; auditwheel bundles
-      # the CUDA runtime libs (driver libcuda excluded). cutile is dropped here (its tileiras JIT is
-      # not bundled in the wheel), so CUDA wheels use the CUTLASS MoE fallback; cutile users use the
-      # prebuilt binary.
+      # the CUDA runtime libs (driver libcuda excluded). cutile is dropped here, so CUDA wheels use
+      # the CUTLASS MoE fallback; cutile users need a cutile-enabled CLI binary and an official
+      # tileiras installation.
       # Only mistralrs-pyo3's version is bumped (not the workspace) so the kernel crates already built
       # by the CLI step are reused from target/ instead of recompiling flash-attn's ~90min hdim512 ptxas.
       - name: Build CUDA wheel
@@ -366,7 +374,7 @@ jobs:
             -p mistralrs-cpu-x86_64-unknown-linux-gnu.tar.gz -O amd64.tar.gz
           tar xzf amd64.tar.gz -C dist/amd64
           gh release download "$TAG" -R "${{ github.repository }}" \
-            -p mistralrs-cpu-aarch64-unknown-linux-gnu.tar.gz -O arm64.tar.gz
+            -p mistralrs-cpu-aarch64-unknown-linux-gnu-v8_0.tar.gz -O arm64.tar.gz
           tar xzf arm64.tar.gz -C dist/arm64
       - name: Version tag
         id: ver
@@ -401,33 +409,44 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Grace SMs (90/100/121) get multi-arch images; the rest are x86-only (no aarch64 hardware).
+        # Build one platform per job so CUDA image layers do not exhaust the hosted runner disk.
         include:
-          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "130", base: "13.0.0-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64,linux/arm64" }
-          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/amd64" }
-          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platforms: "linux/arm64" }
-          - { sm: "80", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "86", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "89", cuda_asset: "132", base: "13.2.0-cudnn", platforms: "linux/amd64" }
-          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platforms: "linux/amd64,linux/arm64" }
+          - { sm: "80", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "128", base: "12.8.1-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "129", base: "12.9.1-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "130", base: "13.0.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "131", base: "13.1.2-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "80", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "86", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "89", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "100", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "120", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "121", cuda_asset: "132", base: "13.2.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platform: "linux/amd64", arch: "amd64", triple: "x86_64-unknown-linux-gnu" }
+          - { sm: "90", cuda_asset: "133", base: "13.3.0-cudnn", platform: "linux/arm64", arch: "arm64", triple: "aarch64-unknown-linux-gnu" }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -436,19 +455,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.ref_name }}
-          PLATFORMS: ${{ matrix.platforms }}
         run: |
-          mkdir -p dist/amd64 dist/arm64
-          if [[ "$PLATFORMS" == *amd64* ]]; then
-            gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-x86_64-unknown-linux-gnu.tar.gz" -O amd64.tar.gz
-            tar xzf amd64.tar.gz -C dist/amd64
-          fi
-          if [[ "$PLATFORMS" == *arm64* ]]; then
-            gh release download "$TAG" -R "${{ github.repository }}" \
-              -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-aarch64-unknown-linux-gnu.tar.gz" -O arm64.tar.gz
-            tar xzf arm64.tar.gz -C dist/arm64
-          fi
+          mkdir -p "dist/${{ matrix.arch }}"
+          gh release download "$TAG" -R "${{ github.repository }}" \
+            -p "mistralrs-cuda${{ matrix.cuda_asset }}-sm${{ matrix.sm }}-${{ matrix.triple }}.tar.gz" -O package.tar.gz
+          tar xzf package.tar.gz -C "dist/${{ matrix.arch }}"
       - name: Version tag
         id: ver
         env:
@@ -460,17 +471,18 @@ jobs:
           CUDA_ASSET: ${{ matrix.cuda_asset }}
           SM: ${{ matrix.sm }}
           VERSION: ${{ steps.ver.outputs.v }}
+          ARCH: ${{ matrix.arch }}
         run: |
           {
             echo "tags<<EOF"
-            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
-            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-latest"
-            if [ "$CUDA_ASSET" = "131" ]; then
-              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-${VERSION}"
-              echo "ghcr.io/ericlbuehler/mistral.rs:cuda-sm${SM}-latest"
-            fi
+            echo "ghcr.io/ericlbuehler/mistral.rs:cuda${CUDA_ASSET}-sm${SM}-${VERSION}-${ARCH}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+      - name: Disk before Docker build
+        run: |
+          df -h
+          du -sh dist
+          docker system df || true
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -483,10 +495,86 @@ jobs:
           context: .
           file: Dockerfile.cuda-all
           push: true
-          platforms: ${{ matrix.platforms }}
+          platforms: ${{ matrix.platform }}
           build-args: |
             BASE_TAG=${{ matrix.base }}
           tags: ${{ steps.docker_tags.outputs.tags }}
+
+  docker-cuda-manifest:
+    needs: docker-cuda
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sm: "80", cuda_asset: "128", arches: "amd64" }
+          - { sm: "86", cuda_asset: "128", arches: "amd64" }
+          - { sm: "89", cuda_asset: "128", arches: "amd64" }
+          - { sm: "90", cuda_asset: "128", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "128", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "128", arches: "amd64" }
+          - { sm: "121", cuda_asset: "129", arches: "arm64" }
+          - { sm: "80", cuda_asset: "130", arches: "amd64" }
+          - { sm: "86", cuda_asset: "130", arches: "amd64" }
+          - { sm: "89", cuda_asset: "130", arches: "amd64" }
+          - { sm: "90", cuda_asset: "130", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "130", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "130", arches: "amd64" }
+          - { sm: "121", cuda_asset: "130", arches: "arm64" }
+          - { sm: "80", cuda_asset: "131", arches: "amd64" }
+          - { sm: "86", cuda_asset: "131", arches: "amd64" }
+          - { sm: "89", cuda_asset: "131", arches: "amd64" }
+          - { sm: "90", cuda_asset: "131", arches: "amd64 arm64" }
+          - { sm: "100", cuda_asset: "131", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "131", arches: "amd64" }
+          - { sm: "121", cuda_asset: "131", arches: "arm64" }
+          - { sm: "80", cuda_asset: "132", arches: "amd64" }
+          - { sm: "86", cuda_asset: "132", arches: "amd64" }
+          - { sm: "89", cuda_asset: "132", arches: "amd64" }
+          - { sm: "100", cuda_asset: "132", arches: "amd64 arm64" }
+          - { sm: "120", cuda_asset: "132", arches: "amd64" }
+          - { sm: "121", cuda_asset: "132", arches: "arm64" }
+          - { sm: "90", cuda_asset: "133", arches: "amd64 arm64" }
+    steps:
+      - name: Version tag
+        id: ver
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: echo "v=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish Docker manifest
+        env:
+          CUDA_ASSET: ${{ matrix.cuda_asset }}
+          SM: ${{ matrix.sm }}
+          ARCHES: ${{ matrix.arches }}
+          VERSION: ${{ steps.ver.outputs.v }}
+        run: |
+          image=ghcr.io/ericlbuehler/mistral.rs
+          sources=()
+          for arch in $ARCHES; do
+            sources+=("${image}:cuda${CUDA_ASSET}-sm${SM}-${VERSION}-${arch}")
+          done
+
+          tags=(
+            -t "${image}:cuda${CUDA_ASSET}-sm${SM}-${VERSION}"
+            -t "${image}:cuda${CUDA_ASSET}-sm${SM}-latest"
+          )
+          if [ "$CUDA_ASSET" = "131" ]; then
+            tags+=(
+              -t "${image}:cuda-sm${SM}-${VERSION}"
+              -t "${image}:cuda-sm${SM}-latest"
+            )
+          fi
+
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
 
   # Real (non-prerelease) tags from the canonical repo publish the wheels (built in the metal /
   # linux-cpu / windows-cpu jobs above) to PyPI via OIDC (no token). rc tags build the wheels as

@@ -8,6 +8,7 @@ members = [
     "mistralrs-vision",
     "mistralrs-quant",
     "mistralrs-paged-attn",
+    "mistralrs-metal-compile",
     "mistralrs-flash-attn",
 
     "mistralrs-audio",
@@ -19,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.8.22"
+version = "0.9.0"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -30,23 +31,21 @@ license = "MIT"
 rust-version = "1.94"
 
 [workspace.dependencies]
-# candle-core = { version = "0.10.2" }
-# candle-nn = { version = "0.10.2" }
-# candle-flash-attn-v3 = { version = "0.10.2" }
-# candle-metal-kernels = { version = "0.10.2" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "d23f960" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "d23f960" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "d23f960" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.10.2", rev = "d23f960" }
-# candle-core = { path = "../candle/candle-core", version = "0.10.2" }
-# candle-nn = { path = "../candle/candle-nn", version = "0.10.2" }
-# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.10.2" }
-# candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.10.2" }
+# candle-core = { version = "0.11.0" }
+# candle-nn = { version = "0.11.0" }
+# candle-flash-attn-v3 = { version = "0.11.0" }
+# candle-metal-kernels = { version = "0.11.0" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
 
 axum = "0.8.8"
+mimalloc = "0.1"
 anyhow = "1.0.100"
 serde = "1.0.228"
 serde_json = "1.0.149"
+sha2 = "0.10.9"
 indexmap = { version = "2.13.0", features = ["serde"] }
 either = { version = "1.15.0", features = ["serde"] }
 accelerate-src = { version = "0.3.2" }
@@ -92,6 +91,7 @@ walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
 regex = "1.12.2"
+fancy-regex = "0.14.0"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
 dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }
@@ -192,18 +192,19 @@ cuda-core = "=0.1.0"
 cuda-async = "=0.1.0"
 cuda-bindings = "=0.1.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.8.22" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.8.22" }
-mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.8.22" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.8.22" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.8.22" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.8.22" }
-mistralrs = { path = "mistralrs", version = "0.8.22" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.8.22" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.8.22" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.8.22" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.8.22" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.8.22" }
+mistralrs-core = { path = "mistralrs-core", version = "0.9.0" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.0" }
+mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.0" }
+mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.0" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.9.0" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.9.0" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.0" }
+mistralrs = { path = "mistralrs", version = "0.9.0" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.9.0" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.9.0" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.9.0" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.0" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.0" }
 
 [profile.release-with-debug]
 inherits = "release"

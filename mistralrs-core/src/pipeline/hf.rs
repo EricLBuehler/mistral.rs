@@ -212,6 +212,21 @@ pub fn hf_token_path() -> Option<PathBuf> {
     hf_home_dir().map(|home| home.join("token"))
 }
 
+/// True when every listed file is already present in the local HF cache (or a local dir).
+pub(crate) fn files_cached_locally(model_id: &str, revision: &str, files: &[&str]) -> bool {
+    let model_path = Path::new(model_id);
+    if model_path.exists() {
+        return files.iter().all(|file| model_path.join(file).exists());
+    }
+    let cache = crate::GLOBAL_HF_CACHE
+        .get()
+        .cloned()
+        .or_else(|| hf_hub_cache_dir().map(Cache::new))
+        .unwrap_or_else(Cache::from_env);
+    let repo = cache.repo(offline_repo(model_path, revision));
+    files.iter().all(|file| repo.get(file).is_some())
+}
+
 pub(crate) fn build_api(
     token_source: &crate::pipeline::TokenSource,
     progress: bool,

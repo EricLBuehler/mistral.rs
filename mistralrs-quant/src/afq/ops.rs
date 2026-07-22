@@ -44,7 +44,7 @@ pub(crate) fn afq_quantize_op(
     let bits = bits as usize;
 
     #[cfg(feature = "metal")]
-    {
+    if w.device().is_metal() {
         let w_s = w.storage_and_layout().0;
         let Storage::Metal(w_s) = &*w_s else {
             candle_core::bail!("expected metal")
@@ -139,7 +139,7 @@ pub(crate) fn afq_dequantize_op(
     }
 
     #[cfg(feature = "metal")]
-    {
+    if w_q.device().is_metal() {
         let wq_s = w_q.storage_and_layout().0;
         let Storage::Metal(wq_s) = &*wq_s else {
             candle_core::bail!("expected metal")
@@ -390,7 +390,7 @@ pub(crate) fn afq_mm_op(
     };
 
     #[cfg(feature = "metal")]
-    {
+    if w.device().is_metal() {
         let x_s = x.storage_and_layout().0;
         let Storage::Metal(x_s) = &*x_s else {
             candle_core::bail!("expected metal")
@@ -1138,7 +1138,10 @@ mod cpu_tests {
 mod metal_tests {
     use candle_core::{DType, Device, Result, Tensor, D};
 
-    use crate::{afq::ops::afq_dequantize_op, AfqBits, AfqGroupSize};
+    use crate::{
+        afq::ops::{afq_dequantize_op, afq_embedding_op},
+        AfqBits, AfqGroupSize,
+    };
 
     use super::afq_quantize_op;
 
@@ -1260,6 +1263,44 @@ mod metal_tests {
     fn test_afq_two() -> Result<()> {
         let rmse = run_afq_roundtrip(AfqBits::Two)?;
         assert!(rmse < 0.40, "{rmse}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_afq_metal_embedding() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let ids = Tensor::from_vec(vec![3u32, 1, 3, 15], (2, 2), &device)?;
+
+        for group_size in [AfqGroupSize::Low, AfqGroupSize::Med, AfqGroupSize::High] {
+            let values = (0..(16 * 128))
+                .map(|i| {
+                    let x = i as f32;
+                    (x * 0.011).sin() - (x * 0.019).cos() * 0.25
+                })
+                .collect::<Vec<_>>();
+            let weight = Tensor::from_vec(values, (16, 128), &device)?;
+
+            for bits in [
+                AfqBits::Two,
+                AfqBits::Three,
+                AfqBits::Four,
+                AfqBits::Six,
+                AfqBits::Eight,
+            ] {
+                let (w_q, scales, biases) = afq_quantize_op(&weight, group_size, bits)?;
+                let got = afq_embedding_op(&ids, &w_q, &scales, &biases, group_size, bits)?;
+                let expected = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?
+                    .index_select(&ids.flatten_all()?, 0)?
+                    .reshape((2, 2, 128))?;
+                let max_diff = (got - expected)?
+                    .abs()?
+                    .max_all()?
+                    .to_dtype(DType::F32)?
+                    .to_scalar::<f32>()?;
+                assert!(max_diff < 1e-6, "{bits:?}/{group_size:?}: {max_diff}");
+            }
+        }
+
         Ok(())
     }
 

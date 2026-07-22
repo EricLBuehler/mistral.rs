@@ -13,4 +13,4 @@ mod weights;
 pub use cache::GdnLayerCache;
 pub use config::GdnConfig;
 pub use layer::GatedDeltaNet;
-pub use weights::GdnWeightMode;
+pub use weights::GdnInputProjectionKind;

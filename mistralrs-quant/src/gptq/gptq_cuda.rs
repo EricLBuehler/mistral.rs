@@ -409,6 +409,21 @@ impl QuantMethod for GptqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let pack = 32usize / usize::try_from(self.bits).unwrap_or(1).max(1);
+        let shape = vec![
+            self.q_weight.dim(1)?,
+            self.q_weight.dim(0)?.saturating_mul(pack),
+        ];
+        Ok(crate::plan_weight_isq(
+            self.scales.dtype(),
+            self.scales.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,

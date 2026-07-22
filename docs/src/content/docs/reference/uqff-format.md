@@ -14,7 +14,7 @@ UQFF 1.x is not compatible with files produced by earlier mistral.rs releases (p
 A UQFF export is a directory containing:
 
 - One or more `<stem>-<shard>.uqff` shards holding the quantized layers.
-- `residual.safetensors` for unquantized tensors (token embeddings, norms, etc.).
+- `residual.safetensors` for unquantized tensors (norms, dense embeddings, etc.).
 - Model assets copied from the source repo so the directory is self-contained: `config.json`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`, and (when present) `modules.json`, `chat_template.jinja`, `processor_config.json`, `preprocessor_config.json`.
 
 A loader is pointed at one or more shard files (`from_uqff`); the residual safetensors and the JSON assets are picked up by sibling-path lookup.
@@ -46,6 +46,8 @@ The writer splits the tensor stream into `<stem>-0.uqff`, `<stem>-1.uqff`, ... w
 Each shard set carries three u32 scalar entries: `uqff.version.major`, `uqff.version.minor`, `uqff.version.patch`. Readers reject a different major version and reject a minor newer than they support; older minors within the same major are accepted. Files without version entries are rejected.
 
 UQFF 1.1 adds inline unquantized linear entries (`weight.format = Unquant`) so mixed files can preserve unsupported layer shapes without moving those weights into `residual.safetensors`.
+
+UQFF 1.2 stores quantized token embeddings as regular layer entries and omits their original dense weights from `residual.safetensors`. Readers still accept UQFF 1.1 files whose token embeddings remain in the residual file.
 
 ## Tensor parallelism
 

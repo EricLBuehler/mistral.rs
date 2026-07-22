@@ -14,7 +14,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{apply_rotary_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
+    layers::{
+        apply_rotary_q, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
+        Sdpa,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -411,6 +414,7 @@ impl Expert {
 /// MoE gate with sigmoid scoring and e_score_correction_bias (NoAuxTc routing)
 struct MoeGate {
     weight: Tensor,
+    lora_site: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     cfg: Glm4MoeConfig,
     top_k: usize,
     n_routed_experts: usize,
@@ -420,6 +424,10 @@ struct MoeGate {
 impl MoeGate {
     fn new(cfg: &Glm4MoeConfig, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
+        let lora_site = mistralrs_quant::register_dynamic_lora_site(
+            &vb.clone().set_dtype(DType::F32),
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, n_routed_experts),
+        )?;
         let e_score_correction_bias = vb.get_with_hints_dtype(
             n_routed_experts,
             "e_score_correction_bias",
@@ -428,6 +436,7 @@ impl MoeGate {
         )?;
         Ok(Self {
             weight,
+            lora_site,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok,
             n_routed_experts,
@@ -438,10 +447,12 @@ impl MoeGate {
     /// Returns (topk_idx, topk_weight)
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         let (bs, seq_len, h) = xs.dims3()?;
-        let xs = xs.reshape(((), h))?;
-        let logits = xs
-            .to_dtype(DType::F32)?
-            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let xs = xs.reshape(((), h))?.to_dtype(DType::F32)?;
+        let logits = xs.broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let logits = match &self.lora_site {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs, logits)?,
+            None => logits,
+        };
         // Sigmoid scoring
         let scores = candle_nn::ops::sigmoid(&logits)?;
 
@@ -514,6 +525,7 @@ impl Moe {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         let experts = MoEExperts::new(
@@ -702,10 +714,13 @@ impl Glm4Moe {
         let mapper = normal_loading_metadata.mapper;
         let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {

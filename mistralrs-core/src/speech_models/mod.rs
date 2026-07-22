@@ -7,7 +7,7 @@ use std::{str::FromStr, sync::Arc};
 pub use dia::{DiaConfig, DiaPipeline};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, strum::EnumIter)]
 pub enum SpeechLoaderType {
     #[serde(rename = "dia")]
     Dia,

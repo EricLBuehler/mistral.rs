@@ -249,6 +249,11 @@ where
         outcomes.push(Some(outcome));
     }
     cache.finish_verification_batch(&mut cache_guards, seqs, &cache_outcomes)?;
+    for (seq, outcome) in seqs.iter_mut().zip(outcomes.iter()) {
+        if let Some(outcome) = outcome {
+            seq.set_num_computed_tokens(outcome.keep_len);
+        }
+    }
 
     let mut active_indices = Vec::new();
     let mut sampled_tokens = Vec::new();

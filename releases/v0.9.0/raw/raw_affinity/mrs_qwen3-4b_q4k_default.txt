@@ -1,0 +1,56 @@
+# cmd: /home/ericbuehler/mistral.rs/target/release/mistralrs bench --cpu --prompt-len 2048 --depth 512 --gen-len 256 --iterations 3 --warmup 1 -m Qwen/Qwen3-4B --isq q4k
+# env: {}
+# wall_s: 132.8
+# rc: 0
+=== stdout ===
+[2m2026-07-04T04:31:21.114755Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-07-04T04:31:21.599982Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is F32.
+[2m2026-07-04T04:31:21.800945Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: text[max_seq_len: 4096, max_batch_size: 1].
+[2m2026-07-04T04:31:21.800976Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 36 repeating layers.
+[2m2026-07-04T04:31:21.800978Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-07-04T04:31:21.833049Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-35: cpu (122 GB)
+[2m2026-07-04T04:31:21.864771Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::isq_flow::plan[0m[2m:[0m Quantizing model weights to q4k.
+[2m2026-07-04T04:31:21.865356Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::normal[0m[2m:[0m Loading model weights for quantization.
+[2m2026-07-04T04:31:37.310149Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-07-04T04:31:37.310181Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m mistral.rs version: 0.8.23
+[2m2026-07-04T04:31:37.310188Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: 4f6042b41ef56dd9d22360b39a8d381ac070700d
+[2m2026-07-04T04:31:37.310279Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text]
+[2m2026-07-04T04:31:37.310281Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-07-04T04:31:39.505989Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-07-04T04:31:39.506004Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-07-04T04:31:40.784855Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-07-04T04:31:40.784887Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 3 iteration(s) with prompt lengths [2048], 256 generation tokens, decode depths [512]...
+[2m2026-07-04T04:31:40.784893Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/3...
+[2m2026-07-04T04:32:02.312358Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 410.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:07.312495Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 108.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:12.312628Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:17.312724Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 18.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:19.269368Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/3...
+[2m2026-07-04T04:32:22.312935Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 7.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:42.314540Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 410.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:47.314638Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 119.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:52.314753Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 19.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:32:56.011342Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 3/3...
+[2m2026-07-04T04:32:57.315247Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 14.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:33:17.316767Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 410.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:33:22.316868Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 112.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:33:27.316980Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 20.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-04T04:33:32.317095Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 18.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: Qwen/Qwen3-4B
+Iterations: 3
+
+┌────────────────────────────┬─────────────┬───────────────────────┐
+│ Test                       ┆ T/s         ┆ Latency               │
+╞════════════════════════════╪═════════════╪═══════════════════════╡
+│ Prefill (2048 tokens)      ┆ 103.3 ± 2.8 ┆ 19841.33 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512) ┆ 19.4 ± 0.2  ┆ 51.43 ms/T            │
+└────────────────────────────┴─────────────┴───────────────────────┘
+
+
+=== stderr ===
+

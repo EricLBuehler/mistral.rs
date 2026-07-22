@@ -271,7 +271,9 @@ impl ModelConfigLike for ModelConfigMetadata {
 
 #[cfg(test)]
 mod tests {
-    use super::KvCacheTopology;
+    use super::{
+        AttentionBackendKind, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    };
 
     #[test]
     fn all_own_topology_uses_single_prefix_cache_group() {
@@ -289,5 +291,26 @@ mod tests {
         assert!(topology.uses_own_kv_cache_for_layer(1));
         assert!(!topology.uses_own_kv_cache_for_layer(2));
         assert_eq!(topology.owner_for_layer(3), 1);
+    }
+
+    #[test]
+    fn unsupported_flashinfer_group_uses_standard_paged_attention() {
+        let config = ModelConfigMetadata {
+            max_seq_len: 32_768,
+            num_layers: 24,
+            hidden_size: 896,
+            num_kv_heads: 2,
+            num_attn_heads: 14,
+            sliding_window: None,
+            k_head_dim: 64,
+            v_head_dim: 64,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+
+        assert_eq!(
+            config.attention_backend_kind(),
+            AttentionBackendKind::Standard
+        );
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::Standard);
     }
 }

@@ -45,11 +45,13 @@ impl FP8Linear {
     }
 
     pub(super) fn dequantize(&self, dtype: DType) -> Result<Linear> {
-        let dequant_w = self
-            .lin
-            .weight()
-            .to_dtype(dtype)?
-            .broadcast_mul(&self.dequant_w_scale.to_dtype(dtype)?)?;
+        let weight = self.lin.weight();
+        let weight = if weight.dtype() == DType::F8E4M3 && dtype != DType::F8E4M3 {
+            crate::scalar_fp8::ops::fp8_to_dtype(weight, dtype)?
+        } else {
+            weight.to_dtype(dtype)?
+        };
+        let dequant_w = weight.broadcast_mul(&self.dequant_w_scale.to_dtype(dtype)?)?;
         Ok(Linear::new(dequant_w, self.lin.bias().cloned()))
     }
 }
@@ -63,7 +65,7 @@ mod tests {
     };
 
     #[cfg(not(feature = "metal"))]
-    use crate::fp8::FP8Linear;
+    use crate::{fp8::FP8Linear, QuantMethod, QuantMethodConfig};
 
     #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
@@ -92,6 +94,32 @@ mod tests {
         let diff2 = (&data - q8_0)?.abs()?.mean_all()?;
 
         println!("{diff2}");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "metal"))]
+    fn test_embedding_gathers_before_dequantizing() -> Result<()> {
+        let data = (0..185)
+            .map(|i| (i as f32 - 92.0) / 37.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_slice(&data, (5, 37), &Device::Cpu)?;
+        let linear = FP8Linear::new(QuantMethodConfig::FP8 {
+            lin: candle_nn::Linear::new(weight, None),
+            dtype: DType::F8E4M3,
+        })?;
+        let ids = Tensor::new(&[[4u32, 1], [3, 1]], &Device::Cpu)?;
+        let actual = linear.embedding_forward_raw(&ids)?;
+        let expected = linear
+            .dequantize_w()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 2, 37))?;
+
+        assert_eq!(actual.dims(), &[2, 2, 37]);
+        assert_eq!(
+            actual.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
         Ok(())
     }
 
@@ -148,6 +176,40 @@ mod tests {
             None,
         )?;
 
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use crate::{fp8::FP8Linear, QuantMethod, QuantMethodConfig};
+
+    #[test]
+    fn test_metal_embedding_gathers_multiple_rows_before_dequantizing() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let data = (0..185)
+            .map(|i| (i as f32 - 92.0) / 37.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_slice(&data, (5, 37), &device)?;
+        let linear = FP8Linear::new(QuantMethodConfig::FP8 {
+            lin: candle_nn::Linear::new(weight, None),
+            dtype: DType::F8E4M3,
+        })?;
+        let ids = Tensor::new(&[[4u32, 1], [3, 1]], &device)?;
+        let actual = linear.embedding_forward_raw(&ids)?;
+        let expected = linear
+            .dequantize_w()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 2, 37))?;
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        let empty_ids = ids.narrow(1, 0, 0)?;
+        let empty = linear.embedding_forward_raw(&empty_ids)?;
+
+        assert!(max_diff <= 1e-6, "max_diff={max_diff}");
+        assert_eq!(empty.dims(), &[2, 0, 37]);
+        assert_eq!(empty.dtype(), DType::F32);
         Ok(())
     }
 }

@@ -11,7 +11,7 @@ For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/m
 
 ### `mistralrs: command not found` after install
 
-The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `rustup`, but the change does not apply to the current shell. Open a new shell or run `source "$HOME/.cargo/env"`.
+Installer-managed binaries are exposed at `~/.local/bin/mistralrs`, backed by `~/.mistralrs/mistralrs`. Open a new shell or run `source "$HOME/.mistralrs/env"`. Manual Cargo installs use `~/.cargo/bin/mistralrs` and may require `source "$HOME/.cargo/env"`.
 
 ### Build fails with `flash-attn` feature enabled
 

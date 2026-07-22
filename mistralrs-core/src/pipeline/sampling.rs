@@ -200,7 +200,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                     let mut content_delta = if has_reasoning_parser {
                         seq.get_response_content_delta()
                     } else {
-                        None
+                        Some(delta.clone())
                     };
 
                     let tool_calls = if let Some(state) = seq.tool_call_state.as_mut() {
@@ -448,6 +448,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                             agentic_tool_calls: None,
                             files: None,
                             session_id: None,
@@ -467,6 +470,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             system_fingerprint: crate::SYSTEM_FINGERPRINT.to_string(),
                             object: "text_completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                         },
                         seq.responder(),
                     )
@@ -505,7 +511,6 @@ pub(crate) async fn finalize_block_gen(
             Some(&metadata.eos_tok[..])
         };
 
-        let mut appended = 0usize;
         for token in block {
             if !seq.is_running() {
                 break;
@@ -517,11 +522,7 @@ pub(crate) async fn finalize_block_gen(
                 top_logprobs: None,
             };
             finish_or_add_toks_to_seq(this, prefix_cacher, seq, logprobs, eos_tok, true).await?;
-            appended += 1;
         }
-        // These tokens only enter the KV cache on the next step's encoder pass; the prefix
-        // cacher must not register blocks covering them.
-        seq.set_unencoded_tail_len(appended);
     }
 
     Ok(())

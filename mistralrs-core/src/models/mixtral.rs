@@ -16,7 +16,9 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -256,6 +258,7 @@ impl SparseMoeBlock {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::MIXTRAL,
         };
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -411,10 +414,13 @@ impl Model {
         let vb_m = vb.pp("model");
         let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;

@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use candle_core::{Result, Tensor};
 
@@ -27,6 +27,7 @@ pub(crate) mod diffusion_gemma;
 pub(crate) mod gemma3;
 pub(crate) mod gemma3n;
 pub(crate) mod gemma4;
+pub(crate) mod lfm2_vl;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;
 pub(crate) mod qwen3_5;
@@ -51,6 +52,18 @@ pub struct ModelInputs {
     pub paged_attn_meta: Option<PagedAttentionInputMetadata>,
     pub flash_meta: FlashParams,
     pub recurrent_batch_kind: RecurrentBatchKind,
+    pub adapter_leases: Arc<[Option<crate::AdapterLease>]>,
+}
+
+pub(crate) fn adapter_leases(
+    input_seqs: &[&mut crate::sequence::Sequence],
+    seq_indices: &[usize],
+) -> Arc<[Option<crate::AdapterLease>]> {
+    seq_indices
+        .iter()
+        .map(|&index| input_seqs[index].adapter_lease().cloned())
+        .collect::<Vec<_>>()
+        .into()
 }
 
 fn mrope_position_deltas_for_broadcast(

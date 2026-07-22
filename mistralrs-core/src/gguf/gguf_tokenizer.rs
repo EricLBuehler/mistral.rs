@@ -62,6 +62,24 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             bos: c.get_value("bos_token_id").ok(),
         };
 
+        // Special token ids come from untrusted GGUF metadata; reject out-of-range ids
+        // so a malformed file errors instead of panicking when indexing `tokens`.
+        let vocab_size = props.tokens.len();
+        let check = |name: &str, id: u32| -> Result<()> {
+            anyhow::ensure!(
+                (id as usize) < vocab_size,
+                "GGUF `{name}` token id {id} is out of bounds for vocab size {vocab_size}"
+            );
+            Ok(())
+        };
+        check("eos", props.eos)?;
+        if let Some(bos) = props.bos {
+            check("bos", bos)?;
+        }
+        if let Some(unk) = props.unk {
+            check("unk", unk)?;
+        }
+
         Ok(props)
     }
 }

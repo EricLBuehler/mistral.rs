@@ -13,8 +13,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, dense_embedding, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding,
-        RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
+        self, dense_embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker,
+        Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{
@@ -1003,10 +1003,13 @@ impl TextModel {
         // Use float32 for embedding scale factor
         let embed_scale = (cfg.hidden_size as f64).sqrt();
         let dtype = vb.dtype();
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         // Use float32 for per-layer embedding scale factor

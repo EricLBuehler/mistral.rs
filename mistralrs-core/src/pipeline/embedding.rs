@@ -3,13 +3,13 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, TokenSource,
+    get_model_paths, AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
-use crate::distributed::{self, use_ring, WorkerTransferData};
+use crate::distributed::{self, WorkerTransferData};
 use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
 use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
 use crate::embedding_normal_model_loader;
@@ -80,7 +80,6 @@ pub struct EmbeddingLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -108,7 +107,6 @@ pub struct EmbeddingLoaderBuilder {
     kind: ModelKind,
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -144,14 +142,6 @@ impl EmbeddingLoaderBuilder {
         self
     }
 
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
-        self.kind = ModelKind::Adapter {
-            adapter: AdapterKind::Lora,
-        };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
-        self
-    }
-
     pub(crate) fn with_load_context(mut self, load_context: EmbeddingLoadContext) -> Self {
         self.load_context = load_context;
         self
@@ -173,7 +163,6 @@ impl EmbeddingLoaderBuilder {
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapter_ids: self.lora_adapter_ids,
             load_context: self.load_context,
         })
     }
@@ -252,11 +241,16 @@ impl Loader for EmbeddingLoader {
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let write_uqff = self.config.write_uqff.is_some();
-        let use_distributed = (use_nccl || use_ring()) && !write_uqff;
+        let tensor_parallelism = distributed::resolve_tensor_parallelism(
+            self.inner.model_config(&config)?.as_ref(),
+            use_nccl,
+            write_uqff,
+        )?;
+        let use_distributed = tensor_parallelism.is_enabled();
 
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            let WorkerTransferData::Init { worker_rank, .. } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_distributed {
             vec![candle_core::Device::new_cuda(0)?]
@@ -401,7 +395,12 @@ impl Loader for EmbeddingLoader {
             let device = mapper.device_for(layer, false).cloned();
             layer_devices.push(device);
         }
-        let dtype = mapper.get_min_dtype(dtype)?;
+        let dtype = super::isq_flow::resolve_weight_load_dtype(
+            dtype,
+            mapper.as_ref(),
+            &available_devices,
+            write_uqff,
+        )?;
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
         if crate::using_flash_attn() {
@@ -495,6 +494,7 @@ impl Loader for EmbeddingLoader {
                 dtype,
                 &device,
                 &available_devices,
+                tensor_parallelism.world_size(),
                 silent,
                 &config,
                 loading_isq,
@@ -642,6 +642,7 @@ impl Loader for EmbeddingLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Embedding],
                 },
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             mapper: pipeline_mapper,
             modules,

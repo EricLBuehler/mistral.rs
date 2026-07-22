@@ -12,7 +12,7 @@ use mistralrs_quant::{
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding_with_legacy_tied_uqff, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -532,13 +532,16 @@ impl MLlamaTextModel {
         let mapper = normal_loading_metadata.mapper;
         let dtype = vb.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size + 8,
             cfg.hidden_size,
             mapper.set_nm_device(
                 vb.pp("model.embed_tokens"),
                 normal_loading_metadata.loading_isq,
             ),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 

@@ -384,6 +384,58 @@ Manually reload a previously unloaded model.
 | --- | --- | --- | --- |
 | `model_id` | `str` | required | The model ID to reload. |
 
+### `Runner.load_lora_adapter`
+
+```text
+load_lora_adapter(
+    alias: str,
+    adapter_dir: str | PathLike[str],
+    model_id: str | None = None,
+    load_inplace: bool = False,
+    expected_generation: str | None = None,
+) -> LoraAdapterInfo
+```
+
+Load a local LoRA adapter, optionally replacing with generation CAS.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.unload_lora_adapter`
+
+```text
+unload_lora_adapter(
+    alias: str,
+    model_id: str | None = None,
+    expected_generation: str | None = None,
+) -> LoraAdapterInfo
+```
+
+Unregister a LoRA alias while in-flight requests retain their generation.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.list_lora_adapters`
+
+```text
+list_lora_adapters(
+    model_id: str | None = None,
+) -> list[LoraAdapterInfo]
+```
+
+List loaded LoRA adapters for a model.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.lora_adapter_status`
+
+```text
+lora_adapter_status(model_id: str | None = None) -> LoraRuntimeStatus
+```
+
+Return loaded aliases and complete resident-generation capacity usage.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
 ### `Runner.list_models_with_status`
 
 ```text
@@ -507,6 +559,67 @@ file was wire-truncated in the response payload.
 | `total_rows` | `int` |
 | `min_rows` | `int` |
 | `max_rows` | `int` |
+
+
+## `LoraAdapterError`
+
+A dynamic LoRA lifecycle operation failed.
+
+| Field | Type |
+| --- | --- |
+| `code` | `str` |
+
+
+## `LoraAdapterInfo`
+
+A loaded alias and the immutable generation it currently selects.
+
+| Field | Type |
+| --- | --- |
+| `alias` | `str` |
+| `source` | `str` |
+| `revision` | `str \| None` |
+| `generation` | `str` |
+| `rank` | `int` |
+| `bytes` | `int` |
+
+### `LoraAdapterInfo.exact`
+
+```text
+exact() -> LoraAdapterGeneration
+```
+
+Select this exact immutable generation in a request.
+
+
+## `LoraResidentGenerationInfo`
+
+One device-resident generation, including retired generations still leased.
+
+| Field | Type |
+| --- | --- |
+| `generation` | `str` |
+| `aliases` | `list[str]` |
+| `rank` | `int` |
+| `bytes` | `int` |
+| `retired` | `bool` |
+| `active_leases` | `int` |
+
+
+## `LoraRuntimeStatus`
+
+Loaded aliases, resident generations, active leases, and capacity limits.
+
+| Field | Type |
+| --- | --- |
+| `adapters` | `list[LoraAdapterInfo]` |
+| `generations` | `list[LoraResidentGenerationInfo]` |
+| `resident_generations` | `int` |
+| `retired_generations` | `int` |
+| `resident_bytes` | `int` |
+| `max_adapters` | `int` |
+| `max_rank` | `int` |
+| `max_bytes` | `int` |
 
 ---
 

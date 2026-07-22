@@ -35,12 +35,14 @@ Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
 |---|---|
 | CUDA 13.3+ on Hopper / `sm90` | `cuda133-sm90` |
 | CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132-sm{cc}` |
-| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131-sm{cc}` |
+| CUDA 13.2+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda132-sm{cc}` |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131-sm{cc}` (no cuTile) |
 | CUDA 13.0+ | `cuda130-sm{cc}` |
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
 | CUDA 12.8+ | `cuda128-sm{cc}` |
 
-cuTile is included only on lanes whose CUDA toolkit supports that SM.
+cuTile is available only on the supported CUDA lanes listed above. Install `tileiras` as described
+in [cuTile setup](/mistral.rs/developer/moe-backends/).
 
 CUDA compute capability variants (SM80+):
 - `80` (A100)
@@ -53,7 +55,7 @@ CUDA compute capability variants (SM80+):
 
 See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping.
 
-The CPU image and Grace CUDA images (`90`, `100`, `121`) are multi-arch (`amd64` + `arm64`). Docker picks the right architecture automatically. The other CUDA tags are x86_64 only.
+The CPU image is multi-arch. CUDA `90` and `100` tags are multi-arch where both variants appear in the release table, while CUDA `121` is arm64-only for DGX Spark. Docker picks the matching architecture automatically; the other CUDA tags are x86_64 only.
 
 The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
 
@@ -66,6 +68,26 @@ For production, pin a version or sha tag rather than `*-latest`. Model ids also 
 - `HF_HOME=/data` is set in the image: mount a volume at `/data` to persist downloaded weights (they land in `/data/hub`). HF authentication for gated models: `-e HF_TOKEN=<token>`.
 - Chat templates ship at `/chat_templates` for models that need one: `--chat-template /chat_templates/<file>.json`.
 
+## Enabling cuTile in a published image
+
+The published image does not include Python or `tileiras`. Install the official package
+in a derived image. For Ampere, Ada, or Blackwell:
+
+```dockerfile
+FROM ghcr.io/ericlbuehler/mistral.rs:cuda132-sm100-latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
+    && python3 -m pip install --no-cache-dir --upgrade "cuda-tile[tileiras]" \
+    && TILEIRAS_DIR="$(python3 -c 'import nvidia.cu13.bin as b; print(next(iter(b.__path__)))')" \
+    && ln -sf "$TILEIRAS_DIR/tileiras" /usr/local/bin/tileiras \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CUTILE_TILEIRAS_PATH=/usr/local/bin/tileiras
+```
+
+Select the base tag for the actual GPU. For Hopper, derive from `cuda133-sm90-latest` and install
+`cuda-toolkit[tileiras,nvvm,nvcc]>=13.3` instead. Pin a versioned base tag for production.
+
 ## Building an image
 
 From a repository checkout:
@@ -74,14 +96,16 @@ From a repository checkout:
 # CPU
 docker build -t mistralrs:latest -f Dockerfile .
 
-# CUDA (set the compute capability for your GPU)
-docker build -t mistralrs:cuda -f Dockerfile.cuda-all \
-  --build-arg CUDA_COMPUTE_CAP=89 .
+# CUDA source build (set the compute capability for your GPU)
+docker build -t mistralrs:cuda -f Dockerfile.cuda-13.0-ubi9 \
+  --build-arg CUDA_COMPUTE_CAP=89 \
+  --build-arg WITH_FEATURES=cuda,cudnn,flash-attn .
 ```
 
-- `Dockerfile.cuda-all` accepts `CUDA_COMPUTE_CAP`, `BASE_TAG`, and `WITH_FEATURES` build args. The default base is CUDA 12.8.1 and default features are `cuda,cudnn`; CI builds add `flash-attn`, and release images add `cutile` on supported CUDA/SM pairs.
-- `Dockerfile.cuda-13.0-ubi9` is a Red Hat UBI 9 variant for air-gapped and enterprise deployments.
-- The first CUDA build is slow because flash-attention compilation takes a while; later builds use the layer cache.
+- `Dockerfile.cuda-13.0-ubi9` builds from source on Red Hat UBI 9 and accepts `CUDA_COMPUTE_CAP` and `WITH_FEATURES`.
+- `Dockerfile.cuda-all` is not a source-build Dockerfile.
+- Release images are cuTile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [cuTile setup](/mistral.rs/developer/moe-backends/) to activate cuTile.
+- Building with `flash-attn` is slow the first time; later builds use the layer cache.
 
 ## Production deployment notes
 

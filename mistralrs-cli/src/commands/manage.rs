@@ -1,17 +1,16 @@
-//! Self-management for prebuilt installs: `update` and `uninstall`.
+//! Self-management commands for `update` and `uninstall`.
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
-const REPO_URL: &str = "https://github.com/EricLBuehler/mistral.rs";
 #[cfg(unix)]
 const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh";
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.sh";
 #[cfg(windows)]
 const INSTALL_PS1_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1";
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.ps1";
 
-fn prebuilt_dir() -> Option<PathBuf> {
+fn managed_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".mistralrs"))
 }
 
@@ -19,37 +18,26 @@ fn bin_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".local").join("bin"))
 }
 
-// A prebuilt install lives in ~/.mistralrs; the on-PATH entry is a symlink into it. canonicalize so
-// the running exe (the symlink or its target) resolves to the real ~/.mistralrs path.
-fn is_prebuilt_install() -> bool {
-    let (Some(pre), Ok(exe)) = (prebuilt_dir(), std::env::current_exe()) else {
+// Managed installs live in ~/.mistralrs; canonicalize so symlinks resolve to the real install path.
+fn is_managed_install() -> bool {
+    let (Some(pre), Ok(exe)) = (managed_dir(), std::env::current_exe()) else {
         return false;
     };
     let real = std::fs::canonicalize(&exe).unwrap_or(exe);
     real.starts_with(pre)
 }
 
-fn print_source_install_hint(action: &str) {
+fn print_unmanaged_uninstall_hint() {
     let exe = std::env::current_exe().unwrap_or_default();
-    println!("`mistralrs {action}` only manages prebuilt installs.");
-    println!("This binary is at {} (built from source).", exe.display());
-    match action {
-        "update" => println!(
-            "Update it with: cargo install --git {REPO_URL} --locked --force mistralrs-cli"
-        ),
-        _ => println!("Remove it with: cargo uninstall mistralrs-cli"),
-    }
+    println!("`mistralrs uninstall` only manages installer-managed installs.");
+    println!("This binary is at {}.", exe.display());
+    println!("Remove it with: cargo uninstall mistralrs-cli");
 }
 
 pub fn run_update(version: Option<String>) -> Result<()> {
-    let _ = &version;
-    if !is_prebuilt_install() {
-        print_source_install_hint("update");
-        return Ok(());
-    }
-
     #[cfg(windows)]
     {
+        let _ = &version;
         println!("Automatic update is not yet supported on Windows (the running .exe is locked).");
         println!("Re-run the installer in a new PowerShell:");
         println!("  irm {INSTALL_PS1_URL} | iex");
@@ -58,7 +46,7 @@ pub fn run_update(version: Option<String>) -> Result<()> {
 
     #[cfg(unix)]
     {
-        println!("Updating mistral.rs (prebuilt) to the latest release...");
+        println!("Updating mistral.rs...");
         let cmd = format!("curl --proto '=https' --tlsv1.2 -sSf {INSTALL_SH_URL} | sh");
         let mut c = std::process::Command::new("sh");
         c.arg("-c")
@@ -78,11 +66,11 @@ pub fn run_update(version: Option<String>) -> Result<()> {
 
 pub fn run_uninstall(yes: bool) -> Result<()> {
     let _ = yes;
-    let Some(pre) = prebuilt_dir() else {
+    let Some(pre) = managed_dir() else {
         bail!("could not resolve home directory");
     };
-    if !is_prebuilt_install() {
-        print_source_install_hint("uninstall");
+    if !is_managed_install() {
+        print_unmanaged_uninstall_hint();
         return Ok(());
     }
 
@@ -92,7 +80,7 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             "Automatic uninstall is not yet supported on Windows (the running .exe is locked)."
         );
         println!(
-            "Delete {} and the mistralrs.exe on your PATH manually.",
+            "Delete {} and the mistralrs launcher on your PATH manually.",
             pre.display()
         );
         Ok(())
@@ -105,15 +93,19 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             return Ok(());
         }
         if let Some(bin) = bin_dir() {
-            for name in ["mistralrs", "tileiras"] {
-                let link = bin.join(name);
-                let is_symlink = link
-                    .symlink_metadata()
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false);
-                if is_symlink {
-                    let _ = std::fs::remove_file(&link);
-                }
+            let mistralrs_link = bin.join("mistralrs");
+            let is_symlink = mistralrs_link
+                .symlink_metadata()
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_symlink {
+                let _ = std::fs::remove_file(&mistralrs_link);
+            }
+
+            let tileiras_link = bin.join("tileiras");
+            let legacy_target = pre.join("bin").join("tileiras");
+            if std::fs::read_link(&tileiras_link).ok().as_deref() == Some(legacy_target.as_path()) {
+                let _ = std::fs::remove_file(&tileiras_link);
             }
         }
         std::fs::remove_dir_all(&pre).with_context(|| format!("removing {}", pre.display()))?;

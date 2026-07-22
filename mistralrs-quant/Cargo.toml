@@ -22,6 +22,7 @@ lazy_static.workspace = true
 paste.workspace = true
 tracing.workspace = true
 indicatif.workspace = true
+indexmap.workspace = true
 rayon.workspace = true
 libc.workspace = true
 byteorder.workspace = true
@@ -35,15 +36,18 @@ yoke.workspace = true
 memmap2.workspace = true
 safetensors.workspace = true
 regex.workspace = true
+fancy-regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true
+sysinfo.workspace = true
 cutile = { workspace = true, optional = true }
 cutile-compiler = { workspace = true, optional = true }
 cutile-ir = { workspace = true, optional = true }
 cuda-core = { workspace = true, optional = true }
 cuda-async = { workspace = true, optional = true }
 cuda-bindings = { workspace = true, optional = true }
+mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
 cuda = [
@@ -68,6 +72,7 @@ metal = [
     "dep:objc2-foundation",
     "dep:dispatch2",
     "dep:candle-metal-kernels",
+    "dep:mistralrs-metal-compile",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 arm-nightly-feat = []
@@ -94,6 +99,7 @@ cuda-13030 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
+mistralrs-metal-compile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true

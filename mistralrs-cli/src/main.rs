@@ -25,8 +25,14 @@ use commands::{
 };
 use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
 
+// Tensor ops allocate fresh output buffers constantly; mimalloc removes the page-fault
+// churn that dominates small-model CPU inference with the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    candle_core::utils::init_global_threadpool();
     let cli = Cli::parse();
     init_tracing(cli.global.verbose);
 
@@ -62,6 +68,7 @@ async fn main() -> Result<()> {
             image,
             video,
             audio,
+            adapter,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
             run_interactive(
@@ -75,6 +82,7 @@ async fn main() -> Result<()> {
                 image,
                 video,
                 audio,
+                adapter,
             )
             .await?;
         }
@@ -137,6 +145,7 @@ async fn main() -> Result<()> {
             model_type,
             default_model,
             runtime,
+            adapter,
             prompt_len,
             gen_len,
             depth,
@@ -154,6 +163,7 @@ async fn main() -> Result<()> {
                     depths: depth,
                     iterations,
                     warmup,
+                    adapter,
                 },
             )
             .await?;

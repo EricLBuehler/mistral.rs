@@ -1,5 +1,57 @@
 use super::config::GdnDims;
 use candle_core::{Result, Tensor, D};
+use mistralrs_quant::QuantMethod;
+use std::sync::Arc;
+
+pub enum GdnInputProjection {
+    Grouped {
+        in_proj_qkvz: Arc<dyn QuantMethod>,
+        in_proj_ba: Arc<dyn QuantMethod>,
+    },
+    Split {
+        in_proj_qkv: Arc<dyn QuantMethod>,
+        in_proj_z: Arc<dyn QuantMethod>,
+        in_proj_b: Arc<dyn QuantMethod>,
+        in_proj_a: Arc<dyn QuantMethod>,
+    },
+}
+
+impl GdnInputProjection {
+    pub fn forward(
+        &self,
+        x: &Tensor,
+        dims: &GdnDims,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<GdnProjection> {
+        match self {
+            Self::Grouped {
+                in_proj_qkvz,
+                in_proj_ba,
+            } => GdnProjection::from_grouped(
+                in_proj_qkvz.forward(x)?,
+                in_proj_ba.forward(x)?,
+                dims,
+                batch_size,
+                seq_len,
+            ),
+            Self::Split {
+                in_proj_qkv,
+                in_proj_z,
+                in_proj_b,
+                in_proj_a,
+            } => GdnProjection::from_split(
+                in_proj_qkv.forward(x)?,
+                in_proj_z.forward(x)?,
+                in_proj_b.forward(x)?,
+                in_proj_a.forward(x)?,
+                dims,
+                batch_size,
+                seq_len,
+            ),
+        }
+    }
+}
 
 pub struct GdnProjection {
     pub q: Tensor,
@@ -11,18 +63,7 @@ pub struct GdnProjection {
 }
 
 impl GdnProjection {
-    pub fn from_packed(
-        mixed: Tensor,
-        dims: &GdnDims,
-        batch_size: usize,
-        seq_len: usize,
-    ) -> Result<Self> {
-        let mixed_qkvz = mixed.narrow(D::Minus1, 0, dims.qkvz_out_dim())?;
-        let mixed_ba = mixed.narrow(D::Minus1, dims.qkvz_out_dim(), dims.ba_out_dim())?;
-        Self::new(mixed_qkvz, mixed_ba, dims, batch_size, seq_len)
-    }
-
-    pub fn new(
+    pub fn from_grouped(
         mixed_qkvz: Tensor,
         mixed_ba: Tensor,
         dims: &GdnDims,
@@ -54,6 +95,29 @@ impl GdnProjection {
             z: z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
             b: b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: a.reshape((batch_size, seq_len, dims.num_v_heads))?,
+        })
+    }
+
+    pub fn from_split(
+        mixed_qkv: Tensor,
+        mixed_z: Tensor,
+        mixed_b: Tensor,
+        mixed_a: Tensor,
+        dims: &GdnDims,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Self> {
+        let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
+        let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
+        let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
+
+        Ok(Self {
+            q: q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
+            k: k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
+            v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
+            z: mixed_z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
+            b: mixed_b.reshape((batch_size, seq_len, dims.num_v_heads))?,
+            a: mixed_a.reshape((batch_size, seq_len, dims.num_v_heads))?,
         })
     }
 

@@ -262,6 +262,7 @@ impl Attention {
 
 struct MoeMlp {
     gate: candle_nn::Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     router_jitter_noise: f64,
 }
@@ -275,10 +276,11 @@ impl MoeMlp {
         loading_isq: bool,
     ) -> Result<Self> {
         let num_experts = cfg.num_local_experts;
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, num_experts),
         )?;
 
         let moe_cfg = MoEExpertsConfig {
@@ -287,6 +289,7 @@ impl MoeMlp {
             num_experts_per_tok: 2,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::MIXTRAL,
         };
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -300,6 +303,7 @@ impl MoeMlp {
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             router_jitter_noise: cfg.router_jitter_noise,
         })
@@ -357,6 +361,10 @@ impl MoeMlp {
         let xs_flat = xs.reshape(((), hidden))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let (routing_weights, selected_experts) =
             self.sparsemixer(&router_logits, self.router_jitter_noise)?;
 

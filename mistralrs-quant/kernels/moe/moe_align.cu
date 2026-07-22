@@ -109,6 +109,46 @@ __global__ void count_and_sort_expert_tokens_kernel(
   }
 }
 
+
+__global__ void hunyuan_moe_capacity_mask_kernel(
+    const uint32_t* __restrict__ ids, const float* __restrict__ weights,
+    float* __restrict__ masked_weights, const int n_tokens,
+    const int n_experts, const int top_k, const int expert_capacity) {
+  const int expert = blockIdx.x;
+  const int priority = blockIdx.y;
+  if (expert >= n_experts || priority >= top_k || threadIdx.x != 0) {
+    return;
+  }
+
+  int accepted = 0;
+  for (int prev_priority = 0; prev_priority < priority; ++prev_priority) {
+    for (int token = 0; token < n_tokens; ++token) {
+      const int route = token * top_k + prev_priority;
+      if (ids[route] == static_cast<uint32_t>(expert)) {
+        ++accepted;
+      }
+    }
+  }
+
+  for (int token = 0; token < n_tokens; ++token) {
+    const int route = token * top_k + priority;
+    if (ids[route] == static_cast<uint32_t>(expert)) {
+      if (accepted < expert_capacity) {
+        masked_weights[route] = weights[route];
+        ++accepted;
+      }
+    }
+  }
+}
+
+__global__ void fill_f32_kernel(float* __restrict__ dst, const float value, const int n) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n) {
+    return;
+  }
+  dst[idx] = value;
+}
+
 }  // namespace
 
 extern "C" void launch_moe_align(const int32_t* topk_ids, int32_t* sorted_token_ids,
@@ -135,4 +175,25 @@ extern "C" void launch_moe_align(const int32_t* topk_ids, int32_t* sorted_token_
   dim3 grid_dims(1, actual_blocks);
   count_and_sort_expert_tokens_kernel<<<grid_dims, block_threads, 0, stream>>>(
       topk_ids, sorted_token_ids, cumsum, (size_t)numel, num_experts);
+}
+
+
+extern "C" void launch_hunyuan_moe_capacity_mask(
+    const void* ids, const void* weights, void* masked_weights,
+    const int n_tokens, const int n_experts, const int top_k,
+    const int expert_capacity, cudaStream_t stream) {
+  if (n_tokens <= 0 || n_experts <= 0 || top_k <= 0 || expert_capacity <= 0) {
+    return;
+  }
+
+  const int total = n_tokens * top_k;
+  const int block = 256;
+  const int grid = (total + block - 1) / block;
+  fill_f32_kernel<<<grid, block, 0, stream>>>(
+      reinterpret_cast<float*>(masked_weights), 0.0f, total);
+
+  dim3 mask_grid(n_experts, top_k);
+  hunyuan_moe_capacity_mask_kernel<<<mask_grid, 1, 0, stream>>>(
+      reinterpret_cast<const uint32_t*>(ids), reinterpret_cast<const float*>(weights),
+      reinterpret_cast<float*>(masked_weights), n_tokens, n_experts, top_k, expert_capacity);
 }

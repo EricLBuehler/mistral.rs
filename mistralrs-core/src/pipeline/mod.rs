@@ -54,9 +54,10 @@ pub use loaders::{
     EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader, EmbeddingModelPaths,
     EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FluxLoader, GLM4Loader,
     GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
-    GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
+    GemmaLoader, GptOssLoader, GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader,
+    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2Loader, Lfm2VlLoader,
+    LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader,
+    MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
     MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName,
     QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader,
@@ -93,8 +94,10 @@ pub(crate) fn get_device_layers_for_loader(
 use mistralrs_quant::IsqType;
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
-pub(crate) use paths::{get_chat_template, get_model_paths, get_xlora_paths};
-pub use paths::{AdapterPaths, LoraAdapterPaths};
+pub(crate) use paths::{
+    get_adapter_paths, get_chat_template, get_model_paths, AdapterPathOptions, XLoraPreload,
+};
+pub use paths::{AdapterPaths, ResolvedLoraAdapter};
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -112,7 +115,9 @@ use tokenizers::Tokenizer;
 use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
-use crate::paged_attention::block_hash::{compute_block_hashes, MultimodalAttentionPolicy};
+use crate::paged_attention::block_hash::{
+    adapter_generation_key, compute_block_hashes, MultimodalAttentionPolicy,
+};
 use crate::sequence::Sequence;
 
 use prompt_chunks::build_prompt_chunk_plan;
@@ -125,6 +130,68 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+pub(crate) fn validate_lora_loader_config(
+    adapters: Option<&[crate::LoraAdapterSpec]>,
+    runtime_config: Option<crate::LoraRuntimeConfig>,
+) -> anyhow::Result<()> {
+    if let Some(runtime_config) = runtime_config {
+        runtime_config.validate()?;
+    }
+    let Some(adapters) = adapters else {
+        return Ok(());
+    };
+    let mut aliases = std::collections::HashSet::new();
+    for adapter in adapters {
+        let alias = adapter.alias.trim();
+        if alias.is_empty() {
+            anyhow::bail!("LoRA adapter alias must not be empty");
+        }
+        if alias.len() > crate::MAX_LORA_ALIAS_BYTES {
+            anyhow::bail!(
+                "LoRA adapter alias must not exceed {} bytes",
+                crate::MAX_LORA_ALIAS_BYTES
+            );
+        }
+        if adapter.source.trim().is_empty() {
+            anyhow::bail!(
+                "LoRA adapter source for alias `{}` must not be empty",
+                adapter.alias
+            );
+        }
+        if adapter.revision().is_empty() {
+            anyhow::bail!(
+                "LoRA adapter revision for alias `{}` must not be empty",
+                adapter.alias
+            );
+        }
+        if adapter
+            .base_model_name
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            anyhow::bail!(
+                "LoRA adapter `{}` has an empty base_model_name",
+                adapter.alias
+            );
+        }
+        if !aliases.insert(alias) {
+            anyhow::bail!(
+                "LoRA adapter alias `{}` is specified more than once",
+                adapter.alias
+            );
+        }
+    }
+    if let Some(config) = runtime_config.filter(|config| aliases.len() > config.max_adapters) {
+        anyhow::bail!(
+            "LoRA adapter preload count {} exceeds the configured maximum {}",
+            aliases.len(),
+            config.max_adapters
+        );
+    }
+    Ok(())
+}
+
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
@@ -657,6 +724,8 @@ pub struct GeneralMetadata {
     pub cache_engine: Option<CacheEngine>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
     pub modalities: Modalities,
+    // UQFF writes force the whole model onto CPU, so the pipeline is not servable afterwards.
+    pub loaded_for_uqff_write: bool,
 }
 
 impl GeneralMetadata {
@@ -961,6 +1030,10 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
+        None
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -1022,7 +1095,13 @@ pub trait Pipeline:
         if snapshots.is_empty() {
             return Ok(());
         }
-        let block_hashes = compute_block_hashes(seq.get_toks(), block_size, seq.mm_features(), &[]);
+        let adapter_key = adapter_generation_key(seq.adapter_generation());
+        let block_hashes = compute_block_hashes(
+            seq.get_toks(),
+            block_size,
+            seq.mm_features(),
+            adapter_key.as_slice(),
+        );
         let n_blocks = cached_tokens / block_size;
         if block_hashes.len() >= n_blocks {
             prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);

@@ -18,7 +18,7 @@ pub enum AttentionMask {
     /// "this is a prefill" to the paged attention layer.
     CausalFlash,
     /// An explicit mask tensor (causal, sliding window, bidirectional, etc).
-    /// Dispatches to the eager (non-flash) attention path.
+    /// CPU fused attention can consume it directly; other backends route to eager as needed.
     Custom(Tensor),
 }
 
@@ -46,7 +46,10 @@ impl AttentionMask {
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
+pub(crate) use backends::cpu::fast_exp;
+#[cfg(feature = "cuda")]
+use backends::naive::maybe_synchronize;
+pub(crate) use backends::{flash_attn, naive_sdpa, sinks_attn};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
@@ -132,6 +135,36 @@ fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     }
 }
 
+fn run_flash_attn_cpu_for_dtype(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    // KV may be stored at lower precision than the activations (f16 CPU KV cache);
+    // kernels accumulate in f32 either way, so convert q down and the output back up.
+    let out_dtype = q.dtype();
+    let q_conv;
+    let q = if q.dtype() != k.dtype() {
+        q_conv = q.to_dtype(k.dtype())?;
+        &q_conv
+    } else {
+        q
+    };
+    let res = match k.dtype() {
+        DType::F32 => cpu::run_flash_attn_cpu::<f32>(q, k, v, mask, sdpa_params),
+        DType::F16 => cpu::run_flash_attn_cpu::<half::f16>(q, k, v, mask, sdpa_params),
+        DType::BF16 => cpu::run_flash_attn_cpu::<half::bf16>(q, k, v, mask, sdpa_params),
+        other => candle_core::bail!("Unsupported dtype for CPU flash attn: {other:?}"),
+    }?;
+    if res.dtype() != out_dtype {
+        res.to_dtype(out_dtype)
+    } else {
+        Ok(res)
+    }
+}
+
 pub struct SdpaParams {
     pub n_kv_groups: usize,
     pub softcap: Option<f32>,
@@ -154,7 +187,7 @@ impl Sdpa {
     ///
     /// - `AttentionMask::CausalFlash`: flash attention with `is_causal = true`
     /// - `AttentionMask::None`: flash if available (decode), else eager without mask
-    /// - `AttentionMask::Custom`: eager attention with the explicit mask tensor
+    /// - `AttentionMask::Custom`: CPU fused attention or eager attention with the explicit mask tensor
     #[allow(unused_variables, clippy::too_many_arguments)]
     pub fn run_attention(
         &self,
@@ -178,8 +211,14 @@ impl Sdpa {
         // early-exit is safe to enable only when the request is known causal.
         let do_causal = flash_params.is_some_and(|p| p.causal);
 
-        // Custom mask, eager attention (flash can't use arbitrary mask tensors)
         if let AttentionMask::Custom(mask_tensor) = mask {
+            if q.device().is_cpu() {
+                let q = q.transpose(1, 2)?;
+                let k = k.transpose(1, 2)?;
+                let v = v.transpose(1, 2)?;
+                return run_flash_attn_cpu_for_dtype(&q, &k, &v, Some(mask_tensor), sdpa_params);
+            }
+
             return self.run_attention_noflash(q, k, v, Some(mask_tensor), sdpa_params, do_causal);
         }
 
@@ -218,26 +257,7 @@ impl Sdpa {
             let v = v.transpose(1, 2)?;
 
             if q.device().is_cpu() {
-                match q.dtype() {
-                    DType::F32 => {
-                        return cpu::run_flash_attn_cpu::<f32>(&q, &k, &v, None, sdpa_params);
-                    }
-                    DType::F16 => {
-                        return cpu::run_flash_attn_cpu::<half::f16>(&q, &k, &v, None, sdpa_params)
-                    }
-                    DType::BF16 => {
-                        return cpu::run_flash_attn_cpu::<half::bf16>(
-                            &q,
-                            &k,
-                            &v,
-                            None,
-                            sdpa_params,
-                        );
-                    }
-                    _ => {
-                        return Err(candle_core::Error::Msg("Unsupported data type".into()));
-                    }
-                }
+                return run_flash_attn_cpu_for_dtype(&q, &k, &v, None, sdpa_params);
             } else {
                 // hd512 flash kernels drop softcap/sliding-window at compile time; fail loud, not silent.
                 let (_, _, _, head_dim) = q.dims4()?;
@@ -493,5 +513,84 @@ impl Sdpa {
         } else {
             naive_sdpa(q, &k, &v, mask, sdpa_params)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{Result as CandleResult, D};
+
+    const EPS: f32 = 1e-4;
+
+    fn assert_close(lhs: &Tensor, rhs: &Tensor) -> CandleResult<()> {
+        let lhs = lhs.flatten_all()?.to_vec1::<f32>()?;
+        let rhs = rhs.flatten_all()?.to_vec1::<f32>()?;
+        for (lhs, rhs) in lhs.iter().zip(rhs.iter()) {
+            assert!((lhs - rhs).abs() < EPS, "{lhs} != {rhs}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_cpu_mask_uses_attention_dispatch() -> CandleResult<()> {
+        let (b, h, q_len, kv_len, d) = (1, 2, 3, 3, 4);
+        let q = Tensor::from_vec(
+            (0..b * h * q_len * d)
+                .map(|x| x as f32 / 31.0)
+                .collect::<Vec<_>>(),
+            (b, h, q_len, d),
+            &Device::Cpu,
+        )?;
+        let k = Tensor::from_vec(
+            (0..b * h * kv_len * d)
+                .map(|x| x as f32 / 37.0)
+                .collect::<Vec<_>>(),
+            (b, h, kv_len, d),
+            &Device::Cpu,
+        )?;
+        let v = Tensor::from_vec(
+            (0..b * h * kv_len * d)
+                .map(|x| x as f32 / 41.0)
+                .collect::<Vec<_>>(),
+            (b, h, kv_len, d),
+            &Device::Cpu,
+        )?;
+        let mask = Tensor::from_vec(
+            vec![
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+            ],
+            (q_len, kv_len),
+            &Device::Cpu,
+        )?;
+        let sdpa_params = SdpaParams {
+            n_kv_groups: 1,
+            softcap: None,
+            softmax_scale: 1.0,
+            sliding_window: None,
+            sinks: None,
+        };
+
+        let out = Sdpa.run_attention(
+            &q,
+            &k,
+            &v,
+            &AttentionMask::Custom(mask.clone()),
+            Some(&FlashParams::empty(true)),
+            &sdpa_params,
+        )?;
+        let logits = q.matmul(&k.transpose(2, 3)?)?.broadcast_add(&mask)?;
+        let expected = candle_nn::ops::softmax(&logits, D::Minus1)?.matmul(&v)?;
+
+        assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
+        assert_close(&out, &expected)
     }
 }

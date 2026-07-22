@@ -1,5 +1,4 @@
 use candle_core::{Device, Result, Tensor};
-use candle_nn::Linear;
 use mistralrs_quant::{Comm, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder};
 use std::sync::Arc;
 
@@ -7,14 +6,15 @@ use crate::device_map::DeviceMapper;
 
 use super::config::{GdnConfig, GdnDims};
 use super::norm::RmsNormGated;
+use super::projection::GdnInputProjection;
 
-pub enum GdnWeightMode {
-    MergedOnly,
-    MergedWithFallback,
+pub enum GdnInputProjectionKind {
+    Grouped,
+    Split,
 }
 
 pub struct GdnWeights {
-    pub in_proj: Arc<dyn QuantMethod>,
+    pub input_proj: GdnInputProjection,
     pub conv1d_weight: Tensor,
     pub dt_bias: Tensor,
     pub a_log: Tensor,
@@ -29,7 +29,7 @@ pub struct GdnWeightLoadCtx<'a> {
     pub layer_idx: usize,
     pub loading_isq: bool,
     pub comm: &'a Arc<Comm>,
-    pub weight_mode: GdnWeightMode,
+    pub input_projection_kind: GdnInputProjectionKind,
 }
 
 impl GdnWeights {
@@ -41,7 +41,7 @@ impl GdnWeights {
             layer_idx,
             loading_isq,
             comm,
-            weight_mode,
+            input_projection_kind,
         } = ctx;
         let isq_target_device = if loading_isq {
             mapper.device_for(layer_idx, false).cloned()
@@ -50,17 +50,54 @@ impl GdnWeights {
         };
         let vb_la = mapper.set_device(layer_idx, vb.pp("linear_attn"), loading_isq);
 
-        let qkvz_w = move_to_target(
-            load_qkvz(&vb_la, dims, &weight_mode)?,
-            isq_target_device.as_ref(),
-        )?;
-        let ba_w = move_to_target(
-            load_ba(&vb_la, dims, &weight_mode)?,
-            isq_target_device.as_ref(),
-        )?;
-        let in_proj_w = Tensor::cat(&[qkvz_w, ba_w], 0)?;
-        let in_proj =
-            ReplicatedLayer::from_linear(Linear::new(in_proj_w, None), vb_la.pp("in_proj"))?;
+        let input_proj = match input_projection_kind {
+            GdnInputProjectionKind::Grouped => GdnInputProjection::Grouped {
+                in_proj_qkvz: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.qkvz_out_dim(),
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_qkvz"),
+                )?,
+                in_proj_ba: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.ba_out_dim(),
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_ba"),
+                )?,
+            },
+            GdnInputProjectionKind::Split => GdnInputProjection::Split {
+                in_proj_qkv: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.conv_dim,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_qkv"),
+                )?,
+                in_proj_z: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.value_dim,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_z"),
+                )?,
+                in_proj_b: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.num_v_heads,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_b"),
+                )?,
+                in_proj_a: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.num_v_heads,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_a"),
+                )?,
+            },
+        };
         let conv1d_weight = move_to_target(
             vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
             isq_target_device.as_ref(),
@@ -90,7 +127,7 @@ impl GdnWeights {
         )?;
 
         Ok(Self {
-            in_proj,
+            input_proj,
             conv1d_weight,
             dt_bias,
             a_log,
@@ -98,65 +135,6 @@ impl GdnWeights {
             out_proj,
         })
     }
-}
-
-fn load_qkvz(vb: &ShardedVarBuilder, dims: &GdnDims, mode: &GdnWeightMode) -> Result<Tensor> {
-    match mode {
-        GdnWeightMode::MergedOnly => vb.get(
-            (dims.qkvz_out_dim(), dims.hidden_size),
-            "in_proj_qkvz.weight",
-        ),
-        GdnWeightMode::MergedWithFallback if vb.contains_tensor("in_proj_qkvz.weight") => vb.get(
-            (dims.qkvz_out_dim(), dims.hidden_size),
-            "in_proj_qkvz.weight",
-        ),
-        GdnWeightMode::MergedWithFallback => load_split_qkvz(vb, dims),
-    }
-}
-
-fn load_split_qkvz(vb: &ShardedVarBuilder, dims: &GdnDims) -> Result<Tensor> {
-    let qkv_w = vb.get(
-        (dims.key_dim * 2 + dims.value_dim, dims.hidden_size),
-        "in_proj_qkv.weight",
-    )?;
-    let z_w = vb.get((dims.value_dim, dims.hidden_size), "in_proj_z.weight")?;
-    let q_w = qkv_w.narrow(0, 0, dims.key_dim)?;
-    let k_w = qkv_w.narrow(0, dims.key_dim, dims.key_dim)?;
-    let v_w = qkv_w.narrow(0, dims.key_dim * 2, dims.value_dim)?;
-    let q_grouped = q_w.reshape((dims.num_k_heads, dims.head_k_dim, dims.hidden_size))?;
-    let k_grouped = k_w.reshape((dims.num_k_heads, dims.head_k_dim, dims.hidden_size))?;
-    let v_grouped = v_w.reshape((
-        dims.num_k_heads,
-        dims.v_per_group * dims.head_v_dim,
-        dims.hidden_size,
-    ))?;
-    let z_grouped = z_w.reshape((
-        dims.num_k_heads,
-        dims.v_per_group * dims.head_v_dim,
-        dims.hidden_size,
-    ))?;
-    Tensor::cat(&[q_grouped, k_grouped, v_grouped, z_grouped], 1)?
-        .reshape((dims.qkvz_out_dim(), dims.hidden_size))
-}
-
-fn load_ba(vb: &ShardedVarBuilder, dims: &GdnDims, mode: &GdnWeightMode) -> Result<Tensor> {
-    match mode {
-        GdnWeightMode::MergedOnly => {
-            vb.get((dims.ba_out_dim(), dims.hidden_size), "in_proj_ba.weight")
-        }
-        GdnWeightMode::MergedWithFallback if vb.contains_tensor("in_proj_ba.weight") => {
-            vb.get((dims.ba_out_dim(), dims.hidden_size), "in_proj_ba.weight")
-        }
-        GdnWeightMode::MergedWithFallback => load_split_ba(vb, dims),
-    }
-}
-
-fn load_split_ba(vb: &ShardedVarBuilder, dims: &GdnDims) -> Result<Tensor> {
-    let b_w = vb.get((dims.num_v_heads, dims.hidden_size), "in_proj_b.weight")?;
-    let a_w = vb.get((dims.num_v_heads, dims.hidden_size), "in_proj_a.weight")?;
-    let b_grouped = b_w.reshape((dims.num_k_heads, dims.v_per_group, dims.hidden_size))?;
-    let a_grouped = a_w.reshape((dims.num_k_heads, dims.v_per_group, dims.hidden_size))?;
-    Tensor::cat(&[b_grouped, a_grouped], 1)?.reshape((dims.ba_out_dim(), dims.hidden_size))
 }
 
 fn move_to_target(tensor: Tensor, target_device: Option<&Device>) -> Result<Tensor> {

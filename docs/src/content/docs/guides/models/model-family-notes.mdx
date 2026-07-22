@@ -58,7 +58,7 @@ Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID direct
 
 ## MoE models and MoQE
 
-MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it with `--isq-organization moqe`; it composes with either `--isq <level>` or `--quant <level>`:
+MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it with `--isq-organization moqe`; it composes with either `--isq <level>` or `--quant <level>`:
 
 ```bash
 mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
@@ -94,9 +94,19 @@ ISQ applies only to the attention layers (and `lm_head`); the expert weights are
 
 Qwen3 Next mixes Gated Delta Network (linear attention) layers with full softmax attention, so its cost profile at long contexts differs from a pure softmax model. Qwen3-Coder-Next checkpoints use the same loader.
 
+## Qwen3.5 and Qwen3.6
+
+Qwen3.5 and Qwen3.6 dense and MoE checkpoints are supported. Qwen3.6 shares the Qwen3.5 HF `model_type`, so it loads through the same `Qwen3_5` and `Qwen3_5Moe` paths.
+
 ## Granite 4.0 (GraniteMoeHybrid)
 
 IBM Granite 4.0 checkpoints (e.g. `ibm-granite/granite-4.0-micro`) mix Mamba-2 recurrent layers with attention layers. They load through auto-detection like any other text model.
+
+## LFM2 and LFM2.5
+
+LiquidAI LFM2 and LFM2.5 dense and MoE checkpoints are supported. LFM2-VL and LFM2.5-VL are supported for image input.
+
+The official repos ship `chat_template.jinja`, including the Liquid tool-call format. It is auto-detected like other model-native tool-call formats.
 
 ## Gemma
 

@@ -289,6 +289,7 @@ impl<'a> AgentStream<'a> {
                                                         total_prompt_time_sec: 0.0,
                                                         total_completion_time_sec: 0.0,
                                                     },
+                                                    adapter_generation: None,
                                                     agentic_tool_calls: None,
                                                     files: None,
                                                     session_id: None,

@@ -21,6 +21,20 @@ pub struct UnquantLinear {
     stats: ImatrixLayerStats,
 }
 
+fn has_cublaslt_batch_layout(x: &Tensor) -> bool {
+    if x.rank() != 3 {
+        return false;
+    }
+
+    let dims = x.dims();
+    let stride = x.layout().stride();
+    stride[1] == dims[2] && stride[2] == 1
+}
+
+fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
+    has_cublaslt_batch_layout(a) && has_cublaslt_batch_layout(w)
+}
+
 impl UnquantLinear {
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format"];
@@ -103,9 +117,12 @@ impl QuantMethod for UnquantLinear {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
+                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                        CUBLASLT_CONTROLLER.get_for_device(a.device())
+                    } else {
+                        None
+                    };
+                    if let Some(cublaslt) = cublaslt {
                         cublaslt
                             .batch_matmul(
                                 a,
@@ -148,17 +165,15 @@ impl QuantMethod for UnquantLinear {
         } else {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
-                    if let (Device::Cuda(_), Some(cublaslt)) =
-                        (a.device(), CUBLASLT_CONTROLLER.get_for_device(a.device()))
-                    {
-                        // cuBLAS batch_matmul requires 3D tensors, fall back to regular matmul for 2D.
-                        if a.rank() >= 3 && w.rank() >= 3 {
-                            cublaslt
-                                .batch_matmul(a, &w, None, None, None, None, None)?
-                                .t()
-                        } else {
-                            a.matmul(&w.t()?)
-                        }
+                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                        CUBLASLT_CONTROLLER.get_for_device(a.device())
+                    } else {
+                        None
+                    };
+                    if let Some(cublaslt) = cublaslt {
+                        cublaslt
+                            .batch_matmul(a, &w, None, None, None, None, None)?
+                            .t()
                     } else {
                         a.matmul(&w.t()?)
                     }
@@ -314,6 +329,16 @@ impl QuantMethod for UnquantLinear {
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
         (self.w.dtype(), self.w.device().clone())
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.w.dtype(),
+            self.w.device().clone(),
+            self.w.dims().to_vec(),
+            request,
+            false,
+        ))
     }
 
     fn has_bias(&self) -> bool {
@@ -665,6 +690,27 @@ mod tests {
         assert!(tensors
             .iter()
             .any(|tensor| tensor.name() == "test.linear.weight.format"));
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn forward_cuda_accepts_non_contiguous_3d_input() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let input = Tensor::randn(0., 1., (1, 4, 3), &device)?
+            .to_dtype(DType::F32)?
+            .transpose(1, 2)?;
+        let weight = Tensor::randn(0., 1., (5, 4), &device)?.to_dtype(DType::F32)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), None),
+        ))?;
+
+        assert!(!has_cublaslt_batch_layout(&input));
+        let output = layer.forward(&input)?;
+        let expected = input.matmul(&weight.broadcast_left(1)?.t()?)?;
+        let max_diff = (output - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+
+        assert!(max_diff <= 1e-5, "max_diff={max_diff}");
         Ok(())
     }
 

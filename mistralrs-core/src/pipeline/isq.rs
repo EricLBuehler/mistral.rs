@@ -25,6 +25,12 @@ const UQFF_METADATA_VERSION: &str = "uqff.version";
 const UQFF_METADATA_MISTRALRS_VERSION: &str = "uqff.producer.mistralrs.version";
 const UQFF_METADATA_MISTRALRS_GIT_REVISION: &str = "uqff.producer.mistralrs.git_revision";
 
+fn is_tracked_module_tensor(name: &str, tracked_keys: &HashSet<&str>) -> bool {
+    name.strip_suffix(".weight")
+        .or_else(|| name.strip_suffix(".bias"))
+        .is_some_and(|module| tracked_keys.contains(module))
+}
+
 pub(crate) struct WeightLoadingState {
     pub(crate) from_uqff: bool,
     pub(crate) loading_isq: bool,
@@ -408,7 +414,7 @@ pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> 
         base_model,
         repo_id,
         mut layers,
-        residual,
+        mut residual,
         full_ser,
         imatrix,
     } = request;
@@ -422,6 +428,11 @@ pub(crate) fn write_uqff_artifacts(request: UqffWriteRequest<'_>) -> Result<()> 
         }
     }
     layers.sort_by(|a, b| a.key.cmp(&b.key));
+    let tracked_keys = layers
+        .iter()
+        .map(|module| module.key.as_str())
+        .collect::<HashSet<_>>();
+    residual.retain(|(name, _)| !is_tracked_module_tensor(name, &tracked_keys));
 
     let mut output_paths = if types.len() == 1 {
         if output.extension().is_none_or(|ext| ext != "uqff") {
@@ -555,6 +566,8 @@ fn write_uqff_type(
         ty,
         |m| m.ty.unwrap_or(ty),
         &|key| imatrix.get(key).cloned(),
+        mistralrs_quant::IsqConsumer::UqffWrite,
+        MAX_UQFF_SIZE_BYTES,
         Some(quant_report.clone()),
     )?;
     let guard = mistralrs_quant::QuantizeOntoGuard::new();
@@ -562,9 +575,10 @@ fn write_uqff_type(
         bar.set_message(module.key.clone());
         bar.tick();
         let resolved_ty = module.ty.unwrap_or(ty);
-        let layer = rx
+        let output = rx
             .recv()
             .map_err(|e| anyhow::anyhow!("Requantize channel error: {e}"))??;
+        let layer = &output.value;
         let serialized_tensors = layer.serialize_uqff(&module.key, resolved_ty)?;
         let (stored, shape) =
             mistralrs_quant::stored_type_from_tensors(&serialized_tensors, &module.key)?;
@@ -609,9 +623,9 @@ fn write_uqff_type(
         if swap_runtime {
             let target = module.ct.resolve()?.dtype_and_device().1;
             let layer = if layer.dtype_and_device().1.same_device(&target) {
-                layer
+                output.value.clone()
             } else {
-                layer.clone().apply_isq(
+                output.value.clone().apply_isq(
                     None,
                     target,
                     &std::sync::atomic::AtomicUsize::new(0),
@@ -975,6 +989,24 @@ pub(crate) fn load_imatrix_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracked_module_weights_are_not_written_as_residuals() {
+        let tracked = HashSet::from(["model.embed_tokens", "model.layers.0.self_attn.q_proj"]);
+        assert!(is_tracked_module_tensor(
+            "model.embed_tokens.weight",
+            &tracked
+        ));
+        assert!(is_tracked_module_tensor(
+            "model.layers.0.self_attn.q_proj.bias",
+            &tracked
+        ));
+        assert!(!is_tracked_module_tensor("model.norm.weight", &tracked));
+        assert!(!is_tracked_module_tensor(
+            "model.embed_tokens.weight_scale",
+            &tracked
+        ));
+    }
 
     #[test]
     fn test_resolve_uqff_shorthand_numeric_q8() {

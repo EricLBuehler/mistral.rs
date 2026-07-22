@@ -271,7 +271,7 @@ impl Loader for SpeechLoader {
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            let WorkerTransferData::Init { worker_rank, .. } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl || use_ring() {
             vec![candle_core::Device::new_cuda(0)?]
@@ -327,6 +327,7 @@ impl Loader for SpeechLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Audio],
                 },
+                loaded_for_uqff_write: false,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
             cfg: self

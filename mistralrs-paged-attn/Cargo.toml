@@ -20,12 +20,21 @@ objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
 dispatch2 = { workspace = true, optional = true }
 candle-metal-kernels = { workspace = true, optional = true }
+mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 thiserror.workspace = true
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
 anyhow.workspace = true
+mistralrs-metal-compile = { workspace = true, optional = true }
 
 [features]
 cuda = ["dep:cudaforge", "candle-core/cuda"]
-metal = ["dep:objc2-metal", "dep:objc2-foundation", "dep:dispatch2", "dep:candle-metal-kernels"]
+metal = [
+    "candle-core/metal",
+    "dep:objc2-metal",
+    "dep:objc2-foundation",
+    "dep:dispatch2",
+    "dep:candle-metal-kernels",
+    "dep:mistralrs-metal-compile",
+]

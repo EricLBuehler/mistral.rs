@@ -916,6 +916,7 @@ impl InputsProcessor for Qwen3VLImageProcessor {
             } else {
                 crate::pipeline::RecurrentBatchKind::Decode
             },
+            adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
             inputs,

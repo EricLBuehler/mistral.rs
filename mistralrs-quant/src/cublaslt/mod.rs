@@ -77,29 +77,25 @@ mod tests;
 pub use api::{fused_batch_matmul, fused_batch_matmul_f8, CublasLt};
 
 pub fn maybe_init_cublas_lt_wrapper(device: Device) {
+    #[cfg(feature = "cuda")]
+    if !device.is_cuda() {
+        return;
+    }
+
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
         #[cfg(feature = "cuda")]
         {
-            match device {
-                Device::Cuda(_) => {
-                    let wrapper = Box::new(CublasLtWrapper {
-                        cublaslt: CublasLt::new(&device).unwrap(),
-                    });
-                    let wrapper_ptr = Box::leak(wrapper) as &'static CublasLtWrapper;
+            let wrapper = Box::new(CublasLtWrapper {
+                cublaslt: CublasLt::new(&device).unwrap(),
+            });
+            let wrapper_ptr = Box::leak(wrapper) as &'static CublasLtWrapper;
 
-                    // Set the controller handle and store the device location
-                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
-                    *handle_lock = Some(wrapper_ptr);
-                    let mut device_loc = CUBLASLT_CONTROLLER.device_location.lock().unwrap();
-                    *device_loc = Some(device.location());
-                }
-                _ => {
-                    let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
-                    *handle_lock = None;
-                }
-            }
+            let mut handle_lock = CUBLASLT_CONTROLLER.handle.lock().unwrap();
+            *handle_lock = Some(wrapper_ptr);
+            let mut device_loc = CUBLASLT_CONTROLLER.device_location.lock().unwrap();
+            *device_loc = Some(device.location());
         }
 
         #[cfg(not(feature = "cuda"))]

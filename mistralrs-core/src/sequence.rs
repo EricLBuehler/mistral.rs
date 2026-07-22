@@ -5,7 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
-    AudioInput, ChatCompletionResponse, Usage, VideoInput,
+    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -261,6 +261,9 @@ pub struct MultimodalData {
     pub input_audios: Option<SequenceAudios>,
     pub input_videos: Option<SequenceVideos>,
     pub cached_pixel_values: Option<Tensor>,
+    pub cached_pixel_attention_mask: Option<Tensor>,
+    pub cached_spatial_shapes: Option<Tensor>,
+    pub cached_num_crops: Option<Vec<usize>>,
     pub cached_img_thw: Option<Tensor>,
     pub cached_vid_thw: Option<Tensor>,
     /// Complete image grid THW covering ALL images in the sequence (including prefix-cached ones).
@@ -294,6 +297,9 @@ impl MultimodalData {
             input_audios: input_audios.map(SequenceAudios::new),
             input_videos: input_videos.map(SequenceVideos::new),
             cached_pixel_values: None,
+            cached_pixel_attention_mask: None,
+            cached_spatial_shapes: None,
+            cached_num_crops: None,
             cached_img_thw: None,
             cached_vid_thw: None,
             rope_img_grid_thw: None,
@@ -439,6 +445,9 @@ impl MultimodalData {
         // Invalidate preprocessed pixel value cache, the trimmed image set
         // no longer matches the cached tensor dimensions (used by Qwen VL models).
         self.cached_pixel_values = None;
+        self.cached_pixel_attention_mask = None;
+        self.cached_spatial_shapes = None;
+        self.cached_num_crops = None;
         self.cached_img_thw = None;
         self.cached_vid_thw = None;
     }
@@ -647,6 +656,7 @@ pub struct Sequence {
     pub(crate) return_raw_logits: bool,
     token_offset: usize,
     eos_tokens: Vec<u32>,
+    adapter: Option<AdapterLease>,
 
     // Multimodal data (images, diffusion settings, pixel caches)
     pub multimodal: MultimodalData,
@@ -665,10 +675,8 @@ pub struct Sequence {
     /// These tokens should be skipped during prefill.
     prefix_cache_len: usize,
     block_hash_revision: u64,
-    /// Trailing tokens not yet encoded into the KV cache. Block-diffusion models append a
-    /// whole canvas per step; it only enters the cache on the NEXT step's encoder pass, so
-    /// the prefix cacher must not register blocks covering it.
-    unencoded_tail_len: usize,
+    /// Number of logical tokens represented in model/cache state.
+    num_computed_tokens: usize,
     /// Denoising-loop time inside the latest block-generation step; booked as completion
     /// time even when the step was a prompt step (the encoder prefill is the prompt part).
     pending_denoise_time_ms: u128,
@@ -797,7 +805,7 @@ impl Sequence {
             prefill_prompt_toks: None,
             prefix_cache_len: 0,
             block_hash_revision: 0,
-            unencoded_tail_len: 0,
+            num_computed_tokens: 0,
             pending_denoise_time_ms: 0,
             suffix,
             prefix,
@@ -824,6 +832,7 @@ impl Sequence {
             return_raw_logits,
             token_offset: 0,
             eos_tokens,
+            adapter: None,
             total_prompt_time: None,
             total_completion_time: None,
             step_start_instant: None,
@@ -899,6 +908,20 @@ impl Sequence {
 
     pub fn id(&self) -> &usize {
         &self.id
+    }
+
+    pub(crate) fn bind_adapter(&mut self, adapter: AdapterLease) {
+        assert!(self.adapter.is_none(), "sequence adapter is already bound");
+        self.adapter = Some(adapter);
+        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn adapter_lease(&self) -> Option<&AdapterLease> {
+        self.adapter.as_ref()
+    }
+
+    pub fn adapter_generation(&self) -> Option<AdapterGenerationId> {
+        self.adapter.as_ref().map(AdapterLease::generation)
     }
 
     pub fn is_running(&self) -> bool {
@@ -1061,6 +1084,7 @@ impl Sequence {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         self.clear_staged_speculative_tokens();
+        self.num_computed_tokens = 0;
         self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
@@ -1126,12 +1150,20 @@ impl Sequence {
         self.block_hash_revision
     }
 
-    pub fn unencoded_tail_len(&self) -> usize {
-        self.unencoded_tail_len
+    pub fn num_computed_tokens(&self) -> usize {
+        self.num_computed_tokens.min(self.len())
     }
 
-    pub fn set_unencoded_tail_len(&mut self, len: usize) {
-        self.unencoded_tail_len = len;
+    pub fn set_num_computed_tokens(&mut self, len: usize) {
+        self.num_computed_tokens = len.min(self.len());
+    }
+
+    pub fn advance_num_computed_tokens(&mut self, amount: usize) {
+        self.set_num_computed_tokens(self.num_computed_tokens.saturating_add(amount));
+    }
+
+    pub fn num_uncomputed_tokens(&self) -> usize {
+        self.len().saturating_sub(self.num_computed_tokens())
     }
 
     pub(crate) fn add_pending_denoise_time(&mut self, time: std::time::Duration) {
@@ -1909,6 +1941,9 @@ impl SequenceGroup {
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "chat.completion.chunk".to_string(),
                     usage: usage_opt,
+                    adapter_generation: seq
+                        .adapter_generation()
+                        .map(|generation| generation.to_string()),
                     session_id: None,
                 }))
                 .await?;
@@ -1928,6 +1963,9 @@ impl SequenceGroup {
                     model: model.clone(),
                     system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                     object: "text_completion".to_string(),
+                    adapter_generation: seq
+                        .adapter_generation()
+                        .map(|generation| generation.to_string()),
                 }))
                 .await?;
         }

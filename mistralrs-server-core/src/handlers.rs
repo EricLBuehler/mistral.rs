@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
+    lora_adapters::list_lora_adapter_models,
     openai::{ModelObject, ModelObjects},
     types::ExtractedMistralRsState,
 };
@@ -50,6 +51,9 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
         object: "model",
         created: state.get_creation_time(),
         owned_by: "local",
+        root: Some("default".to_string()),
+        parent: None,
+        adapter_generation: None,
         status: None,
         tools_available: None,
         mcp_tools_count: None,
@@ -76,14 +80,33 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Json<ModelObjects>
             };
 
         model_objects.push(ModelObject {
+            root: Some(model_id.clone()),
             id: model_id,
             object: "model",
             created: state.get_creation_time(),
             owned_by: "local",
+            parent: None,
+            adapter_generation: None,
             status: Some(status.to_string()),
             tools_available,
             mcp_tools_count,
             mcp_servers_connected,
+        });
+    }
+
+    for adapter_model in list_lora_adapter_models(&state).unwrap_or_default() {
+        model_objects.push(ModelObject {
+            root: Some(adapter_model.adapter.alias.clone()),
+            id: adapter_model.id,
+            object: "model",
+            created: state.get_creation_time(),
+            owned_by: "local",
+            parent: Some(adapter_model.parent),
+            adapter_generation: Some(adapter_model.adapter.generation.to_string()),
+            status: Some(CoreModelStatus::Loaded.to_string()),
+            tools_available: None,
+            mcp_tools_count: None,
+            mcp_servers_connected: None,
         });
     }
 

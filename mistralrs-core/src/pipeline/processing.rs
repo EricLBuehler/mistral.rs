@@ -62,6 +62,14 @@ pub trait Processor {
             self.template_action(),
             tools,
         )?;
+        // Templates own their special tokens (HF apply_chat_template convention): when
+        // the rendered prompt already starts with bos, letting the tokenizer add it
+        // again doubles it (gemma-family tokenizers add bos in their post-processor).
+        let add_special_tokens = add_special_tokens
+            && !pipeline
+                .get_chat_template()
+                .and_then(|t| t.bos_tok())
+                .is_some_and(|bos| prompt.starts_with(&bos));
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {

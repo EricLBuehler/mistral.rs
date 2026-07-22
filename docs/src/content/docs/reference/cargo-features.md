@@ -9,11 +9,11 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 
 | Feature | Crates | Purpose |
 |---|---|---|
-| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA GPU support via CUDA, including CUDA [paged attention](/mistral.rs/guides/perf/paged-attention/) and FlashInfer (paged-attention kernel library) paged kernels. |
+| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA CUDA acceleration, including [paged attention](/mistral.rs/guides/perf/paged-attention/). |
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
 | `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
-| `cutile` | `mistralrs-cli`, `mistralrs-core` | cuTile JIT MoE (Mixture of Experts) kernels. Requires CUDA >= 13.2 on Ampere/Ada, CUDA >= 13.3 on Hopper, CUDA >= 13.1 on Blackwell+, and the `tileiras` assembler at runtime. Without it, MoE models fall back to the built-in CUTLASS (NVIDIA GEMM template library) kernels. See [MoE expert backends](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
+| `cutile` | `mistralrs-cli`, `mistralrs-core` | Optional cuTile acceleration for MoE and routed LoRA. Requires CUDA >= 13.2 on Ampere/Ada and Blackwell+, CUDA >= 13.3 on Hopper, and a compatible `tileiras` installation. See [cuTile setup](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
@@ -23,7 +23,7 @@ Typical combinations:
 
 - NVIDIA Hopper: `cuda flash-attn flash-attn-v3 cudnn` (add `cutile` with CUDA >= 13.3)
 - NVIDIA Ampere or Ada: `cuda flash-attn cudnn` (add `cutile` with CUDA >= 13.2)
-- NVIDIA Blackwell with CUDA >= 13.1: `cuda flash-attn cudnn cutile`
+- NVIDIA Blackwell with CUDA >= 13.2 and a compatible `tileiras`: `cuda flash-attn cudnn cutile`
 - NVIDIA older: `cuda cudnn`
 - Apple Silicon: `metal`
 - Intel CPU with MKL: `mkl`
@@ -67,4 +67,4 @@ No crate enables an accelerator feature by default. Opt in to the accelerator ma
 
 ## Feature verification
 
-`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `accelerate`, `mkl`). Other features such as `cutile`, `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.
+`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `cutile`, `accelerate`, `mkl`). Other features such as `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.
