@@ -23,8 +23,8 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic LoRA runtime for a text model without preloading an adapter |
-| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a text-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated |
+| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |
@@ -76,8 +76,8 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic LoRA runtime for a text model without preloading an adapter |
-| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a text-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated |
+| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |
@@ -126,8 +126,8 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--enable-lora` | `false` | Install a dynamic LoRA runtime for a text model without preloading an adapter |
-| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a text-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated |
+| `--enable-lora` | `false` | Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum number of loaded LoRA aliases and resident generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum total bytes held by resident LoRA adapter tensors |

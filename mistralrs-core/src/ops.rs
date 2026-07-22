@@ -3495,6 +3495,13 @@ pub fn split_mul_and_act_order(
             "split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}"
         );
     }
+    if order == GatedActivationOrder::GateUp
+        && matches!(xs.dtype(), DType::F16 | DType::BF16 | DType::F32)
+    {
+        if let Some(activation_type) = glu_activation_type(act) {
+            return mistralrs_quant::fused_split_glu(xs, split_size, activation_type);
+        }
+    }
 
     let first = xs.narrow(D::Minus1, 0, split_size)?;
     let second = xs.narrow(D::Minus1, split_size, split_size)?;

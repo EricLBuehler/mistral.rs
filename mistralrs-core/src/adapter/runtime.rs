@@ -6,7 +6,10 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-use mistralrs_quant::{LoraConfig, LoraExecution, LoraLayerRegistry, ShardedVarBuilder};
+use candle_core::Tensor;
+use mistralrs_quant::{
+    LoraConfig, LoraExecution, LoraExecutionArena, LoraLayerRegistry, ShardedVarBuilder,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -261,6 +264,7 @@ pub struct DynamicLoraRuntime {
     limits: LoraRuntimeConfig,
     live_updates: bool,
     mutation_lock: Mutex<()>,
+    execution_arena: Arc<LoraExecutionArena>,
 }
 
 impl std::fmt::Debug for DynamicLoraRuntime {
@@ -297,6 +301,7 @@ impl DynamicLoraRuntime {
             limits,
             live_updates,
             mutation_lock: Mutex::new(()),
+            execution_arena: Arc::new(LoraExecutionArena::new()),
         })
     }
 
@@ -601,10 +606,11 @@ impl DynamicLoraRuntime {
             .iter()
             .map(|lease| lease.as_ref().map(AdapterLease::slot))
             .collect::<Vec<_>>();
-        let mut execution = LoraExecution::from_sequence_slots(
+        let mut execution = LoraExecution::from_sequence_slots_with_arena(
             self.layers.runtime_id(),
             &sequence_slots,
             sequence_length,
+            self.execution_arena.clone(),
         );
         let mut installed = HashSet::new();
         for lease in adapter_leases.iter().flatten() {
@@ -734,28 +740,45 @@ fn snapshot_file(
     Ok((snapshot, hasher.finalize().into()))
 }
 
-fn adapter_bytes(
-    weights: &[(
-        Arc<mistralrs_quant::LoraSiteHandle>,
-        mistralrs_quant::LoraWeights,
-    )],
-) -> Result<u64, LoraAdapterError> {
-    weights.iter().try_fold(0u64, |total, (_, weights)| {
-        [weights.a(), weights.b()]
-            .into_iter()
-            .try_fold(total, |total, tensor| {
-                let elements = u64::try_from(tensor.elem_count())
-                    .map_err(|_| LoraAdapterError::SizeOverflow)?;
-                let element_bytes = u64::try_from(tensor.dtype().size_in_bytes())
-                    .map_err(|_| LoraAdapterError::SizeOverflow)?;
-                let bytes = elements
+fn adapter_bytes(weights: &mistralrs_quant::DynamicLoraWeights) -> Result<u64, LoraAdapterError> {
+    fn add_tensor(
+        total: u64,
+        tensor: &Tensor,
+        counted: &mut HashSet<candle_core::TensorId>,
+    ) -> Result<u64, LoraAdapterError> {
+        if !counted.insert(tensor.id()) {
+            return Ok(total);
+        }
+        let elements =
+            u64::try_from(tensor.elem_count()).map_err(|_| LoraAdapterError::SizeOverflow)?;
+        let element_bytes = u64::try_from(tensor.dtype().size_in_bytes())
+            .map_err(|_| LoraAdapterError::SizeOverflow)?;
+        total
+            .checked_add(
+                elements
                     .checked_mul(element_bytes)
-                    .ok_or(LoraAdapterError::SizeOverflow)?;
-                total
-                    .checked_add(bytes)
-                    .ok_or(LoraAdapterError::SizeOverflow)
-            })
-    })
+                    .ok_or(LoraAdapterError::SizeOverflow)?,
+            )
+            .ok_or(LoraAdapterError::SizeOverflow)
+    }
+
+    let mut total = 0u64;
+    let mut counted = HashSet::new();
+    for (_, weights) in &weights.linear {
+        total = add_tensor(total, weights.a(), &mut counted)?;
+        total = add_tensor(total, weights.b(), &mut counted)?;
+    }
+    for (_, weights) in &weights.experts {
+        for projection in [weights.gate(), weights.up(), weights.down()]
+            .into_iter()
+            .flatten()
+        {
+            total = add_tensor(total, projection.a(), &mut counted)?;
+            total = add_tensor(total, projection.b(), &mut counted)?;
+            total = add_tensor(total, projection.scales(), &mut counted)?;
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -765,8 +788,9 @@ mod tests {
     use candle_core::{DType, Device, Tensor};
     use candle_nn::Linear;
     use mistralrs_quant::{
-        maybe_wrap_dynamic_lora, with_lora_execution, LoraLinearSpec, QuantMethod,
-        QuantMethodConfig, ShardedSafeTensors, UnquantLinear,
+        maybe_wrap_dynamic_lora, with_lora_execution, LoraExpertInputMode, LoraExpertProjection,
+        LoraExpertProjectionNames, LoraExpertSiteSpec, LoraLinearSpec, LoraSiteKey, QuantMethod,
+        QuantMethodConfig, Shard, ShardedSafeTensors, UnquantLinear,
     };
 
     use super::*;
@@ -789,6 +813,87 @@ mod tests {
             ),
         ]);
         candle_core::safetensors::save(&tensors, dir.join("adapter_model.safetensors")).unwrap();
+    }
+
+    fn write_expert_adapter(dir: &Path) {
+        std::fs::write(
+            dir.join("adapter_config.json"),
+            r#"{"r":1,"lora_alpha":1,"target_modules":["gate_proj"]}"#,
+        )
+        .unwrap();
+        let root = "base_model.model.model.layers.0.mlp.experts";
+        let tensors = HashMap::from([
+            (
+                format!("{root}.0.gate_proj.lora_A.weight"),
+                Tensor::new(&[[1f32, 0.]], &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.0.gate_proj.lora_B.weight"),
+                Tensor::new(&[[1f32], [2.]], &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.1.gate_proj.lora_A.weight"),
+                Tensor::new(&[[0f32, 1.]], &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.1.gate_proj.lora_B.weight"),
+                Tensor::new(&[[3f32], [4.]], &Device::Cpu).unwrap(),
+            ),
+        ]);
+        candle_core::safetensors::save(&tensors, dir.join("adapter_model.safetensors")).unwrap();
+    }
+
+    fn write_fused_expert_adapter(dir: &Path) {
+        std::fs::write(
+            dir.join("adapter_config.json"),
+            r#"{"r":1,"lora_alpha":1,"target_parameters":["mlp.experts.gate_up_proj","mlp.experts.down_proj"]}"#,
+        )
+        .unwrap();
+        let root = "base_model.model.model.layers.0.mlp.experts";
+        let tensors = HashMap::from([
+            (
+                format!("{root}.base_layer.lora_A.weight"),
+                Tensor::ones((2, 2), DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.base_layer.lora_B.weight"),
+                Tensor::ones((4, 2), DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.lora_A.weight"),
+                Tensor::ones((2, 2), DType::F32, &Device::Cpu).unwrap(),
+            ),
+            (
+                format!("{root}.lora_B.weight"),
+                Tensor::ones((2, 2), DType::F32, &Device::Cpu).unwrap(),
+            ),
+        ]);
+        candle_core::safetensors::save(&tensors, dir.join("adapter_model.safetensors")).unwrap();
+    }
+
+    fn expert_registry() -> (
+        Arc<LoraLayerRegistry>,
+        Arc<mistralrs_quant::LoraExpertSiteHandle>,
+    ) {
+        let registry = Arc::new(LoraLayerRegistry::new());
+        let site = registry
+            .register_expert(
+                LoraSiteKey::new("model.layers.0.mlp.experts"),
+                LoraExpertSiteSpec::new(
+                    2,
+                    2,
+                    2,
+                    LoraExpertProjectionNames::new("gate_proj", "up_proj", "down_proj"),
+                    Shard::default(),
+                    Shard::default(),
+                )
+                .unwrap(),
+                DType::F32,
+                Device::Cpu,
+            )
+            .unwrap();
+        registry.finalize().unwrap();
+        (registry, site)
     }
 
     fn runtime_and_layer(
@@ -856,6 +961,69 @@ mod tests {
         assert_eq!(forward(&runtime, &*layer, old_lease), vec![vec![4., 3.]]);
         assert_eq!(forward(&runtime, &*layer, new_lease), vec![vec![6., 3.]]);
         assert_eq!(runtime.list(), vec![second]);
+    }
+
+    #[test]
+    fn expert_directory_load_runs_through_runtime_execution() {
+        let adapter_dir = tempfile::tempdir().unwrap();
+        write_expert_adapter(adapter_dir.path());
+        let (registry, site) = expert_registry();
+        let runtime = DynamicLoraRuntime::new(
+            registry,
+            LoraRuntimeConfig {
+                max_bytes: 40,
+                ..LoraRuntimeConfig::default()
+            },
+            true,
+        )
+        .unwrap();
+        let info = runtime
+            .load_from_directory("domain", adapter_dir.path())
+            .unwrap();
+        assert_eq!(info.bytes, 40);
+        assert_eq!(runtime.status().resident_bytes, 40);
+
+        let lease = runtime.resolve_alias("domain").unwrap();
+        let execution = runtime.execution(&[Some(lease)], 1).unwrap();
+        let output = with_lora_execution(Some(execution), || {
+            let lora = mistralrs_quant::LoraExpertExecution::current(&site)
+                .unwrap()
+                .expect("active expert adapter");
+            lora.add_delta(
+                LoraExpertProjection::Gate,
+                &Tensor::new(&[[2f32, 3.]], &Device::Cpu).unwrap(),
+                Tensor::zeros((1, 2, 2), DType::F32, &Device::Cpu).unwrap(),
+                &Tensor::new(&[[0u32, 1]], &Device::Cpu).unwrap(),
+                None,
+                LoraExpertInputMode::TokenRows,
+            )
+            .unwrap()
+            .to_vec3::<f32>()
+            .unwrap()
+        });
+        assert_eq!(output, vec![vec![vec![2., 4.], vec![9., 12.]]]);
+    }
+
+    #[test]
+    fn fused_expert_budget_counts_shared_tensors_once() {
+        let adapter_dir = tempfile::tempdir().unwrap();
+        write_fused_expert_adapter(adapter_dir.path());
+        let (registry, _) = expert_registry();
+        let runtime = DynamicLoraRuntime::new(
+            registry,
+            LoraRuntimeConfig {
+                max_bytes: 96,
+                ..LoraRuntimeConfig::default()
+            },
+            true,
+        )
+        .unwrap();
+
+        let info = runtime
+            .load_from_directory("domain", adapter_dir.path())
+            .unwrap();
+        assert_eq!(info.bytes, 96);
+        assert_eq!(runtime.status().resident_bytes, 96);
     }
 
     #[test]

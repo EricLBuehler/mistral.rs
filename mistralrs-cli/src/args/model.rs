@@ -75,12 +75,16 @@ pub enum ModelFormat {
 /// Adapter options (LoRA/X-LoRA)
 #[derive(Args, Clone, Deserialize)]
 pub struct AdapterOptions {
-    /// Install a dynamic LoRA runtime for a text model without preloading an adapter
+    /// Install a dynamic language-model LoRA runtime without preloading an adapter. Supports ordinary
+    /// text loaders. Qwen3.5/3.6 MoE conditional-generation models require auto model selection;
+    /// vision-tower adapters are unsupported.
     #[arg(long, conflicts_with = "xlora")]
     #[serde(default)]
     pub enable_lora: bool,
 
-    /// Preload a text-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated.
+    /// Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May
+    /// be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection;
+    /// vision-tower adapters are unsupported.
     #[arg(
         long,
         visible_alias = "lora-modules",
@@ -238,20 +242,14 @@ fn parse_lora_adapter(value: &str) -> Result<LoraAdapterSpec, String> {
         revision: Option<String>,
         #[serde(default)]
         base_model_name: Option<String>,
-        #[serde(default)]
-        is_3d_lora_weight: Option<bool>,
+        #[serde(default, rename = "is_3d_lora_weight")]
+        _is_3d_lora_weight: Option<bool>,
     }
 
     let value = value.trim();
     if value.starts_with('{') {
         let module: LoraModuleObject = serde_json::from_str(value)
             .map_err(|error| format!("invalid LoRA module JSON: {error}"))?;
-        if module.is_3d_lora_weight == Some(true) {
-            return Err(
-                "is_3d_lora_weight=true is unsupported; routed MoE LoRA tensors are not supported"
-                    .to_string(),
-            );
-        }
         let mut adapter = LoraAdapterSpec::new(module.name, module.path);
         if let Some(revision) = module.revision {
             adapter = adapter.with_revision(revision);
@@ -518,11 +516,12 @@ mod tests {
     }
 
     #[test]
-    fn vllm_3d_lora_modules_are_rejected() {
-        let error =
+    fn vllm_3d_lora_modules_are_accepted() {
+        let adapter =
             parse_lora_adapter(r#"{"name":"moe","path":"org/moe-lora","is_3d_lora_weight":true}"#)
-                .unwrap_err();
-        assert!(error.contains("is_3d_lora_weight=true is unsupported"));
+                .unwrap();
+        assert_eq!(adapter.alias, "moe");
+        assert_eq!(adapter.source, "org/moe-lora");
     }
 
     #[test]

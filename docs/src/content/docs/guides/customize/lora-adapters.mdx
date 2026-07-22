@@ -1,11 +1,11 @@
 ---
 title: LoRA and X-LoRA adapters
-description: Preload, route, and hot-swap multiple LoRA adapters on one text base model.
+description: Preload, route, and hot-swap multiple LoRA adapters on one base model.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without modifying its weights. mistral.rs can keep multiple LoRA adapters resident, select one independently for every request, and replace an adapter alias without interrupting in-flight requests. Dynamic LoRA currently supports text models only.
+LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without modifying its weights. mistral.rs can keep multiple LoRA adapters resident, select one independently for every request, and replace an adapter alias without interrupting in-flight requests. Dynamic LoRA supports text models. The CLI/server auto loader additionally supports the text submodel of Qwen3.5/3.6 MoE conditional-generation models; it does not adapt the vision tower.
 
 X-LoRA is a separate execution path. It uses a learned scaling head to mix several adapters at each token rather than selecting one adapter for a request.
 
@@ -37,7 +37,7 @@ Preloading enables the dynamic LoRA runtime automatically. To start without an a
 mistralrs serve -m <base-model> --enable-lora
 ```
 
-Remote adapters resolve from their own Hugging Face revision. `--lora ALIAS=SOURCE` uses `main`, regardless of the base model revision. Use `--lora-modules '{"name":"code","path":"org/adapter","revision":"<commit>"}'`, `LoraAdapter(alias=..., source=..., revision="...")` in Python, `LoraAdapterSpec::new(...).with_revision("...")` in Rust, or structured TOML to pin another branch, tag, pull request ref, or commit. A local adapter directory does not use the revision. The JSON form accepts vLLM's `base_model_name` as lineage metadata; it does not override or constrain `-m`, and model cards report the model actually selected by `-m`. `is_3d_lora_weight: false` is also accepted; `true` is rejected because routed MoE LoRA tensors are unsupported.
+Remote adapters resolve from their own Hugging Face revision. `--lora ALIAS=SOURCE` uses `main`, regardless of the base model revision. Use `--lora-modules '{"name":"code","path":"org/adapter","revision":"<commit>"}'`, `LoraAdapter(alias=..., source=..., revision="...")` in Python, `LoraAdapterSpec::new(...).with_revision("...")` in Rust, or structured TOML to pin another branch, tag, pull request ref, or commit. A local adapter directory does not use the revision. The JSON form accepts vLLM's `base_model_name` as lineage metadata; it does not override or constrain `-m`, and model cards report the model actually selected by `-m`. The vLLM `is_3d_lora_weight` field accepts either value as a compatibility hint; mistral.rs detects the adapter layout from `adapter_config.json` and the safetensors shapes.
 
 `run` and `bench` use the base model unless `--adapter <alias>` selects a preloaded adapter. In interactive mode, `/adapter <alias>` changes the selection, `/adapter none` selects the base model, and `/adapter list` shows the available aliases. Use `/adapter use <alias>` when the alias itself is `none` or `list`.
 
@@ -116,6 +116,99 @@ let response = model
 
 </TabItem>
 </Tabs>
+
+## Routed MoE adapters
+
+Dynamic LoRA can target the routed experts of supported text MoE models. Expert weights use the same aliases, per-request selection, immutable generations, preload limits, and hot-load API as dense LoRA. A single adapter may contain both ordinary linear LoRA tensors and routed expert tensors.
+
+```bash
+mistralrs serve -m Qwen/Qwen3-30B-A3B \
+  --lora-modules '{"name":"domain","path":"<moe-lora-repo>","is_3d_lora_weight":true}'
+```
+
+`is_3d_lora_weight` does not force a layout and is not required. Both the CLI JSON form and `POST /v1/load_lora_adapter` accept `true` and `false` for vLLM compatibility. Invalid or incompatible tensor shapes are still rejected by the loader.
+
+A per-expert PEFT adapter can use this minimal configuration:
+
+```json
+{
+  "peft_type": "LORA",
+  "r": 8,
+  "lora_alpha": 16,
+  "target_modules": ["gate_proj", "up_proj", "down_proj"]
+}
+```
+
+Its safetensors keys are ordinary per-module pairs, for example `base_model.model.model.layers.0.mlp.experts.0.gate_proj.lora_A.weight` and `.lora_B.weight`. Repeat the pairs for each targeted expert and projection. Models using Mixtral names substitute `w1`, `w3`, and `w2`.
+
+A fused vLLM/PEFT adapter instead uses parameter targets:
+
+```json
+{
+  "peft_type": "LORA",
+  "r": 8,
+  "lora_alpha": 16,
+  "target_parameters": [
+    "mlp.experts.gate_up_proj",
+    "mlp.experts.down_proj"
+  ]
+}
+```
+
+For layer 0, its gate/up pair is `base_model.model.model.layers.0.mlp.experts.base_layer.lora_A.weight` and `.lora_B.weight`; its down pair is `base_model.model.model.layers.0.mlp.experts.lora_A.weight` and `.lora_B.weight`. The exact accepted shapes follow below.
+
+The following routed layouts are supported. Here `E` is the number of experts, `H` is hidden size, `I` is the unsharded expert intermediate size, and `r` is LoRA rank.
+
+| PEFT configuration | Projection | Accepted source A / B shapes |
+|---|---|---|
+| `target_modules` with per-expert paths | Gate or up | `[r,H]` / `[I,r]` for each `experts.<index>.gate_proj` or `up_proj`; Mixtral, LFM2 MoE, and Phi-3.5-MoE use `w1` or `w3`. |
+| `target_modules` with per-expert paths | Down | `[r,I]` / `[H,r]` for each `experts.<index>.down_proj`; Mixtral, LFM2 MoE, and Phi-3.5-MoE use `w2`. |
+| `target_parameters` fused expert group | Gate and up | Flat `[E*r,H]` / `[2I,E*r]`, or packed `[E,r,H]` / `[E,2I,r]`, targeting `*.experts.gate_up_proj`. |
+| `target_parameters` fused expert group | Down | Flat `[E*r,I]` / `[H,E*r]`, or packed `[E,r,I]` / `[E,H,r]`, targeting `*.experts.down_proj`. |
+
+Per-expert projections may have different ranks. mistral.rs pads them to the largest rank in that projection and gives missing experts a zero scale. The fused gate/up B tensor follows the model's registered gate/up ordering. The unified text MoE families use concatenated gate rows followed by up rows; GPT-OSS uses interleaved `[gate0,up0,gate1,up1,...]` rows and splits them before activation when expert LoRA is active. For GPT-OSS, the ordinary router target is `*.mlp.router`, per-expert targets use `gate_proj`, `up_proj`, and `down_proj`, and fused targets use `*.mlp.experts.gate_up_proj` and `*.mlp.experts.down_proj`. Tensor parallelism shards gate/up B on its output dimension and down A on its input dimension. Per-expert and fused layouts cannot be mixed within one expert group, and every adapter tensor must be consumed by a registered site.
+
+Routed expert LoRA is wired for these text model families:
+
+- DeepSeek V2, DeepSeek V3, and DeepSeek R1
+- GLM-4.7 and GLM-4.7-Flash
+- GPT-OSS
+- Hunyuan MoE
+- LFM2 and LFM2.5 MoE
+- Mixtral
+- Phi-3.5-MoE
+- Qwen3 MoE
+- Qwen3-Next and Qwen3-Coder-Next
+- Qwen3.5 and Qwen3.6 MoE conditional-generation models through the CLI/server auto loader, text submodel only
+
+This list is narrower than general MoE model support. Granite MoE and multimodal MoE pipelines other than Qwen3.5/3.6 MoE are not routed-LoRA targets in the dynamic runtime. AnyMoE remains a separate adapter composition path and cannot be combined with dynamic per-request LoRA. Tensor parallelism is supported as described above; expert parallelism is not implemented for dynamic routed LoRA.
+
+Qwen3.5/3.6 support uses the canonical Hugging Face `model.language_model.*` checkpoint namespace. Alternate checkpoints using `language_model.model.*` are rejected when dynamic LoRA is enabled so an adapter cannot silently run against the base model. Ordinary and routed LoRA tensors may target the language model, including its router, shared expert, and routed experts. Vision-tower LoRA tensors are rejected. Text, image, and video requests may select a text-submodel adapter, but visual encoding itself remains unchanged.
+
+For example, this starts the canonical Qwen3.6 MoE model with a public fused-expert compatibility adapter:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.6-35B-A3B \
+  --lora domain=jeeejeee/qwen36-35ba3b-moe-all-linear-poken-lora
+```
+
+Use the default `auto` model selection for Qwen3.5/3.6 MoE LoRA. Image options such as `--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is enabled; the explicit `multimodal` model type does not accept adapters. This conditional-generation exception is currently exposed through the CLI/server auto loader only. Rust `LoraModelBuilder` and Python `Which.Lora` construct text loaders and cannot select this architecture.
+
+The adapter delta has a device-independent Candle implementation. CPU and Metal use that reference path. On CUDA, an active routed adapter retains the Fused or cuTile base expert GEMMs and adds the routed delta in place; CUTLASS switches to the Fused base path. Quantized FastExperts decode keeps gate/up and down outputs route-major, applies each LoRA delta before activation or reduction, and performs one final GPU reduction with F32 accumulation. Supported quantized grouped prefill remains active when it preserves route order; unsupported quantized layouts use gather. GPT-OSS keeps its MXFP4 gather projections, but its active gate/up adapter path splits the interleaved outputs and applies activation after both deltas. Selecting the base model, a dense-only adapter, or an adapter without weights for a given expert group leaves that group's ordinary base path unchanged.
+
+CUDA metadata dispatch is based on routed work and expert sparsity. Ranks through 64 bypass grouped metadata when `routes * rank <= 1024`; sparse batches through rank 128 also bypass it when `routes * 8 <= experts * active adapter slots`. The native fallback uses the generic direct kernel for those cases, for rank-128-or-lower jobs with at most 128 routes, and for rank-128-or-lower projections that reduce the feature width by at least 2x with at most 512 routes. Larger F16 and BF16 jobs use grouped tensor-core kernels through rank 128 on SM80 or newer, while the grouped scalar kernels cover F32, older GPUs, and higher ranks through 512. Other compatible CUDA layouts fall back to the Candle implementation.
+
+With the `cuda` and `cutile` features, BF16 jobs through rank 64 satisfying `routes * rank <= 1024` stay on native direct CUDA. Other eligible routed expert LoRA through rank 128 first tries a one-shot cuTile delta kernel, using its no-sort form for sparse work and its grouped form otherwise. SM12 keeps rank-16-or-lower, strongly contracting projections on native direct CUDA between 256 and 512 routes, where that kernel is faster. The first exact shape in each power-of-two route/block bucket synchronously probes at most nine configurations with one warmup and three timed launches each. Compatible shapes then reuse the measured configuration from a bounded cache. cuTile requires a binary built with a supported CUDA version, a supported GPU, and `tileiras` 13.2 or newer at runtime; the assembler must list the active SM, and Hopper requires CUDA and `tileiras` 13.3 or newer. Unsupported devices, dtypes, ranks, layouts, and unavailable JIT tooling use native CUDA. A runtime failure uses native only at a fallback-safe prelaunch boundary, when no scratch or output work is pending. A failure while scratch work is pending or after attempting the in-place output launch fails that request; the fatal boundary is cached, so later calls for the same shape also return an error instead of risking a duplicate or partial accumulation.
+
+The CUDA microbenchmark uses BF16 and Qwen3-235B-A22B-like expert geometry: 128 experts, top-k 8, hidden size 4096, and expert intermediate size 1536. Its standard profile covers 1, 16, 64, and 256 tokens; ranks 8, 64, and 128; one- and four-adapter batches; and hot, spread, and skewed routing. The full profile adds rank 96, complementary gate/up and weighted-down cases, and a compact rank-512 generic-fallback case. It reports low-level native and cuTile kernels, routing-metadata rebuilds, cached runtime dispatch, forced adapter reconfiguration, the Candle reference, CUDA-event throughput, wall time, and sample percentiles. A cuTile case is reported as skipped when the runtime probe does not support it:
+
+```bash
+cargo run --release -p mistralrs-quant \
+  --example routed_lora_bench --features cuda,cutile
+```
+
+Use `MISTRALRS_LORA_BENCH_PROFILE=quick` for a low-memory native-path smoke benchmark or `full` for the complete matrix. The quick profile defaults to rank 8; use rank 128 with `decode-gate-t1,decode-down-t1` to compare native and cuTile no-sort decode, or rank 16 with `batch-gate-t16` to compare their grouped paths. `MISTRALRS_LORA_BENCH_RANKS` and `MISTRALRS_LORA_BENCH_CASES` accept comma-separated filters. `MISTRALRS_LORA_BENCH_ITERS`, `MISTRALRS_LORA_BENCH_SAMPLES`, and `MISTRALRS_LORA_BENCH_REFERENCE_ITERS` control sampling.
+This synthetic microbenchmark does not measure end-to-end serving throughput or establish a performance comparison with vLLM.
 
 ## Select an adapter per request
 
@@ -283,23 +376,23 @@ Runtime-loaded aliases live in process memory and do not survive a server restar
 
 | Area | Support |
 |---|---|
-| Model category | Text models only. |
-| Request APIs | Chat Completions, Completions, and Responses. Not Embeddings, Anthropic Messages, multimodal, diffusion, or speech requests. |
+| Model category | Text models. The CLI/server auto loader also supports the text submodel of canonical Hugging Face Qwen3.5/3.6 MoE conditional-generation models. Rust `LoraModelBuilder` and Python `Which.Lora` do not support that conditional-generation exception. Vision-tower adapters are unsupported. |
+| Request APIs | Chat Completions, Completions, and Responses. Qwen3.5/3.6 MoE image and video requests may select a text-submodel adapter. Not Embeddings, Anthropic Messages, other multimodal families, diffusion, or speech requests. |
 | Adapter files | PEFT `adapter_config.json` and one `adapter_model.safetensors` file. Pickle `.bin`, sharded adapter files, adapter tokenizers, and added vocabulary are not supported. |
-| Adapter formats | Standard LoRA and RS-LoRA. `rank_pattern` and `alpha_pattern` use PEFT's insertion-ordered, suffix-anchored regex matching. |
-| Module selection | `target_modules` accepts a full-path regex string, the string `all-linear`, or a list of exact names and dotted suffixes. `exclude_modules` accepts a full-path regex string or the same exact-name and dotted-suffix list form. |
-| Base weights | Text-model weight paths backed by `QuantMethod`, including plain safetensors, in-situ quantization, and UQFF. LoRA execution does not inspect the base quantization format. |
-| CUDA | Dedicated F16/BF16 kernel for compatible prefill and decode layouts with ranks up to 128; other ranks, dtypes, or layouts use the Candle reference path. |
-| Metal and CPU | Candle reference path. |
+| Adapter formats | Standard LoRA and RS-LoRA, including the routed expert layouts above. `rank_pattern` and `alpha_pattern` use PEFT's insertion-ordered, suffix-anchored regex matching. |
+| Module selection | `target_modules` accepts a full-path regex string, the string `all-linear`, or a list of exact names and dotted suffixes. `target_parameters` is limited to routed `*.experts.gate_up_proj` and `*.experts.down_proj`. `exclude_modules` accepts a full-path regex string or the same exact-name and dotted-suffix list form. |
+| Base weights | Supported language-model weight paths backed by `QuantMethod`, including plain safetensors, in-situ quantization, and UQFF. LoRA execution does not inspect the base quantization format. Qwen3.5/3.6 MoE requires canonical `model.language_model.*` names. |
+| CUDA | Ordinary linear LoRA uses a dedicated F16/BF16 kernel for compatible layouts and ranks through 128. Routed LoRA uses native direct, grouped tensor-core, and generic kernels through rank 512; sparse no-sort and grouped BF16 work through rank 128 can use the autotuned cuTile path. Other compatible layouts use the Candle reference path. |
+| Metal and CPU | Candle reference path for ordinary and routed expert LoRA. |
 | Tensor parallelism | Preloading is supported; live load and unload are not. |
 | Raw GGUF/GGML | Uses the legacy `--legacy-lora` path; per-request selection and hot-loading are unavailable. |
 | Speculative decoding | Dynamic LoRA attachment is not supported. |
-| Unsupported adapter variants | DoRA, aLoRA, QALoRA, BD-LoRA, Arrow, MonteCLoRA, adapter bias, `modules_to_save`, layer replication, `target_parameters`, weight tying, trainable-token indices, Megatron configuration, `lm_head`, embedding-layer tensors, and routed MoE expert adapters. |
+| Unsupported adapter variants | DoRA, aLoRA, QALoRA, BD-LoRA, Arrow, MonteCLoRA, adapter bias, `modules_to_save`, layer replication, non-expert `target_parameters`, weight tying, trainable-token indices, Megatron configuration, `lm_head`, and embedding-layer tensors. |
 | Base-transforming initializers | Configurations retaining `pissa`, `pissa_niter_*`, `olora`, `corda`, `loftq`, or `lora_ga` in `init_lora_weights` are rejected. Convert the result to an ordinary LoRA adapter for the original base before loading it. |
 
 Unsupported configurations and unexpected adapter tensors are rejected rather than partially loaded.
 
-The default rank admission limit is 256, while the dedicated CUDA kernel supports ranks through 128. Set `--lora-max-rank 128` when accepting a slower fallback is undesirable. Base-only requests retain their ordinary execution path, and the scheduler can batch base rows and rows using different adapters together. CUDA graphs are skipped for LoRA-active execution.
+The default rank admission limit is 256. The ordinary linear CUDA kernel and the routed tensor-core and cuTile kernels support ranks through 128; the routed generic CUDA kernel supports ranks through 512. Set `--lora-max-rank 128` when accepting a generic or reference fallback is undesirable. Base-only requests retain their ordinary execution path, and the scheduler can batch base rows and rows using different adapters together. CUDA graphs are skipped for LoRA-active execution.
 
 Use the same preload and benchmark shape to measure isolated adapter overhead against the base model:
 
@@ -312,7 +405,7 @@ mistralrs bench -m <base-model> --lora code=<adapter-repo> --adapter code \
 
 The CLI benchmark uses streaming responses to report wall-clock TTFT and TPOT for one sequence. It warms every requested shape separately and computes TPOT across the intervals between output tokens. Its numbers do not characterize mixed-adapter server batching. Measure production workloads through the HTTP server with the same model, adapter ranks, prompt/decode lengths, concurrency, and sampling settings when comparing against another runtime.
 
-Full examples: [lora](/mistral.rs/examples/python/lora/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust), and [adapter-chat](/mistral.rs/examples/server/adapter-chat/) (HTTP).
+Full examples: [lora](/mistral.rs/examples/python/lora/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust), [adapter-chat](/mistral.rs/examples/server/adapter-chat/) (HTTP), and [moe-lora-smoke](/mistral.rs/examples/server/moe-lora-smoke/) (routed MoE comparison).
 
 ## Migrating from mistral.rs 0.9.0 and older
 
@@ -348,9 +441,9 @@ The lifecycle endpoint names and core `lora_name`/`lora_path` fields match vLLM,
 | `--fully-sharded-loras` | No equivalent. |
 | `--api-key` protection for mutation routes | No direct equivalent; use an authenticated reverse proxy. |
 | Adapter tokenizer or extra vocabulary | Unsupported; requests use the base tokenizer and vocabulary |
-| Multimodal or routed-MoE LoRA | Unsupported; dynamic LoRA is currently limited to text transformer projections. |
+| Multimodal LoRA | Through the CLI/server auto loader, Qwen3.5/3.6 MoE supports language-model LoRA on text, image, and video requests. The Rust `LoraModelBuilder` and Python `Which.Lora` do not expose this exception. Vision-tower LoRA and all other multimodal families are unsupported. |
 | Live updates with tensor parallelism | Preload on every rank instead; runtime load and unload are unavailable |
-| `is_3d_lora_weight` | Only `false` is supported; routed MoE adapter tensors are rejected |
+| `is_3d_lora_weight` | `true` and `false` are accepted as compatibility hints; config and tensor shapes determine the layout. |
 
 The explicit `adapter` request field is optional when an alias is used as `model`. Use it for exact-generation selection or to keep base-model and adapter routing separate.
 
@@ -367,13 +460,12 @@ Common HTTP lifecycle errors use a stable `error.code`:
 | `lora_adapter_not_found` | Refresh `/v1/lora_adapters`; an exact generation may already have left residency. |
 | `lora_generation_mismatch` | Refresh the alias generation and decide whether the newer version should be replaced or removed. |
 | `lora_generation_conflict` | Refresh status and avoid publishing different resident data under an existing content generation. |
-| `lora_rank_limit_exceeded` | Raise the admission limit or use a lower-rank adapter; ranks above 128 leave the dedicated CUDA path. |
+| `lora_rank_limit_exceeded` | Raise the admission limit or use a lower-rank adapter. Ordinary linear ranks above 128 leave the dedicated CUDA path; routed ranks above 128 leave tensor-core and cuTile paths, and routed ranks above 512 leave the generic CUDA path. |
 | `lora_alias_limit_exceeded`, `lora_adapter_limit_exceeded`, or `lora_slot_space_exhausted` | Unload unused aliases or wait for retired generations to drain. |
 | `lora_byte_limit_exceeded` | Free adapter capacity or raise the limit only when device headroom permits. |
 | `lora_adapter_file_too_large` or `request_body_too_large` | Reduce the input size or raise only the corresponding trusted-server limit. |
 | `invalid_lora_adapter` | Check the PEFT file layout, unsupported features, tensor names, shapes, and base-model compatibility. |
 | `invalid_lora_load_policy` | Send `expected_generation` only together with `load_inplace: true`. |
-| `unsupported_lora_layout` | Send `is_3d_lora_weight: false`; routed MoE adapter tensors are not supported. |
 | `adapter_path_forbidden` or `adapter_file_forbidden` | Move the immutable directory below `MISTRALRS_LORA_ADAPTER_ROOT` and fix its permissions. |
 | `adapter_path_not_found`, `adapter_file_not_found`, `invalid_adapter_path`, `invalid_adapter_file`, or `model_not_found` | Correct the path or model ID before retrying. |
 | `malformed_json`, `invalid_request_body`, `invalid_content_type`, or `invalid_query` | Correct the request encoding before retrying. |

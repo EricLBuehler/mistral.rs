@@ -4229,9 +4229,9 @@
           },
           "is_3d_lora_weight": {
             "type": "boolean",
-            "description": "vLLM MoE layout flag. Only false is supported.",
+            "description": "Accepted for vLLM compatibility. The adapter files determine the LoRA tensor layout.",
             "default": false,
-            "example": false
+            "example": true
           },
           "load_inplace": {
             "type": "boolean",

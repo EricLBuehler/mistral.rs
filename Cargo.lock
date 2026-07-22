@@ -3999,6 +3999,7 @@ dependencies = [
  "cutile-compiler",
  "cutile-ir",
  "dispatch2",
+ "fancy-regex 0.14.0",
  "float8",
  "futures",
  "half",

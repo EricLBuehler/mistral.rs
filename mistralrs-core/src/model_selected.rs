@@ -297,6 +297,11 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// ISQ organization: `default` or `moqe`.
+        #[arg(short, long)]
+        #[serde(default)]
+        organization: Option<IsqOrganization>,
+
         /// UQFF path to write to.
         #[arg(short, long)]
         write_uqff: Option<UqffWriteConfig>,
@@ -304,6 +309,21 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
         from_uqff: Option<String>,
+
+        /// .imatrix file to enhance GGUF quantizations with.
+        #[arg(short, long)]
+        #[serde(default)]
+        imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        #[arg(short, long)]
+        #[serde(default)]
+        calibration_file: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length.
+        #[arg(short = 'e', long)]
+        #[serde(default)]
+        max_edge: Option<u32>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -313,9 +333,29 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
 
+        /// Maximum prompt number of images to expect for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_num_images: Option<usize>,
+
+        /// Maximum expected image edge length for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_image_length: Option<usize>,
+
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a GGUF model.

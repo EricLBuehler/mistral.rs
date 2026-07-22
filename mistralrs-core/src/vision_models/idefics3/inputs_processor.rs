@@ -346,6 +346,7 @@ impl InputsProcessor for Idefics3ImageProcessor {
             } else {
                 crate::pipeline::RecurrentBatchKind::Decode
             },
+            adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {
             inputs,

@@ -36,6 +36,7 @@ yoke.workspace = true
 memmap2.workspace = true
 safetensors.workspace = true
 regex.workspace = true
+fancy-regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true

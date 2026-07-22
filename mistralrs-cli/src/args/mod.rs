@@ -980,6 +980,32 @@ mod tests {
     }
 
     #[test]
+    fn auto_lora_parses_multimodal_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "Qwen/Qwen3.6-35B-A3B",
+            "--enable-lora",
+            "--max-edge",
+            "2048",
+            "--max-num-images",
+            "5",
+            "--max-image-length",
+            "1536",
+        ])
+        .unwrap();
+
+        let Command::Serve { default_model, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.multimodal.max_edge, Some(2048));
+        assert_eq!(default_model.multimodal.max_num_images, Some(5));
+        assert_eq!(default_model.multimodal.max_image_length, Some(1536));
+    }
+
+    #[test]
     fn lora_preload_requires_an_explicit_alias() {
         let result = Cli::try_parse_from([
             "mistralrs",

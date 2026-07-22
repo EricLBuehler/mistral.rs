@@ -23,7 +23,8 @@ use mistralrs_server_core::{
 use crate::args::{
     AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
     GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
-    QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
+    MultimodalOptions, QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions,
+    ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -327,6 +328,7 @@ pub(crate) fn convert_to_model_selected(
                         quantization,
                         device,
                         matformer,
+                        None,
                     );
                 }
                 ModelFormat::Plain => {
@@ -339,6 +341,7 @@ pub(crate) fn convert_to_model_selected(
                             quantization,
                             device,
                             matformer,
+                            Some(multimodal),
                         );
                     }
                 }
@@ -379,7 +382,15 @@ pub(crate) fn convert_to_model_selected(
             quantization,
             device,
             cache: _,
-        } => convert_text_model(model, format, adapter, quantization, device, matformer),
+        } => convert_text_model(
+            model,
+            format,
+            adapter,
+            quantization,
+            device,
+            matformer,
+            None,
+        ),
 
         ModelType::Multimodal {
             model,
@@ -391,12 +402,14 @@ pub(crate) fn convert_to_model_selected(
             multimodal,
         } => {
             adapter.validate().map_err(anyhow::Error::msg)?;
-            if adapter.dynamic_lora_enabled()
-                || adapter.legacy_lora.is_some()
-                || adapter.xlora.is_some()
-            {
+            if adapter.dynamic_lora_enabled() {
                 anyhow::bail!(
-                    "LoRA and X-LoRA adapters are currently supported only for text models"
+                    "Dynamic LoRA for Qwen3.5/3.6 MoE is available through the auto model type; vision-tower adapters and other multimodal architectures are not supported"
+                );
+            }
+            if adapter.legacy_lora.is_some() || adapter.xlora.is_some() {
+                anyhow::bail!(
+                    "Legacy LoRA and X-LoRA adapters are currently supported only for text models"
                 );
             }
             Ok(ModelSelected::MultimodalPlain {
@@ -475,6 +488,7 @@ fn convert_text_model(
     quantization: &QuantizationOptions,
     device: &DeviceOptions,
     matformer: &MatformerSelection,
+    multimodal: Option<&MultimodalOptions>,
 ) -> Result<ModelSelected> {
     adapter.validate().map_err(anyhow::Error::msg)?;
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
@@ -522,11 +536,19 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
+            organization: quantization.isq_organization,
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
+            imatrix: quantization.imatrix.clone(),
+            calibration_file: quantization.calibration_file.clone(),
+            max_edge: multimodal.and_then(|options| options.max_edge),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
+            max_num_images: multimodal.and_then(|options| options.max_num_images),
+            max_image_length: multimodal.and_then(|options| options.max_image_length),
             hf_cache_path: device.hf_cache.clone(),
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
         }),
 
         (ModelFormat::Plain, false, false, true) => Ok(ModelSelected::XLora {
@@ -1162,8 +1184,9 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
 #[cfg(test)]
 mod tests {
     use axum::serve::Listener;
-    use mistralrs_core::{LoraAdapterSpec, ModelDType};
+    use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, ModelDType};
     use mistralrs_sandbox::NetworkMode;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::args::{SandboxNetworkMode, SandboxProfileArg};
@@ -1203,17 +1226,117 @@ mod tests {
             &QuantizationOptions::default(),
             &DeviceOptions::default(),
             &MatformerSelection::default(),
+            None,
         )
         .unwrap();
 
+        assert!(matches!(
+            mistralrs_core::get_auto_device_map_params(&selected).unwrap(),
+            AutoDeviceMapParams::Text { .. }
+        ));
         match selected {
             ModelSelected::Lora {
                 adapters,
                 runtime_config,
+                organization,
+                imatrix,
+                calibration_file,
+                max_edge,
+                max_num_images,
+                max_image_length,
+                matformer_config_path,
+                matformer_slice_name,
                 ..
             } => {
                 assert!(adapters.is_empty());
                 assert_eq!(runtime_config, adapter.lora_runtime_config());
+                assert!(organization.is_none());
+                assert!(imatrix.is_none());
+                assert!(calibration_file.is_none());
+                assert!(max_edge.is_none());
+                assert!(max_num_images.is_none());
+                assert!(max_image_length.is_none());
+                assert!(matformer_config_path.is_none());
+                assert!(matformer_slice_name.is_none());
+            }
+            _ => panic!("expected dynamic LoRA model"),
+        }
+    }
+
+    #[test]
+    fn auto_lora_preserves_multimodal_and_loading_options() {
+        let adapter = AdapterOptions {
+            enable_lora: true,
+            ..AdapterOptions::default()
+        };
+        let quantization = QuantizationOptions {
+            from_uqff: Some("q4k-0.uqff".to_string()),
+            isq_organization: Some(IsqOrganization::MoeExpertsOnly),
+            imatrix: Some(PathBuf::from("model.imatrix")),
+            ..QuantizationOptions::default()
+        };
+        let device = DeviceOptions {
+            max_seq_len: 4096,
+            max_batch_size: 7,
+            ..DeviceOptions::default()
+        };
+        let matformer = MatformerSelection {
+            config_path: Some(PathBuf::from("matformer.csv")),
+            slice_name: Some("slice".to_string()),
+        };
+        let multimodal = MultimodalOptions {
+            max_edge: Some(2048),
+            max_num_images: Some(5),
+            max_image_length: Some(1536),
+        };
+        let model_type = ModelType::Auto {
+            model: test_model(),
+            format: FormatOptions::default(),
+            adapter,
+            quantization,
+            device,
+            cache: crate::args::CacheOptions::default(),
+            multimodal,
+        };
+        let selected = convert_to_model_selected(&model_type, &matformer).unwrap();
+
+        match mistralrs_core::get_auto_device_map_params(&selected).unwrap() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 4096);
+                assert_eq!(max_batch_size, 7);
+                assert_eq!(max_image_shape, (1536, 1536));
+                assert_eq!(max_num_images, 5);
+            }
+            _ => panic!("expected multimodal device-map parameters"),
+        }
+        match selected {
+            ModelSelected::Lora {
+                organization,
+                from_uqff,
+                imatrix,
+                max_edge,
+                max_num_images,
+                max_image_length,
+                matformer_config_path,
+                matformer_slice_name,
+                ..
+            } => {
+                assert!(matches!(
+                    organization,
+                    Some(IsqOrganization::MoeExpertsOnly)
+                ));
+                assert_eq!(from_uqff.as_deref(), Some("q4k-0.uqff"));
+                assert_eq!(imatrix, Some(PathBuf::from("model.imatrix")));
+                assert_eq!(max_edge, Some(2048));
+                assert_eq!(max_num_images, Some(5));
+                assert_eq!(max_image_length, Some(1536));
+                assert_eq!(matformer_config_path, Some(PathBuf::from("matformer.csv")));
+                assert_eq!(matformer_slice_name.as_deref(), Some("slice"));
             }
             _ => panic!("expected dynamic LoRA model"),
         }
@@ -1237,6 +1360,7 @@ mod tests {
             &QuantizationOptions::default(),
             &DeviceOptions::default(),
             &MatformerSelection::default(),
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("--legacy-lora"));

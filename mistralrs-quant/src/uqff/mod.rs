@@ -411,6 +411,11 @@ impl ShardedVarBuilder {
         self
     }
 
+    pub fn without_lora_registry(mut self) -> Self {
+        self.lora_registry = None;
+        self
+    }
+
     pub fn lora_registry(&self) -> Option<&Arc<crate::LoraLayerRegistry>> {
         self.lora_registry.as_ref()
     }

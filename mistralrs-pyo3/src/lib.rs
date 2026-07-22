@@ -872,6 +872,11 @@ impl Runner {
         code_execution_config: Option<CodeExecutionConfig>,
         shell_config: Option<ShellConfig>,
     ) -> PyApiResult<Self> {
+        if anymoe_config.is_some() && matches!(&which, Which::Lora { .. }) {
+            return Err(PyApiErr::from(
+                "dynamic LoRA cannot be combined with AnyMoE in one Python Runner",
+            ));
+        }
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }

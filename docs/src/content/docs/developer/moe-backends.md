@@ -19,19 +19,47 @@ emits a log line; the other backends are silent unless they fall back.
 
 The ordering matters: cuTile outperforms CUTLASS, which substantially outperforms the fused
 fallback for prefill. A build without the `cutile` feature still gets a strong MoE path through
-CUTLASS - but enabling `cutile` on supported hardware is meaningfully faster, which is why the
-installer adds it automatically for supported CUDA/SM pairs.
+CUTLASS. The installer selects a cutile-enabled binary automatically for supported CUDA/SM pairs,
+but NVIDIA's `tileiras` developer tool is installed separately.
+
+## Install the cuTile runtime tool
+
+Install NVIDIA's official `tileiras` package. For Ampere, Ada, and Blackwell, NVIDIA's cuTile
+package supplies it:
+
+```bash
+python3 -m pip install --upgrade "cuda-tile[tileiras]"
+```
+
+Hopper requires the CUDA 13.3 or newer toolkit components:
+
+```bash
+python3 -m pip install --upgrade "cuda-toolkit[tileiras,nvvm,nvcc]>=13.3"
+```
+
+The pip packages do not add `tileiras` to `PATH`. Point mistral.rs at the installed binary, and add
+the same export to the shell profile or service environment that starts the server:
+
+```bash
+export CUTILE_TILEIRAS_PATH="$(python3 -c 'import nvidia.cu13.bin as b; print(next(iter(b.__path__)))')/tileiras"
+```
+
+A system CUDA installation containing a compatible `tileiras` works as well. Keep the NVIDIA CUDA
+package components on the same major/minor release. Put that executable on `PATH` or set
+`CUTILE_TILEIRAS_PATH` to it. Release archives do not redistribute `tileiras`; without a compatible
+installation, the cutile-enabled binary uses its native CUDA routed-LoRA and CUTLASS MoE fallbacks.
+Run `mistralrs doctor` to probe the runtime tool and target support for every detected GPU. See NVIDIA's
+[cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
 
 ## Selection and graceful degradation
 
-Backend selection happens once per model load and never strands you on a broken
-configuration:
+Backend selection happens once per model load and validates the available runtime tooling before
+choosing an optimized backend:
 
 - cuTile requires a supported build CUDA and GPU pair: Ampere/Ada (`sm_8x`) needs CUDA >= 13.2,
-  Hopper (`sm90`) needs CUDA >= 13.3, and Blackwell+ (`sm_10x`/`sm_12x`) needs CUDA >= 13.1.
-  It also needs the `tileiras` JIT assembler at runtime. If either probe fails - for example, a
-  cutile-enabled binary deployed to a machine without the toolkit - selection quietly moves to
-  CUTLASS and logs why.
+  Hopper (`sm90`) needs CUDA >= 13.3, and Blackwell+ (`sm_10x`/`sm_12x`) needs CUDA >= 13.2.
+  It also needs the `tileiras` JIT assembler at runtime, and that assembler must list the active
+  GPU target. If either probe fails, selection quietly moves to CUTLASS and logs why.
 - CUTLASS requires a build targeting compute capability 8.0 or newer. Below that, selection
   moves on.
 - Under CUTLASS, batches below 64 tokens delegate to the fused kernels: the grouped-GEMM setup
@@ -42,10 +70,11 @@ configuration:
 
 Set `MISTRALRS_MOE_BACKEND` to force a specific backend: `cutile`, `cutlass`, `fused` (also
 accepted: `wmma`, `native`, `legacy`), or `fast`. This is intended for debugging and A/B
-comparisons. Forcing a backend the build or hardware cannot support behaves in one of two ways:
+comparisons. Forcing a backend the build or model cannot support behaves in one of two ways:
 
 - Unsupported by the build (e.g. `cutile` on a non-cutile build): falls back to automatic selection.
-- Unsupported by the hardware (e.g. `cutlass` on a pre-Ampere build): fails at the first forward pass.
+- Compiled but ineligible because of the device, dtype, activation, weight format, or JIT tooling:
+  fails during model loading with an error naming the unmet requirement.
 
 `CUTILE_TILEIRAS_PATH` points the cuTile JIT at a specific `tileiras` binary instead of
 resolving it from `PATH`.

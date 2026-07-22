@@ -1,20 +1,36 @@
 mod dynamic;
 mod static_lora;
 
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex, OnceLock},
+};
 
 use candle_core::Result;
 pub(crate) use dynamic::maybe_wrap_dynamic_lora_with_key;
 pub use dynamic::{
-    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
-    with_lora_execution, DynamicLoraLoadPlan, LoraAdapterWeights, LoraExecution, LoraLayerRegistry,
-    LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId,
-    LoraWeights,
+    add_expert_delta_reference, apply_dynamic_lora_delta, load_dynamic_lora_weights,
+    maybe_wrap_dynamic_lora, plan_dynamic_lora_weights, register_dynamic_lora_site,
+    with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights,
+    LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraExpertDelta,
+    LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection, LoraExpertProjectionNames,
+    LoraExpertProjectionWeights, LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights,
+    LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey,
+    LoraSiteSlice, LoraSlotId, LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode,
+    RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, ROUTED_LORA_BASE_SLOT,
+    ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use dynamic::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 use indexmap::IndexMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 pub use static_lora::linear_no_bias_static_lora;
+
+const LORA_REGEX_CACHE_CAPACITY: usize = 256;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StaticLoraConfig {
@@ -88,12 +104,61 @@ fn default_init_lora_weights() -> serde_json::Value {
     serde_json::Value::Bool(true)
 }
 
-fn target_regex(pattern: &str) -> std::result::Result<Regex, regex::Error> {
-    Regex::new(&format!(r"\A(?:{pattern})\z"))
+enum LoraRegex {
+    Fast(Regex),
+    Fancy(fancy_regex::Regex),
 }
 
-fn pattern_key_regex(pattern: &str) -> std::result::Result<Regex, regex::Error> {
-    Regex::new(&format!(r"\A(?:.*\.)?(?:{pattern})\z"))
+static LORA_REGEX_CACHE: OnceLock<Mutex<HashMap<String, Arc<LoraRegex>>>> = OnceLock::new();
+
+impl LoraRegex {
+    fn new(pattern: String) -> std::result::Result<Self, String> {
+        match Regex::new(&pattern) {
+            Ok(regex) => Ok(Self::Fast(regex)),
+            Err(fast_error) => {
+                fancy_regex::Regex::new(&pattern)
+                    .map(Self::Fancy)
+                    .map_err(|fancy_error| {
+                        format!("{fast_error}; compatibility parser: {fancy_error}")
+                    })
+            }
+        }
+    }
+
+    fn try_is_match(&self, path: &str) -> std::result::Result<bool, String> {
+        match self {
+            Self::Fast(regex) => Ok(regex.is_match(path)),
+            Self::Fancy(regex) => regex.is_match(path).map_err(|error| error.to_string()),
+        }
+    }
+}
+
+fn cached_regex(pattern: String) -> std::result::Result<Arc<LoraRegex>, String> {
+    let cache = LORA_REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(regex) = cache
+        .lock()
+        .expect("LoRA regex cache poisoned")
+        .get(&pattern)
+    {
+        return Ok(regex.clone());
+    }
+    let regex = Arc::new(LoraRegex::new(pattern.clone())?);
+    let mut cache = cache.lock().expect("LoRA regex cache poisoned");
+    if cache.len() >= LORA_REGEX_CACHE_CAPACITY {
+        if let Some(key) = cache.keys().next().cloned() {
+            cache.remove(&key);
+        }
+    }
+    cache.insert(pattern, regex.clone());
+    Ok(regex)
+}
+
+fn target_regex(pattern: &str) -> std::result::Result<Arc<LoraRegex>, String> {
+    cached_regex(format!(r"\A(?:{pattern})\z"))
+}
+
+fn pattern_key_regex(pattern: &str) -> std::result::Result<Arc<LoraRegex>, String> {
+    cached_regex(format!(r"\A(?:.*\.)?(?:{pattern})\z"))
 }
 
 fn validate_pattern_keys<T>(name: &str, values: &IndexMap<String, T>) -> Result<()> {
@@ -106,16 +171,26 @@ fn validate_pattern_keys<T>(name: &str, values: &IndexMap<String, T>) -> Result<
 }
 
 impl LoraTargetModules {
-    fn matches(&self, path: &str) -> bool {
+    fn try_matches(&self, path: &str) -> Result<bool> {
         match self {
-            Self::Pattern(pattern) => target_regex(pattern).is_ok_and(|regex| regex.is_match(path)),
-            Self::Modules(modules) => modules.iter().any(|target| {
+            Self::Pattern(pattern) => target_regex(pattern)
+                .and_then(|regex| regex.try_is_match(path))
+                .map_err(|error| {
+                    candle_core::Error::msg(format!(
+                        "failed to match LoRA target regex `{pattern}`: {error}"
+                    ))
+                }),
+            Self::Modules(modules) => Ok(modules.iter().any(|target| {
                 path == target
                     || path
                         .strip_suffix(target)
                         .is_some_and(|prefix| prefix.ends_with('.'))
-            }),
+            })),
         }
+    }
+
+    fn matches(&self, path: &str) -> bool {
+        self.try_matches(path).unwrap_or(false)
     }
 
     fn validate(&self, name: &str, require_nonempty: bool) -> Result<()> {
@@ -138,27 +213,51 @@ impl LoraTargetModules {
 }
 
 impl LoraConfig {
-    fn pattern_value<T: Copy>(path: &str, values: &IndexMap<String, T>) -> Option<T> {
-        values
-            .iter()
-            .find(|(key, _)| pattern_key_regex(key).is_ok_and(|regex| regex.is_match(path)))
-            .map(|(_, value)| *value)
+    fn try_pattern_value<T: Copy>(
+        path: &str,
+        name: &str,
+        values: &IndexMap<String, T>,
+    ) -> Result<Option<T>> {
+        for (key, value) in values {
+            let regex = pattern_key_regex(key).map_err(|error| {
+                candle_core::Error::msg(format!("invalid LoRA {name} regex `{key}`: {error}"))
+            })?;
+            if regex.try_is_match(path).map_err(|error| {
+                candle_core::Error::msg(format!(
+                    "failed to match LoRA {name} regex `{key}`: {error}"
+                ))
+            })? {
+                return Ok(Some(*value));
+            }
+        }
+        Ok(None)
     }
 
     pub fn rank_for(&self, path: &str) -> usize {
-        Self::pattern_value(path, &self.rank_pattern).unwrap_or(self.rank)
+        self.try_rank_for(path).unwrap_or(self.rank)
+    }
+
+    pub fn try_rank_for(&self, path: &str) -> Result<usize> {
+        Ok(Self::try_pattern_value(path, "rank_pattern", &self.rank_pattern)?.unwrap_or(self.rank))
     }
 
     pub fn alpha_for(&self, path: &str) -> f64 {
-        Self::pattern_value(path, &self.alpha_pattern).unwrap_or(self.alpha)
+        self.try_alpha_for(path).unwrap_or(self.alpha)
+    }
+
+    pub fn try_alpha_for(&self, path: &str) -> Result<f64> {
+        Ok(
+            Self::try_pattern_value(path, "alpha_pattern", &self.alpha_pattern)?
+                .unwrap_or(self.alpha),
+        )
     }
 
     pub fn scale_for(&self, path: &str) -> Result<f64> {
-        let rank = self.rank_for(path);
+        let rank = self.try_rank_for(path)?;
         if rank == 0 {
             candle_core::bail!("LoRA rank for `{path}` must be nonzero");
         }
-        let alpha = self.alpha_for(path);
+        let alpha = self.try_alpha_for(path)?;
         if !alpha.is_finite() {
             candle_core::bail!("LoRA alpha for `{path}` must be finite");
         }
@@ -178,10 +277,38 @@ impl LoraConfig {
             })
     }
 
+    pub fn try_targets_path(&self, path: &str) -> Result<bool> {
+        let Some(targets) = &self.target_modules else {
+            return Ok(false);
+        };
+        if matches!(targets, LoraTargetModules::Pattern(pattern) if pattern.eq_ignore_ascii_case("all-linear"))
+        {
+            return Ok(true);
+        }
+        targets.try_matches(path)
+    }
+
+    pub fn targets_parameter(&self, path: &str) -> bool {
+        self.target_parameters.as_ref().is_some_and(|parameters| {
+            parameters.iter().any(|parameter| {
+                path == parameter
+                    || path
+                        .strip_suffix(parameter)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+            })
+        })
+    }
+
     pub fn excludes_path(&self, path: &str) -> bool {
         self.exclude_modules
             .as_ref()
             .is_some_and(|excludes| excludes.matches(path))
+    }
+
+    pub fn try_excludes_path(&self, path: &str) -> Result<bool> {
+        self.exclude_modules
+            .as_ref()
+            .map_or(Ok(false), |excludes| excludes.try_matches(path))
     }
 
     pub fn validate_dynamic(&self) -> Result<()> {
@@ -218,12 +345,18 @@ impl LoraConfig {
         {
             candle_core::bail!("dynamic LoRA does not support layer_replication");
         }
-        if self
-            .target_parameters
-            .as_ref()
-            .is_some_and(|parameters| !parameters.is_empty())
-        {
-            candle_core::bail!("dynamic LoRA does not support target_parameters");
+        if let Some(parameters) = &self.target_parameters {
+            for parameter in parameters {
+                let supported = parameter
+                    .strip_suffix(".gate_up_proj")
+                    .or_else(|| parameter.strip_suffix(".down_proj"))
+                    .is_some_and(|prefix| prefix == "experts" || prefix.ends_with(".experts"));
+                if !supported {
+                    candle_core::bail!(
+                        "dynamic LoRA target_parameters only supports routed MoE `*.experts.gate_up_proj` and `*.experts.down_proj`, got `{parameter}`"
+                    );
+                }
+            }
         }
         for (name, config) in [
             ("use_bdlora", &self.use_bdlora),
@@ -271,10 +404,17 @@ impl LoraConfig {
         if self.rank == 0 {
             candle_core::bail!("LoRA rank must be nonzero");
         }
-        self.target_modules
-            .as_ref()
-            .ok_or_else(|| candle_core::Error::msg("LoRA target_modules must not be empty"))?
-            .validate("target_modules", true)?;
+        if let Some(target_modules) = &self.target_modules {
+            target_modules.validate("target_modules", true)?;
+        }
+        if self.target_modules.is_none()
+            && self
+                .target_parameters
+                .as_ref()
+                .is_none_or(|parameters| parameters.is_empty())
+        {
+            candle_core::bail!("LoRA target_modules or target_parameters must not be empty");
+        }
         if let Some(exclude_modules) = &self.exclude_modules {
             exclude_modules.validate("exclude_modules", false)?;
         }
@@ -414,6 +554,35 @@ mod tests {
     }
 
     #[test]
+    fn peft_lookahead_target_modules_are_supported() -> Result<()> {
+        let config: LoraConfig = serde_json::from_value(serde_json::json!({
+            "r": 8,
+            "lora_alpha": 32,
+            "target_modules": "^(model\\.language_model(?=\\.).*\\.(in_proj_z|in_proj_qkv|in_proj_b|out_proj|up_proj|down_proj|v_proj|q_proj|shared_expert_gate|gate_proj|o_proj|k_proj|in_proj_a))$",
+            "rank_pattern": {"language_model(?=\\.).*up_proj": 4},
+            "alpha_pattern": {"language_model(?=\\.).*up_proj": 12}
+        }))
+        .map_err(candle_core::Error::wrap)?;
+
+        config.validate_dynamic()?;
+        assert!(config.targets_path("model.language_model.layers.0.mlp.experts.12.up_proj"));
+        assert!(!config.targets_path("model.language_model_extra.layers.0.mlp.experts.12.up_proj"));
+        assert_eq!(
+            config.try_rank_for("model.language_model.layers.0.mlp.up_proj")?,
+            4
+        );
+        assert_eq!(
+            config.try_alpha_for("model.language_model.layers.0.mlp.up_proj")?,
+            12.0
+        );
+        assert_eq!(
+            config.scale_for("model.language_model.layers.0.mlp.up_proj")?,
+            3.0
+        );
+        Ok(())
+    }
+
+    #[test]
     fn rank_and_alpha_patterns_follow_peft_matching() -> Result<()> {
         let config: LoraConfig = serde_json::from_str(
             r#"{
@@ -515,6 +684,39 @@ mod tests {
     }
 
     #[test]
+    fn routed_expert_target_parameters_are_accepted() -> Result<()> {
+        let config: LoraConfig = serde_json::from_value(serde_json::json!({
+            "r": 8,
+            "lora_alpha": 16,
+            "target_parameters": [
+                "mlp.experts.gate_up_proj",
+                "mlp.experts.down_proj"
+            ]
+        }))
+        .map_err(candle_core::Error::wrap)?;
+
+        config.validate_dynamic()?;
+        assert!(config.targets_parameter("model.layers.2.mlp.experts.gate_up_proj"));
+        assert!(config.targets_parameter("model.layers.2.mlp.experts.down_proj"));
+        assert!(!config.targets_parameter("model.layers.2.mlp.experts.up_proj"));
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_target_parameters_are_rejected() {
+        let config: LoraConfig = serde_json::from_value(serde_json::json!({
+            "r": 8,
+            "lora_alpha": 16,
+            "target_parameters": ["mlp.router.weight"]
+        }))
+        .unwrap();
+
+        let error = config.validate_dynamic().unwrap_err().to_string();
+        assert!(error.contains("target_parameters"));
+        assert!(error.contains("mlp.router.weight"));
+    }
+
+    #[test]
     fn active_peft_variants_are_rejected() {
         let base = serde_json::json!({
             "r": 8,
@@ -525,10 +727,6 @@ mod tests {
             ("alora_invocation_tokens", serde_json::json!([1, 2])),
             ("use_qalora", serde_json::json!(true)),
             ("layer_replication", serde_json::json!([[0, 1]])),
-            (
-                "target_parameters",
-                serde_json::json!(["experts.gate_up_proj"]),
-            ),
             ("use_bdlora", serde_json::json!({"nblocks": 2})),
             ("arrow_config", serde_json::json!({})),
             ("monteclora_config", serde_json::json!({})),

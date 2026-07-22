@@ -91,6 +91,7 @@ walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
 regex = "1.12.2"
+fancy-regex = "0.14.0"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
 dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }

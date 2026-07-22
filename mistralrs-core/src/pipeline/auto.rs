@@ -159,6 +159,10 @@ impl AutoLoaderBuilder {
             Some(model_id.clone()),
             jinja_explicit,
         );
+        if let (Some(adapters), Some(runtime_config)) = (lora_adapters.clone(), lora_runtime_config)
+        {
+            multimodal_builder = multimodal_builder.with_lora(adapters, runtime_config);
+        }
         if let Some(ref path) = hf_cache_path {
             multimodal_builder = multimodal_builder.hf_cache_path(path.clone());
         }
@@ -200,6 +204,13 @@ enum Detected {
     Embedding(Option<EmbeddingLoaderType>),
     Diffusion(DiffusionLoaderType),
     Speech(crate::speech_models::SpeechLoaderType),
+}
+
+fn supports_dynamic_lora(detected: &Detected) -> bool {
+    matches!(
+        detected,
+        Detected::Normal(_) | Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe)
+    )
 }
 
 impl AutoLoader {
@@ -408,8 +419,10 @@ impl AutoLoader {
             return Ok(());
         }
         let detected = self.detect(artifacts)?;
-        if self.dynamic_lora_enabled && !matches!(&detected, Detected::Normal(_)) {
-            anyhow::bail!("dynamic LoRA is currently supported only for text models");
+        if self.dynamic_lora_enabled && !supports_dynamic_lora(&detected) {
+            anyhow::bail!(
+                "dynamic LoRA is supported for text models and the Qwen3.5/3.6 MoE text submodel; vision-tower adapters and other multimodal architectures are not supported"
+            );
         }
         match detected {
             Detected::Normal(tp) => {
@@ -534,5 +547,55 @@ impl Loader for AutoLoader {
             .as_ref()
             .map(|l| l.get_kind())
             .unwrap_or(ModelKind::Normal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detector() -> AutoLoader {
+        AutoLoader {
+            model_id: "Qwen/Qwen3.6-35B-A3B".to_string(),
+            normal_builder: Mutex::new(None),
+            multimodal_builder: Mutex::new(None),
+            embedding_builder: Mutex::new(None),
+            loader: Mutex::new(None),
+            hf_cache_path: None,
+            dynamic_lora_enabled: true,
+        }
+    }
+
+    #[test]
+    fn qwen3_5_moe_auto_detection_routes_dynamic_lora_to_multimodal() {
+        let detected = detector()
+            .detect(&ConfigArtifacts {
+                contents: Some(
+                    r#"{"architectures":["Qwen3_5MoeForConditionalGeneration"]}"#.to_string(),
+                ),
+                sentence_transformers_present: false,
+                repo_files: Vec::new(),
+                remote_access_issue: None,
+            })
+            .unwrap();
+
+        assert!(matches!(
+            detected,
+            Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe)
+        ));
+    }
+
+    #[test]
+    fn dynamic_lora_auto_detection_is_narrowly_gated() {
+        assert!(supports_dynamic_lora(&Detected::Normal(
+            NormalLoaderType::Qwen3Moe
+        )));
+        assert!(supports_dynamic_lora(&Detected::Multimodal(
+            MultimodalLoaderType::Qwen3_5Moe
+        )));
+        assert!(!supports_dynamic_lora(&Detected::Multimodal(
+            MultimodalLoaderType::Qwen3VLMoE
+        )));
+        assert!(!supports_dynamic_lora(&Detected::Embedding(None)));
     }
 }

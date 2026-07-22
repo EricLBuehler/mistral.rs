@@ -112,7 +112,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBueh
 irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
 ```
 
-Downloads a self-contained prebuilt binary for your platform (Metal on Apple Silicon; per-GPU CUDA or CPU on Linux; CPU on Windows), falling back to a source build if none matches. No Rust or CUDA toolkit needed for the prebuilt path.
+Downloads a self-contained prebuilt binary for your platform (Metal on Apple Silicon; per-GPU CUDA or CPU on Linux; CPU on Windows), falling back to a source build if none matches. Its native paths need no Rust or CUDA toolkit. The optional cuTile JIT requires NVIDIA's separately installed `tileiras` tool; without it CUDA builds use their native routed-LoRA and CUTLASS MoE fallbacks.
 
 [Manual installation, accelerator details & other platforms](https://ericlbuehler.github.io/mistral.rs/quickstart/)
 

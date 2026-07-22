@@ -971,6 +971,7 @@ impl DecoderLayer {
                 num_experts_per_tok: top_k,
                 hidden_size: cfg.hidden_size,
                 moe_intermediate_size: expert_inter,
+                expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
             };
             let moe = MoEExperts::new_direct(
                 &moe_cfg,
@@ -1575,7 +1576,7 @@ impl TextModel {
                 normal_loading_metadata.loading_isq,
                 &cfg.quantization_config,
                 cfg.hidden_activation,
-            );
+            )?;
         }
         let vb_l = vb_m.pp("layers");
         let layers = NiceProgressBar::<_, 'b'>(

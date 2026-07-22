@@ -326,10 +326,10 @@ impl Attention {
 
 struct GptOssMoE {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     gate_up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
-    #[allow(dead_code)]
-    num_experts: usize,
+    expert_lora: Option<Arc<mistralrs_quant::LoraExpertSiteHandle>>,
     num_experts_per_tok: usize,
     intermediate_size: usize,
     alpha: f32,
@@ -338,13 +338,37 @@ struct GptOssMoE {
 
 impl GptOssMoE {
     fn new(cfg: &Config, vb: ShardedVarBuilder, layer_device: Device) -> Result<Self> {
-        let gate = layers::linear(
-            cfg.hidden_size,
-            cfg.num_local_experts,
-            vb.pp("router").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("router").set_device(layer_device.clone());
+        let gate = layers::linear(cfg.hidden_size, cfg.num_local_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_local_experts),
         )?;
 
         let experts_vb = vb.pp("experts").set_device(layer_device);
+        let expert_lora = match experts_vb.lora_registry() {
+            Some(registry) => Some(
+                registry.register_expert(
+                    mistralrs_quant::LoraSiteKey::new(experts_vb.prefix()),
+                    mistralrs_quant::LoraExpertSiteSpec::new(
+                        cfg.num_local_experts,
+                        cfg.hidden_size,
+                        cfg.intermediate_size,
+                        mistralrs_quant::LoraExpertProjectionNames::new(
+                            "gate_proj",
+                            "up_proj",
+                            "down_proj",
+                        ),
+                        mistralrs_quant::Shard::default(),
+                        mistralrs_quant::Shard::default(),
+                    )?
+                    .with_gate_up_order(mistralrs_quant::LoraGateUpOrder::Interleaved),
+                    experts_vb.dtype(),
+                    experts_vb.device().clone(),
+                )?,
+            ),
+            None => None,
+        };
 
         let gate_up_proj = MXFP4Layer::packed_gptoss_linear(
             cfg.num_local_experts,
@@ -366,9 +390,10 @@ impl GptOssMoE {
 
         Ok(Self {
             gate,
+            gate_lora,
             gate_up_proj,
             down_proj,
-            num_experts: cfg.num_local_experts,
+            expert_lora,
             num_experts_per_tok: cfg.num_experts_per_tok,
             intermediate_size: cfg.intermediate_size,
             alpha: cfg.alpha,
@@ -381,6 +406,10 @@ impl GptOssMoE {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
 
         let topk = crate::ops::moe_router_topk(
             &router_logits,
@@ -400,34 +429,55 @@ impl GptOssMoE {
 
         let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
         let (num_tokens, topk_dim, _) = gate_up.dims3()?;
+        let expert_lora = self
+            .expert_lora
+            .as_ref()
+            .map(mistralrs_quant::LoraExpertExecution::current)
+            .transpose()?
+            .flatten();
 
-        #[cfg(feature = "cuda")]
-        let activated = {
-            let gate_up_for_kernel =
-                gate_up.reshape((num_tokens * topk_dim, self.intermediate_size, 2))?;
-            let result = mistralrs_quant::gptoss_swiglu_interleaved(
-                &gate_up_for_kernel,
-                self.intermediate_size,
-                self.alpha,
-                self.limit,
-            )?;
-            result.reshape((num_tokens, topk_dim, self.intermediate_size))?
-        };
-
-        #[cfg(not(feature = "cuda"))]
-        let activated = {
-            let gate_up_reshaped =
-                gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
-            let gate = gate_up_reshaped
-                .narrow(D::Minus1, 0, 1)?
-                .squeeze(D::Minus1)?;
-            let up = gate_up_reshaped
-                .narrow(D::Minus1, 1, 1)?
-                .squeeze(D::Minus1)?;
+        let activated = if let Some(lora) = &expert_lora {
+            let (gate, up) = lora.add_gate_up_delta_owned(&xs_flat, gate_up, &topk_ids)?;
             gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
+        } else {
+            #[cfg(feature = "cuda")]
+            {
+                let gate_up_for_kernel =
+                    gate_up.reshape((num_tokens * topk_dim, self.intermediate_size, 2))?;
+                let result = mistralrs_quant::gptoss_swiglu_interleaved(
+                    &gate_up_for_kernel,
+                    self.intermediate_size,
+                    self.alpha,
+                    self.limit,
+                )?;
+                result.reshape((num_tokens, topk_dim, self.intermediate_size))?
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                let gate_up_reshaped =
+                    gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
+                let gate = gate_up_reshaped
+                    .narrow(D::Minus1, 0, 1)?
+                    .squeeze(D::Minus1)?;
+                let up = gate_up_reshaped
+                    .narrow(D::Minus1, 1, 1)?
+                    .squeeze(D::Minus1)?;
+                gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
+            }
         };
 
         let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
+        let expert_out = match &expert_lora {
+            Some(lora) => lora.add_delta_owned(
+                mistralrs_quant::LoraExpertProjection::Down,
+                &activated,
+                expert_out,
+                &topk_ids,
+                None,
+                mistralrs_quant::LoraExpertInputMode::RoutedRows,
+            )?,
+            None => expert_out,
+        };
 
         let topk_weights = topk_weights
             .to_dtype(expert_out.dtype())?

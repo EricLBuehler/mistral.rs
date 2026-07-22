@@ -10,6 +10,8 @@ use candle_core::{DType, Device, Result};
 
 use crate::Shard;
 
+use super::{LoraExpertSiteHandle, LoraExpertSiteSpec};
+
 static NEXT_RUNTIME_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -164,6 +166,7 @@ impl LoraSiteHandle {
 #[derive(Default)]
 struct RegistryState {
     sites: BTreeMap<LoraSiteKey, Arc<LoraSiteHandle>>,
+    expert_sites: BTreeMap<LoraSiteKey, Arc<LoraExpertSiteHandle>>,
     finalized: bool,
 }
 
@@ -183,6 +186,7 @@ impl std::fmt::Debug for RegistryState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RegistryState")
             .field("sites", &self.sites)
+            .field("expert_sites", &self.expert_sites)
             .field("finalized", &self.finalized)
             .finish()
     }
@@ -208,6 +212,12 @@ impl LoraLayerRegistry {
         device: Device,
     ) -> Result<Arc<LoraSiteHandle>> {
         let mut state = self.state.lock().expect("LoRA layer registry poisoned");
+        if state.expert_sites.contains_key(&key) {
+            candle_core::bail!(
+                "LoRA site `{}` was registered as both a linear and an expert group",
+                key.path()
+            );
+        }
         if let Some(site) = state.sites.get(&key) {
             if site.spec != spec
                 || site.activation_dtype != activation_dtype
@@ -239,6 +249,53 @@ impl LoraLayerRegistry {
         Ok(site)
     }
 
+    pub fn register_expert(
+        &self,
+        key: LoraSiteKey,
+        spec: LoraExpertSiteSpec,
+        activation_dtype: DType,
+        device: Device,
+    ) -> Result<Arc<LoraExpertSiteHandle>> {
+        if key.slice().is_some() {
+            candle_core::bail!("expert LoRA group sites cannot be sliced");
+        }
+        let mut state = self.state.lock().expect("LoRA layer registry poisoned");
+        if state.sites.contains_key(&key) {
+            candle_core::bail!(
+                "LoRA site `{}` was registered as both a linear and an expert group",
+                key.path()
+            );
+        }
+        if let Some(site) = state.expert_sites.get(&key) {
+            if site.spec() != &spec
+                || site.activation_dtype() != activation_dtype
+                || site.device().location() != device.location()
+            {
+                candle_core::bail!(
+                    "LoRA expert site `{}` was registered with incompatible specifications",
+                    key.path()
+                );
+            }
+            return Ok(site.clone());
+        }
+        if state.finalized {
+            candle_core::bail!(
+                "cannot register LoRA expert site `{}` after registry finalization",
+                key.path()
+            );
+        }
+
+        let site = Arc::new(LoraExpertSiteHandle::new(
+            self.runtime_id,
+            key.clone(),
+            spec,
+            activation_dtype,
+            device,
+        ));
+        state.expert_sites.insert(key, site.clone());
+        Ok(site)
+    }
+
     pub fn finalize(&self) -> Result<Vec<Arc<LoraSiteHandle>>> {
         let mut state = self.state.lock().expect("LoRA layer registry poisoned");
         if !state.finalized {
@@ -247,6 +304,12 @@ impl LoraLayerRegistry {
                 site.id
                     .set(id)
                     .map_err(|_| candle_core::Error::msg("LoRA site ID was already assigned"))?;
+            }
+            let first_expert_id = state.sites.len();
+            for (offset, site) in state.expert_sites.values().enumerate() {
+                let id =
+                    u32::try_from(first_expert_id + offset).map_err(candle_core::Error::wrap)?;
+                site.assign_id(id)?;
             }
             state.finalized = true;
         }
@@ -262,11 +325,32 @@ impl LoraLayerRegistry {
             .cloned()
             .collect()
     }
+
+    pub fn expert_sites(&self) -> Vec<Arc<LoraExpertSiteHandle>> {
+        self.state
+            .lock()
+            .expect("LoRA layer registry poisoned")
+            .expert_sites
+            .values()
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn expert_spec() -> Result<LoraExpertSiteSpec> {
+        LoraExpertSiteSpec::new(
+            2,
+            4,
+            8,
+            super::super::LoraExpertProjectionNames::new("gate", "up", "down"),
+            Shard::default(),
+            Shard::default(),
+        )
+    }
 
     #[test]
     fn site_ids_are_independent_of_registration_order() -> Result<()> {
@@ -289,6 +373,29 @@ mod tests {
         }
 
         assert_eq!(ids(&["c", "a", "b"])?, ids(&["a", "b", "c"])?);
+        Ok(())
+    }
+
+    #[test]
+    fn linear_and_expert_sites_share_one_id_namespace() -> Result<()> {
+        let registry = LoraLayerRegistry::new();
+        let expert = registry.register_expert(
+            LoraSiteKey::new("experts"),
+            expert_spec()?,
+            DType::F32,
+            Device::Cpu,
+        )?;
+        let linear = registry.register(
+            LoraSiteKey::new("linear"),
+            LoraLinearSpec::replicated(4, 8),
+            DType::F32,
+            Device::Cpu,
+        )?;
+        registry.finalize()?;
+
+        assert_eq!(linear.id()?, 0);
+        assert_eq!(expert.id()?, 1);
+        assert_ne!(linear.id()?, expert.id()?);
         Ok(())
     }
 

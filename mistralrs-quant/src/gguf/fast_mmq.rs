@@ -733,22 +733,36 @@ pub fn grouped(
     )))
 }
 
-/// Run one grouped MoE projection after fusing `activation(gate) * up` directly
-/// into the MMQ activation quantization layout.
-#[allow(clippy::too_many_arguments)]
-pub fn grouped_from_glu_pair(
-    weight: &QTensor,
-    gate: &Tensor,
-    up: &Tensor,
-    ids_src: &CudaSlice<u32>,
-    ids_dst: &CudaSlice<u32>,
-    expert_bounds: &CudaSlice<u32>,
+struct GroupedGluRun<'a> {
+    weight: &'a QTensor,
+    gate: &'a Tensor,
+    up: &'a Tensor,
+    row_stride: usize,
+    ids_src: Option<&'a CudaSlice<u32>>,
+    ids_dst: &'a CudaSlice<u32>,
+    expert_bounds: &'a CudaSlice<u32>,
     total_assignments: usize,
     ncols_max: usize,
     num_experts: usize,
     activation: i32,
-    dev: &CudaDevice,
-) -> Result<Tensor> {
+    dev: &'a CudaDevice,
+}
+
+fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
+    let GroupedGluRun {
+        weight,
+        gate,
+        up,
+        row_stride,
+        ids_src,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev,
+    } = run;
     let dtype = weight.dtype();
     if !supports(dtype) {
         candle_core::bail!("fast_mmq grouped_from_glu_pair: unsupported quant dtype {dtype:?}");
@@ -787,8 +801,6 @@ pub fn grouped_from_glu_pair(
         candle_core::bail!("fast_mmq grouped_from_glu_pair: k={k} not divisible by qk={qk}");
     }
 
-    let gate = gate.contiguous()?;
-    let up = up.contiguous()?;
     let (gate_storage, gate_layout) = gate.storage_and_layout();
     let Storage::Cuda(gate_cuda) = &*gate_storage else {
         candle_core::bail!("fast_mmq grouped_from_glu_pair: gate must live on CUDA");
@@ -797,6 +809,9 @@ pub fn grouped_from_glu_pair(
     let Storage::Cuda(up_cuda) = &*up_storage else {
         candle_core::bail!("fast_mmq grouped_from_glu_pair: up must live on CUDA");
     };
+    if gate_layout.stride() != [row_stride, 1] || up_layout.stride() != [row_stride, 1] {
+        candle_core::bail!("fast_mmq grouped_from_glu_pair: invalid gate/up row stride");
+    }
 
     let stream_ptr = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
     let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
@@ -829,7 +844,13 @@ pub fn grouped_from_glu_pair(
     let up_slice = up_cuda.as_cuda_slice::<f32>()?;
     let (gate_ptr, _gate_guard) = slice_ptr(gate_slice, gate_layout.start_offset());
     let (up_ptr, _up_guard) = slice_ptr(up_slice, up_layout.start_offset());
-    let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
+    let (ids_src_ptr, _ids_src_guard) = match ids_src {
+        Some(ids_src) => {
+            let (ptr, guard) = slice_ptr(ids_src, 0);
+            (ptr, Some(guard))
+        }
+        None => (0, None),
+    };
     let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
     let (bounds_ptr, _bounds_guard) = slice_ptr(expert_bounds, 0);
     let (out_ptr, _out_guard) = slice_ptr(&out, 0);
@@ -841,7 +862,7 @@ pub fn grouped_from_glu_pair(
             ids_src_ptr as *const i32,
             scratch_ptr,
             k as i64,
-            k as i64,
+            row_stride as i64,
             k_padded as i64,
             total_assignments as i64,
             activation,
@@ -884,12 +905,115 @@ pub fn grouped_from_glu_pair(
     )))
 }
 
+/// Run one grouped MoE projection after fusing `activation(gate) * up` directly
+/// into the MMQ activation quantization layout.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_pair(
+    weight: &QTensor,
+    gate: &Tensor,
+    up: &Tensor,
+    ids_src: &CudaSlice<u32>,
+    ids_dst: &CudaSlice<u32>,
+    expert_bounds: &CudaSlice<u32>,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+    let row_stride = gate.dim(1)?;
+    grouped_from_glu(GroupedGluRun {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride,
+        ids_src: Some(ids_src),
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev,
+    })
+}
+
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_sorted_pair(
+    weight: &QTensor,
+    gate: &Tensor,
+    up: &Tensor,
+    ids_dst: &CudaSlice<u32>,
+    expert_bounds: &CudaSlice<u32>,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let gate = gate.contiguous()?;
+    let up = up.contiguous()?;
+    let row_stride = gate.dim(1)?;
+    grouped_from_glu(GroupedGluRun {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride,
+        ids_src: None,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_from_glu_packed(
+    weight: &QTensor,
+    gate_up: &Tensor,
+    ids_src: &CudaSlice<u32>,
+    ids_dst: &CudaSlice<u32>,
+    expert_bounds: &CudaSlice<u32>,
+    total_assignments: usize,
+    ncols_max: usize,
+    num_experts: usize,
+    activation: i32,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let gate_up = gate_up.contiguous()?;
+    let (_, _, k) = weight.shape().dims3()?;
+    if gate_up.dims2()? != (total_assignments, 2 * k) {
+        candle_core::bail!("fast_mmq grouped_from_glu_packed: gate/up shape mismatch");
+    }
+    let gate = gate_up.narrow(1, 0, k)?;
+    let up = gate_up.narrow(1, k, k)?;
+    grouped_from_glu(GroupedGluRun {
+        weight,
+        gate: &gate,
+        up: &up,
+        row_stride: 2 * k,
+        ids_src: Some(ids_src),
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        ncols_max,
+        num_experts,
+        activation,
+        dev,
+    })
+}
+
 /// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
 ///
-/// Gate/up share one MMQ activation quantization pass while still producing
-/// rows in flat assignment order for the downstream weighted down projection.
+/// Gate/up share one MMQ activation quantization pass and one packed output.
 #[allow(clippy::too_many_arguments)]
-pub fn grouped_pair(
+pub fn grouped_pair_packed(
     gate: &QTensor,
     up: &QTensor,
     xs: &Tensor,
@@ -900,7 +1024,7 @@ pub fn grouped_pair(
     topk: usize,
     num_experts: usize,
     dev: &CudaDevice,
-) -> Result<(Tensor, Tensor)> {
+) -> Result<Tensor> {
     let dtype = gate.dtype();
     if dtype != up.dtype() {
         candle_core::bail!(
@@ -981,13 +1105,12 @@ pub fn grouped_pair(
     let (fixup_ptr, _fixup_guard) = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes)?;
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
 
-    let gate_out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
-    let up_out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
+    let output = unsafe { dev.alloc::<f32>(total_assignments * nrows * 2)? };
 
     let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
     let stride_row_x = (k / qk) as i64;
-    let stride_col_dst = nrows as i64;
+    let stride_col_dst = (2 * nrows) as i64;
     let di = get_device_info(dev);
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
@@ -996,8 +1119,8 @@ pub fn grouped_pair(
     let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
     let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
     let (bounds_ptr, _bounds_guard) = slice_ptr(expert_bounds, 0);
-    let (gate_out_ptr, _gate_out_guard) = slice_ptr(&gate_out, 0);
-    let (up_out_ptr, _up_out_guard) = slice_ptr(&up_out, 0);
+    let (gate_out_ptr, _gate_out_guard) = slice_ptr(&output, 0);
+    let (up_out_ptr, _up_out_guard) = slice_ptr(&output, nrows);
 
     unsafe {
         match input_ty {
@@ -1094,15 +1217,41 @@ pub fn grouped_pair(
     drop(_ids_dst_guard);
     drop(_ids_src_guard);
 
-    let out_shape: Shape = vec![total_assignments, nrows].into();
-    let gate_tensor = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(gate_out, dev.clone())),
-        out_shape.clone(),
-    ));
-    let up_tensor = Tensor::from((
-        Storage::Cuda(CudaStorage::wrap_cuda_slice(up_out, dev.clone())),
+    let out_shape: Shape = vec![total_assignments, 2 * nrows].into();
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
         out_shape,
-    ));
+    )))
+}
 
-    Ok((gate_tensor, up_tensor))
+/// Run two GGUF-quantized MoE projections with llama.cpp-style grouped MMQ.
+#[allow(clippy::too_many_arguments)]
+pub fn grouped_pair(
+    gate: &QTensor,
+    up: &QTensor,
+    xs: &Tensor,
+    ids_src: &CudaSlice<u32>,
+    ids_dst: &CudaSlice<u32>,
+    expert_bounds: &CudaSlice<u32>,
+    total_assignments: usize,
+    topk: usize,
+    num_experts: usize,
+    dev: &CudaDevice,
+) -> Result<(Tensor, Tensor)> {
+    let output = grouped_pair_packed(
+        gate,
+        up,
+        xs,
+        ids_src,
+        ids_dst,
+        expert_bounds,
+        total_assignments,
+        topk,
+        num_experts,
+        dev,
+    )?;
+    let (_, nrows, _) = gate.shape().dims3()?;
+    let gate = output.narrow(1, 0, nrows)?.contiguous()?;
+    let up = output.narrow(1, nrows, nrows)?.contiguous()?;
+    Ok((gate, up))
 }

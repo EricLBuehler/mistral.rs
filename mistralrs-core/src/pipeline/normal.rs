@@ -55,7 +55,7 @@ use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
     DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig, Pipeline,
-    Topology, TryIntoDType, GLOBAL_HF_CACHE, MAX_LORA_ALIAS_BYTES,
+    Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor, Var};
@@ -229,61 +229,10 @@ impl NormalLoaderBuilder {
     /// If the loader type is not specified, loader type is automatically determined from the
     /// `architectures` array in the config.
     pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
-        if let Some(runtime_config) = self.lora_runtime_config {
-            runtime_config.validate()?;
-        }
-        if let Some(adapters) = &self.lora_adapters {
-            let mut aliases = std::collections::HashSet::new();
-            for adapter in adapters {
-                let alias = adapter.alias.trim();
-                if alias.is_empty() {
-                    anyhow::bail!("LoRA adapter alias must not be empty");
-                }
-                if alias.len() > MAX_LORA_ALIAS_BYTES {
-                    anyhow::bail!(
-                        "LoRA adapter alias must not exceed {MAX_LORA_ALIAS_BYTES} bytes"
-                    );
-                }
-                if adapter.source.trim().is_empty() {
-                    anyhow::bail!(
-                        "LoRA adapter source for alias `{}` must not be empty",
-                        adapter.alias
-                    );
-                }
-                if adapter.revision().is_empty() {
-                    anyhow::bail!(
-                        "LoRA adapter revision for alias `{}` must not be empty",
-                        adapter.alias
-                    );
-                }
-                if adapter
-                    .base_model_name
-                    .as_deref()
-                    .is_some_and(|model| model.trim().is_empty())
-                {
-                    anyhow::bail!(
-                        "LoRA adapter `{}` has an empty base_model_name",
-                        adapter.alias
-                    );
-                }
-                if !aliases.insert(alias) {
-                    anyhow::bail!(
-                        "LoRA adapter alias `{}` is specified more than once",
-                        adapter.alias
-                    );
-                }
-            }
-            if let Some(config) = self
-                .lora_runtime_config
-                .filter(|config| aliases.len() > config.max_adapters)
-            {
-                anyhow::bail!(
-                    "LoRA adapter preload count {} exceeds the configured maximum {}",
-                    aliases.len(),
-                    config.max_adapters
-                );
-            }
-        }
+        super::validate_lora_loader_config(
+            self.lora_adapters.as_deref(),
+            self.lora_runtime_config,
+        )?;
         let loader: Box<dyn NormalModelLoader> = match loader_tp {
             Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
             Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),

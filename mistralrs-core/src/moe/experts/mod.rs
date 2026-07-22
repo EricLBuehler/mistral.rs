@@ -11,7 +11,10 @@ mod config;
 mod forward;
 
 use candle_core::{Device, Result, Tensor};
-use mistralrs_quant::{IsqType, QuantizedConfig, ShardedVarBuilder, SumAllReduce};
+use mistralrs_quant::{
+    IsqType, LoraExpertExecution, LoraExpertProjectionNames, LoraExpertSiteHandle,
+    LoraExpertSiteSpec, LoraSiteKey, QuantizedConfig, Shard, ShardedVarBuilder, SumAllReduce,
+};
 use std::sync::Arc;
 
 use crate::layers::Activation;
@@ -32,6 +35,7 @@ use forward::{MoEForward, MoEForwardConfig, MoEForwardShape};
 /// MoE experts layer without the gate; the caller computes routing weights + topk indices.
 pub struct MoEExperts {
     backend: MoEExpertsBackendImpl,
+    lora_site: Option<Arc<LoraExpertSiteHandle>>,
     act: Activation,
     #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     num_experts: usize,
@@ -95,8 +99,10 @@ impl MoEExperts {
     ) -> Result<Self> {
         let experts_vb = vb.pp("experts").set_device(layer_device.clone());
         if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
+            let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
+                lora_site,
                 cfg,
                 comm,
                 act,
@@ -111,7 +117,7 @@ impl MoEExperts {
             act,
         );
         // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
-        let backend_impl = match MoEExpertsBackend::resolve(&choice) {
+        let backend_impl = match MoEExpertsBackend::resolve(&choice)? {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
                 w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
                     cfg,
@@ -140,13 +146,20 @@ impl MoEExperts {
                     )?)
                 } else {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(
-                        cfg, experts_vb, comm,
+                        cfg,
+                        experts_vb.clone(),
+                        comm,
                     )?)
                 }
             }
         };
+        let lora_sharded = match &backend_impl {
+            MoEExpertsBackendImpl::Fast(weights) => weights.sharded,
+            _ => comm.world_size() > 1,
+        };
+        let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, lora_sharded)?;
 
-        Ok(Self::from_backend(backend_impl, cfg, comm, act))
+        Ok(Self::from_backend(backend_impl, lora_site, cfg, comm, act))
     }
 
     /// Create MoEExperts from a VB already at the experts level (gemma4's flat `moe.*`, no
@@ -160,8 +173,10 @@ impl MoEExperts {
         act: Activation,
     ) -> Result<Self> {
         if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
+            let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
+                lora_site,
                 cfg,
                 comm,
                 act,
@@ -176,7 +191,7 @@ impl MoEExperts {
             act,
         );
         // only the stacked backends need a readable checkpoint; Fast detects with a dummy fallback
-        let backend_impl = match MoEExpertsBackend::resolve(&choice) {
+        let backend_impl = match MoEExpertsBackend::resolve(&choice)? {
             MoEExpertsBackend::Fused => MoEExpertsBackendImpl::Fused(FusedExpertsWeights {
                 w: StackedExpertWeights::from_checkpoint(&ExpertCheckpoint::new(
                     cfg,
@@ -203,28 +218,81 @@ impl MoEExperts {
                     );
                 }
                 MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_unquantized(
-                    cfg, experts_vb, comm,
+                    cfg,
+                    experts_vb.clone(),
+                    comm,
                 )?)
             }
         };
+        let lora_sharded = match &backend_impl {
+            MoEExpertsBackendImpl::Fast(weights) => weights.sharded,
+            _ => comm.world_size() > 1,
+        };
+        let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, lora_sharded)?;
 
-        Ok(Self::from_backend(backend_impl, cfg, comm, act))
+        Ok(Self::from_backend(backend_impl, lora_site, cfg, comm, act))
     }
 
     fn from_backend(
         backend: MoEExpertsBackendImpl,
+        lora_site: Option<Arc<LoraExpertSiteHandle>>,
         cfg: &MoEExpertsConfig,
         comm: &Arc<mistralrs_quant::Comm>,
         act: Activation,
     ) -> Self {
         Self {
             backend,
+            lora_site,
             act,
             num_experts: cfg.num_experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
         }
+    }
+
+    fn register_lora_site(
+        cfg: &MoEExpertsConfig,
+        experts_vb: &ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+        sharded: bool,
+    ) -> Result<Option<Arc<LoraExpertSiteHandle>>> {
+        let Some(registry) = experts_vb.lora_registry() else {
+            return Ok(None);
+        };
+        let names = cfg.expert_proj_names;
+        let (gate_up_output_shard, down_input_shard) = if sharded {
+            (
+                Shard::Simple {
+                    dim: 0,
+                    rank: comm.rank(),
+                    world_size: comm.world_size(),
+                },
+                Shard::Simple {
+                    dim: 1,
+                    rank: comm.rank(),
+                    world_size: comm.world_size(),
+                },
+            )
+        } else {
+            (Shard::default(), Shard::default())
+        };
+        let spec = LoraExpertSiteSpec::new(
+            cfg.num_experts,
+            cfg.hidden_size,
+            cfg.moe_intermediate_size,
+            LoraExpertProjectionNames::new(names.gate, names.up, names.down),
+            gate_up_output_shard,
+            down_input_shard,
+        )?;
+        registry
+            .register_expert(
+                LoraSiteKey::new(experts_vb.prefix()),
+                spec,
+                experts_vb.dtype(),
+                experts_vb.device().clone(),
+            )
+            .map(Some)
     }
     /// Forward pass through experts
     ///
@@ -239,6 +307,12 @@ impl MoEExperts {
         let (batch_size, seq_len, hidden_dim) = xs.dims3()?;
         let shape = MoEForwardShape::new(batch_size, seq_len, hidden_dim);
         let xs_flat = xs.reshape(shape.flat())?;
+        let lora = self
+            .lora_site
+            .as_ref()
+            .map(LoraExpertExecution::current)
+            .transpose()?
+            .flatten();
         let forward = MoEForward {
             xs,
             xs_flat: &xs_flat,
@@ -246,6 +320,7 @@ impl MoEExperts {
             topk_ids,
             original_dtype: xs.dtype(),
             shape,
+            lora,
         };
 
         let config = self.forward_config();

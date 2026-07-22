@@ -20,6 +20,9 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(test)]
+#[path = "build_support/cuda_headers.rs"]
+mod cuda_headers;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -88,13 +91,18 @@ pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
+    quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
     ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
 #[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
+#[cfg(feature = "cuda")]
 pub use gguf::fast_mmq::{
-    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
-    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
+    grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
+    grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
@@ -106,10 +114,22 @@ pub use isq_executor::{
     IsqPlanParams, IsqRequest, IsqResourceEstimate,
 };
 pub use lora::{
-    linear_no_bias_static_lora, load_dynamic_lora_weights, maybe_wrap_dynamic_lora,
-    plan_dynamic_lora_weights, with_lora_execution, DynamicLoraLoadPlan, LoraAdapterWeights,
-    LoraConfig, LoraExecution, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle,
-    LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, StaticLoraConfig,
+    add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
+    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
+    register_dynamic_lora_site, with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights,
+    LoraAdapterWeights, LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats,
+    LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection,
+    LoraExpertProjectionNames, LoraExpertProjectionWeights, LoraExpertSiteHandle,
+    LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec,
+    LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules,
+    LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode, RoutedLoraMetadataLayout,
+    RoutedLoraProjectionLayout, StaticLoraConfig, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
+    ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use lora::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
@@ -127,7 +147,7 @@ pub use utils::isq::{
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
-pub use utils::{fused_glu, GluActivationType};
+pub use utils::{fused_glu, fused_split_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 

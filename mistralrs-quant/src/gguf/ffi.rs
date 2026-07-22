@@ -29,6 +29,40 @@ macro_rules! declare_mmvq_fused_qkv {
     };
 }
 
+macro_rules! declare_moe_lora_decode {
+    ($gate_up:ident, $down:ident) => {
+        pub fn $gate_up(
+            gate_weights: *const c_void,
+            up_weights: *const c_void,
+            all_inputs: *const c_void,
+            indices: *const u32,
+            all_outputs: *mut c_void,
+            n: i32,
+            k: i32,
+            batch: i32,
+            topk: i32,
+            k_padded: i32,
+            num_experts: i32,
+            output_type: i32,
+            stream: *mut c_void,
+        ) -> i32;
+        pub fn $down(
+            all_weights: *const c_void,
+            all_inputs: *const c_void,
+            indices: *const u32,
+            all_outputs: *mut c_void,
+            n: i32,
+            k: i32,
+            batch: i32,
+            topk: i32,
+            k_padded: i32,
+            num_experts: i32,
+            output_type: i32,
+            stream: *mut c_void,
+        ) -> i32;
+    };
+}
+
 macro_rules! declare_mmvq_fused_glu {
     ($fn_name:ident) => {
         pub fn $fn_name(
@@ -262,24 +296,44 @@ extern "C" {
     );
 
     pub fn launch_moe_weighted_reduce_flat(
-        inputs: *const f32,
-        topk_weights: *const f32,
-        outputs: *mut f32,
-        num_tokens: i32,
-        hidden: i32,
-        topk: i32,
-        stream: *mut c_void,
-    );
-
-    pub fn launch_moe_weighted_reduce_flat_bf16(
-        inputs: *const f32,
+        inputs: *const c_void,
         topk_weights: *const f32,
         outputs: *mut c_void,
         num_tokens: i32,
         hidden: i32,
         topk: i32,
         stream: *mut c_void,
-    );
+    ) -> i32;
+
+    pub fn launch_moe_weighted_reduce_flat_bf16(
+        inputs: *const c_void,
+        topk_weights: *const f32,
+        outputs: *mut c_void,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    ) -> i32;
+
+    pub fn launch_moe_weighted_reduce_flat_f16_input(
+        inputs: *const c_void,
+        topk_weights: *const f32,
+        outputs: *mut c_void,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    ) -> i32;
+
+    pub fn launch_moe_weighted_reduce_flat_bf16_input(
+        inputs: *const c_void,
+        topk_weights: *const f32,
+        outputs: *mut c_void,
+        num_tokens: i32,
+        hidden: i32,
+        topk: i32,
+        stream: *mut c_void,
+    ) -> i32;
 
     /// Grouped MoE GEMM for Q8_0 weights
     pub fn launch_moe_grouped_gemm_q8_0(
@@ -627,6 +681,51 @@ extern "C" {
         k_padded: i32,
         act_type: i32,
         stream: *mut c_void,
+    );
+
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q8_0_q8_1,
+        launch_moe_gemv_lora_down_q8_0_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q4_0_q8_1,
+        launch_moe_gemv_lora_down_q4_0_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q4_1_q8_1,
+        launch_moe_gemv_lora_down_q4_1_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q5_0_q8_1,
+        launch_moe_gemv_lora_down_q5_0_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q5_1_q8_1,
+        launch_moe_gemv_lora_down_q5_1_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q8_1_q8_1,
+        launch_moe_gemv_lora_down_q8_1_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q2k_q8_1,
+        launch_moe_gemv_lora_down_q2k_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q3k_q8_1,
+        launch_moe_gemv_lora_down_q3k_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q4k_q8_1,
+        launch_moe_gemv_lora_down_q4k_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q5k_q8_1,
+        launch_moe_gemv_lora_down_q5k_q8_1
+    );
+    declare_moe_lora_decode!(
+        launch_moe_gemv_gate_up_pair_q6k_q8_1,
+        launch_moe_gemv_lora_down_q6k_q8_1
     );
 
     // Fused down+aggregate launchers

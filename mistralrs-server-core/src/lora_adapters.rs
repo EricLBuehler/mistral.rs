@@ -436,9 +436,9 @@ pub struct LoadLoraAdapterRequest {
     #[serde(default)]
     #[schema(value_type = Option<String>, example = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a")]
     pub expected_generation: Option<mistralrs_core::AdapterGenerationId>,
-    /// vLLM MoE layout flag. Only false is supported.
+    /// Accepted for vLLM compatibility. The adapter files determine the LoRA tensor layout.
     #[serde(default)]
-    #[schema(default = false, example = false)]
+    #[schema(default = false, example = true)]
     pub is_3d_lora_weight: bool,
     #[serde(default)]
     pub model: Option<String>,
@@ -775,35 +775,14 @@ pub(crate) async fn load_lora_adapter(
     payload: Result<Json<LoadLoraAdapterRequest>, JsonRejection>,
 ) -> Result<Json<LoraAdapterObject>, LoraAdapterApiError> {
     let request = lifecycle_json(payload)?;
+    validate_alias(&request.lora_name)?;
+    let policy = lora_load_policy(&request)?;
     let LoadLoraAdapterRequest {
         lora_name,
         lora_path,
-        load_inplace,
-        expected_generation,
-        is_3d_lora_weight,
         model,
+        ..
     } = request;
-    validate_alias(&lora_name)?;
-    if is_3d_lora_weight {
-        return Err(LoraAdapterApiError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "unsupported_lora_layout",
-            "is_3d_lora_weight is not supported",
-        ));
-    }
-    if expected_generation.is_some() && !load_inplace {
-        return Err(LoraAdapterApiError::new(
-            StatusCode::BAD_REQUEST,
-            "invalid_lora_load_policy",
-            "expected_generation requires load_inplace=true",
-        ));
-    }
-    let policy = match (load_inplace, expected_generation) {
-        (false, None) => LoraAdapterLoadPolicy::Create,
-        (true, None) => LoraAdapterLoadPolicy::Upsert,
-        (true, Some(generation)) => LoraAdapterLoadPolicy::CompareAndSwap(generation),
-        (false, Some(_)) => unreachable!(),
-    };
     let load_permit = config.try_begin_load()?;
     let adapter_path = PathBuf::from(lora_path);
     let model = normalize_model_id(model);
@@ -826,6 +805,24 @@ pub(crate) async fn load_lora_adapter(
         .await
         .map_err(|error| adapter_task_error("adapter load", error))??;
     Ok(Json(LoraAdapterObject::from_info(info, true)))
+}
+
+fn lora_load_policy(
+    request: &LoadLoraAdapterRequest,
+) -> Result<LoraAdapterLoadPolicy, LoraAdapterApiError> {
+    if request.expected_generation.is_some() && !request.load_inplace {
+        return Err(LoraAdapterApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid_lora_load_policy",
+            "expected_generation requires load_inplace=true",
+        ));
+    }
+    Ok(match (request.load_inplace, request.expected_generation) {
+        (false, None) => LoraAdapterLoadPolicy::Create,
+        (true, None) => LoraAdapterLoadPolicy::Upsert,
+        (true, Some(generation)) => LoraAdapterLoadPolicy::CompareAndSwap(generation),
+        (false, Some(_)) => unreachable!(),
+    })
 }
 
 #[utoipa::path(
@@ -1118,10 +1115,17 @@ mod tests {
             "lora_path": "production-v2",
             "load_inplace": true,
             "expected_generation": "0707070707070707070707070707070707070707070707070707070707070707",
-            "is_3d_lora_weight": false
+            "is_3d_lora_weight": true
         }))
         .unwrap();
         assert!(request.load_inplace);
+        assert!(request.is_3d_lora_weight);
+        assert_eq!(
+            lora_load_policy(&request).unwrap(),
+            LoraAdapterLoadPolicy::CompareAndSwap(mistralrs_core::AdapterGenerationId::from_bytes(
+                [7; 32]
+            ))
+        );
         assert_eq!(
             request.expected_generation,
             Some(mistralrs_core::AdapterGenerationId::from_bytes([7; 32]))

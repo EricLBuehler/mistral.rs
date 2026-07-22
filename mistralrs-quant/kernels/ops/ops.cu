@@ -946,9 +946,99 @@ extern "C" void fused_glu_f32(const float *a, const float *b, float *output,
   CUDA_CHECK(cudaGetLastError());
 }
 
+template <typename T>
+__global__ void
+fused_split_glu_kernel(const T *__restrict__ input, T *__restrict__ output,
+                       const uint32_t split_size,
+                       const uint64_t output_elements, const int activation) {
+  const uint64_t index =
+      static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= output_elements)
+    return;
+
+  const uint64_t row = index / split_size;
+  const uint32_t column = index - row * split_size;
+  const uint64_t gate_index = row * 2 * split_size + column;
+  T activated = (T)apply_glu_activation((float)input[gate_index], activation);
+  output[index] = activated * input[gate_index + split_size];
+}
+
+template <typename T, typename T4>
+__global__ void
+fused_split_glu_kernel_vec4(const T4 *__restrict__ input,
+                            T4 *__restrict__ output, const uint32_t split_vecs,
+                            const uint64_t output_vecs, const int activation) {
+  const uint64_t index =
+      static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= output_vecs)
+    return;
+
+  const uint64_t row = index / split_vecs;
+  const uint32_t column = index - row * split_vecs;
+  const uint64_t gate_index = row * 2 * split_vecs + column;
+  T4 gate = input[gate_index];
+  T4 up = input[gate_index + split_vecs];
+  T4 result;
+#pragma unroll
+  for (int element = 0; element < 4; ++element) {
+    T activated =
+        (T)apply_glu_activation((float)((T *)&gate)[element], activation);
+    ((T *)&result)[element] = activated * ((T *)&up)[element];
+  }
+  output[index] = result;
+}
+
+template <typename T, typename T4>
+void launch_fused_split_glu(const T *input, T *output, uint32_t rows,
+                            uint32_t split_size, int activation,
+                            cudaStream_t stream) {
+  if (rows == 0 || split_size == 0)
+    return;
+  constexpr int threads = 256;
+  const uintptr_t alignment =
+      reinterpret_cast<uintptr_t>(input) | reinterpret_cast<uintptr_t>(output);
+  if (split_size % 4 == 0 && (alignment & (alignof(T4) - 1)) == 0) {
+    const uint32_t split_vecs = split_size / 4;
+    const uint64_t output_vecs = static_cast<uint64_t>(rows) * split_vecs;
+    const int blocks = static_cast<int>((output_vecs + threads - 1) / threads);
+    fused_split_glu_kernel_vec4<T, T4><<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const T4 *>(input), reinterpret_cast<T4 *>(output),
+        split_vecs, output_vecs, activation);
+  } else {
+    const uint64_t output_elements = static_cast<uint64_t>(rows) * split_size;
+    const int blocks =
+        static_cast<int>((output_elements + threads - 1) / threads);
+    fused_split_glu_kernel<<<blocks, threads, 0, stream>>>(
+        input, output, split_size, output_elements, activation);
+  }
+  CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" void fused_split_glu_f16(const __half *input, __half *output,
+                                    uint32_t rows, uint32_t split_size,
+                                    int activation, cudaStream_t stream) {
+  launch_fused_split_glu<__half, uint64_t>(input, output, rows, split_size,
+                                           activation, stream);
+}
+
+extern "C" void fused_split_glu_bf16(const __nv_bfloat16 *input,
+                                     __nv_bfloat16 *output, uint32_t rows,
+                                     uint32_t split_size, int activation,
+                                     cudaStream_t stream) {
+  launch_fused_split_glu<__nv_bfloat16, uint64_t>(
+      input, output, rows, split_size, activation, stream);
+}
+
+extern "C" void fused_split_glu_f32(const float *input, float *output,
+                                    uint32_t rows, uint32_t split_size,
+                                    int activation, cudaStream_t stream) {
+  launch_fused_split_glu<float, float4>(input, output, rows, split_size,
+                                        activation, stream);
+}
+
 __global__ void softcap_f32_kernel(const float *__restrict__ input,
-                                   float *__restrict__ output,
-                                   const uint32_t N, const float cap) {
+                                   float *__restrict__ output, const uint32_t N,
+                                   const float cap) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= N) {
     return;
@@ -967,9 +1057,10 @@ __global__ void softcap_f16_to_f32_kernel(const __half *__restrict__ input,
   output[idx] = tanhf(value / cap) * cap;
 }
 
-__global__ void softcap_bf16_to_f32_kernel(
-    const __nv_bfloat16 *__restrict__ input, float *__restrict__ output,
-    const uint32_t N, const float cap) {
+__global__ void
+softcap_bf16_to_f32_kernel(const __nv_bfloat16 *__restrict__ input,
+                           float *__restrict__ output, const uint32_t N,
+                           const float cap) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= N) {
     return;
@@ -987,12 +1078,11 @@ extern "C" void softcap_f32(const float *input, float *output, uint32_t N,
 }
 
 extern "C" void softcap_f16_to_f32(const __half *input, float *output,
-                                   uint32_t N, float cap,
-                                   cudaStream_t stream) {
+                                   uint32_t N, float cap, cudaStream_t stream) {
   const int nthreads = 256;
   const int nblocks = (N + nthreads - 1) / nthreads;
-  softcap_f16_to_f32_kernel<<<nblocks, nthreads, 0, stream>>>(
-      input, output, N, cap);
+  softcap_f16_to_f32_kernel<<<nblocks, nthreads, 0, stream>>>(input, output, N,
+                                                              cap);
   CUDA_CHECK(cudaGetLastError());
 }
 
@@ -1001,7 +1091,7 @@ extern "C" void softcap_bf16_to_f32(const __nv_bfloat16 *input, float *output,
                                     cudaStream_t stream) {
   const int nthreads = 256;
   const int nblocks = (N + nthreads - 1) / nthreads;
-  softcap_bf16_to_f32_kernel<<<nblocks, nthreads, 0, stream>>>(
-      input, output, N, cap);
+  softcap_bf16_to_f32_kernel<<<nblocks, nthreads, 0, stream>>>(input, output, N,
+                                                               cap);
   CUDA_CHECK(cudaGetLastError());
 }

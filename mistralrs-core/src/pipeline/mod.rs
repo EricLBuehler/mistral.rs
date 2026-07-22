@@ -130,6 +130,68 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+pub(crate) fn validate_lora_loader_config(
+    adapters: Option<&[crate::LoraAdapterSpec]>,
+    runtime_config: Option<crate::LoraRuntimeConfig>,
+) -> anyhow::Result<()> {
+    if let Some(runtime_config) = runtime_config {
+        runtime_config.validate()?;
+    }
+    let Some(adapters) = adapters else {
+        return Ok(());
+    };
+    let mut aliases = std::collections::HashSet::new();
+    for adapter in adapters {
+        let alias = adapter.alias.trim();
+        if alias.is_empty() {
+            anyhow::bail!("LoRA adapter alias must not be empty");
+        }
+        if alias.len() > crate::MAX_LORA_ALIAS_BYTES {
+            anyhow::bail!(
+                "LoRA adapter alias must not exceed {} bytes",
+                crate::MAX_LORA_ALIAS_BYTES
+            );
+        }
+        if adapter.source.trim().is_empty() {
+            anyhow::bail!(
+                "LoRA adapter source for alias `{}` must not be empty",
+                adapter.alias
+            );
+        }
+        if adapter.revision().is_empty() {
+            anyhow::bail!(
+                "LoRA adapter revision for alias `{}` must not be empty",
+                adapter.alias
+            );
+        }
+        if adapter
+            .base_model_name
+            .as_deref()
+            .is_some_and(|model| model.trim().is_empty())
+        {
+            anyhow::bail!(
+                "LoRA adapter `{}` has an empty base_model_name",
+                adapter.alias
+            );
+        }
+        if !aliases.insert(alias) {
+            anyhow::bail!(
+                "LoRA adapter alias `{}` is specified more than once",
+                adapter.alias
+            );
+        }
+    }
+    if let Some(config) = runtime_config.filter(|config| aliases.len() > config.max_adapters) {
+        anyhow::bail!(
+            "LoRA adapter preload count {} exceeds the configured maximum {}",
+            aliases.len(),
+            config.max_adapters
+        );
+    }
+    Ok(())
+}
+
 pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,

@@ -501,6 +501,7 @@ mod tests {
             num_experts_per_tok: 2,
             hidden_size: HIDDEN,
             moe_intermediate_size: INTER,
+            expert_proj_names: super::super::config::ExpertProjNames::DEFAULT,
         };
         let comm = Arc::new(
             mistralrs_quant::Comm::from_device(

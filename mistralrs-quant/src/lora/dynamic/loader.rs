@@ -1,13 +1,22 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
+
+#[cfg(test)]
+use std::sync::Arc;
+
+mod expert;
 
 use candle_core::Result;
 
 use crate::{LoraConfig, Shard, ShardedVarBuilder};
 
-use super::{LoraLayerRegistry, LoraParallelism, LoraSiteHandle, LoraWeights};
+use self::expert::{
+    load_expert_site, plan_expert_site, ExpertSiteMeta, GateUpOrder, LoadedExpertProjection,
+};
+use super::{
+    DynamicLoraWeights, LoraExpertProjection, LoraExpertProjectionWeights, LoraExpertSiteHandle,
+    LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraParallelism, LoraSiteHandle,
+    LoraWeights,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DynamicLoraLoadPlan {
@@ -27,13 +36,13 @@ struct AdapterTensorPair {
 }
 
 struct AdapterTensorIndex {
-    pairs: BTreeMap<(String, String), AdapterTensorPair>,
+    pairs: BTreeMap<String, BTreeMap<String, AdapterTensorPair>>,
     tensor_names: BTreeSet<String>,
 }
 
 impl AdapterTensorIndex {
     fn new(names: Vec<String>) -> Self {
-        let mut pairs = BTreeMap::<(String, String), AdapterTensorPair>::new();
+        let mut pairs = BTreeMap::<String, BTreeMap<String, AdapterTensorPair>>::new();
         let tensor_names = names.iter().cloned().collect();
         for name in names {
             if split_lora_name(&name, "lora_embedding_A").is_some()
@@ -51,7 +60,8 @@ impl AdapterTensorIndex {
             let Some(key) = key else {
                 continue;
             };
-            let pair = pairs.entry(key).or_default();
+            let (prefix, suffix) = key;
+            let pair = pairs.entry(prefix).or_default().entry(suffix).or_default();
             if is_a {
                 pair.a = Some(name);
             } else {
@@ -66,11 +76,15 @@ impl AdapterTensorIndex {
 
     fn pair_for_site<'a>(&'a self, path: &str) -> Result<Option<(&'a str, &'a str)>> {
         let peft_path = format!("base_model.model.{path}");
-        let mut candidates = self
-            .pairs
-            .iter()
-            .filter(|((prefix, _), _)| prefix == path || prefix == &peft_path);
-        let Some(((prefix, suffix), pair)) = candidates.next() else {
+        let mut candidates = [path, peft_path.as_str()]
+            .into_iter()
+            .filter_map(|prefix| self.pairs.get(prefix).map(|pairs| (prefix, pairs)))
+            .flat_map(|(prefix, pairs)| {
+                pairs
+                    .iter()
+                    .map(move |(suffix, pair)| (prefix, suffix, pair))
+            });
+        let Some((prefix, suffix, pair)) = candidates.next() else {
             return Ok(None);
         };
         if candidates.next().is_some() {
@@ -130,10 +144,10 @@ fn site_load_spec<'a>(
     let Some((a_name, b_name)) = tensors.pair_for_site(path)? else {
         return Ok(None);
     };
-    if !config.targets_path(path) {
+    if !config.try_targets_path(path)? {
         candle_core::bail!("LoRA tensors for site `{path}` are not declared by target_modules");
     }
-    if config.excludes_path(path) {
+    if config.try_excludes_path(path)? {
         candle_core::bail!("LoRA tensors for site `{path}` are excluded by exclude_modules");
     }
     if path.split('.').any(|part| part == "experts") {
@@ -144,7 +158,7 @@ fn site_load_spec<'a>(
     }
 
     let spec = site.spec();
-    let rank = config.rank_for(path);
+    let rank = config.try_rank_for(path)?;
     let scale = config.scale_for(path)?;
     let (a_shard, b_shard) = match spec.parallelism() {
         LoraParallelism::Replicated => (Shard::default(), Shard::default()),
@@ -273,21 +287,56 @@ pub fn plan_dynamic_lora_weights(
         consumed.insert(load.a_name.to_string());
         consumed.insert(load.b_name.to_string());
     }
+    for site in registry.expert_sites() {
+        let Some(plan) = plan_expert_site(expert_site_meta(&site), config, &tensors, weights)?
+        else {
+            continue;
+        };
+        bytes = bytes
+            .checked_add(plan.bytes())
+            .ok_or_else(|| candle_core::Error::msg("LoRA tensor size overflow"))?;
+        consumed.extend(plan.consumed().iter().cloned());
+    }
     validate_consumption(&tensors, &consumed)?;
     Ok(DynamicLoraLoadPlan { bytes })
+}
+
+fn expert_site_meta(site: &LoraExpertSiteHandle) -> ExpertSiteMeta<'_> {
+    let spec = site.spec();
+    ExpertSiteMeta {
+        path: site.key().path(),
+        num_experts: spec.num_experts(),
+        hidden_size: spec.hidden_size(),
+        intermediate_size: spec.intermediate_size(),
+        gate_name: spec.name(LoraExpertProjection::Gate),
+        up_name: spec.name(LoraExpertProjection::Up),
+        down_name: spec.name(LoraExpertProjection::Down),
+        gate_up_order: match spec.gate_up_order() {
+            LoraGateUpOrder::Concatenated => GateUpOrder::Concatenated,
+            LoraGateUpOrder::Interleaved => GateUpOrder::Interleaved,
+        },
+        gate_up_output_shard: spec.gate_up_output_shard(),
+        down_input_shard: spec.down_input_shard(),
+        activation_dtype: site.activation_dtype(),
+        device: site.device(),
+    }
+}
+
+fn projection_weights(weights: LoadedExpertProjection) -> Result<LoraExpertProjectionWeights> {
+    LoraExpertProjectionWeights::new_loaded(weights.a, weights.b, weights.scales)
 }
 
 pub fn load_dynamic_lora_weights(
     registry: &LoraLayerRegistry,
     config: &LoraConfig,
     weights: &ShardedVarBuilder,
-) -> Result<Vec<(Arc<LoraSiteHandle>, LoraWeights)>> {
+) -> Result<DynamicLoraWeights> {
     config.validate_dynamic()?;
     let tensors = AdapterTensorIndex::new(weights.tensor_names().ok_or_else(|| {
         candle_core::Error::msg("dynamic LoRA loading requires an indexed tensor backend")
     })?);
 
-    let mut loaded = Vec::new();
+    let mut linear = Vec::new();
     let mut consumed = BTreeSet::new();
     for site in registry.sites() {
         let Some(load) = site_load_spec(&site, config, &tensors)? else {
@@ -310,10 +359,24 @@ pub fn load_dynamic_lora_weights(
         )?;
         consumed.insert(load.a_name.to_string());
         consumed.insert(load.b_name.to_string());
-        loaded.push((site, LoraWeights::new(a, b, load.scale)?));
+        linear.push((site, LoraWeights::new(a, b, load.scale)?));
+    }
+    let mut experts = Vec::new();
+    for site in registry.expert_sites() {
+        let Some(plan) = plan_expert_site(expert_site_meta(&site), config, &tensors, weights)?
+        else {
+            continue;
+        };
+        consumed.extend(plan.consumed().iter().cloned());
+        let loaded = load_expert_site(expert_site_meta(&site), plan, weights)?;
+        let gate = loaded.gate.map(projection_weights).transpose()?;
+        let up = loaded.up.map(projection_weights).transpose()?;
+        let down = loaded.down.map(projection_weights).transpose()?;
+        let expert_weights = LoraExpertWeights::new(&site, gate, up, down)?;
+        experts.push((site, expert_weights));
     }
     validate_consumption(&tensors, &consumed)?;
-    Ok(loaded)
+    Ok(DynamicLoraWeights { linear, experts })
 }
 
 #[cfg(test)]
@@ -323,6 +386,7 @@ mod tests {
     use candle_core::{DType, Device, Tensor};
 
     use super::*;
+    use crate::lora::dynamic::{LoraExpertProjectionNames, LoraExpertSiteSpec};
     use crate::{LoraLinearSpec, LoraSiteKey, ShardedSafeTensors};
 
     fn config(target: &str, rank: usize, alpha: f64) -> LoraConfig {
@@ -548,7 +612,81 @@ mod tests {
         registry.finalize()?;
 
         let loaded = load_dynamic_lora_weights(&registry, &config("q_proj", 1, 1.0), &weights)?;
-        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.linear.len(), 1);
+        assert!(loaded.experts.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn loads_compact_expert_site_from_safetensors_metadata() -> Result<()> {
+        let device = Device::Cpu;
+        let path = "model.layers.0.mlp.experts";
+        let tensors = [
+            (
+                format!("base_model.model.{path}.0.gate_proj.lora_A.weight"),
+                Tensor::new(&[[1f32, 2.]], &device)?,
+            ),
+            (
+                format!("base_model.model.{path}.0.gate_proj.lora_B.weight"),
+                Tensor::new(&[[3f32], [4.]], &device)?,
+            ),
+            (
+                format!("base_model.model.{path}.1.gate_proj.lora_A.weight"),
+                Tensor::new(&[[5f32, 6.]], &device)?,
+            ),
+            (
+                format!("base_model.model.{path}.1.gate_proj.lora_B.weight"),
+                Tensor::new(&[[7f32], [8.]], &device)?,
+            ),
+        ];
+        let directory = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let weights_path = directory.path().join("adapter_model.safetensors");
+        safetensors::serialize_to_file(
+            tensors.iter().map(|(name, tensor)| (name.as_str(), tensor)),
+            Some(HashMap::from([
+                ("format".to_string(), "pt".to_string()),
+                ("peft".to_string(), "lora".to_string()),
+            ])),
+            &weights_path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let weights = unsafe {
+            ShardedSafeTensors::sharded(
+                std::slice::from_ref(&weights_path),
+                DType::F32,
+                &device,
+                None,
+                Arc::new(|_| true),
+            )?
+        };
+        let registry = LoraLayerRegistry::new();
+        registry.register_expert(
+            LoraSiteKey::new(path),
+            LoraExpertSiteSpec::new(
+                2,
+                2,
+                2,
+                LoraExpertProjectionNames::new("gate_proj", "up_proj", "down_proj"),
+                Shard::default(),
+                Shard::default(),
+            )?,
+            DType::F32,
+            device,
+        )?;
+        registry.finalize()?;
+        let config = config("gate_proj", 1, 2.0);
+
+        assert_eq!(
+            plan_dynamic_lora_weights(&registry, &config, &weights)?.bytes(),
+            40
+        );
+        let loaded = load_dynamic_lora_weights(&registry, &config, &weights)?;
+        assert!(loaded.linear.is_empty());
+        assert_eq!(loaded.experts.len(), 1);
+        let gate = loaded.experts[0].1.gate().expect("gate weights");
+        assert_eq!(gate.a().dims(), &[2, 1, 2]);
+        assert_eq!(gate.b().dims(), &[2, 2, 1]);
+        assert_eq!(gate.scales().to_vec1::<f32>()?, vec![2., 2.]);
         Ok(())
     }
 
@@ -591,7 +729,7 @@ mod tests {
             48
         );
 
-        let mut loaded = load_dynamic_lora_weights(&registry, &config, &weights)?;
+        let mut loaded = load_dynamic_lora_weights(&registry, &config, &weights)?.linear;
         let (_, weights) = loaded.pop().expect("loaded registered LoRA site");
         assert!(loaded.is_empty());
         assert_eq!(
@@ -639,7 +777,7 @@ mod tests {
         registry.finalize()?;
 
         let mut loaded =
-            load_dynamic_lora_weights(&registry, &config("down_proj", 2, 2.0), &weights)?;
+            load_dynamic_lora_weights(&registry, &config("down_proj", 2, 2.0), &weights)?.linear;
         let (_, weights) = loaded.pop().expect("loaded registered LoRA site");
         assert!(loaded.is_empty());
         assert_eq!(
@@ -700,7 +838,7 @@ mod tests {
         registry.finalize()?;
 
         let loaded =
-            load_dynamic_lora_weights(&registry, &config("gate_up_proj", 2, 2.0), &weights)?;
+            load_dynamic_lora_weights(&registry, &config("gate_up_proj", 2, 2.0), &weights)?.linear;
         assert_eq!(loaded.len(), 2);
         let first_slice = loaded[0].0.key().slice().expect("fused slice");
         let second_slice = loaded[1].0.key().slice().expect("fused slice");
