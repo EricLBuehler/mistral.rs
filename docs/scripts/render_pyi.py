@@ -33,19 +33,31 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner", "CalibrationStatus"],
+        [
+            "Runner",
+            "CalibrationStatus",
+            "LoraAdapterError",
+            "LoraAdapterInfo",
+            "LoraResidentGenerationInfo",
+            "LoraRuntimeStatus",
+        ],
     ),
     (
         "Which",
         "which",
         "Variants that select which kind of model to load.",
-        ["Which"],
+        ["LoraAdapter", "Which"],
     ),
     (
         "Requests",
         "requests",
         "Request dataclasses passed to Runner methods.",
-        ["ChatCompletionRequest", "CompletionRequest", "EmbeddingRequest"],
+        [
+            "LoraAdapterGeneration",
+            "ChatCompletionRequest",
+            "CompletionRequest",
+            "EmbeddingRequest",
+        ],
     ),
     (
         "Responses",
@@ -151,6 +163,26 @@ def _unparse(node) -> str:
         return ast.unparse(node)
     except Exception:
         return ""
+
+
+def _field_default(node: ast.expr | None) -> str:
+    if not isinstance(node, ast.Call):
+        return _unparse(node) if node is not None else ""
+    if not isinstance(node.func, ast.Name) or node.func.id != "field":
+        return _unparse(node)
+
+    values = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+    default = values.get("default")
+    if default is None and "default_factory" in values:
+        rendered = f"factory: {_unparse(values['default_factory'])}"
+    else:
+        rendered = _unparse(default)
+    if (
+        isinstance(values.get("kw_only"), ast.Constant)
+        and values["kw_only"].value is True
+    ):
+        return f"{rendered} (keyword-only)"
+    return rendered
 
 
 def _is_enum(cls: ast.ClassDef) -> bool:
@@ -425,7 +457,7 @@ def _render_class(
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             name = item.target.id
             ftype = _unparse(item.annotation)
-            value = _unparse(item.value) if item.value is not None else ""
+            value = _field_default(item.value)
             fields.append((name, ftype, value))
         elif isinstance(item, ast.Assign):
             for t in item.targets:
@@ -508,13 +540,18 @@ def _render_index() -> str:
         "",
         "The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.",
         "",
+        ":::note[Release and current-source APIs]",
+        "This reference is generated from the current source tree. Dynamic LoRA lifecycle entries are newer than the published v0.9.0 package; use a [current source build](/mistral.rs/developer/from-source/) until the next release.",
+        ":::",
+        "",
         "## Install",
         "",
         "`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.",
         "",
         "```bash",
         "pip install mistralrs                                   # CPU / Metal (PyPI)",
-        'pip install "mistralrs==0.9.0+cuda128.sm89" \\          # NVIDIA (replace version, CUDA level, and SM)',
+        "# NVIDIA (replace version, CUDA level, and SM)",
+        'pip install "mistralrs==0.9.0+cuda128.sm89" \\',
         "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.0",
         "```",
         "",

@@ -11,18 +11,20 @@ use mistralrs_core::{
 };
 use mistralrs_server_core::{
     approvals::ApprovalBroker,
+    lora_adapters::runtime_lora_updates_enabled,
     mcp_server::{create_mcp_router, MCP_PROTOCOL_VERSION, MCP_ROUTE},
     metrics::{observe_http, ObservabilityState},
     mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
-    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES},
+    route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES, RUNTIME_LORA_API_ROUTES},
     types::SharedMistralRsState,
 };
 
 use crate::args::{
     AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
     GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
-    QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions, ServerOptions,
+    MultimodalOptions, QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions,
+    ServerOptions,
 };
 use crate::ui::build_ui_router;
 
@@ -197,6 +199,7 @@ pub async fn run_server(
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener = tcp_nodelay_listener(listener);
 
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
@@ -219,6 +222,7 @@ pub(crate) async fn spawn_mcp_server(
     let listener = tokio::net::TcpListener::bind(format!("{host}:{mcp_port}"))
         .await
         .with_context(|| format!("Failed to bind MCP server to {host}:{mcp_port}"))?;
+    let listener = tcp_nodelay_listener(listener);
     let router = create_mcp_router(mistralrs);
 
     info!("MCP server listening on http://{host}:{mcp_port}{MCP_ROUTE}");
@@ -230,6 +234,18 @@ pub(crate) async fn spawn_mcp_server(
         }
     });
     Ok(())
+}
+
+pub(crate) fn tcp_nodelay_listener(
+    listener: tokio::net::TcpListener,
+) -> impl axum::serve::Listener<Io = tokio::net::TcpStream, Addr = std::net::SocketAddr> {
+    use axum::serve::ListenerExt;
+
+    listener.tap_io(|stream| {
+        if let Err(error) = stream.set_nodelay(true) {
+            tracing::warn!("failed to set TCP_NODELAY on incoming connection: {error}");
+        }
+    })
 }
 
 pub(crate) fn log_api_surfaces(host: &str, port: u16) {
@@ -250,6 +266,9 @@ pub(crate) fn log_api_surfaces(host: &str, port: u16) {
     log_routes(MISTRALRS_API_ROUTES, RouteKind::Anthropic);
     debug!("Available additional mistral.rs routes:");
     log_routes(MISTRALRS_API_ROUTES, RouteKind::MistralRs);
+    if runtime_lora_updates_enabled() {
+        log_routes(RUNTIME_LORA_API_ROUTES, RouteKind::MistralRs);
+    }
 }
 
 fn log_routes(routes: &[RouteInfo], kind: RouteKind) {
@@ -279,7 +298,9 @@ pub(crate) fn convert_to_model_selected(
         } => {
             // If user explicitly specified a quantized format, handle it
             let format_type = format.format.unwrap_or(ModelFormat::Plain);
-            let has_lora = adapter.lora.is_some();
+            adapter.validate().map_err(anyhow::Error::msg)?;
+            let has_lora = adapter.dynamic_lora_enabled();
+            let has_legacy_lora = adapter.legacy_lora.is_some();
             let has_xlora = adapter.xlora.is_some();
 
             // For GGUF/GGML formats, delegate to text model conversion which has proper validation
@@ -307,11 +328,12 @@ pub(crate) fn convert_to_model_selected(
                         quantization,
                         device,
                         matformer,
+                        None,
                     );
                 }
                 ModelFormat::Plain => {
                     // For plain format with adapters, also use text model conversion
-                    if has_lora || has_xlora {
+                    if has_lora || has_legacy_lora || has_xlora {
                         return convert_text_model(
                             model,
                             format,
@@ -319,6 +341,7 @@ pub(crate) fn convert_to_model_selected(
                             quantization,
                             device,
                             matformer,
+                            Some(multimodal),
                         );
                     }
                 }
@@ -359,42 +382,63 @@ pub(crate) fn convert_to_model_selected(
             quantization,
             device,
             cache: _,
-        } => convert_text_model(model, format, adapter, quantization, device, matformer),
+        } => convert_text_model(
+            model,
+            format,
+            adapter,
+            quantization,
+            device,
+            matformer,
+            None,
+        ),
 
         ModelType::Multimodal {
             model,
             format: _,
-            adapter: _,
+            adapter,
             quantization,
             device,
             cache: _,
             multimodal,
-        } => Ok(ModelSelected::MultimodalPlain {
-            model_id: model.model_id.clone(),
-            tokenizer_json: model
-                .tokenizer
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            arch: None,
-            dtype: model.dtype,
-            topology: device
-                .topology
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            write_uqff: None,
-            from_uqff: quantization.from_uqff.clone(),
-            max_edge: multimodal.max_edge,
-            calibration_file: quantization.calibration_file.clone(),
-            imatrix: quantization.imatrix.clone(),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
-            max_num_images: multimodal.max_num_images.unwrap_or(1),
-            max_image_length: multimodal.max_image_length.unwrap_or(1024),
-            hf_cache_path: device.hf_cache.clone(),
-            matformer_config_path: matformer.config_path.clone(),
-            matformer_slice_name: matformer.slice_name.clone(),
-            organization: quantization.isq_organization,
-        }),
+        } => {
+            adapter.validate().map_err(anyhow::Error::msg)?;
+            if adapter.dynamic_lora_enabled() {
+                anyhow::bail!(
+                    "Dynamic LoRA for Qwen3.5/3.6 MoE is available through the auto model type; vision-tower adapters and other multimodal architectures are not supported"
+                );
+            }
+            if adapter.legacy_lora.is_some() || adapter.xlora.is_some() {
+                anyhow::bail!(
+                    "Legacy LoRA and X-LoRA adapters are currently supported only for text models"
+                );
+            }
+            Ok(ModelSelected::MultimodalPlain {
+                model_id: model.model_id.clone(),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                arch: None,
+                dtype: model.dtype,
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                write_uqff: None,
+                from_uqff: quantization.from_uqff.clone(),
+                max_edge: multimodal.max_edge,
+                calibration_file: quantization.calibration_file.clone(),
+                imatrix: quantization.imatrix.clone(),
+                max_seq_len: device.max_seq_len,
+                max_batch_size: device.max_batch_size,
+                max_num_images: multimodal.max_num_images.unwrap_or(1),
+                max_image_length: multimodal.max_image_length.unwrap_or(1024),
+                hf_cache_path: device.hf_cache.clone(),
+                matformer_config_path: matformer.config_path.clone(),
+                matformer_slice_name: matformer.slice_name.clone(),
+                organization: quantization.isq_organization,
+            })
+        }
 
         ModelType::Diffusion { model, device: _ } => Ok(ModelSelected::DiffusionPlain {
             model_id: model.model_id.clone(),
@@ -444,14 +488,17 @@ fn convert_text_model(
     quantization: &QuantizationOptions,
     device: &DeviceOptions,
     matformer: &MatformerSelection,
+    multimodal: Option<&MultimodalOptions>,
 ) -> Result<ModelSelected> {
+    adapter.validate().map_err(anyhow::Error::msg)?;
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
-    let has_lora = adapter.lora.is_some();
+    let has_lora = adapter.dynamic_lora_enabled();
+    let has_legacy_lora = adapter.legacy_lora.is_some();
     let has_xlora = adapter.xlora.is_some();
 
-    match (format_type, has_lora, has_xlora) {
+    match (format_type, has_lora, has_legacy_lora, has_xlora) {
         // Plain format
-        (ModelFormat::Plain, false, false) => Ok(ModelSelected::Plain {
+        (ModelFormat::Plain, false, false, false) => Ok(ModelSelected::Plain {
             model_id: model.model_id.clone(),
             tokenizer_json: model
                 .tokenizer
@@ -475,27 +522,36 @@ fn convert_text_model(
             matformer_slice_name: matformer.slice_name.clone(),
         }),
 
-        (ModelFormat::Plain, true, false) => Ok(ModelSelected::Lora {
-            model_id: Some(model.model_id.clone()),
+        (ModelFormat::Plain, true, false, false) => Ok(ModelSelected::Lora {
+            model_id: model.model_id.clone(),
             tokenizer_json: model
                 .tokenizer
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            adapter_model_id: adapter.lora.clone().unwrap_or_default(),
+            adapters: adapter.lora.clone(),
+            runtime_config: adapter.lora_runtime_config(),
             arch: model.arch.clone(),
             dtype: model.dtype,
             topology: device
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
+            organization: quantization.isq_organization,
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
+            imatrix: quantization.imatrix.clone(),
+            calibration_file: quantization.calibration_file.clone(),
+            max_edge: multimodal.and_then(|options| options.max_edge),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
+            max_num_images: multimodal.and_then(|options| options.max_num_images),
+            max_image_length: multimodal.and_then(|options| options.max_image_length),
             hf_cache_path: device.hf_cache.clone(),
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
         }),
 
-        (ModelFormat::Plain, false, true) => Ok(ModelSelected::XLora {
+        (ModelFormat::Plain, false, false, true) => Ok(ModelSelected::XLora {
             model_id: Some(model.model_id.clone()),
             tokenizer_json: model
                 .tokenizer
@@ -522,7 +578,7 @@ fn convert_text_model(
         }),
 
         // GGUF format - quantized_filename is required String
-        (ModelFormat::Gguf, false, false) => Ok(ModelSelected::GGUF {
+        (ModelFormat::Gguf, false, false, false) => Ok(ModelSelected::GGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts
@@ -538,16 +594,16 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        (ModelFormat::Gguf, true, false) => Ok(ModelSelected::LoraGGUF {
+        (ModelFormat::Gguf, false, true, false) => Ok(ModelSelected::LoraGGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts
                 .quantized_file
                 .clone()
                 .context("GGUF model type requires `quantized-filename` to be specified")?,
-            adapters_model_id: adapter.lora.clone().unwrap_or_default(),
+            adapters_model_id: adapter.legacy_lora.clone().unwrap_or_default(),
             order: adapter
-                .xlora_order
+                .legacy_lora_order
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -560,7 +616,7 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        (ModelFormat::Gguf, false, true) => Ok(ModelSelected::XLoraGGUF {
+        (ModelFormat::Gguf, false, false, true) => Ok(ModelSelected::XLoraGGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts
@@ -584,7 +640,7 @@ fn convert_text_model(
         }),
 
         // GGML format
-        (ModelFormat::Ggml, false, false) => Ok(ModelSelected::GGML {
+        (ModelFormat::Ggml, false, false, false) => Ok(ModelSelected::GGML {
             tok_model_id: format_opts
                 .tok_model_id
                 .clone()
@@ -608,7 +664,7 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        (ModelFormat::Ggml, true, false) => Ok(ModelSelected::LoraGGML {
+        (ModelFormat::Ggml, false, true, false) => Ok(ModelSelected::LoraGGML {
             tok_model_id: Some(
                 format_opts
                     .tok_model_id
@@ -624,9 +680,9 @@ fn convert_text_model(
                 .quantized_file
                 .clone()
                 .context("GGUF model type requires `quantized-filename` to be specified")?,
-            adapters_model_id: adapter.lora.clone().unwrap_or_default(),
+            adapters_model_id: adapter.legacy_lora.clone().unwrap_or_default(),
             order: adapter
-                .xlora_order
+                .legacy_lora_order
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_default(),
@@ -640,7 +696,7 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        (ModelFormat::Ggml, false, true) => Ok(ModelSelected::XLoraGGML {
+        (ModelFormat::Ggml, false, false, true) => Ok(ModelSelected::XLoraGGML {
             tok_model_id: Some(
                 format_opts
                     .tok_model_id
@@ -673,7 +729,15 @@ fn convert_text_model(
             max_batch_size: device.max_batch_size,
         }),
 
-        _ => anyhow::bail!("Cannot use both --lora and --xlora simultaneously"),
+        (ModelFormat::Plain, false, true, false) => {
+            anyhow::bail!("--legacy-lora is only supported with raw GGUF or GGML models")
+        }
+        (ModelFormat::Gguf | ModelFormat::Ggml, true, false, false) => {
+            anyhow::bail!(
+                "dynamic --lora adapters are not supported with raw GGUF or GGML models; use --legacy-lora"
+            )
+        }
+        _ => anyhow::bail!("dynamic LoRA, legacy LoRA, and X-LoRA are mutually exclusive"),
     }
 }
 
@@ -1119,10 +1183,188 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
 
 #[cfg(test)]
 mod tests {
+    use axum::serve::Listener;
+    use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, ModelDType};
     use mistralrs_sandbox::NetworkMode;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::args::{SandboxNetworkMode, SandboxProfileArg};
+
+    fn test_model() -> ModelSourceOptions {
+        ModelSourceOptions {
+            model_id: "org/base".to_string(),
+            tokenizer: None,
+            arch: None,
+            dtype: ModelDType::Auto,
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_connections_enable_tcp_nodelay() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut listener = tcp_nodelay_listener(listener);
+        let connect = tokio::net::TcpStream::connect(address);
+
+        let ((stream, _), client) = tokio::join!(listener.accept(), connect);
+
+        client.unwrap();
+        assert!(stream.nodelay().unwrap());
+    }
+
+    #[test]
+    fn enable_lora_builds_an_empty_dynamic_runtime() {
+        let adapter = AdapterOptions {
+            enable_lora: true,
+            ..AdapterOptions::default()
+        };
+        let selected = convert_text_model(
+            &test_model(),
+            &FormatOptions::default(),
+            &adapter,
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            mistralrs_core::get_auto_device_map_params(&selected).unwrap(),
+            AutoDeviceMapParams::Text { .. }
+        ));
+        match selected {
+            ModelSelected::Lora {
+                adapters,
+                runtime_config,
+                organization,
+                imatrix,
+                calibration_file,
+                max_edge,
+                max_num_images,
+                max_image_length,
+                matformer_config_path,
+                matformer_slice_name,
+                ..
+            } => {
+                assert!(adapters.is_empty());
+                assert_eq!(runtime_config, adapter.lora_runtime_config());
+                assert!(organization.is_none());
+                assert!(imatrix.is_none());
+                assert!(calibration_file.is_none());
+                assert!(max_edge.is_none());
+                assert!(max_num_images.is_none());
+                assert!(max_image_length.is_none());
+                assert!(matformer_config_path.is_none());
+                assert!(matformer_slice_name.is_none());
+            }
+            _ => panic!("expected dynamic LoRA model"),
+        }
+    }
+
+    #[test]
+    fn auto_lora_preserves_multimodal_and_loading_options() {
+        let adapter = AdapterOptions {
+            enable_lora: true,
+            ..AdapterOptions::default()
+        };
+        let quantization = QuantizationOptions {
+            from_uqff: Some("q4k-0.uqff".to_string()),
+            isq_organization: Some(IsqOrganization::MoeExpertsOnly),
+            imatrix: Some(PathBuf::from("model.imatrix")),
+            ..QuantizationOptions::default()
+        };
+        let device = DeviceOptions {
+            max_seq_len: 4096,
+            max_batch_size: 7,
+            ..DeviceOptions::default()
+        };
+        let matformer = MatformerSelection {
+            config_path: Some(PathBuf::from("matformer.csv")),
+            slice_name: Some("slice".to_string()),
+        };
+        let multimodal = MultimodalOptions {
+            max_edge: Some(2048),
+            max_num_images: Some(5),
+            max_image_length: Some(1536),
+        };
+        let model_type = ModelType::Auto {
+            model: test_model(),
+            format: FormatOptions::default(),
+            adapter,
+            quantization,
+            device,
+            cache: crate::args::CacheOptions::default(),
+            multimodal,
+        };
+        let selected = convert_to_model_selected(&model_type, &matformer).unwrap();
+
+        match mistralrs_core::get_auto_device_map_params(&selected).unwrap() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 4096);
+                assert_eq!(max_batch_size, 7);
+                assert_eq!(max_image_shape, (1536, 1536));
+                assert_eq!(max_num_images, 5);
+            }
+            _ => panic!("expected multimodal device-map parameters"),
+        }
+        match selected {
+            ModelSelected::Lora {
+                organization,
+                from_uqff,
+                imatrix,
+                max_edge,
+                max_num_images,
+                max_image_length,
+                matformer_config_path,
+                matformer_slice_name,
+                ..
+            } => {
+                assert!(matches!(
+                    organization,
+                    Some(IsqOrganization::MoeExpertsOnly)
+                ));
+                assert_eq!(from_uqff.as_deref(), Some("q4k-0.uqff"));
+                assert_eq!(imatrix, Some(PathBuf::from("model.imatrix")));
+                assert_eq!(max_edge, Some(2048));
+                assert_eq!(max_num_images, Some(5));
+                assert_eq!(max_image_length, Some(1536));
+                assert_eq!(matformer_config_path, Some(PathBuf::from("matformer.csv")));
+                assert_eq!(matformer_slice_name.as_deref(), Some("slice"));
+            }
+            _ => panic!("expected dynamic LoRA model"),
+        }
+    }
+
+    #[test]
+    fn dynamic_lora_is_rejected_for_raw_formats() {
+        let adapter = AdapterOptions {
+            lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+            ..AdapterOptions::default()
+        };
+        let format = FormatOptions {
+            format: Some(ModelFormat::Gguf),
+            quantized_file: Some("model.gguf".to_string()),
+            ..FormatOptions::default()
+        };
+        let error = convert_text_model(
+            &test_model(),
+            &format,
+            &adapter,
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("--legacy-lora"));
+    }
 
     #[test]
     fn sandbox_off_returns_none() {

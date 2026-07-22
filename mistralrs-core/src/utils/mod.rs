@@ -172,6 +172,9 @@ macro_rules! handle_pipeline_forward_error {
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                             agentic_tool_calls: None,
                             files: None,
                             session_id: None,
@@ -199,6 +202,9 @@ macro_rules! handle_pipeline_forward_error {
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "text_completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                         };
 
                         if let Err(send_err) = seq.responder()

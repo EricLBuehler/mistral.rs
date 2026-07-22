@@ -34,15 +34,16 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        apply_model_override, create_response_channel, request_model_override,
+        send_request_with_model, BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
     },
     input_files::{resolve_input_file, InputFileSpec},
+    lora_adapters::resolve_lora_adapter_model,
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
-        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
-        OpenAiToolSurface, ResponseFormat,
+        ChatCompletionChunkResponseBody, ChatCompletionRequest, ChatCompletionResponseBody,
+        Grammar, JsonSchemaResponseFormat, MessageInnerContent, OpenAiToolSurface, ResponseFormat,
     },
     skills::SkillStore,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
@@ -1065,6 +1066,7 @@ pub async fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            adapter: oairequest.adapter.map(Into::into),
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
@@ -1077,7 +1079,14 @@ pub async fn parse_request(
     tag = "Mistral.rs",
     path = "/v1/chat/completions",
     request_body = ChatCompletionRequest,
-    responses((status = 200, description = "Chat completions"))
+    responses((
+        status = 200,
+        description = "Chat completion JSON or server-sent event chunks",
+        content(
+            (ChatCompletionResponseBody = "application/json"),
+            (ChatCompletionChunkResponseBody = "text/event-stream")
+        )
+    ))
 )]
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
@@ -1086,6 +1095,14 @@ pub async fn chatcompletions(
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
+    let requested_model = oairequest.model.clone();
+
+    if let Err(error) =
+        resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
+    {
+        return ChatCompletionResponder::ValidationError(Box::new(JsonError::new(error)));
+    }
+    let model_override = request_model_override(requested_model, &oairequest.model);
 
     // Apply server-level default for max_tool_rounds (per-request value takes priority)
     oairequest.max_tool_rounds = oairequest
@@ -1147,13 +1164,26 @@ pub async fn chatcompletions(
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
+        if matches!(
+            &e,
+            mistralrs_core::MistralRsError::LoraAdapter(_)
+                | mistralrs_core::MistralRsError::ModelNotFound(_)
+        ) {
+            return ChatCompletionResponder::ValidationError(Box::new(e));
+        }
         return handle_error(state, e.into());
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_streamer(rx, state, None, None))
+        let on_chunk = model_override.map(|model| {
+            Box::new(move |mut response: ChatCompletionChunkResponse| {
+                apply_model_override(&mut response.model, Some(&model));
+                response
+            }) as ChatCompletionOnChunkCallback
+        });
+        ChatCompletionResponder::Sse(create_streamer(rx, state, on_chunk, None))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response_with_model(&mut rx, state, model_override.as_deref()).await
     }
 }
 
@@ -1183,6 +1213,14 @@ pub fn create_streamer(
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
+) -> ChatCompletionResponder {
+    process_non_streaming_response_with_model(rx, state, None).await
+}
+
+async fn process_non_streaming_response_with_model(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+    model_override: Option<&str>,
 ) -> ChatCompletionResponder {
     let mut tool_call_records = Vec::new();
     let mut pending_args = std::collections::HashMap::new();
@@ -1224,6 +1262,7 @@ pub async fn process_non_streaming_response(
                 if !files.is_empty() {
                     response.files = Some(files);
                 }
+                apply_model_override(&mut response.model, model_override);
                 return match_responses(state, Response::Done(response));
             }
             Some(Response::ModelError(msg, response)) => {
@@ -1234,6 +1273,7 @@ pub async fn process_non_streaming_response(
                 if !files.is_empty() {
                     response.files = Some(files);
                 }
+                apply_model_override(&mut response.model, model_override);
                 return match_responses(state, Response::ModelError(msg, response));
             }
             Some(response) => return match_responses(state, response),

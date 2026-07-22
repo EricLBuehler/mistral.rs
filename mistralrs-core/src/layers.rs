@@ -3148,7 +3148,7 @@ impl Mlp {
             comm,
             vb.pp("up_proj"),
         )?;
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Self {
             gate,
@@ -3189,7 +3189,7 @@ impl Mlp {
 
         let gate = gate_up_projs[0].to_owned();
         let up = gate_up_projs[1].to_owned();
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Self {
             gate,
@@ -3278,7 +3278,7 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[&*gate, &*up])?;
+        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
 
         Ok(Box::new(Self {
             gate,

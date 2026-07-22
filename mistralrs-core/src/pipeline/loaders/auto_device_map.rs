@@ -424,3 +424,62 @@ pub fn get_device_layers(
     }
     Ok(DeviceMapMetadata::from_num_device_layers(mappings))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_params_promote_to_multimodal_defaults_after_detection() {
+        let params = AutoDeviceMapParams::Text {
+            max_seq_len: 4096,
+            max_batch_size: 7,
+        };
+
+        match params.maybe_promote_to_multimodal() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 4096);
+                assert_eq!(max_batch_size, 7);
+                assert_eq!(
+                    max_image_shape,
+                    (
+                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                    )
+                );
+                assert_eq!(max_num_images, AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES);
+            }
+            AutoDeviceMapParams::Text { .. } => panic!("expected multimodal parameters"),
+        }
+    }
+
+    #[test]
+    fn multimodal_params_preserve_explicit_limits_after_detection() {
+        let params = AutoDeviceMapParams::Multimodal {
+            max_seq_len: 8192,
+            max_batch_size: 3,
+            max_image_shape: (1536, 1024),
+            max_num_images: 5,
+        };
+
+        match params.maybe_promote_to_multimodal() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 8192);
+                assert_eq!(max_batch_size, 3);
+                assert_eq!(max_image_shape, (1536, 1024));
+                assert_eq!(max_num_images, 5);
+            }
+            AutoDeviceMapParams::Text { .. } => panic!("expected multimodal parameters"),
+        }
+    }
+}

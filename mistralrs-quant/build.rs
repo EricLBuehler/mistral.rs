@@ -28,6 +28,10 @@ const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
 include!("src/metal_kernels/source_set.rs");
 
 #[cfg(feature = "cuda")]
+#[path = "src/build_support/cuda_headers.rs"]
+mod cuda_headers;
+
+#[cfg(feature = "cuda")]
 #[allow(unused)]
 fn cuda_version_from_build_system() -> (usize, usize) {
     let output = std::process::Command::new("nvcc")
@@ -71,7 +75,7 @@ fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usiz
     let cuda_code = major * 100 + minor;
     ((80..90).contains(&compute_cap) && cuda_code >= 1302)
         || (compute_cap == 90 && cuda_code >= 1303)
-        || (compute_cap >= 100 && cuda_code >= 1301)
+        || (compute_cap >= 100 && cuda_code >= 1302)
 }
 
 fn main() -> Result<(), String> {
@@ -87,7 +91,7 @@ fn main() -> Result<(), String> {
 
     #[cfg(feature = "cuda")]
     {
-        use std::{path::PathBuf, vec};
+        use std::{path::Path, path::PathBuf, vec};
         const CUDA_NVCC_FLAGS: Option<&'static str> = option_env!("CUDA_NVCC_FLAGS");
 
         println!("cargo:rerun-if-changed=build.rs");
@@ -95,8 +99,18 @@ fn main() -> Result<(), String> {
         println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
 
+        let header_files = cuda_headers::find(Path::new("kernels")).map_err(|e| e.to_string())?;
+        for header_file in &header_files {
+            println!("cargo:rerun-if-changed={}", header_file.display());
+        }
+        let header_hash_arg = format!(
+            "-DMISTRALRS_QUANT_CUDA_HEADER_HASH=0x{:016x}",
+            cuda_headers::hash(&header_files).map_err(|e| e.to_string())?
+        );
+
         let mut builder = cudaforge::KernelBuilder::new()
             .source_glob("kernels/*/*.cu")
+            .watch(["kernels"])
             .out_dir(build_dir.clone())
             .arg("-std=c++17")
             .arg("-O3")
@@ -109,7 +123,8 @@ fn main() -> Result<(), String> {
             .arg("--use_fast_math")
             .arg("--verbose")
             .arg("--compiler-options")
-            .arg("-fPIC");
+            .arg("-fPIC")
+            .arg(&header_hash_arg);
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags
@@ -208,12 +223,12 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=cuda_ge_13000");
         }
 
-        let cuda_ge_131 = major > 13 || (major == 13 && minor >= 1);
+        let cuda_ge_132 = major > 13 || (major == 13 && minor >= 2);
         let cutile_supported = cutile_supported_for_build_cuda(major, minor, compute_cap);
         if std::env::var("CARGO_FEATURE_CUTILE").is_ok() {
-            if !cuda_ge_131 {
+            if !cuda_ge_132 {
                 panic!(
-                    "the `cutile` feature requires CUDA >= 13.1 to build (found {major}.{minor}); \
+                    "the `cutile` feature requires CUDA >= 13.2 to build (found {major}.{minor}); \
                      build without `--features cutile`"
                 );
             } else if !cutile_supported {

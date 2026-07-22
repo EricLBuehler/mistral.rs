@@ -3495,6 +3495,13 @@ pub fn split_mul_and_act_order(
             "split_mul_and_act expected last dim {expected_last_dim}, got {last_dim}"
         );
     }
+    if order == GatedActivationOrder::GateUp
+        && matches!(xs.dtype(), DType::F16 | DType::BF16 | DType::F32)
+    {
+        if let Some(activation_type) = glu_activation_type(act) {
+            return mistralrs_quant::fused_split_glu(xs, split_size, activation_type);
+        }
+    }
 
     let first = xs.narrow(D::Minus1, 0, split_size)?;
     let second = xs.narrow(D::Minus1, split_size, split_size)?;
@@ -3507,11 +3514,12 @@ pub fn split_mul_and_act_order(
 #[derive(Clone)]
 pub(crate) struct MergedDenseProjection {
     proj: Arc<dyn mistralrs_quant::QuantMethod>,
+    originals: Vec<Arc<dyn mistralrs_quant::QuantMethod>>,
     output_dims: Vec<usize>,
 }
 
 impl MergedDenseProjection {
-    pub(crate) fn new(projs: &[&dyn mistralrs_quant::QuantMethod]) -> Result<Option<Self>> {
+    pub(crate) fn new(projs: &[Arc<dyn mistralrs_quant::QuantMethod>]) -> Result<Option<Self>> {
         // Deferred capture (UQFF writes, imatrix) tracks the constituent layers; merging would
         // bypass their forwards, leaving stats empty and runtime swaps unobserved.
         if mistralrs_quant::get_immediate_isq()
@@ -3564,11 +3572,19 @@ impl MergedDenseProjection {
 
         Ok(Some(Self {
             proj: Arc::new(proj),
+            originals: projs.to_vec(),
             output_dims,
         }))
     }
 
     pub(crate) fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
+        if self
+            .originals
+            .iter()
+            .any(|proj| proj.is_dynamic_lora_active())
+        {
+            return self.originals.iter().map(|proj| proj.forward(xs)).collect();
+        }
         let ys = self.proj.forward(xs)?;
         let mut parts = Vec::with_capacity(self.output_dims.len());
         let mut offset = 0;
@@ -3655,7 +3671,70 @@ pub(crate) fn qkv_projections(
     ))
 }
 
+#[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Tensor};
+    use candle_nn::Linear;
+    use mistralrs_quant::{
+        maybe_wrap_dynamic_lora, with_lora_execution, LoraExecution, LoraLayerRegistry,
+        LoraLinearSpec, LoraWeights, QuantMethod, QuantMethodConfig, ShardedSafeTensors,
+        UnquantLinear,
+    };
+
+    use super::MergedDenseProjection;
+
+    fn unquant(weight: &[[f32; 2]; 2]) -> candle_core::Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(Tensor::new(weight, &Device::Cpu)?, None)),
+        )?))
+    }
+
+    #[test]
+    fn merged_projection_uses_dynamic_lora_constituents_when_active() -> candle_core::Result<()> {
+        let registry = Arc::new(LoraLayerRegistry::new());
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_lora_registry(registry.clone());
+        let gate = maybe_wrap_dynamic_lora(
+            &vb.pp("gate"),
+            unquant(&[[1., 0.], [0., 1.]])?,
+            LoraLinearSpec::replicated(2, 2),
+        )?;
+        let up = maybe_wrap_dynamic_lora(
+            &vb.pp("up"),
+            unquant(&[[1., 1.], [1., -1.]])?,
+            LoraLinearSpec::replicated(2, 2),
+        )?;
+        registry.finalize()?;
+        let merged = MergedDenseProjection::new(&[gate, up])?.expect("mergeable projections");
+        let input = Tensor::new(&[[2f32, 3.]], &Device::Cpu)?;
+        let base = merged.forward(&input)?;
+        assert_eq!(base[0].to_vec2::<f32>()?, vec![vec![2., 3.]]);
+        assert_eq!(base[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
+
+        let gate_site = registry
+            .sites()
+            .into_iter()
+            .find(|site| site.key().path() == "gate")
+            .expect("gate site");
+        let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
+        execution.insert(
+            &gate_site,
+            0,
+            LoraWeights::new(
+                Tensor::new(&[[1f32, 0.]], &Device::Cpu)?,
+                Tensor::new(&[[1f32], [0.]], &Device::Cpu)?,
+                2.0,
+            )?,
+        )?;
+        let active = with_lora_execution(Some(Arc::new(execution)), || merged.forward(&input))?;
+        assert_eq!(active[0].to_vec2::<f32>()?, vec![vec![6., 3.]]);
+        assert_eq!(active[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
+        Ok(())
+    }
+
     #[test]
     fn test_topk() {
         use crate::ops::{TopKLastDimOp, TopKOutput};

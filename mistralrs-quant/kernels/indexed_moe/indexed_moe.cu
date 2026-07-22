@@ -1176,6 +1176,164 @@ static __device__ __forceinline__ float silu(float x) {
   return x / (1.0f + expf(-x));
 }
 
+enum MoeOutputType : int {
+  MOE_OUTPUT_F32 = 0,
+  MOE_OUTPUT_F16 = 1,
+  MOE_OUTPUT_BF16 = 2,
+};
+
+static __device__ __forceinline__ void
+moe_store_output(void *outputs, size_t index, int output_type, float value) {
+  if (output_type == MOE_OUTPUT_F32) {
+    static_cast<float *>(outputs)[index] = value;
+  } else if (output_type == MOE_OUTPUT_F16) {
+    static_cast<half *>(outputs)[index] = __float2half_rn(value);
+  } else {
+    static_cast<__nv_bfloat16 *>(outputs)[index] = __float2bfloat16_rn(value);
+  }
+}
+
+template <int qk, int qi, typename block_q_t, int vdr,
+          vec_dot_q_cuda_t vec_dot_q_cuda>
+__device__ void moe_gemv_gate_up_pair_impl(
+    const void *__restrict__ gate_weights, const void *__restrict__ up_weights,
+    const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, void *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int num_experts, const int k_padded, const int output_type) {
+  constexpr int ROWS_PER_WARP = 2;
+  constexpr int NWARPS = 4;
+  constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;
+
+  const int warp_id = threadIdx.y;
+  const int row0 = ROWS_PER_BLOCK * blockIdx.x + warp_id * ROWS_PER_WARP;
+  const int current_topk = blockIdx.y;
+  const int current_batch = blockIdx.z;
+
+  if (row0 >= n)
+    return;
+
+  const int task_id = current_batch * topk + current_topk;
+  const unsigned int expert_id = indices[task_id];
+  const size_t output_base = (size_t)task_id * 2 * n;
+  if (expert_id >= (unsigned int)num_experts) {
+    for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
+      if (threadIdx.x == 0) {
+        moe_store_output(all_outputs, output_base + row0 + r, output_type,
+                         0.0f);
+        moe_store_output(all_outputs, output_base + n + row0 + r, output_type,
+                         0.0f);
+      }
+    }
+    return;
+  }
+  const size_t blocks_per_row = ((size_t)k + qk - 1) / qk;
+  const size_t expert_stride_bytes =
+      (size_t)n * blocks_per_row * sizeof(block_q_t);
+  const size_t input_stride_bytes =
+      (size_t)k_padded / QK8_1 * sizeof(block_q8_1);
+
+  const block_q8_1 *x =
+      (const block_q8_1 *)((const char *)all_inputs +
+                           (size_t)current_batch * input_stride_bytes);
+  const block_q_t *gate_w =
+      (const block_q_t *)((const char *)gate_weights +
+                          (size_t)expert_id * expert_stride_bytes);
+  const block_q_t *up_w =
+      (const block_q_t *)((const char *)up_weights +
+                          (size_t)expert_id * expert_stride_bytes);
+
+  constexpr int blocks_per_iter = vdr * WARP_SIZE / qi;
+  const int blocks_per_row_x = (int)blocks_per_row;
+  for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
+    const int row = row0 + r;
+    float gate_sum = 0.0f;
+    float up_sum = 0.0f;
+
+    for (int kbx = threadIdx.x / (qi / vdr); kbx < blocks_per_row_x;
+         kbx += blocks_per_iter) {
+      const int kby = kbx * (qk / QK8_1);
+      const int kqs = vdr * (threadIdx.x % (qi / vdr));
+      gate_sum += vec_dot_q_cuda(&gate_w[kbx + (size_t)row * blocks_per_row],
+                                 &x[kby], kqs);
+      up_sum += vec_dot_q_cuda(&up_w[kbx + (size_t)row * blocks_per_row],
+                               &x[kby], kqs);
+    }
+
+    gate_sum = warp_reduce_sum(gate_sum);
+    up_sum = warp_reduce_sum(up_sum);
+    if (threadIdx.x == 0) {
+      moe_store_output(all_outputs, output_base + row, output_type, gate_sum);
+      moe_store_output(all_outputs, output_base + n + row, output_type, up_sum);
+    }
+  }
+}
+
+template <int qk, int qi, typename block_q_t, int vdr,
+          vec_dot_q_cuda_t vec_dot_q_cuda>
+__device__ void moe_gemv_lora_down_impl(
+    const void *__restrict__ all_weights, const void *__restrict__ all_inputs,
+    const unsigned int *__restrict__ indices, void *__restrict__ all_outputs,
+    const int n, const int k, const int batch, const int topk,
+    const int num_experts, const int k_padded, const int output_type) {
+  constexpr int ROWS_PER_WARP = 4;
+  constexpr int NWARPS = 4;
+  constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;
+
+  const int warp_id = threadIdx.y;
+  const int row0 = ROWS_PER_BLOCK * blockIdx.x + warp_id * ROWS_PER_WARP;
+  const int current_topk = blockIdx.y;
+  const int current_batch = blockIdx.z;
+
+  if (row0 >= n)
+    return;
+
+  const int task_id = current_batch * topk + current_topk;
+  const unsigned int expert_id = indices[task_id];
+  const size_t output_base = (size_t)task_id * n;
+  if (expert_id >= (unsigned int)num_experts) {
+    for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
+      if (threadIdx.x == 0) {
+        moe_store_output(all_outputs, output_base + row0 + r, output_type,
+                         0.0f);
+      }
+    }
+    return;
+  }
+  const size_t blocks_per_row = ((size_t)k + qk - 1) / qk;
+  const size_t expert_stride_bytes =
+      (size_t)n * blocks_per_row * sizeof(block_q_t);
+  const size_t input_stride_bytes =
+      (size_t)k_padded / QK8_1 * sizeof(block_q8_1);
+
+  const block_q8_1 *x =
+      (const block_q8_1 *)((const char *)all_inputs +
+                           (size_t)task_id * input_stride_bytes);
+  const block_q_t *w =
+      (const block_q_t *)((const char *)all_weights +
+                          (size_t)expert_id * expert_stride_bytes);
+
+  constexpr int blocks_per_iter = vdr * WARP_SIZE / qi;
+  const int blocks_per_row_x = (int)blocks_per_row;
+  for (int r = 0; r < ROWS_PER_WARP && row0 + r < n; ++r) {
+    const int row = row0 + r;
+    float sum = 0.0f;
+
+    for (int kbx = threadIdx.x / (qi / vdr); kbx < blocks_per_row_x;
+         kbx += blocks_per_iter) {
+      const int kby = kbx * (qk / QK8_1);
+      const int kqs = vdr * (threadIdx.x % (qi / vdr));
+      sum +=
+          vec_dot_q_cuda(&w[kbx + (size_t)row * blocks_per_row], &x[kby], kqs);
+    }
+
+    sum = warp_reduce_sum(sum);
+    if (threadIdx.x == 0) {
+      moe_store_output(all_outputs, output_base + row, output_type, sum);
+    }
+  }
+}
+
 // Fused gate+up+activation+multiply kernel template
 // Computes: output = up(x) * activation(gate(x)) for each expert assignment
 // Grid: (ceildiv(n, NWARPS * ROWS_PER_WARP), topk, batch)
@@ -1367,6 +1525,55 @@ FUSED_GATE_UP_KERNEL(q5k_q8_1, QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ,
 FUSED_GATE_UP_KERNEL(q6k_q8_1, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
                      vec_dot_q6_K_q8_1)
 
+#define LORA_DECODE_KERNELS(suffix, qk_val, qi_val, block_type, vdr_val,       \
+                            vd_fn)                                             \
+  extern "C" __global__ void moe_gemv_gate_up_pair_##suffix(                   \
+      const void *__restrict__ gate_weights,                                   \
+      const void *__restrict__ up_weights,                                     \
+      const void *__restrict__ all_inputs,                                     \
+      const unsigned int *__restrict__ indices,                                \
+      void *__restrict__ all_outputs, const int n, const int k,                \
+      const int batch, const int topk, const int num_experts,                  \
+      const int k_padded, const int output_type) {                             \
+    moe_gemv_gate_up_pair_impl<qk_val, qi_val, block_type, vdr_val, vd_fn>(    \
+        gate_weights, up_weights, all_inputs, indices, all_outputs, n, k,      \
+        batch, topk, num_experts, k_padded, output_type);                      \
+  }                                                                            \
+  extern "C" __global__ void moe_gemv_lora_down_##suffix(                      \
+      const void *__restrict__ all_weights,                                    \
+      const void *__restrict__ all_inputs,                                     \
+      const unsigned int *__restrict__ indices,                                \
+      void *__restrict__ all_outputs, const int n, const int k,                \
+      const int batch, const int topk, const int num_experts,                  \
+      const int k_padded, const int output_type) {                             \
+    moe_gemv_lora_down_impl<qk_val, qi_val, block_type, vdr_val, vd_fn>(       \
+        all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,      \
+        num_experts, k_padded, output_type);                                   \
+  }
+
+LORA_DECODE_KERNELS(q8_0_q8_1, QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ,
+                    vec_dot_q8_0_q8_1)
+LORA_DECODE_KERNELS(q4_0_q8_1, QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ,
+                    vec_dot_q4_0_q8_1)
+LORA_DECODE_KERNELS(q4_1_q8_1, QK4_1, QI4_1, block_q4_1, VDR_Q4_1_Q8_1_MMVQ,
+                    vec_dot_q4_1_q8_1)
+LORA_DECODE_KERNELS(q5_0_q8_1, QK5_0, QI5_0, block_q5_0, VDR_Q5_0_Q8_1_MMVQ,
+                    vec_dot_q5_0_q8_1)
+LORA_DECODE_KERNELS(q5_1_q8_1, QK5_1, QI5_1, block_q5_1, VDR_Q5_1_Q8_1_MMVQ,
+                    vec_dot_q5_1_q8_1)
+LORA_DECODE_KERNELS(q8_1_q8_1, QK8_1, QI8_1, block_q8_1, VDR_Q8_1_Q8_1_MMVQ,
+                    vec_dot_q8_1_q8_1)
+LORA_DECODE_KERNELS(q2k_q8_1, QK_K, QI2_K, block_q2_K, VDR_Q2_K_Q8_1_MMVQ,
+                    vec_dot_q2_K_q8_1)
+LORA_DECODE_KERNELS(q3k_q8_1, QK_K, QI3_K, block_q3_K, VDR_Q3_K_Q8_1_MMVQ,
+                    vec_dot_q3_K_q8_1)
+LORA_DECODE_KERNELS(q4k_q8_1, QK_K, QI4_K, block_q4_K, VDR_Q4_K_Q8_1_MMVQ,
+                    vec_dot_q4_K_q8_1)
+LORA_DECODE_KERNELS(q5k_q8_1, QK_K, QI5_K, block_q5_K, VDR_Q5_K_Q8_1_MMVQ,
+                    vec_dot_q5_K_q8_1)
+LORA_DECODE_KERNELS(q6k_q8_1, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
+                    vec_dot_q6_K_q8_1)
+
 // ============== Fused down+aggregate kernel instantiations ==============
 
 #define DOWN_AGGREGATE_KERNEL(suffix, qk_val, qi_val, block_type, vdr_val,     \
@@ -1417,7 +1624,7 @@ DOWN_AGGREGATE_KERNEL(q6k_q8_1, QK_K, QI6_K, block_q6_K, VDR_Q6_K_Q8_1_MMVQ,
     const int NWARPS = 4;                                                      \
     const int ROWS_PER_WARP = 2;                                               \
     const int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;                         \
-    dim3 grid((n + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK, topk, batch);         \
+    dim3 grid(1 + (n - 1) / ROWS_PER_BLOCK, topk, batch);                      \
     dim3 block(WARP_SIZE, NWARPS, 1);                                          \
     cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
     moe_gemv_fused_gate_up_##suffix<<<grid, block, 0, s>>>(                    \
@@ -1436,6 +1643,56 @@ LAUNCH_FUSED_GATE_UP(q3k_q8_1)
 LAUNCH_FUSED_GATE_UP(q4k_q8_1)
 LAUNCH_FUSED_GATE_UP(q5k_q8_1)
 LAUNCH_FUSED_GATE_UP(q6k_q8_1)
+
+#define LAUNCH_LORA_DECODE(suffix)                                             \
+  extern "C" int launch_moe_gemv_gate_up_pair_##suffix(                        \
+      const void *gate_weights, const void *up_weights,                        \
+      const void *all_inputs, const unsigned int *indices, void *all_outputs,  \
+      int n, int k, int batch, int topk, int k_padded, int num_experts,        \
+      int output_type, void *stream) {                                         \
+    if (output_type < MOE_OUTPUT_F32 || output_type > MOE_OUTPUT_BF16)         \
+      return static_cast<int>(cudaErrorInvalidValue);                          \
+    constexpr int NWARPS = 4;                                                  \
+    constexpr int ROWS_PER_WARP = 2;                                           \
+    constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;                     \
+    dim3 grid(1 + (n - 1) / ROWS_PER_BLOCK, topk, batch);                      \
+    dim3 block(WARP_SIZE, NWARPS, 1);                                          \
+    cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
+    moe_gemv_gate_up_pair_##suffix<<<grid, block, 0, s>>>(                     \
+        gate_weights, up_weights, all_inputs, indices, all_outputs, n, k,      \
+        batch, topk, num_experts, k_padded, output_type);                      \
+    return static_cast<int>(cudaGetLastError());                               \
+  }                                                                            \
+  extern "C" int launch_moe_gemv_lora_down_##suffix(                           \
+      const void *all_weights, const void *all_inputs,                         \
+      const unsigned int *indices, void *all_outputs, int n, int k, int batch, \
+      int topk, int k_padded, int num_experts, int output_type,                \
+      void *stream) {                                                          \
+    if (output_type < MOE_OUTPUT_F32 || output_type > MOE_OUTPUT_BF16)         \
+      return static_cast<int>(cudaErrorInvalidValue);                          \
+    constexpr int NWARPS = 4;                                                  \
+    constexpr int ROWS_PER_WARP = 4;                                           \
+    constexpr int ROWS_PER_BLOCK = NWARPS * ROWS_PER_WARP;                     \
+    dim3 grid((n + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK, topk, batch);         \
+    dim3 block(WARP_SIZE, NWARPS, 1);                                          \
+    cudaStream_t s = static_cast<cudaStream_t>(stream);                        \
+    moe_gemv_lora_down_##suffix<<<grid, block, 0, s>>>(                        \
+        all_weights, all_inputs, indices, all_outputs, n, k, batch, topk,      \
+        num_experts, k_padded, output_type);                                   \
+    return static_cast<int>(cudaGetLastError());                               \
+  }
+
+LAUNCH_LORA_DECODE(q8_0_q8_1)
+LAUNCH_LORA_DECODE(q4_0_q8_1)
+LAUNCH_LORA_DECODE(q4_1_q8_1)
+LAUNCH_LORA_DECODE(q5_0_q8_1)
+LAUNCH_LORA_DECODE(q5_1_q8_1)
+LAUNCH_LORA_DECODE(q8_1_q8_1)
+LAUNCH_LORA_DECODE(q2k_q8_1)
+LAUNCH_LORA_DECODE(q3k_q8_1)
+LAUNCH_LORA_DECODE(q4k_q8_1)
+LAUNCH_LORA_DECODE(q5k_q8_1)
+LAUNCH_LORA_DECODE(q6k_q8_1)
 
 // ============== Fused down+aggregate launcher functions ==============
 

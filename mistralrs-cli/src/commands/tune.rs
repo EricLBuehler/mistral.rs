@@ -5,7 +5,7 @@ use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 
 use mistralrs_core::{auto_tune, AutoTuneRequest, FitStatus, ModelSelected, QualityTier};
 
-use crate::args::{GlobalOptions, MatformerSelection, ModelType, TuneProfileArg};
+use crate::args::{AdapterOptions, GlobalOptions, MatformerSelection, ModelType, TuneProfileArg};
 
 use super::serve::{
     convert_to_model_selected, extract_device_settings, extract_isq_setting, extract_quant_flag,
@@ -18,6 +18,7 @@ pub async fn run_tune(
     json: bool,
     emit_config: Option<PathBuf>,
 ) -> Result<()> {
+    validate_adapter_options(&model_type)?;
     let model_selected = convert_to_model_selected(&model_type, &MatformerSelection::default())?;
     let (cpu, _device_layers) = extract_device_settings(&model_type);
     let requested = match extract_quant_flag(&model_type) {
@@ -172,6 +173,27 @@ pub async fn run_tune(
     Ok(())
 }
 
+fn validate_adapter_options(model_type: &ModelType) -> Result<()> {
+    let adapter = match model_type {
+        ModelType::Auto { adapter, .. }
+        | ModelType::Text { adapter, .. }
+        | ModelType::Multimodal { adapter, .. } => adapter,
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
+            return Ok(())
+        }
+    };
+    reject_configured_adapters(adapter)
+}
+
+fn reject_configured_adapters(adapter: &AdapterOptions) -> Result<()> {
+    if adapter.dynamic_lora_enabled() || adapter.legacy_lora.is_some() || adapter.xlora.is_some() {
+        anyhow::bail!(
+            "tune does not account for adapter memory or emit adapter configuration; rerun without LoRA or X-LoRA options"
+        );
+    }
+    Ok(())
+}
+
 fn emit_toml_config(
     model_type: &ModelType,
     model_selected: &ModelSelected,
@@ -248,5 +270,26 @@ fn model_dtype(model_selected: &ModelSelected) -> Option<&'static str> {
             ModelDType::F32 => "f32",
         }),
         ModelSelected::Toml { .. } | ModelSelected::MultiModel { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mistralrs_core::LoraAdapterSpec;
+
+    use super::*;
+
+    #[test]
+    fn tune_rejects_adapter_configuration() {
+        reject_configured_adapters(&AdapterOptions::default()).unwrap();
+
+        let adapter = AdapterOptions {
+            lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+            ..AdapterOptions::default()
+        };
+        let error = reject_configured_adapters(&adapter).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not account for adapter memory"));
     }
 }

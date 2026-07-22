@@ -20,6 +20,9 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(test)]
+#[path = "build_support/cuda_headers.rs"]
+mod cuda_headers;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -47,7 +50,6 @@ mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
 pub use uqff::{
@@ -89,13 +91,18 @@ pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
+    quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
     ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
 #[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
+#[cfg(feature = "cuda")]
 pub use gguf::fast_mmq::{
-    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
-    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
+    grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
+    grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
@@ -107,8 +114,22 @@ pub use isq_executor::{
     IsqPlanParams, IsqRequest, IsqResourceEstimate,
 };
 pub use lora::{
-    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
-    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
+    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
+    register_dynamic_lora_site, with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights,
+    LoraAdapterWeights, LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats,
+    LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection,
+    LoraExpertProjectionNames, LoraExpertProjectionWeights, LoraExpertSiteHandle,
+    LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec,
+    LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules,
+    LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode, RoutedLoraMetadataLayout,
+    RoutedLoraProjectionLayout, StaticLoraConfig, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
+    ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use lora::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
@@ -126,7 +147,7 @@ pub use utils::isq::{
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
-pub use utils::{fused_glu, GluActivationType};
+pub use utils::{fused_glu, fused_split_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
@@ -1247,6 +1268,14 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    fn is_dynamic_lora_active(&self) -> bool {
+        false
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        replacement
+    }
+
     fn has_bias(&self) -> bool {
         false
     }
@@ -1778,7 +1807,11 @@ pub fn linear_no_bias(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1788,7 +1821,6 @@ pub fn linear_no_bias(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1828,9 +1860,6 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1838,13 +1867,9 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear(
@@ -1859,7 +1884,11 @@ pub fn linear(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1869,7 +1898,6 @@ pub fn linear(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1909,9 +1937,6 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1920,13 +1945,9 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear_b(

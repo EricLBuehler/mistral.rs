@@ -13,14 +13,14 @@ use crate::{
     get_mut_arcmutex,
     paged_attention::{
         block_hash::{
-            clamp_prefix_cache_hit_len, compute_block_hashes, compute_new_block_hashes, BlockHash,
-            MultiModalFeature,
+            adapter_generation_key, clamp_prefix_cache_hit_len, compute_block_hashes,
+            compute_new_block_hashes, BlockHash, MultiModalFeature,
         },
         kv_cache_manager::KVCacheManager,
     },
     scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     sequence::{clamp_prefix_cache_len_for_mm_features, Sequence, SequenceState, StopReason},
-    TERMINATE_ALL_NEXT_STEP,
+    AdapterGenerationId, TERMINATE_ALL_NEXT_STEP,
 };
 
 use super::CacheConfig;
@@ -33,8 +33,15 @@ type BucketKey = (usize, bool, usize);
 /// Allow sequences to wait for 64 scheduling passes before warning of deprivation.
 const WAITING_TIMEOUT: usize = 64;
 
-/// (seq_id, tokens, mm_features, block_hash_revision, num_computed_tokens)
-type SeqCacheInfo = (usize, Vec<u32>, Vec<MultiModalFeature>, u64, usize);
+/// (seq_id, tokens, mm_features, adapter_generation, block_hash_revision, num_computed_tokens)
+type SeqCacheInfo = (
+    usize,
+    Vec<u32>,
+    Vec<MultiModalFeature>,
+    Option<AdapterGenerationId>,
+    u64,
+    usize,
+);
 
 pub struct PagedAttentionSchedulerOutput {
     /// Either ALL prompt or ALL completion.
@@ -102,15 +109,24 @@ impl PagedAttentionScheduler {
         seq_id: usize,
         tokens: &[u32],
         mm_features: &[MultiModalFeature],
+        adapter_generation: Option<AdapterGenerationId>,
         revision: u64,
     ) {
+        let adapter_key = adapter_generation_key(adapter_generation);
         let known_revision = self.seq_block_hash_revisions.get(&seq_id).copied();
         let hashes = self.seq_block_hashes.entry(seq_id).or_default();
         if hashes.is_empty() || known_revision != Some(revision) {
-            *hashes = compute_block_hashes(tokens, self.block_size, mm_features, &[]);
+            *hashes =
+                compute_block_hashes(tokens, self.block_size, mm_features, adapter_key.as_slice());
             self.seq_block_hash_revisions.insert(seq_id, revision);
         } else {
-            let new = compute_new_block_hashes(tokens, self.block_size, hashes, mm_features, &[]);
+            let new = compute_new_block_hashes(
+                tokens,
+                self.block_size,
+                hashes,
+                mm_features,
+                adapter_key.as_slice(),
+            );
             hashes.extend(new);
         }
     }
@@ -203,11 +219,18 @@ impl PagedAttentionScheduler {
             let tokens = seq_guard.get_toks().to_vec();
             let num_tokens = tokens.len();
             let mm_features = seq_guard.mm_features().to_vec();
+            let adapter_generation = seq_guard.adapter_generation();
             let block_hash_revision = seq_guard.block_hash_revision();
             drop(seq_guard);
 
             // Compute block hashes for prefix cache lookup
-            self.ensure_block_hashes(seq_id, &tokens, &mm_features, block_hash_revision);
+            self.ensure_block_hashes(
+                seq_id,
+                &tokens,
+                &mm_features,
+                adapter_generation,
+                block_hash_revision,
+            );
             let block_hashes = self
                 .seq_block_hashes
                 .get(&seq_id)
@@ -461,22 +484,36 @@ impl PagedAttentionScheduler {
                     let seq_id = *seq_guard.id();
                     let tokens = seq_guard.get_toks().to_vec();
                     let mm_features = seq_guard.mm_features().to_vec();
+                    let adapter_generation = seq_guard.adapter_generation();
                     let block_hash_revision = seq_guard.block_hash_revision();
                     let num_computed_tokens = seq_guard.num_computed_tokens();
                     (
                         seq_id,
                         tokens,
                         mm_features,
+                        adapter_generation,
                         block_hash_revision,
                         num_computed_tokens,
                     )
                 })
                 .collect();
 
-            for (seq_id, tokens, mm_features, block_hash_revision, num_computed_tokens) in
-                &seq_infos
+            for (
+                seq_id,
+                tokens,
+                mm_features,
+                adapter_generation,
+                block_hash_revision,
+                num_computed_tokens,
+            ) in &seq_infos
             {
-                self.ensure_block_hashes(*seq_id, tokens, mm_features, *block_hash_revision);
+                self.ensure_block_hashes(
+                    *seq_id,
+                    tokens,
+                    mm_features,
+                    *adapter_generation,
+                    *block_hash_revision,
+                );
                 if let Some(block_hashes) = self.seq_block_hashes.get(seq_id).cloned() {
                     let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                     kv_mgr.cache_blocks(*seq_id, &block_hashes, *num_computed_tokens);
@@ -503,12 +540,14 @@ impl PagedAttentionScheduler {
                 let id = *seq_guard.id();
                 let tokens = seq_guard.get_toks().to_vec();
                 let mm_features = seq_guard.mm_features().to_vec();
+                let adapter_generation = seq_guard.adapter_generation();
                 let block_hash_revision = seq_guard.block_hash_revision();
                 let num_computed_tokens = seq_guard.num_computed_tokens();
                 let info = (
                     id,
                     tokens,
                     mm_features,
+                    adapter_generation,
                     block_hash_revision,
                     num_computed_tokens,
                 );
@@ -525,10 +564,22 @@ impl PagedAttentionScheduler {
 
         // Cache and free blocks for finished sequences
         if self.prefix_caching_enabled {
-            for (id, tokens, mm_features, block_hash_revision, num_computed_tokens) in
-                &cacheable_finished
+            for (
+                id,
+                tokens,
+                mm_features,
+                adapter_generation,
+                block_hash_revision,
+                num_computed_tokens,
+            ) in &cacheable_finished
             {
-                self.ensure_block_hashes(*id, tokens, mm_features, *block_hash_revision);
+                self.ensure_block_hashes(
+                    *id,
+                    tokens,
+                    mm_features,
+                    *adapter_generation,
+                    *block_hash_revision,
+                );
                 let block_hashes = self.seq_block_hashes.get(id).cloned().unwrap_or_default();
                 let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                 kv_mgr.cache_blocks(*id, &block_hashes, *num_computed_tokens);
@@ -537,7 +588,7 @@ impl PagedAttentionScheduler {
         }
 
         let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-        for (id, _, _, _, _) in finished {
+        for (id, _, _, _, _, _) in finished {
             kv_mgr.free(id);
             self.seq_block_hashes.remove(&id);
             self.seq_block_hash_revisions.remove(&id);
@@ -559,12 +610,19 @@ impl PagedAttentionScheduler {
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();
+        let adapter_generation = seq_guard.adapter_generation();
         let block_hash_revision = seq_guard.block_hash_revision();
         let num_computed_tokens = seq_guard.num_computed_tokens();
         drop(seq_guard);
 
         // Ensure block hashes are up-to-date before freeing
-        self.ensure_block_hashes(seq_id, &tokens, &mm_features, block_hash_revision);
+        self.ensure_block_hashes(
+            seq_id,
+            &tokens,
+            &mm_features,
+            adapter_generation,
+            block_hash_revision,
+        );
         let block_hashes = self
             .seq_block_hashes
             .get(&seq_id)

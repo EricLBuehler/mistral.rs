@@ -193,7 +193,7 @@ cutile_supported_for_cuda() {
     if [ "$cuda_cc" -eq 90 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1303 ] 2>/dev/null; then
         return 0
     fi
-    if [ "$cuda_cc" -ge 100 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1301 ] 2>/dev/null; then
+    if [ "$cuda_cc" -ge 100 ] 2>/dev/null && [ "$cuda_ver_code" -ge 1302 ] 2>/dev/null; then
         return 0
     fi
 
@@ -452,16 +452,24 @@ install_mistralrs() {
     fi
 }
 
+remove_legacy_tileiras_link() {
+    legacy_tileiras_link="$BIN_DIR/tileiras"
+    legacy_tileiras_target="$PREBUILT_DIR/bin/tileiras"
+    if [ -L "$legacy_tileiras_link" ] && [ "$(readlink "$legacy_tileiras_link" 2>/dev/null)" = "$legacy_tileiras_target" ]; then
+        rm -f "$legacy_tileiras_link"
+    fi
+}
+
 install_source_from_staging() {
     if [ ! -f "$SOURCE_MISTRALRS" ]; then
         error "cargo install succeeded but $SOURCE_MISTRALRS was not found"
     fi
+    remove_legacy_tileiras_link
     rm -rf "$PREBUILT_DIR"
     mkdir -p "$PREBUILT_DIR" "$BIN_DIR"
     cp "$SOURCE_MISTRALRS" "$PREBUILT_DIR/mistralrs"
     chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
     ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
-    rm -f "$BIN_DIR/tileiras"
     rm -rf "$SOURCE_INSTALL_ROOT"
     if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
         error "source-built binary did not run after installation"
@@ -501,7 +509,8 @@ cuda_sms_for_variant() {
         130:aarch64|130:arm64) echo "$PREBUILT_CUDA_SMS_AARCH64" ;;
         131:x86_64) echo "$PREBUILT_CUDA_SMS_X86" ;;
         131:aarch64|131:arm64) echo "$PREBUILT_CUDA_SMS_AARCH64" ;;
-        132:x86_64) echo "80 86 89" ;;
+        132:x86_64) echo "80 86 89 100 120" ;;
+        132:aarch64|132:arm64) echo "100 121" ;;
         133:x86_64) echo "90" ;;
         133:aarch64|133:arm64) echo "90" ;;
     esac
@@ -599,22 +608,19 @@ install_prebuilt() {
         rm -rf "$tmp"
         return 1
     fi
+    remove_legacy_tileiras_link
     rm -rf "$PREBUILT_DIR"
     mkdir -p "$PREBUILT_DIR"
-    # CPU/Metal tarballs contain a bare `mistralrs`; CUDA tarballs add lib/ and bin/tileiras.
+    # CPU/Metal tarballs contain a bare `mistralrs`; CUDA tarballs add runtime libraries in lib/.
     if ! tar xzf "$tmp/$asset" -C "$PREBUILT_DIR"; then
         rm -rf "$tmp"
         return 1
     fi
     rm -rf "$tmp"
     chmod +x "$PREBUILT_DIR/mistralrs" 2>/dev/null || true
-    [ -f "$PREBUILT_DIR/bin/tileiras" ] && chmod +x "$PREBUILT_DIR/bin/tileiras" 2>/dev/null || true
     mkdir -p "$BIN_DIR"
-    # Symlink onto PATH; $ORIGIN/lib resolves through the symlink to the real lib dir, and a
-    # tileiras symlink lets cutile's PATH probe find the bundled assembler.
+    # Symlink onto PATH; $ORIGIN/lib resolves through the symlink to the real lib dir.
     ln -sf "$PREBUILT_DIR/mistralrs" "$BIN_DIR/mistralrs"
-    rm -f "$BIN_DIR/tileiras"
-    [ -f "$PREBUILT_DIR/bin/tileiras" ] && ln -sf "$PREBUILT_DIR/bin/tileiras" "$BIN_DIR/tileiras" || true
     if ! "$PREBUILT_DIR/mistralrs" --version >/dev/null 2>&1; then
         warn "Prebuilt binary did not run; falling back to source build."
         return 1
@@ -881,9 +887,6 @@ print_success() {
     echo "========="
     if [ "$method" = "prebuilt" ]; then
         printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
-        if [ -L "$BIN_DIR/tileiras" ]; then
-            printf "  cutile JIT  %s -> %s\n" "$(tildify "$BIN_DIR/tileiras")" "$(tildify "$PREBUILT_DIR/bin/tileiras")"
-        fi
     else
         printf "  binary      %s\n" "$(tildify "$PREBUILT_DIR/mistralrs")"
     fi

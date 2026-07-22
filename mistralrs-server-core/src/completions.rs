@@ -13,10 +13,12 @@ use crate::{
         BaseCompletionResponder,
     },
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
-        BaseJsonModelError, ErrorToResponse, JsonError, ModelErrorMessage,
+        apply_model_override, base_process_non_streaming_response, create_response_channel,
+        request_model_override, send_request_with_model, BaseJsonModelError, ErrorToResponse,
+        JsonError, ModelErrorMessage,
     },
-    openai::{CompletionRequest, Grammar},
+    lora_adapters::resolve_lora_adapter_model,
+    openai::{CompletionChunkResponseBody, CompletionRequest, CompletionResponseBody, Grammar},
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{sanitize_error_message, validate_model_name},
@@ -281,6 +283,7 @@ pub fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            adapter: oairequest.adapter.map(Into::into),
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
             session_id: None,
             files: None,
@@ -296,27 +299,56 @@ pub fn parse_request(
     tag = "Mistral.rs",
     path = "/v1/completions",
     request_body = CompletionRequest,
-    responses((status = 200, description = "Completions"))
+    responses((
+        status = 200,
+        description = "Completion JSON or server-sent event chunks",
+        content(
+            (CompletionResponseBody = "application/json"),
+            (CompletionChunkResponseBody = "text/event-stream")
+        )
+    ))
 )]
 pub async fn completions(
     State(state): ExtractedMistralRsState,
-    Json(oairequest): Json<CompletionRequest>,
+    Json(mut oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
+    let requested_model = oairequest.model.clone();
+
+    if let Err(error) =
+        resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
+    {
+        return CompletionResponder::ValidationError(Box::new(JsonError::new(error)));
+    }
+    let model_override = request_model_override(requested_model, &oairequest.model);
+    let model_id = (oairequest.model != "default").then(|| oairequest.model.clone());
 
     let (request, is_streaming) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
     };
 
-    if let Err(e) = send_request(&state, request).await {
+    if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
+        if matches!(
+            &e,
+            mistralrs_core::MistralRsError::LoraAdapter(_)
+                | mistralrs_core::MistralRsError::ModelNotFound(_)
+        ) {
+            return CompletionResponder::ValidationError(Box::new(e));
+        }
         return handle_error(state, e.into());
     }
 
     if is_streaming {
-        CompletionResponder::Sse(create_streamer(rx, state, None, None))
+        let on_chunk = model_override.map(|model| {
+            Box::new(move |mut response: CompletionChunkResponse| {
+                apply_model_override(&mut response.model, Some(&model));
+                response
+            }) as CompletionOnChunkCallback
+        });
+        CompletionResponder::Sse(create_streamer(rx, state, on_chunk, None))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response_with_model(&mut rx, state, model_override.as_deref()).await
     }
 }
 
@@ -347,7 +379,30 @@ pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
 ) -> CompletionResponder {
-    base_process_non_streaming_response(rx, state, match_responses, handle_error).await
+    process_non_streaming_response_with_model(rx, state, None).await
+}
+
+async fn process_non_streaming_response_with_model(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+    model_override: Option<&str>,
+) -> CompletionResponder {
+    base_process_non_streaming_response(
+        rx,
+        state,
+        |state, mut response| {
+            match &mut response {
+                Response::CompletionDone(response)
+                | Response::CompletionModelError(_, response) => {
+                    apply_model_override(&mut response.model, model_override);
+                }
+                _ => {}
+            }
+            match_responses(state, response)
+        },
+        handle_error,
+    )
+    .await
 }
 
 /// Matches and processes different types of model responses into appropriate completion responses.

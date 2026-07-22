@@ -1,13 +1,13 @@
 ---
 title: "mistralrs tune"
-description: "Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target"
+description: "Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target. Adapter options are rejected because adapter memory is not included in the estimate"
 sidebar:
   order: 8
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target
+Recommend quantization + device mapping for a model. Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias the recommendation toward a specific quantization target. Adapter options are rejected because adapter memory is not included in the estimate
 
 ```
 mistralrs tune [OPTIONS] [COMMAND]
@@ -23,7 +23,13 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -70,7 +76,13 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -114,7 +126,13 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -155,10 +173,6 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
-| `--xlora <XLORA>` |  | X-LoRA adapter model ID |
-| `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
-| `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
 | `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |

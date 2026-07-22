@@ -51,12 +51,14 @@ impl Qwen3_5MoeModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        text::validate_text_checkpoint_namespace(&vb)?;
         // Support both original HuggingFace naming (model.visual.*) and MLX naming (vision_tower.*)
         let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
             vb.pp("vision_tower")
         } else {
             vb.pp("model").pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),

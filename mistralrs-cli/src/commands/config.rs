@@ -12,10 +12,11 @@ use mistralrs_server_core::{
 };
 
 use crate::args::{MatformerSelection, RuntimeOptions};
-use crate::commands::run::interactive_mode;
+use crate::commands::run::{interactive_mode, InteractiveConfig};
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, log_api_surfaces, spawn_mcp_server, validate_agent_options,
+    log_agent_runtime, log_api_surfaces, spawn_mcp_server, tcp_nodelay_listener,
+    validate_agent_options,
 };
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::{build_code_exec_config, build_shell_config};
@@ -191,6 +192,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener = tcp_nodelay_listener(listener);
 
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
@@ -208,13 +210,13 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         sandbox,
         models,
         thinking,
+        adapter,
     } = cfg;
 
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
-
     let (
         paged_attn,
         paged_attn_gpu_mem,
@@ -282,6 +284,12 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
+    if let Some(alias) = adapter.as_deref() {
+        let adapters = mistralrs.list_lora_adapters(None).await?;
+        if !adapters.iter().any(|loaded| loaded.alias == alias) {
+            anyhow::bail!("LoRA adapter alias `{alias}` is not loaded");
+        }
+    }
 
     #[cfg(feature = "code-execution")]
     let do_code_exec = runtime.enable_code_execution;
@@ -296,11 +304,14 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     interactive_mode(
         mistralrs.clone(),
-        runtime.enable_search,
-        do_code_exec,
-        do_shell,
-        runtime.code_exec_permission.into(),
-        thinking,
+        InteractiveConfig {
+            do_search: runtime.enable_search,
+            do_code_exec,
+            do_shell,
+            agent_permission: runtime.code_exec_permission.into(),
+            enable_thinking: thinking,
+            adapter,
+        },
     )
     .await;
 

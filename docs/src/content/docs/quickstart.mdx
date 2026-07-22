@@ -51,17 +51,17 @@ The install script detects your platform and downloads a matching prebuilt binar
 <details>
 <summary>Install locations, per-platform binaries, and environment variables</summary>
 
-Prebuilt binaries do not require Rust or a CUDA toolkit. Installer-managed binaries install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` on Unix and launched from `%USERPROFILE%\.local\bin` on Windows. If needed, the installer adds that directory to your shell environment.
+Prebuilt binaries do not require Rust or a CUDA toolkit for standard acceleration. Installer-managed binaries install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` on Unix and launched from `%USERPROFILE%\.local\bin` on Windows. If needed, the installer adds that directory to your shell environment. Optional cuTile acceleration requires NVIDIA's separately installed `tileiras` tool. See [cuTile setup](/mistral.rs/developer/moe-backends/) for the official package commands.
 
-Source builds use Cargo as a staging step, then install to the same managed location.
+Source builds install to the same managed location.
 
 What you get per platform:
 
 | Platform | Binary | Acceleration |
 |---|---|---|
 | Apple Silicon (macOS) | prebuilt | Metal |
-| Linux x86_64 + NVIDIA GPU | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on supported CUDA/SM pairs |
-| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile on supported CUDA/SM pairs |
+| Linux x86_64 + NVIDIA GPU | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile-capable on supported CUDA/SM pairs |
+| Linux aarch64 + NVIDIA GPU (Grace: GH200/GB200/GB10) | prebuilt, matched to GPU and driver | CUDA, flash-attn, cuTile-capable on supported CUDA/SM pairs |
 | Linux x86_64 / aarch64, no GPU | prebuilt | CPU |
 | Windows x86_64 | prebuilt | CPU |
 | anything else (Intel Mac, an unlisted GPU) | source build | detected at build time |
@@ -72,7 +72,8 @@ For NVIDIA GPUs, the installer checks `nvidia-smi`, then chooses the matching CU
 |---|---|
 | CUDA 13.3+ on Hopper / `sm90` | `cuda133` |
 | CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132` |
-| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` |
+| CUDA 13.2+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda132` |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` (no cuTile) |
 | CUDA 13.0+ | `cuda130` |
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129` |
 | CUDA 12.8+ | `cuda128` |

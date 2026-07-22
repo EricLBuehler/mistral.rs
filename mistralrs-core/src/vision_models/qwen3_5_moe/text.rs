@@ -264,9 +264,11 @@ impl FullAttention {
 
 struct SparseMoeBlock {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     shared_expert: layers::Mlp,
     shared_expert_gate: Linear,
+    shared_expert_gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
 }
@@ -287,10 +289,11 @@ impl SparseMoeBlock {
             .cloned()
             .unwrap_or(real_device);
 
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_experts),
         )?;
 
         let moe_cfg = MoEExpertsConfig {
@@ -298,6 +301,7 @@ impl SparseMoeBlock {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         let experts = MoEExperts::new(
@@ -319,19 +323,24 @@ impl SparseMoeBlock {
             comm,
         )?;
 
-        let mut seg_w = vb
-            .pp("shared_expert_gate")
-            .get((1, cfg.hidden_size), "weight")?;
+        let shared_expert_gate_vb = vb.pp("shared_expert_gate");
+        let mut seg_w = shared_expert_gate_vb.get((1, cfg.hidden_size), "weight")?;
         if loading_isq {
             seg_w = seg_w.to_device(&layer_device)?;
         }
         let shared_expert_gate = Linear::new(seg_w, None);
+        let shared_expert_gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &shared_expert_gate_vb.set_device(layer_device),
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, 1),
+        )?;
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             shared_expert,
             shared_expert_gate,
+            shared_expert_gate_lora,
             num_experts_per_tok: cfg.num_experts_per_tok,
             norm_topk_prob: cfg.norm_topk_prob,
         })
@@ -342,6 +351,10 @@ impl SparseMoeBlock {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -361,11 +374,12 @@ impl SparseMoeBlock {
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = candle_nn::ops::sigmoid(
-            &self
-                .shared_expert_gate
-                .forward(&xs.reshape(((), hidden_dim))?)?,
-        )?;
+        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = match &self.shared_expert_gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
+            None => shared_gate,
+        };
+        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
@@ -456,6 +470,26 @@ pub struct Qwen3_5MoeTextModel {
     pub(super) max_seq_len: usize,
 }
 
+pub(super) fn validate_text_checkpoint_namespace(vb: &ShardedVarBuilder) -> Result<()> {
+    if vb.contains_tensor("language_model.model.embed_tokens.weight")
+        && vb.lora_registry().is_some()
+    {
+        candle_core::bail!(
+            "dynamic LoRA for Qwen3.5/3.6 MoE requires canonical `model.language_model.*` checkpoint tensor names; `language_model.model.*` is not supported"
+        );
+    }
+    Ok(())
+}
+
+fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
+    validate_text_checkpoint_namespace(&vb)?;
+    if vb.contains_tensor("language_model.model.embed_tokens.weight") {
+        Ok(vb.pp("language_model").pp("model"))
+    } else {
+        Ok(vb.pp("model").pp("language_model"))
+    }
+}
+
 impl Qwen3_5MoeTextModel {
     pub fn new(
         cfg: &TextConfig,
@@ -465,11 +499,7 @@ impl Qwen3_5MoeTextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
-        } else {
-            vb.pp("model").pp("language_model")
-        };
+        let vb_m = text_model_vb(vb.clone())?;
 
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
@@ -895,5 +925,32 @@ impl IsqModel for Qwen3_5MoeTextModel {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_lora_rejects_alternate_text_checkpoint_namespace() -> Result<()> {
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap_with_dummy_regexes(
+            HashMap::from([(
+                "language_model.model.embed_tokens.weight".to_string(),
+                Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?,
+            )]),
+            DType::F32,
+            Device::Cpu,
+            None,
+        )
+        .with_lora_registry(Arc::new(mistralrs_quant::LoraLayerRegistry::new()));
+        let error = match text_model_vb(vb) {
+            Ok(_) => panic!("alternate namespace must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("requires canonical `model.language_model.*`"));
+        Ok(())
     }
 }

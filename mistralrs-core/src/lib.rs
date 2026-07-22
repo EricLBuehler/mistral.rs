@@ -22,6 +22,7 @@ use std::{
     error::Error,
     fs::OpenOptions,
     io::Write,
+    path::PathBuf,
     sync::{atomic::AtomicBool, Arc, Mutex, RwLock},
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
@@ -44,6 +45,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+mod adapter;
 mod agent_approval;
 mod cuda;
 mod device_map;
@@ -112,6 +114,15 @@ pub use tuning::{
     auto_tune, AutoTuneRequest, AutoTuneResult, FitStatus, QualityTier, TuneCandidate, TuneProfile,
 };
 
+pub(crate) use adapter::AdapterLease;
+#[doc(hidden)]
+pub use adapter::DynamicLoraRuntime;
+pub use adapter::{
+    AdapterGenerationId, AdapterGenerationParseError, AdapterSelection, LoraAdapterError,
+    LoraAdapterFiles, LoraAdapterInfo, LoraAdapterLoadPolicy, LoraAdapterRoute, LoraAdapterSpec,
+    LoraAdapterSpecParseError, LoraResidentGenerationInfo, LoraRuntimeConfig, LoraRuntimeStatus,
+    DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
+};
 pub use agent_approval::{
     AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler,
@@ -141,7 +152,7 @@ pub use mistralrs_mcp::{
 pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
-pub use mistralrs_quant::{IsqBits, IsqType, MULTI_LORA_DELIMITER};
+pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
 pub use pipeline::hf::{
@@ -157,10 +168,10 @@ pub use pipeline::{
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
     GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, LoraAdapterPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
-    ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
-    MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
-    NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
+    Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
+    MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalPromptPrefixer,
+    MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
+    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter,
     SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
     UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
@@ -344,6 +355,7 @@ struct EngineInstance {
     sender: Sender<Request>,
     engine_handler: Option<JoinHandle<()>>,
     reboot_state: RebootState,
+    adapter_runtime: Option<Arc<DynamicLoraRuntime>>,
     config: MistralRsConfig,
     category: ModelCategory,
     logger: Arc<IntervalLogger>,
@@ -448,38 +460,41 @@ impl std::fmt::Display for ModelStatus {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum MistralRsError {
+    #[error("engine state lock is poisoned")]
     EnginePoisoned,
+    #[error("request sender lock is poisoned")]
     SenderPoisoned,
     /// The requested model was not found (neither loaded nor unloaded)
+    #[error("model `{0}` was not found")]
     ModelNotFound(String),
     /// The model is currently being reloaded
+    #[error("model `{0}` is being reloaded")]
     ModelReloading(String),
     /// Failed to reload the model
+    #[error("failed to reload model: {0}")]
     ReloadFailed(String),
     /// Model does not have loader config for reloading
+    #[error("model `{0}` has no loader configuration")]
     NoLoaderConfig(String),
     /// Model is already loaded
+    #[error("model `{0}` is already loaded")]
     ModelAlreadyLoaded(String),
     /// Model is already unloaded
+    #[error("model `{0}` is already unloaded")]
     ModelAlreadyUnloaded(String),
+    #[error(transparent)]
+    LoraAdapter(#[from] LoraAdapterError),
     /// Other error with a message.
+    #[error("{0}")]
     Other(String),
 }
-
-impl std::fmt::Display for MistralRsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-impl std::error::Error for MistralRsError {}
 
 #[cfg(feature = "pyo3_macros")]
 impl From<MistralRsError> for pyo3::PyErr {
     fn from(value: MistralRsError) -> Self {
-        PyValueError::new_err(format!("{value:?}"))
+        PyValueError::new_err(value.to_string())
     }
 }
 
@@ -675,6 +690,430 @@ impl Drop for MistralRs {
 }
 
 impl MistralRs {
+    fn lora_runtime_now(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<(String, Arc<DynamicLoraRuntime>), MistralRsError> {
+        let resolved_model_id = self.resolve_alias_or_default(model_id)?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        let engine = engines
+            .get(&resolved_model_id)
+            .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
+        let runtime =
+            engine
+                .adapter_runtime
+                .clone()
+                .ok_or_else(|| LoraAdapterError::RuntimeUnavailable {
+                    model_id: resolved_model_id.clone(),
+                })?;
+        Ok((resolved_model_id, runtime))
+    }
+
+    async fn lora_runtime(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<(String, Arc<DynamicLoraRuntime>), MistralRsError> {
+        self.lora_runtime_now(model_id)
+    }
+
+    fn lora_runtime_blocking(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<(String, Arc<DynamicLoraRuntime>), MistralRsError> {
+        self.lora_runtime_now(model_id)
+    }
+
+    async fn ensure_lora_runtime_current(
+        &self,
+        model_id: &str,
+        expected: &Arc<DynamicLoraRuntime>,
+    ) -> Result<(), MistralRsError> {
+        let (_, current) = self.lora_runtime(Some(model_id)).await?;
+        if !Arc::ptr_eq(&current, expected) {
+            return Err(LoraAdapterError::RuntimeChanged {
+                model_id: model_id.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_lora_runtime_current_blocking(
+        &self,
+        model_id: &str,
+        expected: &Arc<DynamicLoraRuntime>,
+    ) -> Result<(), MistralRsError> {
+        let (_, current) = self.lora_runtime_blocking(Some(model_id))?;
+        if !Arc::ptr_eq(&current, expected) {
+            return Err(LoraAdapterError::RuntimeChanged {
+                model_id: model_id.to_string(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
+    fn log_lora_load(model_id: &str, info: &LoraAdapterInfo, policy: LoraAdapterLoadPolicy) {
+        info!(
+            model_id,
+            alias = %info.alias,
+            generation = %info.generation,
+            rank = info.rank,
+            bytes = info.bytes,
+            ?policy,
+            "LoRA adapter published"
+        );
+    }
+
+    fn log_lora_unload(model_id: &str, info: &LoraAdapterInfo) {
+        info!(
+            model_id,
+            alias = %info.alias,
+            generation = %info.generation,
+            rank = info.rank,
+            bytes = info.bytes,
+            "LoRA adapter alias removed"
+        );
+    }
+
+    /// Load a local LoRA adapter directory when its alias is not already registered.
+    /// Once admitted to the blocking loader, the operation completes even if this future is dropped.
+    pub async fn load_lora_adapter(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.load_lora_adapter_with_policy(
+            model_id,
+            alias,
+            adapter_dir,
+            LoraAdapterLoadPolicy::Create,
+        )
+        .await
+    }
+
+    /// Load a local LoRA adapter directory using an atomic publication policy.
+    pub async fn load_lora_adapter_with_policy(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        policy: LoraAdapterLoadPolicy,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime(model_id).await?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let alias = alias.into();
+        let adapter_dir = adapter_dir.into();
+        let expected = runtime.clone();
+        let permit = DynamicLoraRuntime::try_acquire_load_permit()?;
+        let info = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            runtime.load_from_directory_with_policy(alias, adapter_dir, policy)
+        })
+        .await
+        .map_err(LoraAdapterError::Task)?
+        .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current(&resolved_model_id, &expected)
+            .await?;
+        Self::log_lora_load(&resolved_model_id, &info, policy);
+        Ok(info)
+    }
+
+    /// Load already-open LoRA files when their alias is not already registered.
+    /// Once admitted to the blocking loader, the operation completes even if this future is dropped.
+    pub async fn load_lora_adapter_files(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        files: LoraAdapterFiles,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.load_lora_adapter_files_with_policy(
+            model_id,
+            alias,
+            files,
+            LoraAdapterLoadPolicy::Create,
+        )
+        .await
+    }
+
+    /// Load already-open LoRA files using an atomic publication policy.
+    pub async fn load_lora_adapter_files_with_policy(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        files: LoraAdapterFiles,
+        policy: LoraAdapterLoadPolicy,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime(model_id).await?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let alias = alias.into();
+        let expected = runtime.clone();
+        let permit = DynamicLoraRuntime::try_acquire_load_permit()?;
+        let info = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            runtime.load_from_files_with_policy(alias, files, policy)
+        })
+        .await
+        .map_err(LoraAdapterError::Task)?
+        .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current(&resolved_model_id, &expected)
+            .await?;
+        Self::log_lora_load(&resolved_model_id, &info, policy);
+        Ok(info)
+    }
+
+    /// Blocking variant of [`Self::load_lora_adapter`].
+    pub fn load_lora_adapter_blocking(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.load_lora_adapter_blocking_with_policy(
+            model_id,
+            alias,
+            adapter_dir,
+            LoraAdapterLoadPolicy::Create,
+        )
+    }
+
+    /// Blocking variant of [`Self::load_lora_adapter_with_policy`].
+    pub fn load_lora_adapter_blocking_with_policy(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        policy: LoraAdapterLoadPolicy,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime_blocking(model_id)?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let _permit = DynamicLoraRuntime::try_acquire_load_permit()?;
+        let info = runtime
+            .load_from_directory_with_policy(alias, adapter_dir.into(), policy)
+            .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current_blocking(&resolved_model_id, &runtime)?;
+        Self::log_lora_load(&resolved_model_id, &info, policy);
+        Ok(info)
+    }
+
+    /// Blocking variant of [`Self::load_lora_adapter_files`].
+    pub fn load_lora_adapter_files_blocking(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        files: LoraAdapterFiles,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.load_lora_adapter_files_blocking_with_policy(
+            model_id,
+            alias,
+            files,
+            LoraAdapterLoadPolicy::Create,
+        )
+    }
+
+    /// Blocking variant of [`Self::load_lora_adapter_files_with_policy`].
+    pub fn load_lora_adapter_files_blocking_with_policy(
+        &self,
+        model_id: Option<&str>,
+        alias: impl Into<String>,
+        files: LoraAdapterFiles,
+        policy: LoraAdapterLoadPolicy,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime_blocking(model_id)?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let _permit = DynamicLoraRuntime::try_acquire_load_permit()?;
+        let info = runtime
+            .load_from_files_with_policy(alias, files, policy)
+            .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current_blocking(&resolved_model_id, &runtime)?;
+        Self::log_lora_load(&resolved_model_id, &info, policy);
+        Ok(info)
+    }
+
+    /// Unregister an adapter alias while allowing admitted requests to finish.
+    pub async fn unload_lora_adapter(
+        &self,
+        model_id: Option<&str>,
+        alias: &str,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.unload_lora_adapter_if_generation(model_id, alias, None)
+            .await
+    }
+
+    /// Unregister an alias only if it still points at the expected generation.
+    pub async fn unload_lora_adapter_if_generation(
+        &self,
+        model_id: Option<&str>,
+        alias: &str,
+        expected_generation: Option<AdapterGenerationId>,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime(model_id).await?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let alias = alias.to_string();
+        let expected = runtime.clone();
+        let info = tokio::task::spawn_blocking(move || {
+            runtime.unload_if_generation(&alias, expected_generation)
+        })
+        .await
+        .map_err(LoraAdapterError::Task)?
+        .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current(&resolved_model_id, &expected)
+            .await?;
+        Self::log_lora_unload(&resolved_model_id, &info);
+        Ok(info)
+    }
+
+    /// Blocking variant of [`Self::unload_lora_adapter`].
+    pub fn unload_lora_adapter_blocking(
+        &self,
+        model_id: Option<&str>,
+        alias: &str,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        self.unload_lora_adapter_blocking_if_generation(model_id, alias, None)
+    }
+
+    /// Blocking variant of [`Self::unload_lora_adapter_if_generation`].
+    pub fn unload_lora_adapter_blocking_if_generation(
+        &self,
+        model_id: Option<&str>,
+        alias: &str,
+        expected_generation: Option<AdapterGenerationId>,
+    ) -> Result<LoraAdapterInfo, MistralRsError> {
+        let (resolved_model_id, runtime) = self.lora_runtime_blocking(model_id)?;
+        if !runtime.supports_live_updates() {
+            return Err(LoraAdapterError::TensorParallelUnsupported {
+                model_id: resolved_model_id,
+            }
+            .into());
+        }
+        let info = runtime
+            .unload_if_generation(alias, expected_generation)
+            .map_err(MistralRsError::from)?;
+        self.ensure_lora_runtime_current_blocking(&resolved_model_id, &runtime)?;
+        Self::log_lora_unload(&resolved_model_id, &info);
+        Ok(info)
+    }
+
+    /// List loaded adapter aliases for a model.
+    pub async fn list_lora_adapters(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Vec<LoraAdapterInfo>, MistralRsError> {
+        let (_, runtime) = self.lora_runtime(model_id).await?;
+        Ok(runtime.list())
+    }
+
+    /// Blocking variant of [`Self::list_lora_adapters`].
+    pub fn list_lora_adapters_blocking(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<Vec<LoraAdapterInfo>, MistralRsError> {
+        let (_, runtime) = self.lora_runtime_blocking(model_id)?;
+        Ok(runtime.list())
+    }
+
+    /// Return loaded aliases and complete resident-generation capacity usage.
+    pub async fn lora_adapter_status(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<LoraRuntimeStatus, MistralRsError> {
+        let (_, runtime) = self.lora_runtime(model_id).await?;
+        Ok(runtime.status())
+    }
+
+    /// Blocking variant of [`Self::lora_adapter_status`].
+    pub fn lora_adapter_status_blocking(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<LoraRuntimeStatus, MistralRsError> {
+        let (_, runtime) = self.lora_runtime_blocking(model_id)?;
+        Ok(runtime.status())
+    }
+
+    /// List every loaded adapter together with its owning base model.
+    pub fn list_lora_adapter_routes(&self) -> Result<Vec<LoraAdapterRoute>, MistralRsError> {
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        let mut routes = Vec::new();
+        for (model_id, engine) in engines.iter() {
+            if let Some(runtime) = &engine.adapter_runtime {
+                routes.extend(runtime.list().into_iter().map(|adapter| LoraAdapterRoute {
+                    model_id: model_id.clone(),
+                    adapter,
+                }));
+            }
+        }
+        routes.sort_by(|left, right| {
+            (&left.model_id, &left.adapter.alias).cmp(&(&right.model_id, &right.adapter.alias))
+        });
+        Ok(routes)
+    }
+
+    fn prepare_request_dispatch(
+        &self,
+        request: &mut Request,
+    ) -> Result<Sender<Request>, MistralRsError> {
+        let requested_model = match &*request {
+            Request::Normal(request) => request.model_id.clone(),
+            _ => None,
+        };
+        self.get_sender(requested_model.as_deref())?;
+
+        let model_id = self.resolve_alias_or_default(requested_model.as_deref())?;
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| MistralRsError::EnginePoisoned)?;
+        let engine = engines
+            .get(&model_id)
+            .ok_or_else(|| MistralRsError::ModelNotFound(model_id.clone()))?;
+        if let Request::Normal(request) = request {
+            if let Some(selection) = request.adapter.as_mut() {
+                let runtime = engine.adapter_runtime.as_ref().ok_or_else(|| {
+                    LoraAdapterError::RuntimeUnavailable {
+                        model_id: model_id.clone(),
+                    }
+                })?;
+                selection.pin(runtime)?;
+                if let Some(generation) = selection.resolved_generation() {
+                    debug!(model_id, %generation, "admitted LoRA adapter request");
+                }
+            }
+        }
+        Ok(engine.sender.clone())
+    }
+
     pub async fn shutdown(self: Arc<Self>) -> Result<(), String> {
         let mut this =
             Arc::try_unwrap(self).map_err(|_| "Cannot shutdown while MistralRs is shared")?;
@@ -720,6 +1159,7 @@ impl MistralRs {
         };
         let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
+        let adapter_runtime = pipeline_guard.adapter_runtime();
         drop(pipeline_guard);
 
         // cuTile kernels JIT-compile into a thread-local cache, so warmup must run on the engine thread.
@@ -849,6 +1289,7 @@ impl MistralRs {
             sender: tx,
             engine_handler: Some(engine_handler),
             reboot_state,
+            adapter_runtime,
             config: mistralrs_config,
             category,
             logger,
@@ -1195,6 +1636,7 @@ impl MistralRs {
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: None,
+                    adapter: None,
                     truncate_sequence: false,
                     session_id: None,
                     files: None,
@@ -1910,24 +2352,14 @@ impl MistralRs {
 
     /// Dispatch a request to the appropriate engine based on the model_id in the request
     pub fn send_request(&self, mut request: Request) -> Result<(), MistralRsError> {
-        let model_id = match &mut request {
-            Request::Normal(normal_req) => normal_req.model_id.as_deref(),
-            _ => None, // Other request types don't specify model_id
-        };
-
-        let sender = self.get_sender(model_id)?;
+        let sender = self.prepare_request_dispatch(&mut request)?;
         sender
             .blocking_send(request)
             .map_err(|_| MistralRsError::SenderPoisoned)
     }
 
     pub async fn send_request_async(&self, mut request: Request) -> Result<(), MistralRsError> {
-        let model_id = match &mut request {
-            Request::Normal(normal_req) => normal_req.model_id.as_deref(),
-            _ => None,
-        };
-
-        let sender = self.get_sender(model_id)?;
+        let sender = self.prepare_request_dispatch(&mut request)?;
         sender
             .send(request)
             .await

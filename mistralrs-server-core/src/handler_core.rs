@@ -1,8 +1,8 @@
 //! Core functionality for handlers.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{extract::Json, http::StatusCode, response::IntoResponse};
-use mistralrs_core::{Request, Response};
+use mistralrs_core::{MistralRsError, Request, Response};
 use serde::Serialize;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -87,23 +87,35 @@ pub fn create_response_channel(
 }
 
 /// Sends a request to the model processing pipeline.
-pub async fn send_request(state: &SharedMistralRsState, request: Request) -> Result<()> {
+pub async fn send_request(
+    state: &SharedMistralRsState,
+    request: Request,
+) -> Result<(), MistralRsError> {
     send_request_with_model(state, request, None).await
 }
 
 pub async fn send_request_with_model(
     state: &SharedMistralRsState,
-    request: Request,
+    mut request: Request,
     model_id: Option<&str>,
-) -> Result<()> {
-    let sender = state
-        .get_sender(model_id)
-        .context("mistral.rs sender not available.")?;
+) -> Result<(), MistralRsError> {
+    if let (Request::Normal(request), Some(model_id)) = (&mut request, model_id) {
+        request.model_id = Some(model_id.to_string());
+    }
+    state.send_request_async(request).await
+}
 
-    sender
-        .send(request)
-        .await
-        .context("Failed to send request to model pipeline")
+pub(crate) fn request_model_override(
+    requested_model: String,
+    routed_model: &str,
+) -> Option<String> {
+    (requested_model != routed_model).then_some(requested_model)
+}
+
+pub(crate) fn apply_model_override(model: &mut String, model_override: Option<&str>) {
+    if let Some(model_override) = model_override {
+        *model = model_override.to_string();
+    }
 }
 
 /// Generic function to process non-streaming responses.
@@ -129,5 +141,23 @@ where
                 return error_handler(state, error.into());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_model_override_only_preserves_routed_aliases() {
+        assert_eq!(
+            request_model_override("code".to_string(), "base"),
+            Some("code".to_string())
+        );
+        assert_eq!(request_model_override("base".to_string(), "base"), None);
+
+        let mut response_model = "base".to_string();
+        apply_model_override(&mut response_model, Some("code"));
+        assert_eq!(response_model, "code");
     }
 }

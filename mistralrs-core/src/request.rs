@@ -10,8 +10,8 @@ use serde_json::Value;
 use crate::VideoInput;
 
 use crate::{
-    response::Response, sampler::SamplingParams, tools::ToolChoice, AgentPermission,
-    AgentToolApprovalHandler, CodeExecutionPermission, CustomLogitsProcessor,
+    response::Response, sampler::SamplingParams, tools::ToolChoice, AdapterSelection,
+    AgentPermission, AgentToolApprovalHandler, CodeExecutionPermission, CustomLogitsProcessor,
     DiffusionGenerationParams, Tool,
 };
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
@@ -334,6 +334,8 @@ pub struct NormalRequest {
     pub tool_dispatch_url: Option<String>,
     pub model_id: Option<String>,
     #[serde(default)]
+    pub adapter: Option<AdapterSelection>,
+    #[serde(default)]
     pub truncate_sequence: bool,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
@@ -380,6 +382,7 @@ impl NormalRequest {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             session_id: None,
             files: None,
@@ -480,5 +483,41 @@ impl Debug for Request {
             Request::Terminate => write!(f, "Termination Request"),
             Request::TerminateAllSeqsNextStep => write!(f, "Terminate All Seqs Next Step"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_replication_keeps_an_exact_generation() {
+        let (response, _) = tokio::sync::mpsc::channel(1);
+        let mut request = NormalRequest::new_simple(
+            RequestMessage::Completion {
+                text: "hello".to_string(),
+                echo_prompt: false,
+                best_of: None,
+            },
+            SamplingParams::neutral(),
+            response,
+            0,
+            None,
+            None,
+        );
+        let generation = crate::AdapterGenerationId::from_bytes([7; 32]);
+        request.adapter = Some(AdapterSelection::generation(generation));
+
+        let serialized = serde_json::to_string(&Request::Normal(Box::new(request))).unwrap();
+        let Request::Normal(request) = serde_json::from_str::<Request>(&serialized).unwrap() else {
+            panic!("expected a normal request");
+        };
+        assert_eq!(
+            request
+                .adapter
+                .as_ref()
+                .and_then(AdapterSelection::resolved_generation),
+            Some(generation)
+        );
     }
 }

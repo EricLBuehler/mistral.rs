@@ -57,24 +57,25 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 |---|---|
 | `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
+| `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/#enable-http-mutation). |
+| `MISTRALRS_LORA_ADAPTER_ROOT` | Canonical directory root allowed for runtime LoRA adapter paths. Use this whenever runtime LoRA updating is enabled in production. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
-## CUDA and attention kernels
+## CUDA acceleration
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_CUDA_GRAPHS` | CUDA decode graph capture and replay is enabled by default for supported paged-attention decode steps. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
-| `MISTRALRS_FLASHINFER_DECODE` | Set to `0`, `false`, `no`, or `off` to disable the FlashInfer (paged-attention kernel library) paged decode/cache layout and use the generic paged KV-cache layout instead. Defaults to enabled on CUDA when compatible. |
-| `MISTRALRS_NO_MLA` | `MISTRALRS_NO_MLA=1` disables the MLA (Multi-head Latent Attention) path for DeepSeek V2/V3. Generic attention is used instead. |
-| `MISTRALRS_MOE_BACKEND` | Forces the MoE (Mixture of Experts) expert backend: `cutile`, `cutlass`, `fused` (also `wmma`, `native`, `legacy`), or `fast`. Default is automatic selection. See [MoE expert backends](/mistral.rs/developer/moe-backends/). |
-| `CUTILE_TILEIRAS_PATH` | Path to a specific `tileiras` binary for the cuTile JIT instead of resolving it from `PATH`. |
+| `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
+| `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
+| `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
+| `CUTILE_TILEIRAS_PATH` | Path to `tileiras` when it is not available on `PATH`. |
 
 ## Multi-GPU and multi-node
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_NO_NCCL` | `MISTRALRS_NO_NCCL=1` disables NCCL at runtime; single-machine CUDA multi-GPU then falls back to layer mapping. When using the ring backend on a binary also built with `nccl`, set this so the ring backend is selected. |
+| `MISTRALRS_NO_NCCL` | Disables NCCL for single-machine multi-GPU inference when set to `1`. Also set this for ring deployments when the binary includes NCCL. |
 | `MISTRALRS_MN_GLOBAL_WORLD_SIZE` | Total NCCL tensor-parallel world size across nodes. Presence of this variable enables multi-node NCCL mode. |
 | `MISTRALRS_MN_LOCAL_WORLD_SIZE` | Local NCCL tensor-parallel size contributed by each node. |
 | `MISTRALRS_MN_HEAD_NUM_WORKERS` | Set on the head node: number of worker nodes. |
@@ -100,7 +101,6 @@ These are read by build scripts, not at runtime.
 | `MISTRALRS_METAL_PRECOMPILE` | `MISTRALRS_METAL_PRECOMPILE=0` skips Metal kernel precompilation at build time; kernels are compiled at runtime on first use. Also accepts `false`, `no`, and `off`. |
 | `MISTRALRS_METAL_PLATFORMS` | Limits which Metal platform metallibs are precompiled. Accepts comma-separated `macos`, `ios`, `tvos`, or `all`; defaults to all platforms. For local macOS development, use `MISTRALRS_METAL_PLATFORMS=macos`. |
 | `CUDA_NVCC_FLAGS` | Extra compiler options passed to CUDA builds. |
-| `MISTRALRS_CUTLASS_COMMIT` | Overrides the CUTLASS git commit used by CUDA build scripts for flash-attention and CUTLASS MoE kernels. Defaults to the project-pinned commit. |
 | `MISTRALRS_INSTALL_TAG` | Pins the installers to a specific release tag (e.g. `v0.9.0`): the prebuilt is downloaded from that release, and a source build checks out that git tag. Default is the latest stable release (prebuilt) or latest `master` (source). |
 | `MISTRALRS_INSTALL_FROM_SOURCE` | `MISTRALRS_INSTALL_FROM_SOURCE=1` makes the shell and PowerShell installers skip the prebuilt download and build from the latest `master` (bleeding edge) instead of the latest stable release. |
 | `MISTRALRS_INSTALL_NCCL` | `MISTRALRS_INSTALL_NCCL=1` forces the shell and PowerShell installers to add the `nccl` feature for CUDA builds even if NCCL is not detected. |

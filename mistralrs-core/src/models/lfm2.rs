@@ -241,6 +241,7 @@ impl Mlp {
 
 struct MoeMlp {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     expert_bias: Option<Tensor>,
     num_experts_per_tok: usize,
@@ -261,10 +262,11 @@ impl MoeMlp {
             .device_for(layer_idx, false)
             .cloned()
             .unwrap_or_else(|| vb.device().clone());
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_experts),
         )?;
         let expert_bias = if cfg.use_expert_bias {
             Some(
@@ -281,6 +283,7 @@ impl MoeMlp {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::MIXTRAL,
         };
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -294,6 +297,7 @@ impl MoeMlp {
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             expert_bias,
             num_experts_per_tok: cfg.num_experts_per_tok,
@@ -306,6 +310,10 @@ impl MoeMlp {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {

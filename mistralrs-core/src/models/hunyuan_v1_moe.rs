@@ -643,6 +643,7 @@ impl MoeBlock {
             num_experts_per_tok: routing_mode.top_k(),
             hidden_size,
             moe_intermediate_size: intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
         let experts = MoEExperts::new(
             &moe_cfg,

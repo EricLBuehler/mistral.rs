@@ -268,6 +268,7 @@ impl TextMoe {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         let experts = MoEExperts::new(

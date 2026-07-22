@@ -1,13 +1,13 @@
 ---
 title: "mistralrs bench"
-description: "Run performance benchmarks for plain model generation"
+description: "Run performance benchmarks for base or LoRA model generation"
 sidebar:
   order: 11
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Run performance benchmarks for plain model generation
+Run performance benchmarks for base or LoRA model generation
 
 ```
 mistralrs bench [OPTIONS] [COMMAND]
@@ -23,7 +23,13 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -53,11 +59,12 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
 | `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
 | `--mtp-n-predict <MTP_N_PREDICT>` |  | Number of MTP draft tokens to propose per target step |
-| `--prompt-len <PROMPT_LEN>` | `512` | Number of tokens in prompt. Accepts comma-separated values for sweeps |
-| `--gen-len <GEN_LEN>` | `128` | Number of tokens to generate |
-| `--depth <DEPTH>` | `4` | Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps |
+| `--adapter <ADAPTER>` |  | LoRA adapter alias to benchmark. Omit to benchmark the base model |
+| `--prompt-len <PROMPT_LEN>` | `512` | Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps |
+| `--gen-len <GEN_LEN>` | `128` | Output tokens per decode request. Values below 2 skip decode metrics |
+| `--depth <DEPTH>` | `4` | Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps |
 | `--iterations <ITERATIONS>` | `3` | Number of benchmark iterations |
-| `--warmup <WARMUP>` | `1` | Number of warmup runs (discarded) |
+| `--warmup <WARMUP>` | `1` | Number of warmup runs per benchmark case (discarded) |
 
 ## mistralrs bench auto
 
@@ -77,7 +84,13 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -121,7 +134,13 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
+| `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
+| `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
+| `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
+| `--legacy-lora <SOURCE>` |  | Legacy LoRA adapter source for a raw GGUF or GGML model |
+| `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
@@ -162,10 +181,6 @@ mistralrs bench multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--lora <LORA>` |  | LoRA adapter model ID(s), semicolon-separated for multiple |
-| `--xlora <XLORA>` |  | X-LoRA adapter model ID |
-| `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
-| `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
 | `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |

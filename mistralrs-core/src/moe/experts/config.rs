@@ -1,4 +1,4 @@
-use candle_core::{DType, Device};
+use candle_core::{DType, Device, Result};
 #[cfg(feature = "cuda")]
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::QuantizedConfig;
@@ -11,6 +11,7 @@ pub struct MoEExpertsConfig {
     pub num_experts_per_tok: usize,
     pub hidden_size: usize,
     pub moe_intermediate_size: usize,
+    pub expert_proj_names: ExpertProjNames,
 }
 
 /// One of the three expert projections.
@@ -121,14 +122,61 @@ pub fn prelog_moe_backend(
     loading_isq: bool,
     quantization_config: &Option<QuantizedConfig>,
     act: Activation,
-) {
-    let _ = MoEExpertsBackend::resolve(&BackendChoice::new(
+) -> Result<()> {
+    MoEExpertsBackend::resolve(&BackendChoice::new(
         device,
         dtype,
         loading_isq,
         quantization_config,
         act,
-    ));
+    ))?;
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn gated_act(act: Activation) -> Result<mistralrs_quant::moe::cuda::GatedAct> {
+    match act {
+        Activation::Silu => Ok(mistralrs_quant::moe::cuda::GatedAct::Silu),
+        Activation::NewGelu | Activation::GeluPytorchTanh => {
+            Ok(mistralrs_quant::moe::cuda::GatedAct::GeluTanh)
+        }
+        _ => candle_core::bail!("activation {act:?} is not supported by grouped MoE kernels"),
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn validate_raw_weights(c: &BackendChoice, backend: &str) -> Result<()> {
+    if c.quantized || c.loading_isq || c.immediate_isq {
+        candle_core::bail!(
+            "MISTRALRS_MOE_BACKEND={backend} requires raw, unquantized expert weights"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn validate_fused(c: &BackendChoice) -> Result<()> {
+    validate_raw_weights(c, "fused")?;
+    if !matches!(c.dtype, DType::F16 | DType::BF16) {
+        candle_core::bail!("MISTRALRS_MOE_BACKEND=fused requires F16 or BF16 weights");
+    }
+    if !c.device.is_cuda() {
+        candle_core::bail!("MISTRALRS_MOE_BACKEND=fused requires a CUDA device");
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn validate_grouped(c: &BackendChoice, backend: &str) -> Result<()> {
+    validate_raw_weights(c, backend)?;
+    if c.dtype != DType::BF16 {
+        candle_core::bail!("MISTRALRS_MOE_BACKEND={backend} requires BF16 weights");
+    }
+    gated_act(c.act)?;
+    if !c.device.is_cuda() {
+        candle_core::bail!("MISTRALRS_MOE_BACKEND={backend} requires a CUDA device");
+    }
+    Ok(())
 }
 
 impl MoEExpertsBackend {
@@ -147,42 +195,87 @@ impl MoEExpertsBackend {
 
     /// Single source of truth for the backend: env override, then raw CUDA kernels (cuTile when
     /// eligible, else Fused) for unquantized bf16, else gather-based Fast.
-    pub(super) fn resolve(c: &BackendChoice) -> Self {
+    pub(super) fn resolve(c: &BackendChoice) -> Result<Self> {
         if let Some(forced) = Self::from_env() {
-            return forced;
+            match forced {
+                Self::Fast => return Ok(Self::Fast),
+                Self::Fused => {
+                    #[cfg(feature = "cuda")]
+                    {
+                        validate_fused(c)?;
+                        return Ok(Self::Fused);
+                    }
+                    #[cfg(not(feature = "cuda"))]
+                    candle_core::bail!("MISTRALRS_MOE_BACKEND=fused requires a CUDA build");
+                }
+                #[cfg(feature = "cutile")]
+                Self::Cutile => {
+                    validate_grouped(c, "cutile")?;
+                    if !cutile_arch_supported(&c.device) {
+                        candle_core::bail!(
+                            "MISTRALRS_MOE_BACKEND=cutile is unsupported by this CUDA/GPU pair"
+                        );
+                    }
+                    if !cutile_jit_available(&c.device) {
+                        candle_core::bail!(
+                            "MISTRALRS_MOE_BACKEND=cutile requires tileiras support for this GPU"
+                        );
+                    }
+                    return Ok(Self::Cutile);
+                }
+                #[cfg(feature = "cuda")]
+                Self::Cutlass => {
+                    validate_grouped(c, "cutlass")?;
+                    if !cutlass_moe_supported(&c.device) {
+                        candle_core::bail!(
+                            "MISTRALRS_MOE_BACKEND=cutlass is unsupported by this CUDA/GPU pair"
+                        );
+                    }
+                    return Ok(Self::Cutlass);
+                }
+            }
         }
-        if c.device.is_cuda() && !c.quantized && !c.loading_isq && !c.immediate_isq {
+        if c.device.is_cuda()
+            && !c.quantized
+            && !c.loading_isq
+            && !c.immediate_isq
+            && matches!(c.dtype, DType::F16 | DType::BF16)
+        {
             #[cfg(feature = "cuda")]
-            let bf16_gated = c.dtype == DType::BF16
-                && matches!(
-                    c.act,
-                    Activation::NewGelu | Activation::GeluPytorchTanh | Activation::Silu
-                );
+            let bf16_gated = c.dtype == DType::BF16 && gated_act(c.act).is_ok();
             #[cfg(feature = "cutile")]
             if bf16_gated && cutile_arch_supported(&c.device) {
-                if mistralrs_quant::cutile::jit_available() {
-                    return Self::Cutile;
+                if cutile_jit_available(&c.device) {
+                    return Ok(Self::Cutile);
                 }
                 once_log_info(
-                    "cuTile JIT assembler (tileiras) not found at runtime; using CUTLASS MoE kernels",
+                    "cuTile JIT assembler is unavailable for this GPU; using CUTLASS MoE kernels",
                 );
             }
             #[cfg(feature = "cuda")]
             if bf16_gated && cutlass_moe_supported(&c.device) {
                 once_log_info("MoE experts backend: CUTLASS grouped GEMM");
-                return Self::Cutlass;
+                return Ok(Self::Cutlass);
             }
-            return Self::Fused;
+            return Ok(Self::Fused);
         }
-        Self::Fast
+        Ok(Self::Fast)
     }
 }
 
-/// cuTile only on archs its JIT supports (Ampere or Blackwell+, not Hopper); otherwise fall back to Fused.
+/// cuTile only on build CUDA and GPU pairs supported by the pinned compiler.
 #[cfg(feature = "cutile")]
 fn cutile_arch_supported(device: &Device) -> bool {
     match device {
         Device::Cuda(dev) => mistralrs_quant::cutile::device_supported(dev),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "cutile")]
+fn cutile_jit_available(device: &Device) -> bool {
+    match device {
+        Device::Cuda(dev) => mistralrs_quant::cutile::jit_available(dev),
         _ => false,
     }
 }
@@ -192,5 +285,59 @@ fn cutlass_moe_supported(device: &Device) -> bool {
     match device {
         Device::Cuda(dev) => mistralrs_quant::moe::cutlass_moe_available(dev),
         _ => false,
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+
+    fn choice(dtype: DType, act: Activation) -> BackendChoice {
+        BackendChoice {
+            device: Device::Cpu,
+            dtype,
+            loading_isq: false,
+            quantized: false,
+            immediate_isq: false,
+            act,
+        }
+    }
+
+    #[test]
+    fn grouped_activation_mapping_is_exhaustive() {
+        assert_eq!(
+            gated_act(Activation::Silu).unwrap(),
+            mistralrs_quant::moe::cuda::GatedAct::Silu
+        );
+        assert_eq!(
+            gated_act(Activation::NewGelu).unwrap(),
+            mistralrs_quant::moe::cuda::GatedAct::GeluTanh
+        );
+        assert_eq!(
+            gated_act(Activation::GeluPytorchTanh).unwrap(),
+            mistralrs_quant::moe::cuda::GatedAct::GeluTanh
+        );
+        assert!(gated_act(Activation::Gelu).is_err());
+        assert!(gated_act(Activation::Relu).is_err());
+    }
+
+    #[test]
+    fn forced_grouped_validation_rejects_ineligible_inputs() {
+        let error = validate_grouped(&choice(DType::BF16, Activation::Silu), "cutlass")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("CUDA device"));
+
+        let error = validate_grouped(&choice(DType::F16, Activation::Silu), "cutlass")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("BF16"));
+
+        let mut quantized = choice(DType::BF16, Activation::Silu);
+        quantized.quantized = true;
+        let error = validate_grouped(&quantized, "cutlass")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("raw, unquantized"));
     }
 }

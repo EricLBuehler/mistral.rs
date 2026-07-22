@@ -177,6 +177,11 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve().ok()?.unquant_weight_bias()
     }
 
+    fn is_dynamic_lora_active(&self) -> bool {
+        self.resolve()
+            .is_ok_and(|layer| layer.is_dynamic_lora_active())
+    }
+
     fn has_bias(&self) -> bool {
         match self.resolve() {
             Ok(layer) => layer.has_bias(),

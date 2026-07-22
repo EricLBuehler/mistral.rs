@@ -25,6 +25,8 @@ curl http://localhost:1234/v1/chat/completions \
 
 With a single `-m` model, the request `model` is `"default"` (or omitted). In [multi-model serving](/mistral.rs/guides/serve/multiple-models/), use a model id exactly as it appears in `GET /v1/models`.
 
+Loaded dynamic [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) also appear in `GET /v1/models`, so vLLM-compatible clients can put the adapter alias in `model`. Chat Completions, Completions, and Responses additionally accept `adapter` as either an alias string or `{"generation":"<generation-id>"}`. Omit `adapter` and select the base model to run without LoRA. LoRA inference responses expose the exact resolved generation as `adapter_generation` for audit and retry routing.
+
 First time serving a model? The [Quickstart](/mistral.rs/quickstart/) walks through installation, Hugging Face authentication for gated models, and the first run.
 
 ## OpenAI Python client
@@ -42,13 +44,15 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
+For a loaded LoRA alias, either set `model="code"` like vLLM or keep the base model explicit and pass `extra_body={"adapter": "code"}`. The latter also accepts an exact generation object.
+
 The `api_key` is required by the client but not validated by the server; see [authentication](/mistral.rs/reference/http-api/#authentication). Set `stream=True` for token-by-token output ([full example](/mistral.rs/examples/server/streaming/)).
 
 ## Endpoints
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /v1/models` | List loaded models. |
+| `GET /v1/models` | List loaded base models and LoRA alias model cards. |
 | `POST /v1/chat/completions` | Chat, streaming, tool calling, multimodal inputs, and mistral.rs agentic extensions. |
 | `POST /v1/responses` | OpenAI Responses API: response objects, polling, background runs, cancellation. |
 | `POST /v1/skills` | Upload Skills for OpenAI-compatible Responses or Anthropic-compatible Messages. |
@@ -61,6 +65,9 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `POST /v1/audio/speech` | Text to speech. |
 | `POST /v1/files` | Upload OpenAI-compatible user files. |
 | `GET /v1/files` | List uploaded and generated files. |
+| `POST /v1/load_lora_adapter` | Load a local LoRA adapter, or atomically replace one with `load_inplace`. Available only when runtime updating is enabled. |
+| `GET /v1/lora_adapters` | List loaded LoRA aliases, generations, and capacity. The route is always registered, but the target model must have dynamic LoRA enabled. Use `?model=<model-id>` in a multi-model server. |
+| `POST /v1/unload_lora_adapter` | Unload a LoRA alias. Available only when runtime updating is enabled. |
 
 Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
 

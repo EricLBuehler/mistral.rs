@@ -1,4 +1,13 @@
 [model]
-adapters_model_id = "lamm-mit/x-lora"
-order = "ordering-file.json"
+kind = "lora"
+model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
+
+[[model.adapters]]
+alias = "zephyr"
+source = "typeof/zephyr-7b-beta-lora"
+
+[model.runtime_config]
+max_adapters = 4
+max_rank = 128
+max_bytes = 2147483648

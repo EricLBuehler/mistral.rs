@@ -1,4 +1,5 @@
 use candle_core::{DType, Tensor};
+use mistralrs_quant::LoraExpertExecution;
 
 use crate::layers::Activation;
 
@@ -58,6 +59,7 @@ pub(super) struct MoEForward<'a> {
     pub topk_ids: &'a Tensor,
     pub original_dtype: DType,
     pub shape: MoEForwardShape,
+    pub lora: Option<LoraExpertExecution>,
 }
 
 #[derive(Clone, Copy)]

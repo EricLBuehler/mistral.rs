@@ -253,6 +253,7 @@ pub struct ShardedVarBuilder {
     tracker: Tracker,
     uqff_reader: Option<Arc<UqffReader>>,
     shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
+    lora_registry: Option<Arc<crate::LoraLayerRegistry>>,
 }
 
 impl ShardedVarBuilder {
@@ -262,6 +263,7 @@ impl ShardedVarBuilder {
             tracker: Tracker::new(),
             uqff_reader: None,
             shapes: None,
+            lora_registry: None,
         }
     }
 
@@ -281,12 +283,19 @@ impl ShardedVarBuilder {
         self.shapes.as_ref()?.get(&full).map(|s| &s[..])
     }
 
+    pub fn tensor_names(&self) -> Option<Vec<String>> {
+        let mut names = self.shapes.as_ref()?.keys().cloned().collect::<Vec<_>>();
+        names.sort();
+        Some(names)
+    }
+
     pub fn from_self(&self, base: VarBuilderArgs<'static, ShardedSafeTensors>) -> Self {
         Self {
             base,
             tracker: self.tracker.clone(),
             uqff_reader: self.uqff_reader.clone(),
             shapes: self.shapes.clone(),
+            lora_registry: self.lora_registry.clone(),
         }
     }
 
@@ -395,6 +404,20 @@ impl ShardedVarBuilder {
 
     pub fn uqff_reader(&self) -> Option<&Arc<UqffReader>> {
         self.uqff_reader.as_ref()
+    }
+
+    pub fn with_lora_registry(mut self, registry: Arc<crate::LoraLayerRegistry>) -> Self {
+        self.lora_registry = Some(registry);
+        self
+    }
+
+    pub fn without_lora_registry(mut self) -> Self {
+        self.lora_registry = None;
+        self
+    }
+
+    pub fn lora_registry(&self) -> Option<&Arc<crate::LoraLayerRegistry>> {
+        self.lora_registry.as_ref()
     }
 }
 

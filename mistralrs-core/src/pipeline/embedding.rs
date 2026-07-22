@@ -3,9 +3,9 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, TokenSource,
+    get_model_paths, AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -80,7 +80,6 @@ pub struct EmbeddingLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -108,7 +107,6 @@ pub struct EmbeddingLoaderBuilder {
     kind: ModelKind,
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -144,14 +142,6 @@ impl EmbeddingLoaderBuilder {
         self
     }
 
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
-        self.kind = ModelKind::Adapter {
-            adapter: AdapterKind::Lora,
-        };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
-        self
-    }
-
     pub(crate) fn with_load_context(mut self, load_context: EmbeddingLoadContext) -> Self {
         self.load_context = load_context;
         self
@@ -173,7 +163,6 @@ impl EmbeddingLoaderBuilder {
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapter_ids: self.lora_adapter_ids,
             load_context: self.load_context,
         })
     }

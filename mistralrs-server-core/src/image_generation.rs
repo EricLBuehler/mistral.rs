@@ -100,6 +100,7 @@ pub fn parse_request(
         } else {
             Some(oairequest.model.clone())
         },
+        adapter: None,
         truncate_sequence: false,
         session_id: None,
         files: None,
