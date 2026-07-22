@@ -40,6 +40,22 @@ impl Default for Tracker {
     }
 }
 
+impl Tracker {
+    pub fn new() -> Self {
+        Self {
+            modules: Arc::new(Mutex::new(vec![])),
+        }
+    }
+
+    pub fn add_module(&self, module: TrackedModule) {
+        self.modules.lock().unwrap().push(module);
+    }
+
+    pub fn get(&self) -> MutexGuard<'_, Vec<TrackedModule>> {
+        self.modules.lock().unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,21 +118,5 @@ mod tests {
             module.resolve_type(crate::IsqType::AFQ4),
             crate::IsqType::AFQ4
         );
-    }
-}
-
-impl Tracker {
-    pub fn new() -> Self {
-        Self {
-            modules: Arc::new(Mutex::new(vec![])),
-        }
-    }
-
-    pub fn add_module(&self, module: TrackedModule) {
-        self.modules.lock().unwrap().push(module);
-    }
-
-    pub fn get(&self) -> MutexGuard<'_, Vec<TrackedModule>> {
-        self.modules.lock().unwrap()
     }
 }

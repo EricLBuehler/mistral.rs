@@ -183,6 +183,16 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
     })
 }
 
+fn capture_mode(has_write_uqff: bool, wants_imatrix: bool) -> mistralrs_quant::IsqCaptureMode {
+    if has_write_uqff {
+        mistralrs_quant::IsqCaptureMode::CaptureAll
+    } else if wants_imatrix {
+        mistralrs_quant::IsqCaptureMode::CaptureMatches
+    } else {
+        mistralrs_quant::IsqCaptureMode::Immediate
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,15 +238,5 @@ mod tests {
         assert!(matches(&promoted, "model.embed_tokens.weight"));
         assert!(matches(&promoted, "lm_head.weight"));
         Ok(())
-    }
-}
-
-fn capture_mode(has_write_uqff: bool, wants_imatrix: bool) -> mistralrs_quant::IsqCaptureMode {
-    if has_write_uqff {
-        mistralrs_quant::IsqCaptureMode::CaptureAll
-    } else if wants_imatrix {
-        mistralrs_quant::IsqCaptureMode::CaptureMatches
-    } else {
-        mistralrs_quant::IsqCaptureMode::Immediate
     }
 }
