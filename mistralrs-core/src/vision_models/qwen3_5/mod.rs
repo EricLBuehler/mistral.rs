@@ -524,14 +524,14 @@ impl MultimodalModel for Qwen3_5Model {
         &self.text.cfg
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
-        assert_eq!(input_ids.dims()[0], 1);
+        let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");
         Box::new(Qwen3VLVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
             image_grid_thw: None,
             video_grid_thw: None,
             rope_img_grid_thw: None,
             rope_vid_grid_thw: None,
-            seqlens: vec![input_ids.dims()[1]],
+            seqlens: vec![seq_len; batch_size],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
             image_hashes: vec![],

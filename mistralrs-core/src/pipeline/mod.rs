@@ -502,6 +502,12 @@ impl<'a> ModelForwardContext<'a> {
         device: &Device,
         seq_len: usize,
     ) -> candle_core::Result<Option<&Tensor>> {
+        if self.flash_params.packed {
+            let positions = self.cache.rope_positions(device).ok_or_else(|| {
+                candle_core::Error::msg("packed prefill is missing RoPE positions")
+            })?;
+            return Ok(Some(positions));
+        }
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
         }
@@ -541,8 +547,24 @@ impl<'a> ModelForwardContext<'a> {
     }
 
     pub(crate) fn logits(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
-        LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
-            .select(logits)
+        let devices = [logits.device().clone()];
+        let selection = if self.flash_params.packed {
+            let query_lens = self
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    candle_core::Error::msg("packed prefill requires logical query lengths")
+                })?;
+            LogitsSelection::from_packed_context_lens(
+                logits,
+                self.context_lens,
+                query_lens,
+                &devices,
+            )?
+        } else {
+            LogitsSelection::from_context_lens(logits, self.context_lens, &devices)?
+        };
+        selection.select(logits)
     }
 }
 
@@ -567,6 +589,11 @@ pub(crate) enum LogitsSelection {
         len: usize,
     },
     Indices {
+        indices: DeviceTensorMap,
+        batch: usize,
+        len: usize,
+    },
+    PackedIndices {
         indices: DeviceTensorMap,
         batch: usize,
         len: usize,
@@ -646,6 +673,64 @@ impl LogitsSelection {
         })
     }
 
+    pub(crate) fn from_packed_context_lens(
+        source: &Tensor,
+        context_lens: &[(usize, usize)],
+        query_lens: &[usize],
+        devices: &[Device],
+    ) -> candle_core::Result<Self> {
+        let (physical_batch, physical_seq_len, _) = source.dims3()?;
+        if context_lens.len() != query_lens.len() {
+            candle_core::bail!(
+                "packed logits selection length mismatch: {} spans for {} queries",
+                context_lens.len(),
+                query_lens.len()
+            );
+        }
+        let total_tokens = query_lens.iter().sum::<usize>();
+        if physical_batch * physical_seq_len != total_tokens {
+            candle_core::bail!(
+                "packed logits selection token mismatch: source has {} rows, queries have {total_tokens}",
+                physical_batch * physical_seq_len
+            );
+        }
+        let Some((_, output_len)) = context_lens.first().copied() else {
+            candle_core::bail!("packed logits selection requires at least one span");
+        };
+        if context_lens.iter().any(|(_, len)| *len != output_len) {
+            candle_core::bail!("ragged packed logits selection spans are not supported");
+        }
+
+        let mut indices = Vec::with_capacity(context_lens.len() * output_len);
+        let mut base = 0usize;
+        for ((start, len), query_len) in context_lens.iter().copied().zip(query_lens) {
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| candle_core::Error::msg("packed logits selection span overflow"))?;
+            if end > *query_len {
+                candle_core::bail!(
+                    "packed logits selection span ({start}, {len}) exceeds query length {query_len}"
+                );
+            }
+            for position in start..end {
+                indices.push(u32::try_from(base + position).map_err(candle_core::Error::wrap)?);
+            }
+            base += query_len;
+        }
+
+        let batch = query_lens.len();
+        let cpu_indices = Tensor::from_vec(indices, (batch * output_len,), &Device::Cpu)?;
+        let mut device_indices = HashMap::new();
+        for device in devices {
+            device_indices.insert(device.location(), cpu_indices.to_device(device)?);
+        }
+        Ok(Self::PackedIndices {
+            indices: device_indices,
+            batch,
+            len: output_len,
+        })
+    }
+
     pub(crate) fn select(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
         match self {
             Self::All => Ok(logits.clone()),
@@ -673,6 +758,20 @@ impl LogitsSelection {
                     .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
                 let flat = logits.reshape((logits_batch * seq_len, hidden))?;
                 flat.index_select(indices, 0)?
+                    .reshape((*batch, *len, hidden))
+            }
+            Self::PackedIndices {
+                indices,
+                batch,
+                len,
+            } => {
+                let (physical_batch, physical_seq_len, hidden) = logits.dims3()?;
+                let indices = indices
+                    .get(&logits.device().location())
+                    .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
+                logits
+                    .reshape((physical_batch * physical_seq_len, hidden))?
+                    .index_select(indices, 0)?
                     .reshape((*batch, *len, hidden))
             }
         }
@@ -1018,6 +1117,19 @@ impl ForwardInputsResult {
             Self::BlockGeneration { .. } => Ok(self.clone()),
         }
     }
+
+    fn into_cpu_for_batch(
+        self,
+        batch_size: usize,
+        preserve_causal_generation: bool,
+    ) -> candle_core::Result<Self> {
+        if batch_size <= 1
+            || preserve_causal_generation && matches!(&self, Self::CausalGeneration { .. })
+        {
+            return Ok(self);
+        }
+        self.to_device(&Device::Cpu)
+    }
 }
 
 #[async_trait::async_trait]
@@ -1030,6 +1142,22 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        true
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        true
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        false
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
         None
     }
@@ -1171,8 +1299,15 @@ pub trait Pipeline:
                         }
                     }
 
+                    let preserve_causal_generation = input_seqs.len() > 1
+                        && !return_raw_logits
+                        && self.device().is_cuda()
+                        && self.supports_batched_cuda_sampling()
+                        && sampling::can_sample_batch_cuda(input_seqs);
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                    let raw_logits = self
+                        .forward_inputs(inputs, return_raw_logits)?
+                        .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
@@ -1242,18 +1377,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
@@ -1597,8 +1724,15 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(candle_core::Error::msg)?;
 
+                        let preserve_causal_generation = input_seqs.len() > 1
+                            && !return_raw_logits
+                            && self.device().is_cuda()
+                            && self.supports_batched_cuda_sampling()
+                            && sampling::can_sample_batch_cuda(input_seqs);
                         let start = Instant::now();
-                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                        let raw_logits = self
+                            .forward_inputs(inputs, return_raw_logits)?
+                            .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
 
@@ -1666,18 +1800,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
@@ -1847,10 +1973,82 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use crate::MessageContent;
+    use super::{ForwardCache, LogitsSelection, ModelForwardContext};
+    use crate::{pipeline::text_models_inputs_processor::FlashParams, MessageContent};
+    use candle_core::{Device, Tensor};
     use either::Either;
     use indexmap::IndexMap;
     use serde_json::Value;
+
+    #[test]
+    fn packed_logits_select_each_logical_sequence() {
+        let source = Tensor::from_vec(
+            (0u8..8).map(f32::from).collect::<Vec<_>>(),
+            (1, 8, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let selection = LogitsSelection::from_packed_context_lens(
+            &source,
+            &[(2, 1), (0, 1), (3, 1)],
+            &[3, 1, 4],
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let selected = selection.select(&source).unwrap();
+
+        assert_eq!(selected.dims(), &[3, 1, 1]);
+        assert_eq!(
+            selected.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![2.0, 3.0, 7.0]
+        );
+    }
+
+    #[test]
+    fn packed_logits_select_multi_token_spans() {
+        let source = Tensor::from_vec(
+            (0u8..5).map(f32::from).collect::<Vec<_>>(),
+            (1, 5, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let selection = LogitsSelection::from_packed_context_lens(
+            &source,
+            &[(1, 2), (0, 2)],
+            &[3, 2],
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let selected = selection.select(&source).unwrap();
+
+        assert_eq!(selected.dims(), &[2, 2, 1]);
+        assert_eq!(
+            selected.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn packed_positions_require_explicit_metadata() {
+        let mut flash_params = FlashParams::empty(true);
+        flash_params.packed = true;
+        let seqlen_offsets = [0];
+        let context_lens = [(0, 1)];
+        let position_ids = [1];
+        let mut context = ModelForwardContext::with_cache(
+            ForwardCache::None,
+            &seqlen_offsets,
+            &context_lens,
+            &position_ids,
+            &flash_params,
+        );
+
+        let error = context.text_positions(&Device::Cpu, 1).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("packed prefill is missing RoPE positions"));
+    }
 
     macro_rules! hashmap {
         (@single $($x:tt)*) => (());

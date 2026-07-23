@@ -95,6 +95,9 @@ pub trait MultimodalModel:
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
     }
+    fn requires_uniform_completion_batch(&self) -> bool {
+        self.is_block_diffusion()
+    }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;

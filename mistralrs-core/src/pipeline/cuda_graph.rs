@@ -3,6 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
+#[cfg(target_family = "unix")]
+use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
         FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
@@ -746,6 +748,32 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn cuda_decode_graph_supported_for_model(
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+) -> bool {
+    let Some(metadata) = model_metadata else {
+        return false;
+    };
+    #[cfg(target_family = "unix")]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !DecodePlan::requires_host_context_lengths(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                metadata.k_head_dim_for_layer(layer_idx),
+            )
+        })
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !matches!(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                AttentionBackendKind::FlashInfer
+            )
+        })
+    }
 }
 
 pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {

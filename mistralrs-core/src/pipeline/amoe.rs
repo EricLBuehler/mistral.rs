@@ -248,6 +248,18 @@ impl MetadataMixin for AnyMoePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_prompt_batch()
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_completion_batch()
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_batched_cuda_sampling()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,

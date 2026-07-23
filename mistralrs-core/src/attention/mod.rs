@@ -198,6 +198,17 @@ impl Sdpa {
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        if flash_params.is_some_and(|params| params.packed)
+            && (sdpa_params.sinks.is_some()
+                || !matches!(mask, AttentionMask::CausalFlash)
+                || !flash_params.is_some_and(|params| params.causal)
+                || !q.device().is_cuda()
+                || !crate::using_flash_attn()
+                || !matches!(q.dtype(), DType::F16 | DType::BF16))
+        {
+            candle_core::bail!("packed prefill requires causal CUDA FlashAttention");
+        }
+
         // If sinks are present, dispatch to the sinks backend
         if let Some(sinks) = &sdpa_params.sinks {
             let mask_tensor = match mask {

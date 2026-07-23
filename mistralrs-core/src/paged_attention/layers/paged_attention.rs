@@ -249,8 +249,10 @@ fn prefix_gather_causal_mask(
         let prefix_len = kv_len.saturating_sub(q_len);
         for q_idx in 0..q_max {
             for kv_idx in 0..kv_max {
-                let masked = if q_idx >= q_len || kv_idx >= kv_len {
-                    q_idx >= q_len || kv_idx != 0
+                let masked = if q_idx >= q_len {
+                    kv_idx != 0
+                } else if kv_idx >= kv_len {
+                    true
                 } else {
                     let q_pos = prefix_len + q_idx;
                     let future = kv_idx > q_pos;
@@ -722,7 +724,10 @@ impl PagedAttention {
             other => other.clone(),
         };
 
-        if supports_packed_varlen_sdpa(tensors.query) {
+        if query_lens_match_seq_len
+            && !adjusted_mask.is_custom()
+            && supports_packed_varlen_sdpa(tensors.query)
+        {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(
@@ -755,6 +760,7 @@ impl PagedAttention {
                 sliding_k: None,
                 causal: query_lens.iter().any(|&len| len > 1)
                     && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                packed: false,
             };
             if simple_full_causal {
                 return Sdpa
@@ -1083,6 +1089,7 @@ impl PagedAttention {
                 },
                 sliding_k: None,
                 causal: false,
+                packed: false,
             };
             return Sdpa.run_attention(
                 &q_4d,
@@ -1108,11 +1115,28 @@ impl PagedAttention {
             ctx.dims.head_size,
             query.device(),
         )?;
+        let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        let needs_mask = ctx.sdpa_params.sliding_window.is_some()
+            || kv_lens.iter().any(|&kv_len| kv_len != max_kv);
+        let decode_mask = if needs_mask {
+            prefix_gather_causal_mask(
+                &vec![1; ctx.dims.batch_size],
+                &kv_lens,
+                None,
+                1,
+                max_kv,
+                ctx.sdpa_params.sliding_window,
+                query.dtype(),
+                query.device(),
+            )?
+        } else {
+            AttentionMask::None
+        };
         Sdpa.run_attention(
             &q_4d,
             &k_batched,
             &v_batched,
-            &AttentionMask::None,
+            &decode_mask,
             None,
             ctx.sdpa_params,
         )
@@ -1309,5 +1333,60 @@ impl PagedAttention {
             flash_params,
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ragged_decode_mask_excludes_padding() {
+        let mask =
+            prefix_gather_causal_mask(&[1, 1], &[2, 4], None, 1, 4, None, DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        );
+    }
+
+    #[test]
+    fn ragged_prompt_mask_keeps_padding_rows_finite() {
+        let mask =
+            prefix_gather_causal_mask(&[2], &[2], None, 4, 2, None, DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                f32::NEG_INFINITY
+            ]
+        );
     }
 }

@@ -30,8 +30,9 @@ use crate::pipeline::chat_template::{
 };
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
+    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
+    prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphState,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1258,6 +1259,9 @@ impl MultimodalPipeline {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
+        if !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref()) {
+            return Ok(None);
+        }
         if self.model.has_speculative_proposer() {
             return Ok(None);
         }
@@ -1379,6 +1383,14 @@ impl MultimodalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        self.model.requires_uniform_completion_batch()
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        !self.model.has_speculative_proposer()
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
         self.dynamic_lora.clone()
     }

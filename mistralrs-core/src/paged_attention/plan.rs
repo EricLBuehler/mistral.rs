@@ -79,9 +79,23 @@ pub(crate) enum DecodePlan {
 }
 
 impl DecodePlan {
-    pub fn choose(input: DecodePlanInput) -> Result<Self> {
+    pub(crate) fn requires_host_context_lengths(
+        attention_backend: AttentionBackendKind,
+        head_size: usize,
+    ) -> bool {
         #[cfg(all(feature = "cuda", target_family = "unix"))]
-        if input.head_size > FlashInferDecodePlan::head_size_limit(input.attention_backend) {
+        {
+            head_size > FlashInferDecodePlan::head_size_limit(attention_backend)
+        }
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        {
+            let _ = head_size;
+            matches!(attention_backend, AttentionBackendKind::FlashInfer)
+        }
+    }
+
+    pub fn choose(input: DecodePlanInput) -> Result<Self> {
+        if Self::requires_host_context_lengths(input.attention_backend, input.head_size) {
             return Ok(Self::GatherSdpa);
         }
         match input.attention_backend {

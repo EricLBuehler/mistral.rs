@@ -136,6 +136,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub(crate) enable_packed_prefill: bool,
         /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
         /// canvas generation until the prompt is fully encoded.
         pub is_final_prompt_chunk: bool,
@@ -468,9 +469,8 @@ pub mod text_models_inputs_processor {
 
     /// Flash attention sequence length metadata.
     ///
-    /// `cumulative_seqlens_q/k` use **padded** lengths (each sequence is padded to
-    /// `max_len` in the batch). This matches the padded Q tensor in the normal
-    /// prefill and decode paths.
+    /// `cumulative_seqlens_q/k` describe the physical Q/K layout. They use padded
+    /// lengths for normal batches and logical lengths when `packed` is true.
     ///
     /// `logical_k` describes full logical K lengths. `sliding_k`, when present,
     /// describes retained K lengths after a rotating/sliding KV cache has already
@@ -503,6 +503,7 @@ pub mod text_models_inputs_processor {
         pub logical_k: FlashKMeta,
         pub sliding_k: Option<FlashKMeta>,
         pub causal: bool,
+        pub(crate) packed: bool,
     }
 
     impl FlashParams {
@@ -513,6 +514,7 @@ pub mod text_models_inputs_processor {
                 logical_k: FlashKMeta::empty(),
                 sliding_k: None,
                 causal,
+                packed: false,
             }
         }
 
@@ -572,6 +574,23 @@ pub mod text_models_inputs_processor {
         Ok((max, cumulative_seqlens_map))
     }
 
+    fn packed_rope_positions(seqlen_offsets: &[usize], query_lens: &[usize]) -> Result<Vec<u32>> {
+        if seqlen_offsets.len() != query_lens.len() {
+            anyhow::bail!(
+                "packed RoPE position length mismatch: {} offsets for {} queries",
+                seqlen_offsets.len(),
+                query_lens.len()
+            );
+        }
+        let mut positions = Vec::with_capacity(query_lens.iter().sum());
+        for (&offset, &query_len) in seqlen_offsets.iter().zip(query_lens) {
+            for position in offset..offset + query_len {
+                positions.push(u32::try_from(position)?);
+            }
+        }
+        Ok(positions)
+    }
+
     pub(crate) fn make_flash_params(
         device: &Device,
         mapper: Option<&dyn DeviceMapper>,
@@ -579,6 +598,7 @@ pub mod text_models_inputs_processor {
         seqlens_k: &[u32],
         sliding_window: Option<usize>,
         causal: bool,
+        packed: bool,
     ) -> Result<FlashParams> {
         let devices = flash_param_devices(device, mapper);
         let (max_q, cumulative_seqlens_q) = cumulative_seqlens_map(seqlens_q, &devices)?;
@@ -610,6 +630,7 @@ pub mod text_models_inputs_processor {
             logical_k,
             sliding_k,
             causal,
+            packed,
         })
     }
 
@@ -632,6 +653,7 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
         prefix_cache_lens: Option<&[usize]>,
         sliding_window: Option<usize>,
+        allow_packed_prefill: bool,
     ) -> Result<InputMetadata> {
         // Determine effective tokens per sequence after prefix cache trimming
         let effective_lens: Vec<usize> = toks
@@ -644,7 +666,41 @@ pub mod text_models_inputs_processor {
             .collect();
         let max_len = *effective_lens.iter().max().expect("No sequences");
         let padding_tok = T::zero();
-        // Pad each sequence by the padding token to the max len.
+        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
+        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
+            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+        });
+        let all_model_devices_cuda = mapper.is_none_or(|mapper| {
+            mapper
+                .get_unique_devices()
+                .iter()
+                .all(|device| device.is_cuda())
+        });
+        let packed_prefill = allow_packed_prefill
+            && effective_lens.len() > 1
+            && effective_lens.iter().any(|len| *len != max_len)
+            && device.is_cuda()
+            && all_model_devices_cuda
+            && crate::using_flash_attn()
+            && !return_raw_logits
+            && last_n_context_len.is_none()
+            && chunk_offset_toks == 0
+            && !has_any_cache_hit
+            && sliding_window.is_none()
+            && paged_attn_metadata.as_ref().is_some_and(|metadata| {
+                metadata.enable_packed_prefill
+                    && metadata.is_final_prompt_chunk
+                    && !metadata.has_noncausal_mm_context
+                    && metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+            });
+        if packed_prefill {
+            tracing::debug!(
+                sequences = effective_lens.len(),
+                tokens = effective_lens.iter().sum::<usize>(),
+                padded_tokens = effective_lens.len() * max_len,
+                "Using packed prompt prefill"
+            );
+        }
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
@@ -659,10 +715,6 @@ pub mod text_models_inputs_processor {
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         let mut num_cached_tokens_vec: Vec<usize> = Vec::new();
         let mut query_lens_vec: Vec<usize> = Vec::new();
-        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
-        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
-            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
-        });
         for (seq_idx, (seq_id, ctxt)) in seq_ids.iter().zip(&toks).enumerate() {
             let cached = prefix_cache_lens.map_or(0, |lens| lens[seq_idx]);
             let full_prompt_len = ctxt.len();
@@ -675,34 +727,33 @@ pub mod text_models_inputs_processor {
             seqlen_offsets.push(offset.1 + chunk_offset_toks + cached);
 
             position_ids.push(new_len + chunk_offset_toks + cached);
-            let mut padded = new_toks.to_vec();
-            padded.extend(std::iter::repeat_n(
-                padding_tok,
-                max_len.saturating_sub(padded.len()),
-            ));
+            let mut input_toks = new_toks.to_vec();
+            if !packed_prefill {
+                input_toks.extend(std::iter::repeat_n(
+                    padding_tok,
+                    max_len.saturating_sub(input_toks.len()),
+                ));
+            }
             // If we are returning raw logits, we want to not trim the logits at all.
             if return_raw_logits {
                 if last_n_context_len.is_some() {
                     anyhow::bail!("`return_raw_logits` is incompatible with `last_n_context_len`");
                 }
 
-                context_lens.push((0, padded.len()));
+                context_lens.push((0, input_toks.len()));
             } else {
                 context_lens.push((
-                    padded
-                        .len()
-                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
+                    new_len.saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
 
             if flash_attn {
-                // Padded lengths, see FlashParams doc comment for prefix cache nuance.
-                seqlens_q.push(padded.len() as u32);
-                seqlens_k.push((padded.len() + chunk_offset_toks + cached) as u32);
+                seqlens_q.push(input_toks.len() as u32);
+                seqlens_k.push((input_toks.len() + chunk_offset_toks + cached) as u32);
             }
 
-            seqs_tensors.push(Tensor::new(padded, device)?.unsqueeze(0)?);
+            seqs_tensors.push(Tensor::new(input_toks, device)?.unsqueeze(0)?);
 
             if has_any_cache_hit {
                 num_cached_tokens_vec.push(cached);
@@ -786,23 +837,31 @@ pub mod text_models_inputs_processor {
                 &seqlens_k,
                 sliding_window,
                 prompt_chunk_causal,
+                packed_prefill,
             )?
         } else {
             FlashParams::empty(prompt_chunk_causal)
         };
 
-        let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+        let input_concat_dim = if packed_prefill { 1 } else { 0 };
+        let input = Tensor::cat(&seqs_tensors, input_concat_dim).unwrap();
 
         let paged_attn_meta = if let Some(paged_attn_metadata) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see comment above about CUDA contexts)
-            let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
             let prefill_query_lens = slot_mappings.iter().map(Vec::len).collect::<Vec<_>>();
-            let slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                max_slot_mapping_len,
-                _PAD_SLOT_ID,
-                &Device::Cpu,
-            )?;
+            let slot_mappings = if packed_prefill {
+                let slots = slot_mappings.into_iter().flatten().collect::<Vec<_>>();
+                let slot_count = slots.len();
+                Tensor::from_vec(slots, (slot_count,), &Device::Cpu)?
+            } else {
+                let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap();
+                _make_tensor_with_pad(
+                    slot_mappings,
+                    max_slot_mapping_len,
+                    _PAD_SLOT_ID,
+                    &Device::Cpu,
+                )?
+            };
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
             let block_size = paged_attn_metadata.block_size;
@@ -867,10 +926,22 @@ pub mod text_models_inputs_processor {
                 &Device::Cpu,
             )?
             .reshape(((),))?;
+            let packed_rope_positions = if packed_prefill {
+                let positions = packed_rope_positions(&seqlen_offsets, &prefill_query_lens)?;
+                let position_count = positions.len();
+                Some(Tensor::from_vec(
+                    positions,
+                    (position_count,),
+                    &Device::Cpu,
+                )?)
+            } else {
+                None
+            };
 
             // For device mapping, make a copy of each tensor for each device
             let devices = mapper.unwrap().get_unique_devices();
             let mut slot_mappings_map = HashMap::new();
+            let mut rope_positions_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
             let mut mm_prefix_ranges_map = HashMap::new();
@@ -964,6 +1035,10 @@ pub mod text_models_inputs_processor {
             for device in devices {
                 slot_mappings_map
                     .insert(device.location(), slot_mappings.clone().to_device(&device)?);
+                if let Some(positions) = &packed_rope_positions {
+                    rope_positions_map
+                        .insert(device.location(), positions.clone().to_device(&device)?);
+                }
                 block_tables_map
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
@@ -1134,7 +1209,11 @@ pub mod text_models_inputs_processor {
                 prefill_key_value_heads: paged_attn_metadata.prefill_key_value_heads,
                 prefill_head_dim: paged_attn_metadata.prefill_head_dim,
                 flashinfer,
-                rope_positions: None,
+                rope_positions: if rope_positions_map.is_empty() {
+                    None
+                } else {
+                    Some(rope_positions_map)
+                },
                 num_cached_tokens: if has_any_cache_hit {
                     Some(num_cached_tokens_vec.clone())
                 } else {
@@ -1308,7 +1387,15 @@ pub mod text_models_inputs_processor {
         }
 
         let flash_meta = if flash_attn {
-            make_flash_params(device, mapper, &seqlens_q, &seqlens_k, sliding_window, true)?
+            make_flash_params(
+                device,
+                mapper,
+                &seqlens_q,
+                &seqlens_k,
+                sliding_window,
+                true,
+                false,
+            )?
         } else {
             FlashParams::empty(true)
         };
@@ -1677,6 +1764,7 @@ pub mod text_models_inputs_processor {
             mapper,
             Some(&prefix_cache_lens),
             sliding_window,
+            false,
         )
     }
 
@@ -1711,6 +1799,7 @@ pub mod text_models_inputs_processor {
                 None
             },
             sliding_window,
+            input_seqs.iter().all(|seq| seq.adapter_lease().is_none()),
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,
@@ -2070,6 +2159,68 @@ pub mod text_models_inputs_processor {
 
         fn get_type(&self) -> InputsProcessorType {
             InputsProcessorType::Text
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn ragged_prompt_selects_each_last_real_token() {
+            let short = [1u32, 2];
+            let long = [3u32, 4, 5, 6];
+            let input = make_prompt_chunk(
+                0,
+                vec![short.as_slice(), long.as_slice()],
+                &[0, 1],
+                &Device::Cpu,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(input.input.dims(), &[2, 4]);
+            assert_eq!(input.context_lens, vec![(1, 1), (3, 1)]);
+        }
+
+        #[test]
+        fn packed_rope_positions_preserve_logical_offsets() {
+            let positions = packed_rope_positions(&[0, 16, 32], &[3, 1, 4]).unwrap();
+
+            assert_eq!(positions, vec![0, 1, 2, 16, 32, 33, 34, 35]);
+        }
+
+        #[test]
+        fn packed_rope_positions_reject_mismatched_metadata() {
+            let error = packed_rope_positions(&[0, 16], &[3]).unwrap_err();
+
+            assert!(error.to_string().contains("2 offsets for 1 queries"));
+        }
+
+        #[test]
+        fn packed_flash_params_preserve_ragged_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 4],
+                &[0, 3, 1, 4],
+                None,
+                true,
+                true,
+            )
+            .unwrap();
+            let cumulative = params.cumulative_seqlens_q[&Device::Cpu.location()]
+                .to_vec1::<u32>()
+                .unwrap();
+
+            assert_eq!(params.max_q, 4);
+            assert_eq!(cumulative, vec![0, 3, 4, 8]);
         }
     }
 }

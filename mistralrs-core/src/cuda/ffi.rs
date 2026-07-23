@@ -542,6 +542,21 @@ extern "C" {
         inv_temperature: f32,
         stream: i64,
     );
+    pub(crate) fn topk_large_f32_packed_batched(
+        input: *const f32,
+        inv_temperatures: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        block_maxes: *mut f32,
+        block_sums: *mut f32,
+        packed_out: *mut f32,
+        nrows: i32,
+        ncols: i32,
+        k: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
     pub(crate) fn top1_large_f32_packed(
         input: *const f32,
         block_values: *mut f32,
@@ -552,7 +567,30 @@ extern "C" {
         nblocks: i32,
         stream: i64,
     );
-
+    pub(crate) fn top1_large_f32_packed_batched(
+        input: *const f32,
+        block_values: *mut f32,
+        block_indices: *mut u32,
+        packed_out: *mut f32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
+    pub(crate) fn categorical_large_f32_packed_batched(
+        input: *const f32,
+        inv_temperatures: *const f32,
+        uniforms: *const f32,
+        block_values: *mut f32,
+        block_sums: *mut f32,
+        packed_out: *mut f32,
+        nrows: i32,
+        ncols: i32,
+        chunk_size: i32,
+        nblocks: i32,
+        stream: i64,
+    );
     // Mamba SSM selective scan kernel
     pub(crate) fn selective_scan_cuda(
         x: *const f32,       // (batch, seq_len, n_heads * head_dim)

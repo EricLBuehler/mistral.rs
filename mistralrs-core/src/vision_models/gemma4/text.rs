@@ -855,6 +855,15 @@ fn sliding_decode_kv_window(
     Some((kv_len - window, window))
 }
 
+fn is_paged_decode_forward(
+    is_paged: bool,
+    q_len: usize,
+    is_first_prompt_chunk: bool,
+    has_prompt_cache_metadata: bool,
+) -> bool {
+    is_paged && q_len > 0 && !is_first_prompt_chunk && !has_prompt_cache_metadata
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 //  Decoder layer
 // ────────────────────────────────────────────────────────────────────────────
@@ -2045,8 +2054,18 @@ impl TextModel {
             .layers
             .iter()
             .any(|layer| layer.self_attn.force_eager_prefill());
-        let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
-        let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
+        let is_first_prompt_chunk = ctx.is_first_prompt_chunk();
+        let has_prompt_cache_metadata = ctx
+            .paged_input_metadata()
+            .is_some_and(|metadata| metadata.num_cached_tokens.is_some());
+        let is_paged_decode = is_paged_decode_forward(
+            ctx.is_paged(),
+            q_len,
+            is_first_prompt_chunk,
+            has_prompt_cache_metadata,
+        );
+        let is_paged_prefill_chunk =
+            ctx.is_paged() && q_len > 1 && !is_first_prompt_chunk && !is_paged_decode;
 
         let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
             && !use_paged_mm_prefix_path
@@ -2114,8 +2133,7 @@ impl TextModel {
                     ..Default::default()
                 },
             )?;
-            let is_first = ctx.is_first_prompt_chunk();
-            let attention_mask = if is_first || is_paged_prefill_chunk {
+            let attention_mask = if is_first_prompt_chunk || is_paged_prefill_chunk {
                 match attention_mask {
                     AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                     other => other,
@@ -2132,7 +2150,7 @@ impl TextModel {
                     force_custom: false,
                 },
             )?;
-            let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
+            let sliding_attention_mask = if is_first_prompt_chunk || is_paged_prefill_chunk {
                 match sliding_attention_mask {
                     AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
                     other => other,
@@ -2540,7 +2558,16 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use super::sliding_decode_kv_window;
+    use super::{is_paged_decode_forward, sliding_decode_kv_window};
+
+    #[test]
+    fn paged_decode_phase_does_not_depend_on_query_width() {
+        assert!(is_paged_decode_forward(true, 1, false, false));
+        assert!(is_paged_decode_forward(true, 7, false, false));
+        assert!(!is_paged_decode_forward(true, 7, true, false));
+        assert!(!is_paged_decode_forward(true, 7, false, true));
+        assert!(!is_paged_decode_forward(false, 7, false, false));
+    }
 
     #[test]
     fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {

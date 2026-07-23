@@ -681,6 +681,10 @@ impl crate::speculative::SpeculativeTargetMixin for VoxtralModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for VoxtralModel {}
 
 impl MultimodalModel for VoxtralModel {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
