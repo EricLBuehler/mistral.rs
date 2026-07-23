@@ -103,6 +103,12 @@ Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `
 
 Full example: [streaming](/mistral.rs/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/mistral.rs/guides/python/streaming/).
 
+## Local media files
+
+Local image, audio, and video sources are confined to the Python process's current working directory. Relative paths resolve inside that directory; absolute paths are accepted only when they remain inside it. Parent traversal and symlink escapes are rejected. HTTP(S) and data URLs are unaffected.
+
+This is a breaking security restriction for applications that previously passed media paths outside the working directory. Start the process in a directory that contains the media you intend to expose, copy the media into that directory, or use an HTTP(S) or data URL. Windows drive-relative paths such as `C:image.png` are rejected because their meaning depends on per-drive process state; use `C:\image.png` or a normal relative path instead.
+
 ## Notes
 
 The Runner keeps the model in memory for the process lifetime. Requests can be sent sequentially or from multiple threads, all reusing the loaded weights. To swap models, construct a new Runner; the old one releases GPU memory when it goes out of scope.
