@@ -1018,6 +1018,19 @@ impl ForwardInputsResult {
             Self::BlockGeneration { .. } => Ok(self.clone()),
         }
     }
+
+    fn into_cpu_for_batch(
+        self,
+        batch_size: usize,
+        preserve_causal_generation: bool,
+    ) -> candle_core::Result<Self> {
+        if batch_size <= 1
+            || preserve_causal_generation && matches!(&self, Self::CausalGeneration { .. })
+        {
+            return Ok(self);
+        }
+        self.to_device(&Device::Cpu)
+    }
 }
 
 #[async_trait::async_trait]
@@ -1030,6 +1043,18 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        true
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        true
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        false
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
         None
     }
@@ -1171,8 +1196,15 @@ pub trait Pipeline:
                         }
                     }
 
+                    let preserve_causal_generation = input_seqs.len() > 1
+                        && !return_raw_logits
+                        && self.device().is_cuda()
+                        && self.supports_batched_cuda_sampling()
+                        && sampling::can_sample_batch_cuda(input_seqs);
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                    let raw_logits = self
+                        .forward_inputs(inputs, return_raw_logits)?
+                        .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
@@ -1242,18 +1274,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
@@ -1597,8 +1621,15 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(candle_core::Error::msg)?;
 
+                        let preserve_causal_generation = input_seqs.len() > 1
+                            && !return_raw_logits
+                            && self.device().is_cuda()
+                            && self.supports_batched_cuda_sampling()
+                            && sampling::can_sample_batch_cuda(input_seqs);
                         let start = Instant::now();
-                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                        let raw_logits = self
+                            .forward_inputs(inputs, return_raw_logits)?
+                            .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
 
@@ -1666,18 +1697,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),

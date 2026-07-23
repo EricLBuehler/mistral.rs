@@ -24,8 +24,9 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
+    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
+    prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
@@ -1149,6 +1150,9 @@ impl NormalPipeline {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
         }
+        if !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref()) {
+            return Ok(None);
+        }
         if self.model.has_speculative_proposer() {
             return Ok(None);
         }
@@ -1280,6 +1284,20 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        self.model.cache().is_hybrid()
+            || self.model.is_xlora()
+            || self.model.has_speculative_proposer()
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        !self.model.has_speculative_proposer()
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
         self.dynamic_lora.clone()
     }

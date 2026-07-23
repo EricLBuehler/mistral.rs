@@ -689,9 +689,7 @@ pub mod text_models_inputs_processor {
                 context_lens.push((0, padded.len()));
             } else {
                 context_lens.push((
-                    padded
-                        .len()
-                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
+                    new_len.saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
@@ -2070,6 +2068,33 @@ pub mod text_models_inputs_processor {
 
         fn get_type(&self) -> InputsProcessorType {
             InputsProcessorType::Text
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn ragged_prompt_selects_each_last_real_token() {
+            let short = [1u32, 2];
+            let long = [3u32, 4, 5, 6];
+            let input = make_prompt_chunk(
+                0,
+                vec![short.as_slice(), long.as_slice()],
+                &[0, 1],
+                &Device::Cpu,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+            assert_eq!(input.input.dims(), &[2, 4]);
+            assert_eq!(input.context_lens, vec![(1, 1), (3, 1)]);
         }
     }
 }

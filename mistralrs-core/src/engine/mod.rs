@@ -277,7 +277,18 @@ impl Engine {
             config
         };
 
+        let (requires_uniform_prompt_batch, requires_uniform_completion_batch) = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            (
+                pipeline.requires_uniform_prompt_batch(),
+                pipeline.requires_uniform_completion_batch(),
+            )
+        };
         let scheduler = config.into_scheduler();
+        get_mut_arcmutex!(scheduler)
+            .set_requires_uniform_prompt_batch(requires_uniform_prompt_batch);
+        get_mut_arcmutex!(scheduler)
+            .set_requires_uniform_completion_batch(requires_uniform_completion_batch);
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
         // This ensures PagedAttention prefix caching respects the same setting

@@ -1308,6 +1308,11 @@ impl Sequence {
         self.return_logprobs
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sampling_logprob_required(&self) -> bool {
+        get_mut_group!(self).sampling_logprob_required()
+    }
+
     pub fn prompt_tokens(&self) -> usize {
         self.prompt_len
     }
@@ -1787,6 +1792,11 @@ impl SequenceGroup {
         &self.choices
     }
 
+    #[cfg(feature = "cuda")]
+    fn sampling_logprob_required(&self) -> bool {
+        self.n_choices > 1 || self.best_of.is_some()
+    }
+
     /// This may apply the best_of.
     pub fn get_completion_choices(&self) -> Vec<CompletionChoice> {
         if let Some(best_of) = self.best_of {
@@ -2081,6 +2091,14 @@ mod tests {
         assert_eq!(required_tool_call_deadline_tokens(512), 1024);
         assert_eq!(required_tool_call_deadline_tokens(8192), 2048);
         assert_eq!(required_tool_call_deadline_tokens(32768), 4096);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn sampling_logprob_is_retained_for_multi_choice_groups() {
+        assert!(!SequenceGroup::new(1, false, true, None).sampling_logprob_required());
+        assert!(SequenceGroup::new(2, false, true, None).sampling_logprob_required());
+        assert!(SequenceGroup::new(1, false, false, Some(1)).sampling_logprob_required());
     }
 
     #[test]
