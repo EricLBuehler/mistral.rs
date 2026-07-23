@@ -36,21 +36,34 @@ fn parse_text_and_tool_calls(
     Ok((parsed.content, parsed.tool_calls))
 }
 
-#[cfg(test)]
 fn parse_streaming_text_and_tool_calls(
     content_delta: Option<String>,
     raw_delta: &str,
-    has_reasoning_parser: bool,
+    has_external_reasoning_parser: bool,
+    is_done: bool,
     state: Option<&mut ToolCallState>,
-) -> Result<(Option<String>, Vec<crate::tools::ToolCallResponse>)> {
+) -> Result<crate::tools::state::ToolCallParse> {
     let Some(state) = state else {
-        return Ok((
-            content_delta.or_else(|| Some(raw_delta.to_string())),
-            Vec::new(),
-        ));
+        return Ok(crate::tools::state::ToolCallParse {
+            content: content_delta.or_else(|| {
+                if has_external_reasoning_parser {
+                    None
+                } else {
+                    Some(raw_delta.to_string())
+                }
+            }),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+            tool_use_still_possible: false,
+            tool_use_is_done: false,
+        });
     };
-    let parsed = state.parse_streaming(content_delta, raw_delta, has_reasoning_parser, false)?;
-    Ok((parsed.content, parsed.tool_calls))
+    state.parse_streaming(
+        content_delta,
+        raw_delta,
+        has_external_reasoning_parser,
+        is_done,
+    )
 }
 
 fn activate_required_tool_call_grammar(
@@ -203,23 +216,20 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                         Some(delta.clone())
                     };
 
-                    let tool_calls = if let Some(state) = seq.tool_call_state.as_mut() {
-                        let parsed = state.parse_streaming(
-                            content_delta.take(),
-                            delta.as_str(),
-                            has_external_reasoning_parser,
-                            is_done.is_some(),
-                        )?;
-                        content_delta = parsed.content;
-                        let parsed_tool_use_is_done = parsed.tool_use_is_done;
-                        let _parsed_tool_use_still_possible = parsed.tool_use_still_possible;
-                        if parsed_tool_use_is_done || !parsed.tool_calls.is_empty() {
-                            is_done = Some(StopReason::ToolCalls);
-                        }
-                        parsed.tool_calls
-                    } else {
-                        Vec::new()
-                    };
+                    let parsed = parse_streaming_text_and_tool_calls(
+                        content_delta.take(),
+                        delta.as_str(),
+                        has_external_reasoning_parser,
+                        is_done.is_some(),
+                        seq.tool_call_state.as_mut(),
+                    )?;
+                    content_delta = parsed.content;
+                    let parsed_tool_use_is_done = parsed.tool_use_is_done;
+                    let _parsed_tool_use_still_possible = parsed.tool_use_still_possible;
+                    if parsed_tool_use_is_done || !parsed.tool_calls.is_empty() {
+                        is_done = Some(StopReason::ToolCalls);
+                    }
+                    let tool_calls = parsed.tool_calls;
 
                     seq.add_streaming_chunk_choice_to_group(crate::ChunkChoice {
                         delta: crate::Delta {
@@ -770,16 +780,34 @@ mod tests {
     }
 
     #[test]
+    fn no_tool_state_stream_uses_raw_delta() {
+        let parsed =
+            parse_streaming_text_and_tool_calls(None, "hello", false, false, None).unwrap();
+
+        assert_eq!(parsed.content, Some("hello".to_string()));
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn external_reasoning_without_content_does_not_fallback_to_raw_delta() {
+        let parsed =
+            parse_streaming_text_and_tool_calls(None, "<think>secret", true, false, None).unwrap();
+
+        assert_eq!(parsed.content, None);
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
     fn reasoning_stream_does_not_fallback_to_raw_delta() {
         let tool = weather_tool();
         let mut state = ToolCallState::new(ToolChoice::Auto, Some(&[tool]), None).unwrap();
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
-        let (content, tool_calls) =
-            parse_streaming_text_and_tool_calls(None, raw, true, Some(&mut state)).unwrap();
+        let parsed =
+            parse_streaming_text_and_tool_calls(None, raw, true, false, Some(&mut state)).unwrap();
 
-        assert_eq!(content, None);
-        assert!(tool_calls.is_empty());
+        assert_eq!(parsed.content, None);
+        assert!(parsed.tool_calls.is_empty());
     }
 
     #[test]
@@ -788,11 +816,11 @@ mod tests {
         let mut state = ToolCallState::new(ToolChoice::Auto, Some(&[tool]), None).unwrap();
         let raw = r#"<|tool_call>call:get_weather{city:<|"|>Paris<|"|>}"#;
 
-        let (content, tool_calls) =
-            parse_streaming_text_and_tool_calls(None, raw, false, Some(&mut state)).unwrap();
+        let parsed =
+            parse_streaming_text_and_tool_calls(None, raw, false, false, Some(&mut state)).unwrap();
 
-        assert_eq!(content, None);
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].function.name, "get_weather");
+        assert_eq!(parsed.content, None);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
     }
 }
