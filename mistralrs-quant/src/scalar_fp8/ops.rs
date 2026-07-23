@@ -149,7 +149,7 @@ impl CustomOp1 for Fp8ToDtype {
         crate::metal_kernels::call_fp8_to_dtype(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             self.target_dtype,
             input_s.buffer(),
             &output,
@@ -308,7 +308,7 @@ impl CustomOp1 for DtypeToFp8 {
         crate::metal_kernels::call_dtype_to_fp8(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             self.source_dtype,
             input_s.buffer(),
             &output,

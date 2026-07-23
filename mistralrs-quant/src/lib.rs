@@ -1628,7 +1628,7 @@ pub fn try_fused_gate_up_metal(
     metal_kernels::call_afq_qmm_gate_up(
         device.device(),
         &encoder,
-        &metal_kernels::Kernels::new(),
+        metal_kernels::Kernels::global(),
         dtype,
         (
             xs_storage.buffer(),
@@ -1771,7 +1771,7 @@ pub fn try_fused_qkv_metal(
     metal_kernels::call_afq_qmm_qkv(
         device.device(),
         &encoder,
-        &metal_kernels::Kernels::new(),
+        metal_kernels::Kernels::global(),
         dtype,
         (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
         qw_m.buffer(),

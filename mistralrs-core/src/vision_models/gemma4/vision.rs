@@ -42,7 +42,7 @@ impl ClippableLinear {
     fn new(in_features: usize, out_features: usize, vb: ShardedVarBuilder) -> Result<Self> {
         // Some checkpoints nest the weight under a `.linear.` sub-module,
         // others store it directly. Probe to pick the right path.
-        let has_linear_prefix = vb.pp("linear").contains_tensor("weight");
+        let has_linear_prefix = super::has_clippable_linear_prefix(&vb);
         let linear_vb = if has_linear_prefix {
             vb.pp("linear")
         } else {

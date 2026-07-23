@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
@@ -121,6 +122,18 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>>;
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        if let Some(max_model_len) = max_model_len {
+            anyhow::bail!(
+                "max_model_len={max_model_len} is not supported by this multimodal loader"
+            );
+        }
+        Ok(Cow::Borrowed(config))
+    }
     fn is_gptx(&self, config: &str) -> bool;
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
@@ -395,6 +408,14 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
+    }
+
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        Self::get_loader(config)?.runtime_config(config, max_model_len)
     }
 
     fn is_gptx(&self, config: &str) -> bool {
@@ -7685,6 +7706,42 @@ impl DeviceMappedModelLoader for VoxtralLoader {
 
 pub struct Gemma4Loader;
 
+fn gemma4_runtime_config(config: &str, max_model_len: Option<usize>) -> Result<Cow<'_, str>> {
+    let Some(max_model_len) = max_model_len else {
+        return Ok(Cow::Borrowed(config));
+    };
+    anyhow::ensure!(max_model_len > 0, "max_model_len must be greater than zero");
+
+    let parsed: Gemma4Config = serde_json::from_str(config)?;
+    if parsed.text_config.max_position_embeddings <= max_model_len {
+        return Ok(Cow::Borrowed(config));
+    }
+
+    let mut value: serde_json::Value = serde_json::from_str(config)?;
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Gemma4 config must be a JSON object"))?;
+    if root
+        .get("text_config")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        root.get_mut("text_config")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("text_config was checked as an object")
+            .insert(
+                "max_position_embeddings".to_string(),
+                serde_json::Value::from(max_model_len),
+            );
+    } else {
+        root.insert(
+            "max_position_embeddings".to_string(),
+            serde_json::Value::from(max_model_len),
+        );
+    }
+
+    Ok(Cow::Owned(serde_json::to_string(&value)?))
+}
+
 #[allow(dead_code)]
 pub struct Gemma4Prefixer;
 
@@ -7713,6 +7770,13 @@ impl MultimodalModelLoader for Gemma4Loader {
             normal_loading_metadata,
             attention_mechanism,
         )?))
+    }
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        gemma4_runtime_config(config, max_model_len)
     }
     fn is_gptx(&self, _config: &str) -> bool {
         true
@@ -9322,6 +9386,47 @@ mod tests {
                 }}
             }}"#
         )
+    }
+
+    #[test]
+    fn gemma4_runtime_config_caps_nested_and_flat_contexts() -> Result<()> {
+        let loader = Gemma4Loader;
+        let config = gemma4_estimator_config(true);
+
+        assert!(matches!(
+            loader.runtime_config(&config, None)?,
+            Cow::Borrowed(_)
+        ));
+        assert!(loader.runtime_config(&config, Some(0)).is_err());
+
+        let capped = loader.runtime_config(&config, Some(8192))?;
+        let parsed: Gemma4Config = serde_json::from_str(&capped)?;
+        assert_eq!(parsed.text_config.max_position_embeddings, 8192);
+        assert!(matches!(
+            loader.runtime_config(&capped, Some(16384))?,
+            Cow::Borrowed(_)
+        ));
+
+        let mut flat_value: serde_json::Value = serde_json::from_str(&config)?;
+        let text_config = flat_value
+            .as_object_mut()
+            .unwrap()
+            .remove("text_config")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        flat_value.as_object_mut().unwrap().extend(text_config);
+        let flat = serde_json::to_string(&flat_value)?;
+        let flat_capped = AutoMultimodalLoader.runtime_config(&flat, Some(8192))?;
+        assert_eq!(
+            serde_json::from_str::<Gemma4Config>(&flat_capped)?
+                .text_config
+                .max_position_embeddings,
+            8192
+        );
+
+        Ok(())
     }
 
     #[test]

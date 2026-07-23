@@ -1075,6 +1075,7 @@ fn loader_from_selected(
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
+                max_model_len: None,
                 calibration_file,
                 imatrix,
                 hf_cache_path,

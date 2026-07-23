@@ -171,7 +171,7 @@ impl CustomOp3 for RotaryEmb {
         crate::metal_kernels::call_rotary(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             s2.buffer(),
@@ -616,7 +616,7 @@ fn metal_apply_rotary_q(
         crate::metal_kernels::call_rotary_q_positions(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             q_s.dtype(),
             q_s.buffer(),
             cos_s.buffer(),
@@ -638,7 +638,7 @@ fn metal_apply_rotary_q(
         crate::metal_kernels::call_rotary_q(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             q_s.dtype(),
             q_s.buffer(),
             cos_s.buffer(),
@@ -729,7 +729,7 @@ fn metal_apply_rotary_qk(
         crate::metal_kernels::call_rotary_qk_positions(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             q_s.dtype(),
             q_s.buffer(),
             k_s.buffer(),
@@ -755,7 +755,7 @@ fn metal_apply_rotary_qk(
         crate::metal_kernels::call_rotary_qk(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             q_s.dtype(),
             q_s.buffer(),
             k_s.buffer(),
