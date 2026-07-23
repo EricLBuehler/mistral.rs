@@ -25,6 +25,30 @@ struct AddedToken {
     content: String,
 }
 
+fn repair_tokenizer_json(raw: Vec<u8>) -> Result<Vec<u8>> {
+    let mut tokenizer: Value = serde_json::from_slice(&raw)?;
+    let added_tokens: Vec<AddedToken> = serde_json::from_value(tokenizer["added_tokens"].clone())?;
+    let vocab = tokenizer["model"]["vocab"]
+        .as_object()
+        .ok_or_else(|| anyhow!("tokenizer model vocab is not an object"))?;
+    let missing_tokens = added_tokens
+        .into_iter()
+        .filter(|token| !vocab.contains_key(&token.content))
+        .collect::<Vec<_>>();
+
+    if missing_tokens.is_empty() {
+        return Ok(raw);
+    }
+
+    let vocab = tokenizer["model"]["vocab"]
+        .as_object_mut()
+        .expect("tokenizer model vocab was validated above");
+    for token in missing_tokens {
+        vocab.insert(token.content, token.id.into());
+    }
+    Ok(serde_json::to_vec(&tokenizer)?)
+}
+
 #[derive(Deserialize)]
 struct TekkenVocabEntry {
     rank: usize,
@@ -188,22 +212,7 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
 
     let mut tokenizer = {
         let raw = std::fs::read(p.clone()).map_err(anyhow::Error::msg)?;
-        let mut tokenizer: Value = serde_json::from_slice(&raw).unwrap();
-        let added_tokens: Vec<AddedToken> =
-            serde_json::from_value(tokenizer["added_tokens"].clone()).unwrap();
-        let vocab: HashMap<String, usize> =
-            serde_json::from_value(tokenizer["model"]["vocab"].clone()).unwrap();
-        for token in added_tokens {
-            if !vocab.contains_key(&token.content) {
-                tokenizer["model"]["vocab"]
-                    .as_object_mut()
-                    .unwrap()
-                    .insert(token.content, token.id.into())
-                    .ok_or(())
-                    .unwrap_err();
-            }
-        }
-        let raw_fixed = serde_json::to_vec_pretty(&tokenizer).unwrap();
+        let raw_fixed = repair_tokenizer_json(raw)?;
         Tokenizer::from_bytes(&raw_fixed).map_err(anyhow::Error::msg)?
     };
     if let Some(added_tokens) = processor_added_tokens {
@@ -215,4 +224,39 @@ pub(crate) fn get_tokenizer<P: AsRef<Path> + Clone>(
         );
     }
     Ok(tokenizer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repair_tokenizer_json;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn tokenizer_repair_preserves_bytes_when_vocab_is_complete() {
+        let raw = serde_json::to_vec_pretty(&json!({
+            "added_tokens": [{"id": 1, "content": "<special>"}],
+            "model": {"vocab": {"token": 0, "<special>": 1}}
+        }))
+        .unwrap();
+
+        assert_eq!(repair_tokenizer_json(raw.clone()).unwrap(), raw);
+    }
+
+    #[test]
+    fn tokenizer_repair_adds_only_missing_tokens() {
+        let raw = serde_json::to_vec(&json!({
+            "added_tokens": [
+                {"id": 1, "content": "<present>"},
+                {"id": 2, "content": "<missing>"}
+            ],
+            "model": {"vocab": {"token": 0, "<present>": 1}}
+        }))
+        .unwrap();
+
+        let repaired: Value = serde_json::from_slice(&repair_tokenizer_json(raw).unwrap()).unwrap();
+        let vocab = repaired["model"]["vocab"].as_object().unwrap();
+        assert_eq!(vocab.len(), 3);
+        assert_eq!(vocab["<present>"], 1);
+        assert_eq!(vocab["<missing>"], 2);
+    }
 }

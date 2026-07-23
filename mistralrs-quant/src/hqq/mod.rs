@@ -214,7 +214,7 @@ impl HqqBits {
                     crate::metal_kernels::call_hqq_pack_8bit(
                         dev.device(),
                         &encoder,
-                        &crate::metal_kernels::Kernels::new(),
+                        crate::metal_kernels::Kernels::global(),
                         wq_storage.buffer(),
                         &output,
                         output_shape.elem_count(),
@@ -301,7 +301,7 @@ impl HqqBits {
                     crate::metal_kernels::call_hqq_pack_4bit(
                         dev.device(),
                         &encoder,
-                        &crate::metal_kernels::Kernels::new(),
+                        crate::metal_kernels::Kernels::global(),
                         wq_storage.buffer(),
                         &output,
                         wq.dims()[0],

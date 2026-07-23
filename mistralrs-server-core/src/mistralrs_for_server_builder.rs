@@ -779,6 +779,7 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
+            max_model_len: None,
             mtp_config: self.mtp_config.clone(),
         };
 

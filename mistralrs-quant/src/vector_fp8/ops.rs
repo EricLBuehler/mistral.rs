@@ -204,7 +204,7 @@ impl CustomOp2 for Fp8VectorDequantize {
         crate::metal_kernels::call_fp8_vector_dequant(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             self.out_ty,
             weight_s.buffer(),
             scale_s.buffer(),

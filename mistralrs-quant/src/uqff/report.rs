@@ -662,7 +662,7 @@ fn should_read_tensor_data(name: &str, size_bytes: usize, mode: ScanMode) -> boo
     if size_bytes > SMALL_METADATA_TENSOR_BYTES {
         return false;
     }
-    matches!(mode, ScanMode::Verify) && is_version_key(name)
+    is_storage_discriminator_key(name) || matches!(mode, ScanMode::Verify) && is_version_key(name)
 }
 
 async fn read_tensor_data_ranges(
@@ -779,7 +779,7 @@ fn build_output_report(scan: &GroupScan, issues: Option<&QuantizationReport>) ->
 
     for prefix in prefixes {
         let stored = unique_layer_match(&prefix, &headers)
-            .map(|matched| matched.serde_type.stored_label(&scan.quant))
+            .map(|matched| stored_label_for_scan(scan, &prefix, matched.serde_type))
             .unwrap_or_else(|| "unknown".to_string());
         let shape = tensor_shape_for_prefix(scan, &prefix);
         let layer = UqffLayerReport {
@@ -1193,6 +1193,37 @@ fn scalar_u32(meta: &TensorMeta) -> Option<u32> {
     }
 }
 
+fn scalar_u8(meta: &TensorMeta) -> Option<u8> {
+    let data = meta.data.as_deref()?;
+    if meta.dtype == Dtype::U8 && meta.shape.is_empty() && data.len() == 1 {
+        data.first().copied()
+    } else {
+        None
+    }
+}
+
+fn stored_label_for_scan(scan: &GroupScan, prefix: &str, serde_type: QuantizedSerdeType) -> String {
+    let tensors = ["weight.bits", "weight.dtype"]
+        .into_iter()
+        .filter_map(|suffix| {
+            let name = format!("{prefix}.{suffix}");
+            let meta = scan.tensors.get(&name)?;
+            match meta.dtype {
+                Dtype::U8 => {
+                    scalar_u8(meta).map(|value| super::UqffTensor::from_u8_scalar(name, value))
+                }
+                Dtype::U32 => {
+                    scalar_u32(meta).map(|value| super::UqffTensor::from_u32_scalar(name, value))
+                }
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    serde_type
+        .stored_label_from_uqff_tensors(&tensors, prefix)
+        .unwrap_or_else(|_| serde_type.stored_label(&scan.quant))
+}
+
 fn scalar_u32_vec(meta: &TensorMeta) -> Option<Vec<usize>> {
     let data = meta.data.as_deref()?;
     if meta.dtype != Dtype::U32 || data.len() % 4 != 0 {
@@ -1292,6 +1323,10 @@ fn is_version_key(name: &str) -> bool {
     )
 }
 
+fn is_storage_discriminator_key(name: &str) -> bool {
+    name.ends_with(".weight.bits") || name.ends_with(".weight.dtype")
+}
+
 fn is_invalid_uqff_tensor_key(name: &str) -> bool {
     !is_version_key(name) && !name.contains('.')
 }
@@ -1360,6 +1395,95 @@ mod tests {
         .unwrap();
     }
 
+    fn push_synthetic_afq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Afq as u8,
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), bits),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.group_size"), 64),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.scales"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.biases"), vec![0], vec![1]),
+        ]);
+    }
+
+    fn push_synthetic_hqq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Hqq as u8,
+            ),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.scales"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.zeros"), vec![0], vec![1]),
+            UqffTensor::from_u32_vec(format!("{prefix}.weight.shape"), vec![1], vec![1]),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), bits),
+            UqffTensor::from_u32_scalar(format!("{prefix}.weight.group_size"), 64),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.axis"), 0),
+            UqffTensor::from_u32_scalar(format!("{prefix}.weight.optimization_steps"), 0),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.round_zeros"), 0),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.channel_wise"), 1),
+        ]);
+    }
+
+    fn push_synthetic_gguf_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, dtype: u32) {
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0], vec![1]),
+            UqffTensor::from_u32_scalar(format!("{prefix}.weight.dtype"), dtype),
+            UqffTensor::from_u32_vec(format!("{prefix}.weight.shape"), vec![1], vec![1]),
+        ]);
+    }
+
+    fn write_synthetic_mixed_formats(dir: &Path) {
+        let mut afq = super::super::uqff_version_tensors();
+        push_synthetic_afq_layer(&mut afq, "model.layers.0", 4);
+        push_synthetic_afq_layer(&mut afq, "model.layers.1", 6);
+        safetensors::serialize_to_file(
+            afq.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &dir.join("afq4-0.uqff"),
+        )
+        .unwrap();
+
+        let mut hqq = super::super::uqff_version_tensors();
+        push_synthetic_hqq_layer(&mut hqq, "model.layers.0", 4);
+        push_synthetic_hqq_layer(&mut hqq, "model.layers.1", 8);
+        safetensors::serialize_to_file(
+            hqq.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &dir.join("hqq4-0.uqff"),
+        )
+        .unwrap();
+
+        let mut gguf = super::super::uqff_version_tensors();
+        push_synthetic_gguf_layer(&mut gguf, "model.layers.0", 12);
+        push_synthetic_gguf_layer(&mut gguf, "model.layers.1", 14);
+        safetensors::serialize_to_file(
+            gguf.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &dir.join("q4k-0.uqff"),
+        )
+        .unwrap();
+    }
+
+    fn assert_stored_counts(report: &UqffReport, quant: &str, expected: [(&str, usize); 2]) {
+        let output = report
+            .outputs
+            .iter()
+            .find(|output| output.quant == quant)
+            .unwrap();
+        assert_eq!(output.actual_counts.len(), expected.len());
+        for (stored, count) in expected {
+            assert_eq!(output.actual_counts.get(stored), Some(&count));
+        }
+    }
+
     fn counted_artifact(path: &Path) -> (UqffArtifactFile, Arc<AtomicUsize>) {
         let data = Arc::new(std::fs::read(path).unwrap());
         let reads = Arc::new(AtomicUsize::new(0));
@@ -1389,7 +1513,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inspect_reads_only_safetensors_header() {
+    async fn inspect_batches_discriminator_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("afq3-0.uqff");
         write_synthetic_afq3(&path);
@@ -1399,11 +1523,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(reads.load(Ordering::Relaxed), 2);
+        assert_eq!(reads.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]
-    async fn report_reads_only_safetensors_header() {
+    async fn report_batches_discriminator_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("afq3-0.uqff");
         write_synthetic_afq3(&path);
@@ -1413,11 +1537,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(reads.load(Ordering::Relaxed), 2);
+        assert_eq!(reads.load(Ordering::Relaxed), 3);
     }
 
     #[tokio::test]
-    async fn verify_reads_only_header_and_version_payloads() {
+    async fn verify_batches_metadata_payloads() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("afq3-0.uqff");
         write_synthetic_afq3(&path);
@@ -1434,6 +1558,39 @@ mod tests {
         .unwrap();
 
         assert_eq!(reads.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn mixed_storage_discriminators_drive_report_inspect_and_verify() {
+        let dir = tempfile::tempdir().unwrap();
+        write_synthetic_mixed_formats(dir.path());
+
+        let report = build_uqff_report(dir.path(), UqffReportOptions::default())
+            .await
+            .unwrap();
+        assert_stored_counts(&report, "afq4", [("afq4", 1), ("afq6", 1)]);
+        assert_stored_counts(&report, "hqq4", [("hqq4", 1), ("hqq8", 1)]);
+        assert_stored_counts(&report, "q4k", [("q4k", 1), ("q6k", 1)]);
+
+        let inspection = inspect_uqff_path(dir.path(), UqffReportOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(inspection.report.outputs, report.outputs);
+
+        let artifacts = UqffArtifacts {
+            groups: resolve_uqff_groups(dir.path()).unwrap(),
+            existing_report: Some(report),
+        };
+        let result = verify_uqff_artifacts(
+            &artifacts,
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.ok, "{:?}", result.errors);
     }
 
     #[tokio::test]

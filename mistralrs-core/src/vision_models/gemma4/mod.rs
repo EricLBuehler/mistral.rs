@@ -34,6 +34,10 @@ pub mod vision;
 
 pub(crate) use inputs_processor::{Gemma4Processor, Gemma4ProcessorSettings};
 
+fn has_clippable_linear_prefix(vb: &ShardedVarBuilder) -> bool {
+    crate::layers::contains_tensor_or_uqff(vb, "linear.weight")
+}
+
 #[derive(Default)]
 pub struct Gemma4SpecificArgs {
     pub image_position_ids: Option<Tensor>,
@@ -946,3 +950,47 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
 }
 
 impl AnyMoeBaseModelMixin for Gemma4Model {}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Tensor};
+    use mistralrs_quant::{uqff_version_tensors, ShardedSafeTensors, UqffReader, UqffTensor};
+
+    use super::has_clippable_linear_prefix;
+
+    #[test]
+    fn clippable_linears_detect_nested_weights_only_in_uqff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested-linear.uqff");
+        let prefixes = [
+            "model.vision_tower.encoder.layers.0.self_attn.q_proj",
+            "model.audio_tower.layers.0.feed_forward1.ffw_layer_1",
+        ];
+        let mut tensors = uqff_version_tensors();
+        for prefix in prefixes {
+            tensors.push(UqffTensor::from_raw_u8(
+                format!("{prefix}.linear.weight"),
+                vec![0],
+                vec![1],
+            ));
+        }
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let residual: HashMap<String, Tensor> = HashMap::new();
+        let vb = ShardedSafeTensors::wrap(residual, DType::F32, Device::Cpu)
+            .with_uqff_reader(Arc::new(UqffReader::open(&[path]).unwrap()));
+
+        for prefix in prefixes {
+            let linear_vb = vb.pp(prefix);
+            assert!(!linear_vb.contains_tensor("linear.weight"));
+            assert!(has_clippable_linear_prefix(&linear_vb));
+        }
+    }
+}

@@ -57,6 +57,7 @@ impl<T> From<std::sync::PoisonError<T>> for MetalKernelError {
 type Pipelines = HashMap<(String, Option<ConstantValues>), ComputePipeline>;
 
 static LIBRARY: OnceLock<Library> = OnceLock::new();
+static GLOBAL_KERNELS: OnceLock<Kernels> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct Kernels {
@@ -70,6 +71,10 @@ impl Default for Kernels {
 }
 
 impl Kernels {
+    pub fn global() -> &'static Self {
+        GLOBAL_KERNELS.get_or_init(Self::new)
+    }
+
     pub fn new() -> Self {
         let pipelines = RwLock::new(Pipelines::new());
         Self { pipelines }

@@ -69,7 +69,7 @@ pub(crate) fn afq_quantize_op(
         crate::metal_kernels::call_affine_quantize(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             w.dtype(),
             w_s.buffer(),
             w.layout().start_offset() * w_s.dtype().size_in_bytes(),
@@ -182,7 +182,7 @@ pub(crate) fn afq_dequantize_op(
         crate::metal_kernels::call_affine_quantize(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             scales.dtype(),
             wq_s.buffer(),
             w_q.layout().start_offset() * wq_s.dtype().size_in_bytes(),
@@ -279,7 +279,7 @@ pub(crate) fn afq_embedding_op(
         crate::metal_kernels::call_afq_embedding(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             scales.dtype(),
             wq_s.buffer(),
             w_q.layout().start_offset() * wq_s.dtype().size_in_bytes(),
@@ -460,7 +460,7 @@ pub(crate) fn afq_mm_op(
             crate::metal_kernels::call_afq_qmm(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 scales.dtype(),
                 x_s.buffer(),
                 x.layout().start_offset() * x.dtype().size_in_bytes(),
@@ -522,7 +522,7 @@ pub(crate) fn afq_mm_op(
                     crate::metal_kernels::call_afq_qmm_splitk(
                         device.device(),
                         &encoder,
-                        &crate::metal_kernels::Kernels::new(),
+                        crate::metal_kernels::Kernels::global(),
                         scales.dtype(),
                         x_s.buffer(),
                         x.layout().start_offset() * x.dtype().size_in_bytes(),
@@ -561,7 +561,7 @@ pub(crate) fn afq_mm_op(
             crate::metal_kernels::call_afq_qmm(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 scales.dtype(),
                 x_s.buffer(),
                 x.layout().start_offset() * x.dtype().size_in_bytes(),
@@ -748,7 +748,7 @@ pub fn metal_moe_weighted_reduce_flat(
     crate::metal_kernels::call_moe_weighted_reduce_flat(
         device.device(),
         &encoder,
-        &crate::metal_kernels::Kernels::new(),
+        crate::metal_kernels::Kernels::global(),
         dtype,
         in_s.buffer(),
         in_layout.start_offset() * dtype.size_in_bytes(),
@@ -862,7 +862,7 @@ pub fn afq_gather_qmm_rhs_sorted(
     crate::metal_kernels::call_afq_gather_qmm_rhs(
         device.device(),
         &encoder,
-        &crate::metal_kernels::Kernels::new(),
+        crate::metal_kernels::Kernels::global(),
         scales.dtype(),
         x_s.buffer(),
         x_sorted.layout().start_offset() * x_sorted.dtype().size_in_bytes(),
@@ -985,7 +985,7 @@ pub fn afq_gather_qmm_rhs_sorted_gate_up(
     crate::metal_kernels::call_afq_gather_qmm_rhs_gate_up(
         device.device(),
         &encoder,
-        &crate::metal_kernels::Kernels::new(),
+        crate::metal_kernels::Kernels::global(),
         scales_gate.dtype(),
         x_s.buffer(),
         x_sorted.layout().start_offset() * x_sorted.dtype().size_in_bytes(),

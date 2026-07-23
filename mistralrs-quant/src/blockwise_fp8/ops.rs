@@ -276,7 +276,7 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         crate::metal_kernels::call_dequant_blockwise_fp8(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             self.out_ty,
             weight_s.buffer(),
             scale_s.buffer(),

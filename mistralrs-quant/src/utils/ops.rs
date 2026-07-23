@@ -167,7 +167,7 @@ impl CustomOp1 for Leftshift {
         crate::metal_kernels::call_bitwise_leftshift(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             s1.buffer(),
             l1.start_offset(),
@@ -614,7 +614,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -627,7 +627,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -640,7 +640,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -768,7 +768,7 @@ impl CustomOp1 for BitWiseUnary {
             BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 l1.start_offset() * s1.dtype().size_in_bytes(),
@@ -918,7 +918,7 @@ impl CustomOp1 for ArgSort {
         crate::metal_kernels::call_argsort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1025,7 +1025,7 @@ impl CustomOp1 for Sort {
         crate::metal_kernels::call_sort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1530,7 +1530,7 @@ impl CustomOp1 for CumSum {
         crate::metal_kernels::call_scan(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             ScanType::Sum,
             s1.buffer(),
@@ -2135,7 +2135,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         crate::metal_kernels::call_softmax_with_sinks(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             storage.buffer(),
             layout.start_offset() * dtype.size_in_bytes(),
@@ -2259,7 +2259,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2290,7 +2290,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2318,7 +2318,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2344,7 +2344,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
             crate::metal_kernels::call_flash_attn_sinks_prefill(
                 device.device(),
                 &encoder,
-                &kernels,
+                kernels,
                 dtype,
                 q_storage.buffer(),
                 q_offset,
@@ -2503,7 +2503,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks-varlen");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2512,7 +2512,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         crate::metal_kernels::call_flash_attn_sinks_varlen_prefill(
             device.device(),
             &encoder,
-            &kernels,
+            kernels,
             dtype,
             q_storage.buffer(),
             q_offset,
@@ -2848,7 +2848,7 @@ impl CustomOp2 for FusedGlu {
         crate::metal_kernels::call_fused_glu(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             s2.buffer(),
@@ -3100,7 +3100,7 @@ impl CustomOp1 for Softcap {
         crate::metal_kernels::call_softcap(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             l1.start_offset() * dtype.size_in_bytes(),

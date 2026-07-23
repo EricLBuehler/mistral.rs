@@ -140,6 +140,7 @@ pub struct MultimodalSpecificConfig {
     pub write_uqff: Option<UqffWriteConfig>,
     pub from_uqff: Option<Vec<PathBuf>>,
     pub max_edge: Option<u32>,
+    pub max_model_len: Option<usize>,
     pub imatrix: Option<PathBuf>,
     pub calibration_file: Option<PathBuf>,
     pub hf_cache_path: Option<PathBuf>,
@@ -321,12 +322,59 @@ impl Loader for MultimodalLoader {
         let _progress_guard = ProgressScopeGuard::new(silent);
         self.validate_dynamic_lora()?;
         let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let runtime_config = self
+            .inner
+            .runtime_config(&config, self.config.max_model_len)?;
 
         if !self.inner.supports_paged_attention(&config) {
             paged_attn_config = None;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
+
+        // Tokenizer deserialization can briefly use far more memory than its final representation.
+        let (processor, preprocessor_config, tokenizer, llg_factory) = {
+            let processor_config_json = paths
+                .get_processor_config()
+                .as_ref()
+                .map(|f| fs::read_to_string(f).unwrap());
+
+            // Some models only ship nested preprocessor settings in processor_config.json.
+            let preprocessor_config: PreProcessorConfig =
+                match paths.get_preprocessor_config().as_ref() {
+                    Some(preprocessor_config) => {
+                        serde_json::from_str(&fs::read_to_string(preprocessor_config).unwrap())
+                            .unwrap()
+                    }
+                    None => processor_config_json.as_deref().map_or_else(
+                        PreProcessorConfig::default,
+                        |json| match PreProcessorConfig::from_processor_config_json(json) {
+                            Ok(config) => config,
+                            Err(err) => {
+                                warn!(
+                                    "Failed to synthesize preprocessor config from processor_config.json: {err}"
+                                );
+                                PreProcessorConfig::default()
+                            }
+                        },
+                    ),
+                };
+            let processor_config: Option<ProcessorConfig> = processor_config_json
+                .as_deref()
+                .map(|json| serde_json::from_str(json).unwrap());
+            let processor = self.inner.get_processor(
+                &config,
+                processor_config,
+                preprocessor_config.clone(),
+                self.config.max_edge,
+            );
+            let tokenizer = get_tokenizer(
+                paths.get_tokenizer_filename(),
+                Some(processor.get_special_tokens()),
+            )?;
+            let llg_factory = build_llg_factory(tokenizer.clone())?;
+            (processor, preprocessor_config, tokenizer, llg_factory)
+        };
 
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let write_uqff = self.config.write_uqff.is_some();
@@ -611,7 +659,7 @@ impl Loader for MultimodalLoader {
                 ModelKind::Normal => {
                     let (model, tracker) = multimodal_normal_model_loader_sharded!(
                         sharded_vb,
-                        config,
+                        runtime_config,
                         self.inner,
                         mapper,
                         loading_isq,
@@ -630,7 +678,7 @@ impl Loader for MultimodalLoader {
                     Some(dtype),
                     &load_device,
                     layer_devices.clone(),
-                    config,
+                    runtime_config,
                     self.inner,
                     silent,
                     mapper,
@@ -656,7 +704,7 @@ impl Loader for MultimodalLoader {
                         Some(dtype),
                         &load_device,
                         layer_devices.clone(),
-                        config,
+                        runtime_config,
                         self.inner,
                         silent,
                         mapper,
@@ -678,7 +726,7 @@ impl Loader for MultimodalLoader {
                     Some(dtype),
                     &load_device,
                     layer_devices.clone(),
-                    config,
+                    runtime_config,
                     self.inner,
                     silent,
                     mapper,
@@ -698,46 +746,12 @@ impl Loader for MultimodalLoader {
             }
         };
 
-        let processor_config_json = paths
-            .get_processor_config()
-            .as_ref()
-            .map(|f| fs::read_to_string(f).unwrap());
-
-        // Handle models that only ship processor_config.json with nested
-        // image/audio preprocessor settings and no preprocessor_config.json.
-        let preprocessor_config: PreProcessorConfig = match paths.get_preprocessor_config().as_ref()
-        {
-            Some(preprocessor_config) => {
-                serde_json::from_str(&fs::read_to_string(preprocessor_config).unwrap()).unwrap()
+        // Release Metal loader scratch buffers before constructing the remaining pipeline state.
+        for device in &available_devices {
+            if matches!(device, Device::Metal(_)) {
+                device.synchronize()?;
             }
-            None => processor_config_json.as_deref().map_or_else(
-                PreProcessorConfig::default,
-                |json| match PreProcessorConfig::from_processor_config_json(json) {
-                    Ok(config) => config,
-                    Err(err) => {
-                        warn!(
-                            "Failed to synthesize preprocessor config from processor_config.json: {err}"
-                        );
-                        PreProcessorConfig::default()
-                    }
-                },
-            ),
-        };
-        let processor_config: Option<ProcessorConfig> = processor_config_json
-            .as_deref()
-            .map(|json| serde_json::from_str(json).unwrap());
-
-        let processor = self.inner.get_processor(
-            &config,
-            processor_config,
-            preprocessor_config.clone(),
-            self.config.max_edge,
-        ); //There are always some repos that don't properly handle config position, for example... LLaVA
-
-        let tokenizer = get_tokenizer(
-            paths.get_tokenizer_filename(),
-            Some(processor.get_special_tokens()),
-        )?;
+        }
 
         let gen_conf: Option<GenerationConfig> = paths
             .get_gen_conf_filename()
@@ -875,7 +889,6 @@ impl Loader for MultimodalLoader {
         };
 
         let max_seq_len = model.max_seq_len();
-        let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
