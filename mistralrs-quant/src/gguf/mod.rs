@@ -122,6 +122,13 @@ impl GgufMatMul {
         IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
     }
 
+    pub(crate) fn is_float_uqff_dtype(dtype: u32) -> Result<bool> {
+        Ok(matches!(
+            ggml_dtype_from_uqff_code(dtype)?,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16
+        ))
+    }
+
     pub(crate) fn block_size_from_uqff_dtype(dtype: u32) -> Result<usize> {
         Ok(ggml_dtype_from_uqff_code(dtype)?.block_size())
     }
@@ -305,6 +312,10 @@ impl QuantMethod for GgufMatMul {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         self.w.dequantize_f16()?.to_dtype(DType::F32)
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.w.embedding(ids)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -602,5 +613,55 @@ impl QuantizedSerde for GgufMatMul {
     }
     fn isq_type_from_uqff(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
         Self::isq_type_from_uqff_dtype(reader.load_u32_scalar(&format!("{prefix}.weight.dtype"))?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_EMBEDDING_DIM: usize = 256;
+    const TEST_VOCAB_SIZE: usize = 8;
+
+    fn assert_embedding_matches_dequantized_gather(
+        device: &Device,
+        dtype: GgmlDType,
+    ) -> Result<()> {
+        let values = (0..TEST_VOCAB_SIZE * TEST_EMBEDDING_DIM)
+            .map(|index| ((index % 37) as f32 - 18.0) / 7.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (TEST_VOCAB_SIZE, TEST_EMBEDDING_DIM), device)?;
+        let weight = QTensor::quantize(&weight, dtype)?;
+        let ids = Tensor::from_vec(vec![7u32, 1, 7, 3, 0, 4], (2, 3), device)?;
+        let expected = weight
+            .dequantize(device)?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 3, TEST_EMBEDDING_DIM))?;
+        let layer = GgufMatMul::from_qtensor(weight, None);
+        let actual = layer.embedding_forward_raw(&ids)?;
+
+        assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(actual.dtype(), DType::F32);
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_diff <= 1e-6, "{dtype:?}: max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn q_sensitive_targets_support_embedding_gather() -> Result<()> {
+        for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
+            assert_embedding_matches_dequantized_gather(&Device::Cpu, dtype)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn q_sensitive_targets_support_metal_embedding_gather() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
+            assert_embedding_matches_dequantized_gather(&device, dtype)?;
+        }
+        Ok(())
     }
 }

@@ -84,6 +84,13 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let mut final_dims = ids.dims().to_vec();
+        final_dims.push(self.w.dim(D::Minus1)?);
+        let ids = ids.flatten_all()?;
+        self.w.index_select(&ids, 0)?.reshape(final_dims)
+    }
+
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());

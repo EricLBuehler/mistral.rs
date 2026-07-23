@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::Module;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -20,7 +20,7 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{embedding, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{embedding_with_legacy_tied_uqff, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -1608,11 +1608,12 @@ impl PastKvLenCache for GraniteHybridCache {
 
 #[allow(dead_code)]
 pub struct GraniteMoeHybrid {
-    wte: Embedding,
+    wte: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<GraniteLayerType>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     hybrid_cache: Arc<Mutex<GraniteHybridCache>>,
     // EitherCache for pipeline integration
     kv_cache: EitherCache,
@@ -1659,11 +1660,15 @@ impl GraniteMoeHybrid {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let wte = embedding(
+        let wte = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
@@ -1675,13 +1680,7 @@ impl GraniteMoeHybrid {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            wte.clone()
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -1852,6 +1851,7 @@ impl GraniteMoeHybrid {
             layer_types,
             ln_f,
             lm_head,
+            dtype,
             hybrid_cache,
             kv_cache: EitherCache::Hybrid(pipeline_cache),
             device: normal_loading_metadata.real_device,
@@ -1881,7 +1881,7 @@ impl GraniteMoeHybrid {
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let (_batch_size, _seq_len) = input_ids.dims2()?;
-        let mut x = self.wte.forward(input_ids)?;
+        let mut x = self.wte.embedding_forward(input_ids, self.dtype)?;
         // Scale embeddings
         x = scale_tensor(x, self.embedding_multiplier)?;
 

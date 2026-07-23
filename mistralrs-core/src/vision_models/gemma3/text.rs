@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -11,8 +11,8 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
-        embedding, CausalMaskConfig, CausalMasker, Gemma3RotaryEmbedding, GemmaRmsNorm, MatMul,
-        Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
+        embedding_with_legacy_tied_uqff, CausalMaskConfig, CausalMasker, Gemma3RotaryEmbedding,
+        GemmaRmsNorm, MatMul, Mlp, RotaryEmbedding, Sdpa,
     },
     paged_attention::{
         block_hash::MultimodalAttentionPolicy, AttentionImplementation, ModelConfigMetadata,
@@ -387,10 +387,12 @@ impl DecoderLayer {
 }
 
 pub struct TextModel {
-    embed_tokens: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -420,15 +422,17 @@ impl TextModel {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
-        let embed_tokens = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
-            embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
-                &cfg.quantization_config,
-            )?,
-        );
+        let dtype = vb_m.dtype();
+        let embed_tokens_scale = (cfg.hidden_size as f64).sqrt();
+        let embed_tokens = embedding_with_legacy_tied_uqff(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
+            &cfg.quantization_config,
+        )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -516,16 +520,7 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
@@ -540,9 +535,11 @@ impl TextModel {
             .collect::<Vec<_>>();
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale,
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
@@ -566,7 +563,7 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     pub fn forward_embeds(

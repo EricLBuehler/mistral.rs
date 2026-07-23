@@ -6,7 +6,7 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
+use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -457,7 +457,7 @@ impl DecoderLayer {
 // ====================== Text Model ======================
 
 pub struct Qwen3_5MoeTextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
@@ -471,7 +471,7 @@ pub struct Qwen3_5MoeTextModel {
 }
 
 pub(super) fn validate_text_checkpoint_namespace(vb: &ShardedVarBuilder) -> Result<()> {
-    if vb.contains_tensor("language_model.model.embed_tokens.weight")
+    if layers::contains_tensor_or_uqff(vb, "language_model.model.embed_tokens.weight")
         && vb.lora_registry().is_some()
     {
         candle_core::bail!(
@@ -483,7 +483,7 @@ pub(super) fn validate_text_checkpoint_namespace(vb: &ShardedVarBuilder) -> Resu
 
 fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
     validate_text_checkpoint_namespace(&vb)?;
-    if vb.contains_tensor("language_model.model.embed_tokens.weight") {
+    if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
         Ok(vb.pp("language_model").pp("model"))
     } else {
         Ok(vb.pp("model").pp("language_model"))
@@ -501,10 +501,13 @@ impl Qwen3_5MoeTextModel {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = text_model_vb(vb.clone())?;
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -636,16 +639,7 @@ impl Qwen3_5MoeTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         // Create pipeline hybrid cache
@@ -710,7 +704,7 @@ impl Qwen3_5MoeTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -13,8 +13,8 @@ use candle_nn::{
 use float8::F8E4M3;
 use half::{bf16, f16};
 use mistralrs_quant::{
-    AfqLayer, ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder,
+    should_apply_immediate_isq, ColumnParallelLayer, Convolution, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 
@@ -38,21 +38,82 @@ use crate::{
 
 pub use mistralrs_quant::MatMul;
 
+pub fn dense_embedding(
+    in_size: usize,
+    out_size: usize,
+    vb: ShardedVarBuilder,
+    _config: &Option<QuantizedConfig>,
+) -> Result<Embedding> {
+    let embeddings = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
+    Ok(Embedding::new(embeddings, out_size))
+}
+
+fn contains_tensor_or_uqff_with(
+    residual_contains: bool,
+    prefix: &str,
+    name: &str,
+    uqff_contains: impl Fn(&str) -> bool,
+) -> bool {
+    if residual_contains {
+        return true;
+    }
+    let name = if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    };
+    uqff_contains(&name)
+}
+
+pub fn contains_tensor_or_uqff(vb: &ShardedVarBuilder, name: &str) -> bool {
+    contains_tensor_or_uqff_with(vb.contains_tensor(name), &vb.prefix(), name, |name| {
+        vb.uqff_reader().is_some_and(|reader| reader.contains(name))
+    })
+}
+
 pub fn embedding(
     in_size: usize,
     out_size: usize,
     vb: ShardedVarBuilder,
     config: &Option<QuantizedConfig>,
-) -> Result<Embedding> {
-    // AFQ quantized applies quantization to the embeddings.
-    let embeddings = if let Some(QuantizedConfig::Afq { .. }) = config {
-        let afq_layer =
-            AfqLayer::afq_linear_b(out_size, in_size, config.as_ref().unwrap(), false, vb)?;
-        afq_layer.dequantize_w()?
+) -> Result<Arc<dyn QuantMethod>> {
+    if matches!(config, Some(QuantizedConfig::Afq { .. }))
+        || should_apply_immediate_isq(&vb)
+        || vb.uqff_reader().is_some()
+    {
+        ReplicatedLayer::new(out_size, in_size, config, false, vb)
     } else {
-        vb.get_with_hints((in_size, out_size), "weight", Default::default())?
-    };
-    Ok(Embedding::new(embeddings, out_size))
+        let weight = vb.get_with_hints((in_size, out_size), "weight", Default::default())?;
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+        )?))
+    }
+}
+
+fn use_legacy_tied_uqff_head(
+    embedding_prefix: &str,
+    lm_head_prefix: &str,
+    contains: impl Fn(&str) -> bool,
+) -> bool {
+    !contains(&format!("{embedding_prefix}.weight"))
+        && contains(&format!("{lm_head_prefix}.weight"))
+}
+
+pub fn embedding_with_legacy_tied_uqff(
+    in_size: usize,
+    out_size: usize,
+    vb: ShardedVarBuilder,
+    legacy_lm_head_vb: Option<ShardedVarBuilder>,
+    config: &Option<QuantizedConfig>,
+) -> Result<Arc<dyn QuantMethod>> {
+    if let (Some(reader), Some(lm_head_vb)) = (vb.uqff_reader(), legacy_lm_head_vb) {
+        if use_legacy_tied_uqff_head(&vb.prefix(), &lm_head_vb.prefix(), |name| {
+            reader.contains(name)
+        }) {
+            return ReplicatedLayer::new(out_size, in_size, &None, false, lm_head_vb);
+        }
+    }
+    embedding(in_size, out_size, vb, config)
 }
 
 pub fn layer_norm<C: Into<LayerNormConfig>>(
@@ -3415,5 +3476,53 @@ impl Module for ScaledEmbedding {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let embedding = Embedding::new(self.embedding.clone(), self.embedding.dim(D::Minus1)?);
         xs.apply(&embedding)? * self.scale
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{contains_tensor_or_uqff_with, use_legacy_tied_uqff_head};
+    use std::collections::HashSet;
+
+    #[test]
+    fn legacy_tied_uqff_head_is_only_used_without_a_packed_embedding() {
+        let embedding = "model.embed_tokens.weight";
+        let lm_head = "lm_head.weight";
+
+        for (names, expected) in [
+            (HashSet::from([lm_head]), true),
+            (HashSet::from([embedding, lm_head]), false),
+            (HashSet::from([embedding]), false),
+            (HashSet::new(), false),
+        ] {
+            assert_eq!(
+                use_legacy_tied_uqff_head("model.embed_tokens", "lm_head", |name| {
+                    names.contains(name)
+                }),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn tensor_presence_checks_residual_and_prefixed_uqff_names() {
+        assert!(contains_tensor_or_uqff_with(
+            true,
+            "model",
+            "embed_tokens.weight",
+            |_| false,
+        ));
+        assert!(contains_tensor_or_uqff_with(
+            false,
+            "model",
+            "embed_tokens.weight",
+            |name| name == "model.embed_tokens.weight",
+        ));
+        assert!(!contains_tensor_or_uqff_with(
+            false,
+            "model",
+            "embed_tokens.weight",
+            |name| name == "embed_tokens.weight",
+        ));
     }
 }

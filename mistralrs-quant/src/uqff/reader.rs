@@ -1,4 +1,8 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use candle_core::{Device, Result, Tensor};
 use safetensors::tensor::Dtype;
@@ -64,10 +68,45 @@ impl UqffReader {
     }
 
     pub fn pack_factor(&self, dtype: candle_core::DType) -> Result<usize> {
-        Ok(self
-            .first_isq_type()?
-            .map(|isq| isq.pack_factor(dtype))
+        let mut counts = HashMap::new();
+        for name in &self.names {
+            if let Some(prefix) = name.strip_suffix(".weight.format") {
+                if let Ok(ty) = self.isq_type_for_prefix(prefix) {
+                    *counts.entry(ty).or_insert(0usize) += 1;
+                }
+            }
+        }
+        let Some(max_count) = counts.values().copied().max() else {
+            return Ok(1);
+        };
+        Ok(counts
+            .into_iter()
+            .filter(|(_, count)| *count == max_count)
+            .map(|(ty, _)| ty.pack_factor(dtype))
+            .min()
             .unwrap_or(1))
+    }
+
+    pub fn pack_factor_for(
+        &self,
+        prefix: &str,
+        dtype: candle_core::DType,
+    ) -> Result<Option<usize>> {
+        let prefix = prefix.strip_suffix(".weight").unwrap_or(prefix);
+        if !self.contains(&format!("{prefix}.weight.format")) {
+            return Ok(None);
+        }
+        let format = self.load_format(prefix)?;
+        if format == QuantizedSerdeType::Unquant {
+            return Ok(Some(1));
+        }
+        if format == QuantizedSerdeType::Gguf {
+            let dtype = self.load_u32_scalar(&format!("{prefix}.weight.dtype"))?;
+            if GgufMatMul::is_float_uqff_dtype(dtype)? {
+                return Ok(Some(1));
+            }
+        }
+        Ok(Some(self.isq_type_for_prefix(prefix)?.pack_factor(dtype)))
     }
 
     pub fn load_linear(
@@ -123,18 +162,6 @@ impl UqffReader {
             }
             QuantizedSerdeType::Unquant => Ok(1),
         }
-    }
-
-    fn first_isq_type(&self) -> Result<Option<IsqType>> {
-        for name in &self.names {
-            if let Some(prefix) = name.strip_suffix(".weight.format") {
-                // Fallback-quantized layers (e.g. GGUF F32 skips) have no ISQ type
-                if let Ok(ty) = self.isq_type_for_prefix(prefix) {
-                    return Ok(Some(ty));
-                }
-            }
-        }
-        Ok(None)
     }
 
     fn isq_type_for_prefix(&self, prefix: &str) -> Result<IsqType> {
@@ -246,5 +273,192 @@ impl UqffReader {
             .flatten_all()?
             .to_vec1()?;
         Ok(values.into_iter().map(|value| value as usize).collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{uqff_version_tensors, QuantizedSerdeType, UqffTensor};
+    use candle_core::{
+        quantized::{GgmlDType, QTensor},
+        DType,
+    };
+
+    fn write_afq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Afq as u8,
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), bits),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.group_size"), 64),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0; 4], vec![4]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.scales"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight.biases"), vec![0], vec![1]),
+        ]);
+    }
+
+    fn write_gguf_float_layer(tensors: &mut Vec<UqffTensor>, prefix: &str) {
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_u32_scalar(format!("{prefix}.weight.dtype"), 1),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0; 4], vec![4]),
+            UqffTensor::from_u32_vec(format!("{prefix}.weight.shape"), vec![1, 2], vec![2]),
+        ]);
+    }
+
+    fn write_gguf_quant_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, dtype: GgmlDType) {
+        let weight = Tensor::zeros((1, dtype.block_size()), DType::F32, &Device::Cpu).unwrap();
+        let weight = QTensor::quantize(&weight, dtype).unwrap();
+        let layer = GgufMatMul::from_qtensor(weight, None);
+        tensors.extend(
+            layer
+                .serialize_uqff(prefix, IsqType::try_from(dtype).unwrap())
+                .unwrap(),
+        );
+    }
+
+    #[test]
+    fn mixed_uqff_uses_modal_default_and_exact_per_key_factors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mixed.uqff");
+        let mut tensors = uqff_version_tensors();
+        write_afq_layer(&mut tensors, "model.layers.0.self_attn.q_proj", 4);
+        write_afq_layer(&mut tensors, "model.layers.1.self_attn.q_proj", 4);
+        write_afq_layer(&mut tensors, "model.embed_tokens", 6);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let reader = UqffReader::open(&[path]).unwrap();
+        assert_eq!(
+            reader.pack_factor(candle_core::DType::BF16).unwrap(),
+            IsqType::AFQ4.pack_factor(candle_core::DType::BF16)
+        );
+        assert_eq!(
+            reader
+                .pack_factor_for("model.embed_tokens.weight", candle_core::DType::BF16)
+                .unwrap(),
+            Some(IsqType::AFQ6.pack_factor(candle_core::DType::BF16))
+        );
+        assert_eq!(
+            reader
+                .pack_factor_for("missing", candle_core::DType::BF16)
+                .unwrap(),
+            None
+        );
+
+        let tied_path = dir.path().join("tied.uqff");
+        let mut tensors = uqff_version_tensors();
+        write_afq_layer(&mut tensors, "model.layers.0.self_attn.q_proj", 4);
+        write_afq_layer(&mut tensors, "model.embed_tokens", 8);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &tied_path,
+        )
+        .unwrap();
+        let reader = UqffReader::open(&[tied_path]).unwrap();
+        assert_eq!(
+            reader.pack_factor(candle_core::DType::BF16).unwrap(),
+            IsqType::AFQ8.pack_factor(candle_core::DType::BF16)
+        );
+    }
+
+    #[test]
+    fn mixed_q_uqff_uses_modal_default_and_exact_per_key_factors() {
+        let dir = tempfile::tempdir().unwrap();
+        let q4_path = dir.path().join("mixed-q4.uqff");
+        let mut tensors = uqff_version_tensors();
+        write_gguf_quant_layer(
+            &mut tensors,
+            "model.layers.0.self_attn.q_proj",
+            GgmlDType::Q4K,
+        );
+        write_gguf_quant_layer(
+            &mut tensors,
+            "model.layers.1.self_attn.q_proj",
+            GgmlDType::Q4K,
+        );
+        write_gguf_quant_layer(&mut tensors, "model.embed_tokens", GgmlDType::Q6K);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &q4_path,
+        )
+        .unwrap();
+
+        let reader = UqffReader::open(&[q4_path]).unwrap();
+        assert_eq!(
+            reader.pack_factor(DType::BF16).unwrap(),
+            IsqType::Q4K.pack_factor(DType::BF16)
+        );
+        assert_eq!(
+            reader
+                .pack_factor_for("model.embed_tokens.weight", DType::BF16)
+                .unwrap(),
+            Some(IsqType::Q6K.pack_factor(DType::BF16))
+        );
+
+        let q6_path = dir.path().join("mixed-q6.uqff");
+        let mut tensors = uqff_version_tensors();
+        write_gguf_quant_layer(
+            &mut tensors,
+            "model.layers.0.self_attn.q_proj",
+            GgmlDType::Q6K,
+        );
+        write_gguf_quant_layer(
+            &mut tensors,
+            "model.layers.1.self_attn.q_proj",
+            GgmlDType::Q6K,
+        );
+        write_gguf_quant_layer(&mut tensors, "lm_head", GgmlDType::Q8_0);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &q6_path,
+        )
+        .unwrap();
+
+        let reader = UqffReader::open(&[q6_path]).unwrap();
+        assert_eq!(
+            reader.pack_factor(DType::BF16).unwrap(),
+            IsqType::Q6K.pack_factor(DType::BF16)
+        );
+        assert_eq!(
+            reader
+                .pack_factor_for("lm_head.weight", DType::BF16)
+                .unwrap(),
+            Some(IsqType::Q8_0.pack_factor(DType::BF16))
+        );
+    }
+
+    #[test]
+    fn gguf_float_fallback_has_dense_pack_factor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("float-fallback.uqff");
+        let mut tensors = uqff_version_tensors();
+        write_gguf_float_layer(&mut tensors, "model.embed_tokens");
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let reader = UqffReader::open(&[path]).unwrap();
+        assert_eq!(
+            reader
+                .pack_factor_for("model.embed_tokens.weight", candle_core::DType::BF16)
+                .unwrap(),
+            Some(1)
+        );
     }
 }

@@ -100,7 +100,8 @@ pub(crate) static PHI4_MM_VISION_CFG: LazyLock<SiglipVisionConfig> =
     });
 
 pub struct ImageEmbedding {
-    wte: candle_nn::Embedding,
+    wte: Arc<dyn QuantMethod>,
+    dtype: DType,
     image_dim_out: usize,
     num_img_tokens: usize,
     glb_gn: Option<Tensor>,
@@ -123,7 +124,8 @@ impl ImageEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
         img_embd_config: &Phi4MMImageEmbedConfig,
-        wte: candle_nn::Embedding,
+        wte: Arc<dyn QuantMethod>,
+        dtype: DType,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let hidden_size = img_embd_config.n_embd.unwrap_or(cfg.hidden_size);
@@ -288,6 +290,7 @@ impl ImageEmbedding {
 
         Ok(Self {
             wte,
+            dtype,
             image_dim_out,
             num_img_tokens,
             glb_gn,
@@ -704,7 +707,7 @@ impl ImageEmbedding {
             }
         }
 
-        let mut hidden_states = self.wte.forward(&input_ids)?;
+        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
         if select && self.use_hd_transform {
             match image_set_tensor {
                 Some(image_set_tensors) => {

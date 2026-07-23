@@ -11,7 +11,7 @@ use crate::{
     make_dummy_or_error, maybe_wrap_dynamic_lora,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq_sharded, spawn_pending_isq},
+    utils::isq::apply_immediate_isq_sharded,
     AfqLayer, BnbLinear, DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod,
     QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard,
     ShardedVarBuilder, UnquantLinear,
@@ -786,46 +786,21 @@ impl ReplicatedLayer {
         }
 
         let dev = lin.weight().device().clone();
-        if let Some(params) = crate::get_immediate_isq() {
-            if let Some(immediate_isq) = params.ty {
-                let lin = if !dev.is_cpu() {
-                    Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
-                } else {
-                    lin
-                };
-                let layer: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-                let layer = maybe_wrap_dynamic_lora(&vb, layer, spec.clone())?;
-                let module_key = vb.prefix();
-                let layer =
-                    spawn_pending_isq(layer, Some(immediate_isq), dev, &params, module_key.clone());
-                vb.tracker().add_module(crate::TrackedModule {
-                    key: module_key,
-                    ct: layer.clone(),
-                    ty: Some(immediate_isq),
-                    shard: None,
-                });
-                return Ok(layer);
-            }
-            if params.capture != crate::IsqCaptureMode::Immediate {
-                let layer: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-                let layer = maybe_wrap_dynamic_lora(&vb, layer, spec.clone())?;
-                let module_key = vb.prefix();
-                let layer = spawn_pending_isq(layer, None, dev, &params, module_key.clone());
-                vb.tracker().add_module(crate::TrackedModule {
-                    key: module_key,
-                    ct: layer.clone(),
-                    ty: params.ty,
-                    shard: None,
-                });
-                return Ok(layer);
-            }
-        }
-
+        let vb = vb.set_device(dev.clone());
+        let lin = if should_apply_immediate_isq(&vb) && !dev.is_cpu() {
+            Linear::new(
+                lin.weight().to_device(&Device::Cpu)?,
+                lin.bias()
+                    .map(|bias| bias.to_device(&Device::Cpu))
+                    .transpose()?,
+            )
+        } else {
+            lin
+        };
         let layer: Arc<dyn QuantMethod> =
             Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-        maybe_wrap_dynamic_lora(&vb, layer, spec)
+        let layer = maybe_wrap_dynamic_lora(&vb, layer, spec)?;
+        apply_immediate_isq_sharded(layer, vb, None)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -1020,6 +995,14 @@ impl QuantMethod for ReplicatedLayer {
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward_raw(a)
+    }
+
+    fn embedding_forward(&self, ids: &Tensor, output_dtype: candle_core::DType) -> Result<Tensor> {
+        self.0.embedding_forward(ids, output_dtype)
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.0.embedding_forward_raw(ids)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -1505,7 +1488,97 @@ pub fn compute_n_kv_groups(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_tp_head_layout;
+    use std::collections::HashMap;
+
+    use regex::Regex;
+
+    use super::{validate_tp_head_layout, ReplicatedLayer};
+    use crate::{
+        create_isq_executor, set_immediate_isq_config, ImmediateIsqConfig, ImmediateIsqOverride,
+        IsqCaptureMode, IsqExecutorConfig, IsqType, ShardedSafeTensors,
+    };
+
+    fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
+        let ty = Some(ty);
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        let promoted = Regex::new(r"^model\.embed_tokens\.weight$").unwrap();
+        set_immediate_isq_config(
+            ImmediateIsqConfig::new(ty, vec![promoted.clone()], IsqCaptureMode::Immediate)
+                .with_promoted_predicates(vec![promoted])
+                .with_overrides(overrides),
+            executor,
+        );
+    }
+
+    fn tracked_from_linear() -> crate::TrackedModule {
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::<String, candle_core::Tensor>::new(),
+            candle_core::DType::F32,
+            candle_core::Device::Cpu,
+        )
+        .pp("model")
+        .pp("embed_tokens");
+        let tracker = vb.tracker().clone();
+        let linear = candle_nn::Linear::new(
+            candle_core::Tensor::zeros(
+                (64, 256),
+                candle_core::DType::F32,
+                &candle_core::Device::Cpu,
+            )
+            .unwrap(),
+            None,
+        );
+        let _ = ReplicatedLayer::from_linear(linear, vb).unwrap();
+        let tracked = tracker.get()[0].clone();
+        crate::clear_immediate_isq();
+        tracked
+    }
+
+    #[test]
+    fn replicated_from_linear_uses_sensitive_default() {
+        install_immediate(IsqType::AFQ4, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn replicated_from_linear_preserves_explicit_type() {
+        install_immediate(
+            IsqType::AFQ4,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ2));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q4k_sensitive_default() {
+        install_immediate(IsqType::Q4K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q6K));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q6k_sensitive_default() {
+        install_immediate(IsqType::Q6K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q8_0));
+    }
+
+    #[test]
+    fn replicated_from_linear_preserves_explicit_q_type() {
+        install_immediate(
+            IsqType::Q4K,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::Q4_0),
+                device: None,
+            }],
+        );
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q4_0));
+    }
 
     #[test]
     fn tp_head_layout_accepts_partitioned_kv_heads() {

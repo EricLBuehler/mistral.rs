@@ -391,7 +391,7 @@ pub fn call_bitwise_not(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), Output::new(output)));
+    set_params!(encoder, ((a, a_offset), Output::new(output), length as u32));
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -429,7 +429,15 @@ pub fn call_bitwise_or(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
+    set_params!(
+        encoder,
+        (
+            (a, a_offset),
+            (b, b_offset),
+            Output::new(output),
+            length as u32
+        )
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -467,7 +475,15 @@ pub fn call_bitwise_and(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
+    set_params!(
+        encoder,
+        (
+            (a, a_offset),
+            (b, b_offset),
+            Output::new(output),
+            length as u32
+        )
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -505,7 +521,15 @@ pub fn call_bitwise_xor(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), (b, b_offset), Output::new(output)));
+    set_params!(
+        encoder,
+        (
+            (a, a_offset),
+            (b, b_offset),
+            Output::new(output),
+            length as u32
+        )
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -542,7 +566,10 @@ pub fn call_bitwise_leftshift(
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
 
-    set_params!(encoder, ((a, a_offset), Output::new(output), k));
+    set_params!(
+        encoder,
+        ((a, a_offset), Output::new(output), k, length as u32)
+    );
 
     let (thread_group_count, thread_group_size) = linear_split(&pipeline, length);
     encoder.dispatch_thread_groups(thread_group_count, thread_group_size);
@@ -791,6 +818,85 @@ pub fn call_affine_quantize(
             )
         );
     }
+
+    encoder.dispatch_threads(grid_dims, group_dims);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn call_afq_embedding(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    ty: DType,
+    w: &Buffer,
+    w_offset: usize,
+    scales: &Buffer,
+    scales_offset: usize,
+    biases: &Buffer,
+    biases_offset: usize,
+    ids: &Buffer,
+    ids_offset: usize,
+    out: &Buffer,
+    num_ids: usize,
+    hidden_size: usize,
+    bits: usize,
+    group_size: usize,
+) -> Result<(), MetalKernelError> {
+    let type_string = match ty {
+        DType::F32 => "float",
+        DType::BF16 => "bfloat16_t",
+        DType::F16 => "float16_t",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let name = format!("affine_embedding_{type_string}_gs_{group_size}_b_{bits}");
+    let pipeline = kernels.load_pipeline(device, &name)?;
+
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+
+    let pack_factor = match bits {
+        3 => 8,
+        6 => 4,
+        40 => 2,
+        _ => 8 / bits,
+    };
+    let nthreads = num_ids * hidden_size / pack_factor;
+    if nthreads == 0 {
+        return Ok(());
+    }
+    let thread_group_size = (pipeline.max_total_threads_per_threadgroup() as usize).min(nthreads);
+    let group_dims = MTLSize {
+        width: thread_group_size,
+        height: 1,
+        depth: 1,
+    };
+    let grid_dims = MTLSize {
+        width: nthreads,
+        height: 1,
+        depth: 1,
+    };
+    let num_ids = num_ids as i32;
+    let hidden_size = hidden_size as i32;
+
+    set_params!(
+        encoder,
+        (
+            (w, w_offset),
+            (scales, scales_offset),
+            (biases, biases_offset),
+            (ids, ids_offset),
+            Output::new(out),
+            num_ids,
+            hidden_size
+        )
+    );
 
     encoder.dispatch_threads(grid_dims, group_dims);
     Ok(())

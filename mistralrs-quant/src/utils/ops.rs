@@ -3542,6 +3542,77 @@ mod tests {
         assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitwise_metal_unaligned_length() -> candle_core::Result<()> {
+        use super::{BitWiseOp, LeftshiftOp};
+        use candle_core::{Device, Tensor};
+
+        const TEST_LENGTH: usize = 2049;
+        const TEST_SHIFT: usize = 3;
+
+        let device = Device::new_metal(0)?;
+        let lhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let rhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(19).wrapping_add(7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let lhs_tensor = Tensor::from_vec(lhs.clone(), TEST_LENGTH, &device)?;
+        let rhs_tensor = Tensor::from_vec(rhs.clone(), TEST_LENGTH, &device)?;
+
+        let and = lhs_tensor
+            .bitwise_and(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let or = lhs_tensor
+            .bitwise_or(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let xor = lhs_tensor
+            .bitwise_xor(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let not = lhs_tensor
+            .bitwise_not()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let shifted = lhs_tensor
+            .leftshift(TEST_SHIFT)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+
+        assert_eq!(
+            and,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs & rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            or,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs | rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            xor,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs ^ rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(not, lhs.iter().map(|value| !value).collect::<Vec<_>>());
+        assert_eq!(
+            shifted,
+            lhs.iter()
+                .map(|value| value.wrapping_shl(TEST_SHIFT as u32))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_nonzero_and() {
         use crate::utils::ops::{BitWiseOp, NonZeroOp};

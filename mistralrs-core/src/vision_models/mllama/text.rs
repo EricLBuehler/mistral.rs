@@ -3,8 +3,8 @@
 use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, IndexOp, Result, Tensor};
-use candle_nn::{Activation, Embedding, Module};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_nn::{Activation, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -12,7 +12,7 @@ use mistralrs_quant::{
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
+    layers::{embedding_with_legacy_tied_uqff, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -499,10 +499,11 @@ enum MLlamaDecoderLayer {
 }
 
 pub(super) struct MLlamaTextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     lm_head: Arc<dyn QuantMethod>,
     norm: RmsNorm,
     layers: Vec<MLlamaDecoderLayer>,
+    dtype: DType,
     pub(crate) cfg: ModelConfigMetadata,
     pub(crate) cache: EitherCache,
     pub(crate) device: Device,
@@ -529,11 +530,18 @@ impl MLlamaTextModel {
             candle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size + 8,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            mapper.set_nm_device(
+                vb.pp("model.embed_tokens"),
+                normal_loading_metadata.loading_isq,
+            ),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -543,16 +551,10 @@ impl MLlamaTextModel {
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), false),
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(embed_tokens.embeddings(), false)?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), false),
-            )?
+            embed_tokens.clone()
         };
 
         let vb = vb.pp("model");
@@ -619,6 +621,7 @@ impl MLlamaTextModel {
             layers,
             norm,
             lm_head,
+            dtype,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: cfg.num_hidden_layers,
@@ -650,7 +653,7 @@ impl MLlamaTextModel {
         full_text_row_masked_out_mask: Option<&Tensor>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut hidden_states = self.embed_tokens.forward(input_ids)?;
+        let mut hidden_states = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
 
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);

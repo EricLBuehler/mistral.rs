@@ -306,6 +306,10 @@ impl EmbeddingModelLoader for AutoEmbeddingLoader {
 }
 
 impl IsqModelLoader for AutoEmbeddingLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.promoted_isq_predicates(config)
+    }
+
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.immediate_isq_predicates(config)
     }
@@ -326,12 +330,14 @@ impl DeviceMappedModelLoader for AutoEmbeddingLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_size_in_bytes(
             config,
             dtype,
             weight_pack_factor,
+            quantization,
             _matformer_config,
         )
     }
@@ -407,6 +413,10 @@ impl EmbeddingModelLoader for EmbeddingGemmaLoader {
 }
 
 impl IsqModelLoader for EmbeddingGemmaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(r"^embed_tokens\.weight$")?])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -463,12 +473,19 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + norm
         };
@@ -588,6 +605,10 @@ impl EmbeddingModelLoader for Qwen3EmbeddingLoader {
 }
 
 impl IsqModelLoader for Qwen3EmbeddingLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(r"^embed_tokens\.weight$")?])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -642,19 +663,20 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
-            } else {
-                0
-            };
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
-            embed_tokens + lm_head + norm
+            embed_tokens + norm
         };
         Ok(elems * dtype.size_in_bytes())
     }
@@ -727,5 +749,64 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_promotes_only_embedding_weight(predicates: &[Regex]) {
+        assert_eq!(predicates.len(), 1);
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.is_match("embed_tokens.weight")));
+
+        for name in [
+            "lm_head.weight",
+            "lm_head.bias",
+            "model.embed_tokens.weight",
+            "embed_tokens.bias",
+            "embed_tokens.weight.extra",
+            "other_embed_tokens.weight",
+        ] {
+            assert!(
+                predicates.iter().all(|predicate| !predicate.is_match(name)),
+                "unexpected promoted match for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedding_gemma_promotes_only_exact_embedding_weight() {
+        let predicates = EmbeddingGemmaLoader.promoted_isq_predicates("{}").unwrap();
+        assert_promotes_only_embedding_weight(&predicates);
+    }
+
+    #[test]
+    fn qwen3_embedding_promotes_only_exact_embedding_weight() {
+        let predicates = Qwen3EmbeddingLoader.promoted_isq_predicates("{}").unwrap();
+        assert_promotes_only_embedding_weight(&predicates);
+    }
+
+    #[test]
+    fn auto_embedding_delegates_promoted_predicates() {
+        for (config, expected) in [
+            (
+                r#"{"architectures":["Gemma3TextModel"]}"#,
+                EmbeddingGemmaLoader.promoted_isq_predicates("{}").unwrap(),
+            ),
+            (
+                r#"{"architectures":["Qwen3ForCausalLM"]}"#,
+                Qwen3EmbeddingLoader.promoted_isq_predicates("{}").unwrap(),
+            ),
+        ] {
+            let actual = AutoEmbeddingLoader.promoted_isq_predicates(config).unwrap();
+            assert_eq!(
+                actual.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                expected.iter().map(Regex::as_str).collect::<Vec<_>>()
+            );
+            assert_promotes_only_embedding_weight(&actual);
+        }
     }
 }

@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::Module;
-use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{self, Activation},
@@ -21,7 +21,8 @@ use super::Phi4MMConfig;
 pub(super) const AUDIO_SPECIAL_TOKEN_ID: f64 = 200011.;
 
 pub struct AudioEmbedding {
-    wte: candle_nn::Embedding,
+    wte: Arc<dyn QuantMethod>,
+    dtype: DType,
     proj: HashMap<InputMode, Vec<Arc<dyn Module + Send + Sync>>>,
     encoder: ConformerEncoder,
     target_device_dtype: (Device, DType),
@@ -30,7 +31,8 @@ pub struct AudioEmbedding {
 impl AudioEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
-        wte: candle_nn::Embedding,
+        wte: Arc<dyn QuantMethod>,
+        dtype: DType,
         audio_embd_config: &Phi4MMAudioEmbedConfig,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
@@ -91,6 +93,7 @@ impl AudioEmbedding {
 
         Ok(Self {
             wte,
+            dtype,
             proj,
             encoder,
             target_device_dtype: (vb.device().clone(), vb.dtype()),
@@ -160,11 +163,11 @@ impl AudioEmbedding {
             self.get_audio_features(&input_embeds, audio_attention_mask, input_mode)?
         } else {
             // Return early if no audio tokens and not training
-            return self.wte.forward(&input_ids);
+            return self.wte.embedding_forward(&input_ids, self.dtype);
         };
 
         // Get initial hidden states from word embeddings
-        let mut hidden_states = self.wte.forward(&input_ids)?;
+        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
 
         // Verify that audio_embed_sizes sum matches positions count
         let total_audio_tokens = audio_embed_sizes.iter().sum::<usize>();

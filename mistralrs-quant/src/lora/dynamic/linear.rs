@@ -97,6 +97,15 @@ impl QuantMethod for DynamicLoraLinear {
         add_delta(&execution, &self.site, input, output)
     }
 
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        if let Some(execution) = current_lora_execution(self.runtime_id) {
+            if execution.site_is_active(&self.site)? {
+                candle_core::bail!("dynamic LoRA does not support embedding linears");
+            }
+        }
+        self.base.embedding_forward_raw(ids)
+    }
+
     fn gather_forward_raw(&self, input: &Tensor, indices: &Tensor) -> Result<Tensor> {
         if let Some(execution) = current_lora_execution(self.runtime_id) {
             if execution.site_is_active(&self.site)? {
@@ -352,6 +361,64 @@ mod tests {
         )?;
         let output = with_lora_execution(Some(Arc::new(execution)), || layer.forward(&input))?;
         assert_eq!(output.to_vec2::<f32>()?, vec![vec![3., 6.]]);
+        Ok(())
+    }
+
+    #[test]
+    fn embedding_delegates_unless_its_site_is_active() -> Result<()> {
+        let device = Device::Cpu;
+        let registry = LoraLayerRegistry::new();
+        let embedding_site = registry.register(
+            LoraSiteKey::new("embed_tokens"),
+            LoraLinearSpec::replicated(2, 3),
+            DType::F32,
+            device.clone(),
+        )?;
+        let other_site = registry.register(
+            LoraSiteKey::new("other"),
+            LoraLinearSpec::replicated(2, 3),
+            DType::F32,
+            device.clone(),
+        )?;
+        registry.finalize()?;
+        let base: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(Linear::new(
+                Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.]], &device)?,
+                None,
+            )),
+        )?);
+        let layer = DynamicLoraLinear::new(base, embedding_site.clone(), registry.runtime_id());
+        let ids = Tensor::new(&[2u32, 0], &device)?;
+        let expected = vec![vec![5f32, 6.], vec![1., 2.]];
+
+        assert_eq!(
+            layer.embedding_forward_raw(&ids)?.to_vec2::<f32>()?,
+            expected
+        );
+
+        let weights = || {
+            LoraWeights::new(
+                Tensor::zeros((1, 2), DType::F32, &device)?,
+                Tensor::zeros((3, 1), DType::F32, &device)?,
+                1.0,
+            )
+        };
+        let mut other_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
+        other_execution.insert(&other_site, 0, weights()?)?;
+        let output = with_lora_execution(Some(Arc::new(other_execution)), || {
+            layer.embedding_forward_raw(&ids)
+        })?;
+        assert_eq!(output.to_vec2::<f32>()?, expected);
+
+        let mut embedding_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
+        embedding_execution.insert(&embedding_site, 0, weights()?)?;
+        let error = with_lora_execution(Some(Arc::new(embedding_execution)), || {
+            layer.embedding_forward_raw(&ids)
+        })
+        .expect_err("active embedding LoRA should fail");
+        assert!(error
+            .to_string()
+            .contains("dynamic LoRA does not support embedding linears"));
         Ok(())
     }
 

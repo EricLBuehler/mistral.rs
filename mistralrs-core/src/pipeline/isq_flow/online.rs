@@ -108,7 +108,7 @@ pub(crate) fn apply_calibration(
         tracing::warn!(
             "No source weights available; requantizing from resident quantized weights (reduced quality)."
         );
-        requantize_and_swap(modules, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {
+        requantize_and_swap(modules, pool_ty, |m| m.resolve_type(pool_ty), &|key| {
             map.get(key).cloned()
         })?;
     } else {
@@ -327,7 +327,7 @@ pub(crate) fn requantize_from_source(
     }
 
     if !fallback.is_empty() {
-        requantize_and_swap(&fallback, pool_ty, |m| m.ty.unwrap_or(pool_ty), &|key| {
+        requantize_and_swap(&fallback, pool_ty, |m| m.resolve_type(pool_ty), &|key| {
             imatrix_map.get(key).cloned()
         })?;
     }
@@ -379,6 +379,7 @@ mod tests {
             key: "m.lin".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(Shard::Simple {
                 dim: 0,
                 rank: 1,
@@ -444,6 +445,7 @@ mod tests {
             key: "m.lin".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(Shard::default()),
         };
 
@@ -500,6 +502,7 @@ mod tests {
             key: "m.experts.gate_proj".to_string(),
             ct: ct.clone(),
             ty: Some(IsqType::Q8_0),
+            promote_default: false,
             shard: Some(mistralrs_quant::Shard::default()),
         };
 

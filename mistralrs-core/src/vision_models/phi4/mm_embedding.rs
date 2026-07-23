@@ -1,9 +1,8 @@
 use crate::attention::AttentionMask;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use candle_core::{Result, Tensor, D};
-use candle_nn::Module;
-use mistralrs_quant::ShardedVarBuilder;
+use candle_core::{DType, Result, Tensor, D};
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     paged_attention::encoder_cache::EncoderCacheManager, utils::unvarbuilder::UnVarBuilder,
@@ -26,13 +25,15 @@ pub struct Phi4MMImageAudioEmbedding {
     audio_embed: Option<AudioEmbedding>,
     image_embed: Option<ImageEmbedding>,
     image_input_id: f64,
-    wte: candle_nn::Embedding,
+    wte: Arc<dyn QuantMethod>,
+    dtype: DType,
 }
 
 impl Phi4MMImageAudioEmbedding {
     pub fn new(
         cfg: &Phi4MMConfig,
-        wte: candle_nn::Embedding,
+        wte: Arc<dyn QuantMethod>,
+        dtype: DType,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let image_embed = if let Some(img_embd_config) = &cfg.embd_layer.image_embd_layer {
@@ -40,6 +41,7 @@ impl Phi4MMImageAudioEmbedding {
                 cfg,
                 img_embd_config,
                 wte.clone(),
+                dtype,
                 vb.pp("image_embed"),
             )?)
         } else {
@@ -49,6 +51,7 @@ impl Phi4MMImageAudioEmbedding {
             Some(AudioEmbedding::new(
                 cfg,
                 wte.clone(),
+                dtype,
                 audio_embd_config,
                 vb.pp("audio_embed"),
             )?)
@@ -61,6 +64,7 @@ impl Phi4MMImageAudioEmbedding {
             audio_embed,
             image_input_id: cfg.image_input_id.unwrap_or(-1.),
             wte,
+            dtype,
         })
     }
 
@@ -124,7 +128,7 @@ impl Phi4MMImageAudioEmbedding {
             (Some(image_hidden_states), None) => Ok(image_hidden_states),
             (None, Some(audio_hidden_states)) => Ok(audio_hidden_states),
 
-            (None, None) => self.wte.forward(&input_ids),
+            (None, None) => self.wte.embedding_forward(&input_ids, self.dtype),
         }
     }
 

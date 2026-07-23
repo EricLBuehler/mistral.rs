@@ -9,10 +9,9 @@ use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::Module;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
-    UnquantLinear,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -20,9 +19,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{
-        embedding, linear_no_bias as linear, Activation, CausalMasker, MatMul, RmsNorm, Sdpa,
-    },
+    layers::{embedding, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -386,10 +383,11 @@ impl Block {
 }
 
 pub struct Llama {
-    wte: Embedding,
+    wte: Arc<dyn QuantMethod>,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -402,7 +400,7 @@ impl Llama {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let x = self.wte.forward(input_ids)?;
+        let x = self.wte.embedding_forward(input_ids, self.dtype)?;
         self.forward_input_embed(input_ids, x, ctx)
     }
 
@@ -421,15 +419,21 @@ impl Llama {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb.dtype();
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            mapper.set_nm_device(
+                vb.pp("model.embed_tokens"),
+                normal_loading_metadata.loading_isq,
+            ),
             &cfg.quantization_config,
         )?;
-        let lm_head = linear(
+        let lm_head = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.vocab_size,
+            &None,
+            false,
             mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
         )?;
         let ln_f = RmsNorm::new(
@@ -480,7 +484,8 @@ impl Llama {
             wte,
             blocks,
             ln_f,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
+            dtype,
             kv_cache: crate::pipeline::EitherCache::Full(crate::pipeline::Cache::new(
                 cfg.num_hidden_layers,
                 false,
@@ -511,7 +516,7 @@ impl IsqModel for Llama {
 
 impl LLaVALLM for Llama {
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.forward(input_ids)
+        self.wte.embedding_forward(input_ids, self.dtype)
     }
     fn forward_input_embed(
         &self,

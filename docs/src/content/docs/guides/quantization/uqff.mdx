@@ -93,6 +93,13 @@ A [topology](/mistral.rs/guides/perf/topology/) can pin specific layers to a dif
 (e.g. keep `lm_head` at `q8_0` in an otherwise Q4K file); pins are preserved in every output
 variant.
 
+Sensitive token embeddings and output heads follow the higher-precision defaults in the
+[quantization type reference](/mistral.rs/reference/quantization-types/). For example, AFQ4 uses
+AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
+type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
+precedence. The active model loader declares the exact tensors covered by this policy; similarly
+named tensors in vision, audio, or auxiliary subtrees are not promoted implicitly.
+
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 

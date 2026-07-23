@@ -10,7 +10,7 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::Embedding;
+use candle_nn::Linear;
 use mistralrs_quant::{
     softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder, UnquantLinear,
@@ -21,7 +21,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, Activation, CausalMasker, Mlp, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
+        embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
+        RotaryEmbedding, Sdpa,
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
@@ -1411,13 +1412,16 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
 
 #[allow(dead_code)]
 pub struct TextModel {
-    embed_tokens: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
+    embed_tokens_in_residual: bool,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
     lm_head_is_tied: bool,
     // PLE global
-    embed_tokens_per_layer: Option<Embedding>,
+    embed_tokens_per_layer: Option<Arc<dyn QuantMethod>>,
+    embed_tokens_per_layer_in_residual: bool,
     per_layer_model_projection: Option<Arc<dyn QuantMethod>>,
     per_layer_projection_norm: Option<RmsNorm>,
     hidden_size_per_layer_input: usize,
@@ -1427,6 +1431,7 @@ pub struct TextModel {
     per_layer_projection_scalar: f64,
     // Standard
     device: Device,
+    dtype: DType,
     cache: EitherCache,
     max_seq_len: usize,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -1515,15 +1520,30 @@ impl TextModel {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb;
-        let embed_tokens = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
-            embedding(
+        let embed_tokens_scale = (cfg.hidden_size as f64).sqrt();
+        let embed_tokens_in_residual = cfg.tie_word_embeddings && cfg.keep_tied_lm_head_unquantized;
+        let embed_tokens: Arc<dyn QuantMethod> = if embed_tokens_in_residual {
+            let weight = mapper
+                .set_nm_device(vb_m.pp("embed_tokens"), false)
+                .get_with_hints(
+                    (cfg.vocab_size, cfg.hidden_size),
+                    "weight",
+                    Default::default(),
+                )?;
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?)
+        } else {
+            embedding_with_legacy_tied_uqff(
                 cfg.vocab_size,
                 cfg.hidden_size,
-                mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+                mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+                cfg.tie_word_embeddings.then(|| {
+                    mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq)
+                }),
                 &cfg.quantization_config,
-            )?,
-        );
+            )?
+        };
 
         // Build RoPE instances per device
         let _partial_rotary_dim =
@@ -1630,7 +1650,9 @@ impl TextModel {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
 
-        let lm_head: Arc<dyn QuantMethod> = if !cfg.tie_word_embeddings {
+        let lm_head: Arc<dyn QuantMethod> = if cfg.tie_word_embeddings {
+            embed_tokens.clone()
+        } else {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
@@ -1638,21 +1660,6 @@ impl TextModel {
                 false,
                 mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
-        } else {
-            let embed_weight = mapper.cast_nm_device(
-                embed_tokens.embeddings(),
-                normal_loading_metadata.loading_isq,
-            )?;
-            let lin = candle_nn::Linear::new(embed_weight, None);
-            if cfg.keep_tied_lm_head_unquantized {
-                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?)
-                    as Arc<dyn QuantMethod>
-            } else {
-                ReplicatedLayer::from_linear(
-                    lin,
-                    mapper.set_nm_device(vb_m.pp("lm_head"), normal_loading_metadata.loading_isq),
-                )?
-            }
         };
 
         // PLE global components
@@ -1660,10 +1667,15 @@ impl TextModel {
         let ple_vocab = cfg.vocab_size_per_layer_input.unwrap_or(cfg.vocab_size);
         let (embed_tokens_per_layer, per_layer_model_projection, per_layer_projection_norm) =
             if ple_dim > 0 {
-                let ple_emb_vb = mapper.set_nm_device(vb_m.pp("embed_tokens_per_layer"), false);
-                let ple_emb_weight =
-                    ple_emb_vb.get((ple_vocab, cfg.num_hidden_layers * ple_dim), "weight")?;
-                let ple_emb = Embedding::new(ple_emb_weight, cfg.num_hidden_layers * ple_dim);
+                let ple_emb = embedding(
+                    ple_vocab,
+                    cfg.num_hidden_layers * ple_dim,
+                    mapper.set_nm_device(
+                        vb_m.pp("embed_tokens_per_layer"),
+                        normal_loading_metadata.loading_isq,
+                    ),
+                    &cfg.quantization_config,
+                )?;
 
                 let ple_proj = mistralrs_quant::linear_no_bias(
                     cfg.hidden_size,
@@ -1774,11 +1786,14 @@ impl TextModel {
 
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale,
+            embed_tokens_in_residual,
             layers,
             norm,
             lm_head,
             lm_head_is_tied: cfg.tie_word_embeddings,
             embed_tokens_per_layer,
+            embed_tokens_per_layer_in_residual: false,
             per_layer_model_projection,
             per_layer_projection_norm,
             hidden_size_per_layer_input: ple_dim,
@@ -1787,6 +1802,7 @@ impl TextModel {
             per_layer_input_scale: 2f64.powf(-0.5),
             per_layer_projection_scalar: (cfg.hidden_size as f64).powf(-0.5),
             device: normal_loading_metadata.real_device,
+            dtype: vb_m.dtype(),
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.effective_sliding_window(),
@@ -1811,7 +1827,7 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     pub fn last_spec_hidden(&self) -> Option<Tensor> {
@@ -1863,7 +1879,7 @@ impl TextModel {
         let (b, seq, _) = inputs_embeds.dims3()?;
 
         // 1. Token-level per-layer embeddings: [b, seq, num_layers * ple_dim]
-        let embedded = ple_emb.forward(ple_input_ids)?;
+        let embedded = ple_emb.embedding_forward(ple_input_ids, self.dtype)?;
         // Scale by sqrt(ple_dim)
         let embedded = (embedded * (ple_dim as f64).sqrt())?;
         // Reshape to [b, seq, num_layers, ple_dim]
@@ -2340,8 +2356,12 @@ impl TextModel {
         Ok(logits)
     }
 
-    pub(in crate::vision_models) fn embedding(&self) -> &ScaledEmbedding {
-        &self.embed_tokens
+    pub(in crate::vision_models) fn embedding_weight(&self) -> Result<Tensor> {
+        self.embed_tokens.dequantize_w()
+    }
+
+    pub(in crate::vision_models) fn embedding_dtype(&self) -> DType {
+        self.embed_tokens.dtype_and_device().0
     }
 
     /// Snapshot the frozen encoder cache for a batch of sequences with EQUAL context
@@ -2397,13 +2417,24 @@ impl IsqModel for TextModel {
         let uvb = UnVarBuilder::new();
 
         let uvb_m = uvb;
-        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        if self.embed_tokens_in_residual {
+            let weight = self
+                .embed_tokens
+                .dequantize_w()
+                .expect("dense Gemma4 token embedding missing");
+            uvb_m.pp("embed_tokens").add_tensor("weight", weight);
+        }
         uvb_m.pp("norm").add(&self.norm);
 
-        if let Some(ref emb) = self.embed_tokens_per_layer {
-            uvb_m
-                .pp("embed_tokens_per_layer")
-                .add_tensor("weight", emb.embeddings().clone());
+        if self.embed_tokens_per_layer_in_residual {
+            if let Some(ref emb) = self.embed_tokens_per_layer {
+                let weight = emb
+                    .dequantize_w()
+                    .expect("dense Gemma4 PLE embedding missing");
+                uvb_m
+                    .pp("embed_tokens_per_layer")
+                    .add_tensor("weight", weight);
+            }
         }
         if let Some(ref norm) = self.per_layer_projection_norm {
             uvb_m.pp("per_layer_projection_norm").add(norm);

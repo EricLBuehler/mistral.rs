@@ -46,6 +46,12 @@ mod quantize;
 pub(crate) const ISQ_HQQ_GROUP_SIZE: usize = 64;
 pub(crate) const ISQ_HQQ_DEFAULT_OPT_STEPS: Option<usize> = Some(10);
 pub(crate) const OPTIMIZER_HQQ_DEFAULT_STEPS: usize = 20;
+const HQQ_EMBEDDING_CHUNK_ELEMENTS: usize = 1024 * 1024;
+const HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS: usize = 1;
+const HQQ4_HIGH_MASK: u8 = 0xf0;
+const HQQ4_LOW_MASK: u8 = 0x0f;
+const HQQ4_HIGH_MULTIPLIER: f32 = 1.0 / 16.0;
+const HQQ4_LOW_MULTIPLIER: f32 = 1.0;
 
 #[cfg(feature = "cuda")]
 macro_rules! dequant_for_dtype {
@@ -581,6 +587,13 @@ pub struct HqqLayer {
     pub(crate) cfg: HqqConfig,
 }
 
+struct HqqEmbeddingSelection {
+    packed_indices: Tensor,
+    metadata_indices: Tensor,
+    nibble_masks: Option<Tensor>,
+    nibble_multipliers: Option<Tensor>,
+}
+
 impl HqqLayer {
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &[
@@ -638,6 +651,147 @@ impl HqqLayer {
             w_shape,
             cfg,
         }
+    }
+
+    fn embedding_selection(
+        &self,
+        ids: &[u32],
+        embedding_dim: usize,
+        output_start: usize,
+        output_len: usize,
+        pack_factor: usize,
+    ) -> Result<HqqEmbeddingSelection> {
+        let (packed_height, metadata_width) = self.w_q.dims2()?;
+        let mut packed_indices = Vec::with_capacity(output_len);
+        let mut metadata_indices = Vec::with_capacity(output_len);
+        let mut nibble_masks = (pack_factor == 2).then(|| Vec::with_capacity(output_len));
+        let mut nibble_multipliers = (pack_factor == 2).then(|| Vec::with_capacity(output_len));
+
+        for output_index in output_start..output_start + output_len {
+            let token_id = ids[output_index / embedding_dim] as usize;
+            let column_in_embedding = output_index % embedding_dim;
+            let flat_index = token_id * embedding_dim + column_in_embedding;
+            let quantized_row = flat_index / metadata_width;
+            let metadata_index = flat_index % metadata_width;
+            let packed_row = quantized_row % packed_height;
+            packed_indices.push(u32::try_from(packed_row * metadata_width + metadata_index)?);
+            metadata_indices.push(u32::try_from(metadata_index)?);
+
+            if let (Some(masks), Some(multipliers)) = (&mut nibble_masks, &mut nibble_multipliers) {
+                if quantized_row < packed_height {
+                    masks.push(HQQ4_HIGH_MASK);
+                    multipliers.push(HQQ4_HIGH_MULTIPLIER);
+                } else {
+                    masks.push(HQQ4_LOW_MASK);
+                    multipliers.push(HQQ4_LOW_MULTIPLIER);
+                }
+            }
+        }
+
+        let device = self.w_q.device();
+        let packed_indices = Tensor::from_vec(packed_indices, output_len, device)?;
+        let metadata_indices = Tensor::from_vec(metadata_indices, output_len, device)?;
+        let nibble_masks = nibble_masks
+            .map(|masks| Tensor::from_vec(masks, output_len, device))
+            .transpose()?;
+        let nibble_multipliers = nibble_multipliers
+            .map(|multipliers| {
+                Tensor::from_vec(multipliers, output_len, device)?.to_dtype(self.scales.dtype())
+            })
+            .transpose()?;
+
+        Ok(HqqEmbeddingSelection {
+            packed_indices,
+            metadata_indices,
+            nibble_masks,
+            nibble_multipliers,
+        })
+    }
+
+    fn embedding_forward_raw_with_chunk_elements(
+        &self,
+        ids: &Tensor,
+        chunk_elements: usize,
+    ) -> Result<Tensor> {
+        if !matches!(self.cfg.axis, HqqAxis::Zero) || !self.cfg.channel_wise {
+            candle_core::bail!("HQQ embedding requires channel-wise axis-0 quantization.");
+        }
+        let pack_factor = match self.cfg.bits {
+            HqqBits::Eight => 1,
+            HqqBits::Four => 2,
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("HQQ embedding supports only 4-bit and 8-bit weights.")
+            }
+        };
+        let [vocab_size, embedding_dim] = self.w_shape.dims() else {
+            candle_core::bail!(
+                "HQQ embedding requires rank-2 weights, got {:?}.",
+                self.w_shape.dims()
+            );
+        };
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(*embedding_dim);
+        if ids.elem_count() == 0 {
+            return Tensor::zeros(
+                HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS,
+                self.scales.dtype(),
+                self.w_q.device(),
+            )?
+            .narrow(0, 0, 0)?
+            .reshape(Shape::from_dims(&output_shape));
+        }
+
+        let ids = ids
+            .flatten_all()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        for &token_id in &ids {
+            if token_id as usize >= *vocab_size {
+                candle_core::bail!(
+                    "HQQ embedding index {token_id} is out of bounds for vocabulary size {vocab_size}."
+                );
+            }
+        }
+        let output_elements = ids.len().checked_mul(*embedding_dim).ok_or_else(|| {
+            candle_core::Error::Msg("HQQ embedding output element count overflowed.".into())
+        })?;
+        let w_q = self.w_q.flatten_all()?;
+        let scales = self.scales.flatten_all()?;
+        let zeros = self.zeros.flatten_all()?;
+        let mut chunks = Vec::with_capacity(output_elements.div_ceil(chunk_elements));
+
+        for output_start in (0..output_elements).step_by(chunk_elements) {
+            let output_len = chunk_elements.min(output_elements - output_start);
+            let selection = self.embedding_selection(
+                &ids,
+                *embedding_dim,
+                output_start,
+                output_len,
+                pack_factor,
+            )?;
+            let packed = w_q.index_select(&selection.packed_indices, 0)?;
+            let quantized = match (
+                selection.nibble_masks.as_ref(),
+                selection.nibble_multipliers.as_ref(),
+            ) {
+                (Some(masks), Some(multipliers)) => packed
+                    .bitwise_and(masks)?
+                    .to_dtype(self.scales.dtype())?
+                    .mul(multipliers)?,
+                (None, None) => packed.to_dtype(self.scales.dtype())?,
+                _ => unreachable!(),
+            };
+            let scales = scales.index_select(&selection.metadata_indices, 0)?;
+            let zeros = zeros.index_select(&selection.metadata_indices, 0)?;
+            chunks.push(((quantized - zeros)? * scales)?);
+        }
+
+        let output = if chunks.len() == 1 {
+            chunks.pop().unwrap()
+        } else {
+            Tensor::cat(&chunks.iter().collect::<Vec<_>>(), 0)?
+        };
+        output.reshape(Shape::from_dims(&output_shape))
     }
 
     fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
@@ -1002,6 +1156,10 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)
+    }
+
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {
@@ -1151,5 +1309,166 @@ impl QuantizedSerde for HqqLayer {
                 candle_core::bail!("Cannot convert HQQ bit width to an ISQ type.")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
+    use crate::{uqff_version_tensors, IsqType, QuantMethod, QuantizedSerde, Shard, UqffReader};
+
+    const TEST_VOCAB_SIZE: usize = 96;
+    const TEST_EMBEDDING_DIM: usize = 32;
+
+    fn test_layer_on_device(bits: HqqBits, device: &Device) -> Result<HqqLayer> {
+        let values = (0..TEST_VOCAB_SIZE * TEST_EMBEDDING_DIM)
+            .map(|index| {
+                let index = index as f32;
+                (index * 0.017).sin() + (index * 0.013).cos() * 0.25
+            })
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (TEST_VOCAB_SIZE, TEST_EMBEDDING_DIM), &Device::Cpu)?;
+        HqqLayer::quantize(
+            &weight,
+            device,
+            HqqConfig {
+                bits,
+                group_size: super::ISQ_HQQ_GROUP_SIZE.try_into()?,
+                axis: HqqAxis::Zero,
+                optimization_steps: Some(2),
+                round_zeros: false,
+                channel_wise: true,
+            },
+        )
+    }
+
+    fn test_layer(bits: HqqBits) -> Result<HqqLayer> {
+        test_layer_on_device(bits, &Device::Cpu)
+    }
+
+    fn assert_embedding_matches_dequantized_gather(layer: &HqqLayer) -> Result<()> {
+        let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &Device::Cpu)?;
+        let actual = layer.embedding_forward_raw(&ids)?;
+        let expected = layer
+            .dequantize()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 3, TEST_EMBEDDING_DIM))?;
+
+        assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(actual.dtype(), DType::F32);
+        assert!(actual.device().is_cpu());
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_diff <= 1e-6, "max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn hqq4_embedding_matches_dequantized_gather() -> Result<()> {
+        assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Four)?)
+    }
+
+    #[test]
+    fn hqq8_embedding_matches_dequantized_gather() -> Result<()> {
+        assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Eight)?)
+    }
+
+    #[test]
+    fn hqq_embedding_chunks_preserve_shape_and_values() -> Result<()> {
+        const TEST_CHUNK_ELEMENTS: usize = 45;
+        #[cfg(feature = "metal")]
+        let device = Device::new_metal(0)?;
+        #[cfg(not(feature = "metal"))]
+        let device = Device::Cpu;
+        let ids = Tensor::from_vec(vec![95u32, 0, 64, 63, 17, 95], (1, 2, 3), &device)?;
+
+        for bits in [HqqBits::Four, HqqBits::Eight] {
+            let layer = test_layer_on_device(bits, &device)?;
+            let reference_layer = test_layer(bits)?;
+            let actual =
+                layer.embedding_forward_raw_with_chunk_elements(&ids, TEST_CHUNK_ELEMENTS)?;
+            let reference_ids = ids.to_device(&Device::Cpu)?;
+            let expected = reference_layer
+                .dequantize()?
+                .index_select(&reference_ids.flatten_all()?, 0)?
+                .reshape((1, 2, 3, TEST_EMBEDDING_DIM))?;
+
+            assert_eq!(actual.dims(), &[1, 2, 3, TEST_EMBEDDING_DIM]);
+            let actual_values = actual
+                .flatten_all()?
+                .to_device(&Device::Cpu)?
+                .to_vec1::<f32>()?;
+            let expected_values = expected
+                .flatten_all()?
+                .to_device(&Device::Cpu)?
+                .to_vec1::<f32>()?;
+            let max_diff = actual_values
+                .iter()
+                .zip(expected_values)
+                .map(|(actual, expected)| (actual - expected).abs())
+                .fold(0f32, f32::max);
+            assert!(max_diff <= 1e-6, "bits={bits:?}, max_diff={max_diff}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hqq_embedding_accepts_empty_ids() -> Result<()> {
+        #[cfg(feature = "metal")]
+        let device = Device::new_metal(0)?;
+        #[cfg(not(feature = "metal"))]
+        let device = Device::Cpu;
+        let layer = test_layer_on_device(HqqBits::Four, &device)?;
+        let ids = Tensor::zeros(
+            super::HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS,
+            DType::U32,
+            &device,
+        )?
+        .narrow(0, 0, 0)?
+        .reshape((2, 0, 3))?;
+        let output = layer.embedding_forward_raw(&ids)?;
+
+        assert_eq!(output.dims(), &[2, 0, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(output.dtype(), DType::F32);
+        assert_eq!(output.device().location(), device.location());
+        Ok(())
+    }
+
+    #[test]
+    fn hqq4_uqff_embedding_matches_dequantized_gather() -> Result<()> {
+        let layer = test_layer(HqqBits::Four)?;
+        let mut tensors = uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("test.embedding", IsqType::HQQ4)?);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mistralrs-hqq-embedding-{}-{stamp}.uqff",
+            std::process::id()
+        ));
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = UqffReader::open(std::slice::from_ref(&path))?;
+        let loaded = reader
+            .load_linear("test.embedding", &Device::Cpu, Shard::default())?
+            .unwrap();
+        let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &Device::Cpu)?;
+        let actual = loaded.embedding_forward_raw(&ids)?;
+        let expected = layer
+            .dequantize()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 2, TEST_EMBEDDING_DIM))?;
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+
+        drop(reader);
+        let _ = std::fs::remove_file(path);
+        assert!(max_diff <= 1e-6, "max_diff={max_diff}");
+        Ok(())
     }
 }

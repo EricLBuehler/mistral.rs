@@ -13,8 +13,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, RmsNorm,
-        RotaryEmbedding, ScaledEmbedding, Sdpa,
+        self, dense_embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker,
+        Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{
@@ -946,7 +946,9 @@ pub(crate) fn handle_matformer_slicing(
 }
 
 pub struct TextModel {
-    embed_tokens: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
+    dtype: DType,
     embed_tokens_per_layer: ScaledEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
@@ -1000,15 +1002,16 @@ impl TextModel {
 
         // Use float32 for embedding scale factor
         let embed_scale = (cfg.hidden_size as f64).sqrt();
-        let embed_tokens = ScaledEmbedding::new(
-            embed_scale,
-            embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                mapper.set_nm_device(vb.pp("embed_tokens"), false),
-                &cfg.quantization_config,
-            )?,
-        );
+        let dtype = vb.dtype();
+        let embed_tokens = embedding_with_legacy_tied_uqff(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
+            &cfg.quantization_config,
+        )?;
         // Use float32 for per-layer embedding scale factor
         let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
         // Keep embed_tokens_per_layer on CPU if not using Metal
@@ -1019,7 +1022,7 @@ impl TextModel {
         };
         let mut embed_tokens_per_layer = ScaledEmbedding::new(
             per_layer_embed_scale,
-            embedding(
+            dense_embedding(
                 cfg.vocab_size_per_layer_input,
                 cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
                 embed_tokens_per_layer_vb,
@@ -1150,16 +1153,7 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         let per_layer_model_projection = ReplicatedLayer::new_layers_matformer_indices(
@@ -1243,6 +1237,8 @@ impl TextModel {
 
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale: embed_scale,
+            dtype,
             embed_tokens_per_layer,
             layers,
             norm,
@@ -1271,7 +1267,7 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     fn get_per_layer_inputs(&self, input_ids: &Tensor) -> Result<Tensor> {

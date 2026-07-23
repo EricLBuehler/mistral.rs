@@ -11,8 +11,8 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use candle_nn::Module;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use std::{collections::HashMap, sync::Arc};
 use tqdm::Iter;
 use tracing::info;
@@ -378,7 +378,7 @@ impl Block {
 }
 
 pub struct XLoraLlama {
-    wte: Embedding,
+    wte: Arc<dyn QuantMethod>,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -402,7 +402,7 @@ impl XLoraLlama {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut x = self.wte.forward(input_ids)?;
+        let mut x = self.wte.embedding_forward(input_ids, self.dtype)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();
@@ -542,7 +542,10 @@ impl XLoraLlama {
         let wte = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb.pp("model.embed_tokens"), false),
+            mapper.set_nm_device(
+                vb.pp("model.embed_tokens"),
+                normal_loading_metadata.loading_isq,
+            ),
             &cfg.quantization_config,
         )?;
         let lm_head = linear(
