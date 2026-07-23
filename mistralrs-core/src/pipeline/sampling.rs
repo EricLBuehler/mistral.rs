@@ -352,16 +352,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 | crate::sequence::StopReason::StopTok(_)
                 | crate::sequence::StopReason::Canceled
                 | crate::sequence::StopReason::ToolCalls => {
-                    String::from_utf8_lossy(seq.completion_bytes())
-                        .trim_start()
-                        .to_string()
+                    String::from_utf8_lossy(seq.completion_bytes()).to_string()
                 }
                 crate::sequence::StopReason::StopString {
                     completion_bytes_pos,
                     ..
                 } => {
                     let txt = String::from_utf8_lossy(seq.completion_bytes());
-                    txt[..completion_bytes_pos].trim_start().to_string()
+                    txt[..completion_bytes_pos].to_string()
                 }
                 crate::sequence::StopReason::GeneratedImage
                 | crate::sequence::StopReason::GeneratedSpeech => {

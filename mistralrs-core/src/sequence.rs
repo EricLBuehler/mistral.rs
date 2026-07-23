@@ -1329,18 +1329,10 @@ impl Sequence {
 
     /// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
     pub fn peek_delta(&self) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-        let is_first = self.stream_idx == 0;
         let new_decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
         // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
         if new_decoded.ends_with('�') {
             return Ok(None);
-        }
-
-        // The first token usually starts with a space. We don't want to add that to the delta.
-        // Since we're using the completion_bytes, we need to take care of that ourselves.
-        // Had we used HF's Tokenizer, it would have taken care of that for us.
-        if is_first {
-            return Ok(Some(new_decoded.trim_start().to_string()));
         }
         Ok(Some(new_decoded.to_string()))
     }
