@@ -59,7 +59,7 @@ use crate::{
     Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
@@ -1296,6 +1296,14 @@ impl Pipeline for NormalPipeline {
 
     fn supports_batched_cuda_sampling(&self) -> bool {
         !self.model.has_speculative_proposer()
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        self.model.supports_packed_prefill()
+            && !self.model.cache().is_hybrid()
+            && !self.model.is_xlora()
+            && !self.model.has_speculative_proposer()
+            && matches!(self.metadata.activation_dtype, DType::F16 | DType::BF16)
     }
 
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {

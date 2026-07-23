@@ -760,6 +760,7 @@ impl PagedAttention {
                 sliding_k: None,
                 causal: query_lens.iter().any(|&len| len > 1)
                     && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                packed: false,
             };
             if simple_full_causal {
                 return Sdpa
@@ -1088,6 +1089,7 @@ impl PagedAttention {
                 },
                 sliding_k: None,
                 causal: false,
+                packed: false,
             };
             return Sdpa.run_attention(
                 &q_4d,

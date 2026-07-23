@@ -765,6 +765,7 @@ impl Engine {
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
+                                    enable_packed_prefill: pipeline.supports_packed_prefill(),
                                     is_final_prompt_chunk: true,
                                 };
 
