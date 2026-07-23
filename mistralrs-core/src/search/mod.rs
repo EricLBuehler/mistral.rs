@@ -11,10 +11,15 @@ use serde_json::{json, Value};
 use std::env::consts::{ARCH, FAMILY, OS};
 use tokenizers::Tokenizer;
 
-use crate::{Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation};
+use crate::{
+    network_security::{fetch_public_url_limited, PublicHttpFetchOptions, PublicHttpResponse},
+    Function, Tool, ToolType, WebSearchOptions, WebSearchUserLocation,
+};
 
 const SEARCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SEARCH_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_SEARCH_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_SEARCH_REDIRECTS: usize = 3;
 const MAX_SEARCH_RESULTS: usize = 10;
 
 /// Callback used to override how search results are gathered. The returned
@@ -232,11 +237,17 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
     Ok(vec![search_tool, extract_tool])
 }
 
-fn build_client() -> Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .connect_timeout(SEARCH_CONNECT_TIMEOUT)
-        .timeout(SEARCH_REQUEST_TIMEOUT)
-        .build()?)
+fn fetch_options() -> PublicHttpFetchOptions {
+    PublicHttpFetchOptions {
+        max_bytes: MAX_SEARCH_RESPONSE_BYTES,
+        connect_timeout: SEARCH_CONNECT_TIMEOUT,
+        total_timeout: SEARCH_REQUEST_TIMEOUT,
+        max_redirects: MAX_SEARCH_REDIRECTS,
+    }
+}
+
+async fn fetch_search_url(url: reqwest::Url, user_agent: &str) -> Result<PublicHttpResponse> {
+    fetch_public_url_limited(url, fetch_options(), Some(user_agent)).await
 }
 
 fn html_to_text(html: &str) -> Option<String> {
@@ -247,19 +258,14 @@ fn html_to_text(html: &str) -> Option<String> {
 }
 
 pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<SearchResult>> {
-    let client = build_client()?;
     let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
 
     // If the model passed a URL instead of a search query, fetch it directly
     // rather than searching DuckDuckGo (which returns 0 results for raw URLs).
     let trimmed = params.query.trim().trim_matches('"');
     if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        let response = client
-            .get(trimmed)
-            .header("User-Agent", &user_agent)
-            .send()
-            .await?;
-        let html = response.text().await?;
+        let response = fetch_search_url(reqwest::Url::parse(trimmed)?, &user_agent).await?;
+        let html = response.text();
         let content = html_to_text(&html).unwrap_or_default();
         return Ok(vec![SearchResult {
             title: trimmed.to_string(),
@@ -273,17 +279,8 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     let url = format!("https://html.duckduckgo.com/html/?q={encoded_query}");
 
     let t0 = std::time::Instant::now();
-    let response = client
-        .get(&url)
-        .header("User-Agent", &user_agent)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to fetch search results: {}", response.status())
-    }
-
-    let html = response.text().await?;
+    let response = fetch_search_url(reqwest::Url::parse(&url)?, &user_agent).await?;
+    let html = response.text();
     tracing::debug!(
         "Search: DuckDuckGo query completed in {:.2}s",
         t0.elapsed().as_secs_f32()
@@ -333,16 +330,11 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
     // Fetch all pages concurrently with async I/O (not Rayon thread pool rounds).
     let t1 = std::time::Instant::now();
     let fetches = partials.into_iter().map(|(title, description, url)| {
-        let client = client.clone();
         let user_agent = user_agent.clone();
         async move {
-            let resp = client
-                .get(&url)
-                .header("User-Agent", &user_agent)
-                .send()
-                .await
-                .ok()?;
-            let html = resp.text().await.ok()?;
+            let parsed = reqwest::Url::parse(&url).ok()?;
+            let resp = fetch_search_url(parsed, &user_agent).await.ok()?;
+            let html = resp.text();
             let content = html_to_text(&html)?;
             Some(SearchResult {
                 title,
@@ -367,24 +359,42 @@ pub async fn run_search_tool(params: &SearchFunctionParameters) -> Result<Vec<Se
 }
 
 pub async fn run_extract_tool(params: &ExtractFunctionParameters) -> Result<ExtractResult> {
-    let client = build_client()?;
     let user_agent = format!("mistralrs/{APP_VERSION} ({OS}; {ARCH}; {FAMILY})");
 
-    let content = match client
-        .get(&params.url)
-        .header("User-Agent", &user_agent)
-        .send()
-        .await
-    {
-        Ok(response) => response
-            .text()
+    let content = match reqwest::Url::parse(&params.url) {
+        Ok(url) => fetch_search_url(url, &user_agent)
             .await
             .ok()
-            .and_then(|html| html_to_text(&html)),
+            .and_then(|response| html_to_text(&response.text())),
         Err(_) => None,
     };
     Ok(ExtractResult {
         url: params.url.clone(),
         content: content.unwrap_or("ERROR: failed to extract content".to_string()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn direct_url_search_rejects_private_targets() {
+        let result = run_search_tool(&SearchFunctionParameters {
+            query: "http://169.254.169.254/latest/meta-data".to_string(),
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn extract_tool_does_not_fetch_alternate_private_ipv4() {
+        let result = run_extract_tool(&ExtractFunctionParameters {
+            url: "http://2130706433/admin".to_string(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(result.url, "http://2130706433/admin");
+        assert_eq!(result.content, "ERROR: failed to extract content");
+    }
 }

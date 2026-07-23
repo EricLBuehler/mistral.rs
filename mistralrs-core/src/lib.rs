@@ -85,6 +85,8 @@ pub mod matformer;
 mod mla;
 pub mod model_metadata;
 mod models;
+#[doc(hidden)]
+pub mod network_security;
 mod paged_attention;
 mod perf_flags;
 mod pipeline;
