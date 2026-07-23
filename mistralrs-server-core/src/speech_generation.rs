@@ -17,7 +17,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::{
     handler_core::{
-        base_process_non_streaming_response, create_response_channel, send_request,
+        base_process_non_streaming_response, create_response_channel, send_request_with_model,
         ErrorToResponse, JsonError,
     },
     openai::{AudioResponseFormat, SpeechGenerationRequest},
@@ -119,6 +119,10 @@ pub async fn speech_generation(
 ) -> SpeechGenerationResponder {
     let (tx, mut rx) = create_response_channel(None);
 
+    // Route to the model named in the request (honoring `"default"` -> default model), so
+    // config.toml can serve multiple speech models selected per request by `model`.
+    let requested_model = oairequest.model.clone();
+
     let (request, response_format) = match parse_request(oairequest, state.clone(), tx) {
         Ok(x) => x,
         Err(e) => return handle_error(state, e.into()),
@@ -134,7 +138,13 @@ pub async fn speech_generation(
         )));
     }
 
-    if let Err(e) = send_request(&state, request).await {
+    let model_id = if requested_model == "default" {
+        None
+    } else {
+        Some(requested_model.as_str())
+    };
+
+    if let Err(e) = send_request_with_model(&state, request, model_id).await {
         return handle_error(state, e.into());
     }
 

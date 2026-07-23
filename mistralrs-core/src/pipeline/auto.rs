@@ -362,6 +362,13 @@ impl AutoLoader {
             }
         }
 
+        // Speech models that ship no `config.json` (e.g. pocket-tts) are detected by their files.
+        if let Some(tp) =
+            crate::speech_models::SpeechLoaderType::auto_detect_from_files(&artifacts.repo_files)
+        {
+            return Ok(Detected::Speech(tp));
+        }
+
         if artifacts.sentence_transformers_present {
             if let Some(ref config) = artifacts.contents {
                 let cfg: AutoConfig = serde_json::from_str(config)?;
@@ -465,6 +472,7 @@ impl AutoLoader {
                     dac_model_id: None,
                     arch: tp,
                     cfg: None,
+                    voice: None,
                 });
                 *guard = Some(loader);
             }
