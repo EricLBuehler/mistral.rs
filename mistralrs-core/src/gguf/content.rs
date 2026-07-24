@@ -148,10 +148,12 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
                     .to_string()
                     .context("Model metadata should have declared an architecture")
                     .and_then(GGUFArchitecture::from_value)
-                    .unwrap(),
+                    .map_err(|e| candle_core::Error::Msg(e.to_string()))?,
             );
         }
-        let arch = arch.expect("GGUF files must specify `general.architecture`");
+        let arch = arch.ok_or_else(|| {
+            candle_core::Error::Msg("GGUF files must specify `general.architecture`".to_string())
+        })?;
 
         let mut all_metadata = HashMap::new();
         for content in &contents {
@@ -253,5 +255,45 @@ impl<'a, R: std::io::Seek + std::io::Read> Content<'a, R> {
     /// Get all metadatas
     pub fn get_metadata(&self) -> &HashMap<String, Value> {
         &self.all_metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::Cursor,
+        panic::{catch_unwind, AssertUnwindSafe},
+    };
+
+    fn gguf_with_architecture(architecture: &str) -> Cursor<Vec<u8>> {
+        let mut data = Cursor::new(Vec::new());
+        let architecture = Value::String(architecture.to_string());
+        gguf_file::write(&mut data, &[("general.architecture", &architecture)], &[])
+            .expect("synthetic GGUF should be writable");
+        data.set_position(0);
+        data
+    }
+
+    #[test]
+    fn unknown_architecture_returns_error_without_panic() {
+        let mut reader = gguf_with_architecture("gemma4");
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut readers = [&mut reader];
+            Content::from_readers(&mut readers)
+                .map(|_| ())
+                .map_err(|err| err.to_string())
+        }))
+        .expect("unsupported GGUF architecture should not panic");
+
+        match result {
+            Ok(_) => panic!("unsupported GGUF architecture should return an error"),
+            Err(err) => assert!(
+                err.to_string()
+                    .contains("Unknown GGUF architecture `gemma4`"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 }
