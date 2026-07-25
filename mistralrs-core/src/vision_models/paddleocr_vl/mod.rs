@@ -227,6 +227,10 @@ impl MultimodalModel for PaddleOcrVlModel {
             embeds.dtype(),
             &CausalMaskConfig::default(),
         )?;
+        // No `is_first_prompt_chunk` override here: a later prompt chunk carries
+        // `prefix_cache_len = chunk.start`, so paged sees `num_cached_tokens` and takes the prefix
+        // gather path, which reads causality off this mask. Forcing `AttentionMask::None` there
+        // makes it fall back to `flash_params.causal` and attend non-causally within the chunk.
 
         let mut guard = self.cache.normal();
         // `None` on the NormalCache path, where the text model falls back to Sdpa.

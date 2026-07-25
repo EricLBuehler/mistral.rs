@@ -6,7 +6,9 @@
 //! = `[{read_order, class, text}]` next to the manifest.
 //!
 //! Defaults to CPU/f32 (the deterministic parity path). Opt-in env toggles: `PADDLEOCR_VL_GPU=1`
-//! (bf16 on the accelerator), `PADDLEOCR_VL_ISQ=1` (in-situ Q4K), `PADDLEOCR_VL_PAGED=1` (paged attn).
+//! (bf16 on the accelerator), `PADDLEOCR_VL_ISQ=1` (in-situ Q4K), `PADDLEOCR_VL_PAGED=1` (paged
+//! attn), `PADDLEOCR_VL_PREFIX_CACHE=1` (prefix cacher, which the builder leaves off but the
+//! server enables by default).
 //!
 //! Run: `PADDLEOCR_VL_WEIGHTS=<checkpoint_dir> \
 //!   cargo run --release --example paddleocr_vl_recognize -p mistralrs -- <manifest_dir>`
@@ -82,6 +84,9 @@ async fn main() -> Result<()> {
     // PADDLEOCR_VL_PAGED=1 routes decode through the PagedAttention branch instead of the normal cache.
     if std::env::var("PADDLEOCR_VL_PAGED").is_ok() {
         builder = builder.with_paged_attn(PagedAttentionMetaBuilder::default().build()?);
+    }
+    if std::env::var("PADDLEOCR_VL_PREFIX_CACHE").is_ok() {
+        builder = builder.with_prefix_cache_n(Some(16));
     }
     let model = builder.build().await?;
 

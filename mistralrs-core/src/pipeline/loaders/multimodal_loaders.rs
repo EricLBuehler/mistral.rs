@@ -5954,6 +5954,12 @@ impl MultimodalModelLoader for PaddleOcrVlLoader {
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
     }
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        // Safe because the inputs processor registers the image span as an mm feature, so a block
+        // hash covers the image content and not just the (identical for every image) placeholder
+        // token ids.
+        true
+    }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(PaddleOcrVlPrefixer)
     }
@@ -9831,6 +9837,11 @@ mod tests {
         assert_eq!(meta.num_attn_heads(), 16);
         assert_eq!(meta.num_kv_heads(), 2);
         assert_eq!(meta.k_head_dim(), 128);
+
+        // Paged attention and the prefix cacher are both advertised; the latter is only safe
+        // because the inputs processor registers the image span for block hashing.
+        assert!(loader.supports_paged_attention(&cfg));
+        assert!(loader.supports_prefix_cacher(&cfg));
 
         // ISQ targets the ERNIE LM `model.layers.N.*` projections + `lm_head`, not the norms.
         let regexes = loader.isq_layer_regexes(&cfg)?;

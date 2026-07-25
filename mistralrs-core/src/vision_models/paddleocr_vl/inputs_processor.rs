@@ -16,13 +16,14 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::MultimodalKind,
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::Sequence,
+    sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::PreProcessorConfig,
@@ -93,6 +94,30 @@ fn expand_placeholders(text: &str, grids: &[(usize, usize, usize)], merge: usize
     )
 }
 
+/// Tag the `<|IMAGE_START|>..<|IMAGE_END|>` span with the image content hash for the paged prefix
+/// cache. Every expanded placeholder is the same token id, so without this two requests that share a
+/// prompt and a grid shape hash to identical blocks and the second one reuses the first one's image
+/// KV. It also keeps a cache hit off the middle of the span, which would desync the connector rows
+/// `Merger::forward` scatters (it counts image slots from the start of `input_ids`).
+fn register_image_span(seq: &mut Sequence, ids: &[u32], tokenizer: &Tokenizer) {
+    if !seq.mm_features().is_empty() {
+        return;
+    }
+    let (Some(hashes), Some(pad_id), Some(start_id), Some(end_id)) = (
+        seq.image_hashes().map(<[u64]>::to_vec),
+        tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_PLACEHOLDER),
+        tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_START),
+        tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_END),
+    ) else {
+        return;
+    };
+    let ranges = find_placeholder_delimited_ranges(ids, pad_id, start_id, end_id);
+    let features = build_mm_features_from_ranges(&ranges, &hashes, MultimodalKind::Image);
+    if !features.is_empty() {
+        seq.set_mm_features(features);
+    }
+}
+
 fn grid_tuple(grid: &Tensor) -> (usize, usize, usize) {
     let g = grid.to_vec2::<u32>().unwrap();
     (g[0][0] as usize, g[0][1] as usize, g[0][2] as usize)
@@ -130,20 +155,30 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        // Per row, independently: `grids[row]` is that row's image grid whenever its prompt has one,
-        // because mrope is recomputed from the whole prompt on every pass. `vision_rows` is the
-        // subset whose image tokens actually land in THIS pass, in the order their patches are
-        // concatenated into `pixel_values`. `Sequence::has_images` is window-scoped once mm_features
-        // are set, so decode steps and prompt chunks outside the span keep the grid but skip the
-        // tower. Deciding per row (not `all`) keeps a batch correct when rows are at different
-        // prefill chunks, or when a text-only request shares the batch with an OCR one.
+        // Per row, independently: `grids[row]` is that row's image grid, and `vision_rows` is the
+        // subset whose patches are in this pass's `pixel_values`. `Sequence::has_images` is
+        // window-scoped once mm_features are set, so a decode step or a prompt chunk past the span
+        // keeps the grid but skips the tower. Deciding per row (not `all`) keeps a batch correct
+        // when rows sit at different prefill chunks, or when a text-only request shares the batch.
+        //
+        // A grid is only attached once the row's token window actually holds its image tokens:
+        // get_rope_index emits a position block for every grid it is handed, and the first prompt
+        // chunk stops before the span, so a grid there would emit positions for absent tokens.
+        let image_pad_id = tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_PLACEHOLDER);
         let mut grids: Vec<Option<(usize, usize, usize)>> = Vec::with_capacity(input_seqs.len());
         let mut pixel_values_accum = Vec::new();
         let mut vision_rows: Vec<usize> = Vec::new();
 
         for (row, seq) in input_seqs.iter_mut().enumerate() {
+            let window_has_image_toks = image_pad_id.is_some_and(|id| seq.get_toks().contains(&id));
             if !seq.has_images() {
-                grids.push(seq.multimodal.cached_img_thw.as_ref().map(grid_tuple));
+                grids.push(
+                    seq.multimodal
+                        .cached_img_thw
+                        .as_ref()
+                        .filter(|_| window_has_image_toks)
+                        .map(grid_tuple),
+                );
                 continue;
             }
             let (pixel_values, grid) = match &seq.multimodal.cached_pixel_values {
@@ -180,6 +215,8 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                     .get_ids()
                     .to_vec();
                 seq.set_initial_prompt(detok);
+                // Before set_toks_and_reallocate: the block hashes it triggers must see the span.
+                register_image_span(seq, &ids, &tokenizer);
                 seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
                 seq.multimodal.has_changed_prompt = true;
             }
@@ -332,6 +369,74 @@ impl ImagePreProcessor for PaddleOcrVlImageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paged_attention::block_hash::compute_block_hashes;
+    use crate::sequence::clamp_prefix_cache_len_for_mm_features;
+
+    // Reference ocr fixture ids; only their distinctness matters here.
+    const IMAGE_START_ID: u32 = 101305;
+    const IMAGE_PAD_ID: u32 = 101304;
+    const IMAGE_END_ID: u32 = 101306;
+    const BLOCK: usize = 16;
+
+    fn expanded_ids(n_image_toks: usize) -> Vec<u32> {
+        let mut ids = vec![7u32; 20];
+        ids.push(IMAGE_START_ID);
+        ids.extend(std::iter::repeat_n(IMAGE_PAD_ID, n_image_toks));
+        ids.push(IMAGE_END_ID);
+        ids.extend([8u32, 9]);
+        ids
+    }
+
+    // Every expanded placeholder is the same token id, so two OCR requests that share a prompt and a
+    // grid shape have byte-identical token streams. Only the span's content hash can tell their paged
+    // blocks apart; without it the second request reuses the first one's image KV.
+    #[test]
+    fn image_span_separates_prefix_cache_blocks() {
+        let ids = expanded_ids(161);
+        let ranges =
+            find_placeholder_delimited_ranges(&ids, IMAGE_PAD_ID, IMAGE_START_ID, IMAGE_END_ID);
+        assert_eq!(
+            ranges,
+            vec![(20, 163)],
+            "span must cover START..END inclusive"
+        );
+
+        let feats =
+            |hash: u64| build_mm_features_from_ranges(&ranges, &[hash], MultimodalKind::Image);
+        let a = compute_block_hashes(&ids, BLOCK, &feats(0xAAAA_AAAA), &[]);
+        let b = compute_block_hashes(&ids, BLOCK, &feats(0xBBBB_BBBB), &[]);
+        assert!(!a.is_empty(), "prompt must span at least one full block");
+        assert_ne!(a, b, "different images hashed to the same blocks");
+        // Guard: the collision is real without the span, so the assert above is not vacuous.
+        assert_eq!(
+            compute_block_hashes(&ids, BLOCK, &[], &[]),
+            compute_block_hashes(&ids, BLOCK, &[], &[])
+        );
+    }
+
+    // A hit inside the span would leave `input_ids` with fewer image slots than the connector emits
+    // rows, and `Merger::forward` counts slots from the start of `input_ids`.
+    #[test]
+    fn prefix_cache_hit_cannot_land_inside_image_span() {
+        let ids = expanded_ids(161);
+        let ranges =
+            find_placeholder_delimited_ranges(&ids, IMAGE_PAD_ID, IMAGE_START_ID, IMAGE_END_ID);
+        let features =
+            build_mm_features_from_ranges(&ranges, &[0xAAAA_AAAA], MultimodalKind::Image);
+        for hit in [21usize, 100, 182] {
+            let clamped = clamp_prefix_cache_len_for_mm_features(hit, BLOCK, &features);
+            assert!(
+                clamped <= 20,
+                "hit {hit} clamped to {clamped}, inside the span"
+            );
+        }
+        // Past the span the whole image is cached and `input_ids` has no image slots left: legal.
+        assert_eq!(
+            clamp_prefix_cache_len_for_mm_features(183, BLOCK, &features),
+            183
+        );
+    }
+
     // Two images in one message used to be silently reduced to the first, then panic in
     // `expand_placeholders` on the second placeholder's missing grid. It must be a clean error.
     #[test]
