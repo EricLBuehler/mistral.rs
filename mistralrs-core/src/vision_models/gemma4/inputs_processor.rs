@@ -1394,7 +1394,9 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_tokens_for_ranges, convert_to_rgb, Gemma4Processor, Gemma4ProcessorSettings};
+    use super::{
+        cached_tokens_for_ranges, convert_to_rgb, Gemma4Processor, Gemma4ProcessorSettings,
+    };
     use crate::vision_models::processor_config::ProcessorConfig;
     use image::{DynamicImage, Rgba, RgbaImage};
 
