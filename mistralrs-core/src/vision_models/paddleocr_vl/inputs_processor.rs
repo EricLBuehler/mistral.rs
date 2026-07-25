@@ -130,33 +130,28 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        // Per row, independently: `grids[row]` is that row's image grid whenever its prompt has one,
+        // because mrope is recomputed from the whole prompt on every pass. `vision_rows` is the
+        // subset whose image tokens actually land in THIS pass, in the order their patches are
+        // concatenated into `pixel_values`. `Sequence::has_images` is window-scoped once mm_features
+        // are set, so decode steps and prompt chunks outside the span keep the grid but skip the
+        // tower. Deciding per row (not `all`) keeps a batch correct when rows are at different
+        // prefill chunks, or when a text-only request shares the batch with an OCR one.
+        let mut grids: Vec<Option<(usize, usize, usize)>> = Vec::with_capacity(input_seqs.len());
+        let mut pixel_values_accum = Vec::new();
+        let mut vision_rows: Vec<usize> = Vec::new();
 
-        // (padded input_ids_full, all rows' pixel_values concatenated [sum_N,3,14,14], one grid
-        // (t,h,w) per row). grids stay populated on decode too (via the cache) so the model's mrope
-        // `delta` recomputes identically each step.
-        let (new_input, pixel_values, image_grid_thw) = if has_images {
-            let mut pixel_values_accum = Vec::new();
-            let mut grid_accum: Vec<(usize, usize, usize)> = Vec::new();
-
-            let mut detok_seqs = tokenizer
-                .decode_batch(
-                    &input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks())
-                        .collect::<Vec<_>>(),
-                    false,
-                )
-                .expect("Detokenization failed!");
-
-            for seq in input_seqs.iter_mut() {
-                let (pixel_values, grid) = if let Some(cached) = &seq.multimodal.cached_pixel_values
-                {
-                    (
-                        cached.clone(),
-                        grid_tuple(seq.multimodal.cached_img_thw.as_ref().unwrap()),
-                    )
-                } else {
+        for (row, seq) in input_seqs.iter_mut().enumerate() {
+            if !seq.has_images() {
+                grids.push(seq.multimodal.cached_img_thw.as_ref().map(grid_tuple));
+                continue;
+            }
+            let (pixel_values, grid) = match &seq.multimodal.cached_pixel_values {
+                Some(cached) => (
+                    cached.clone(),
+                    grid_tuple(seq.multimodal.cached_img_thw.as_ref().unwrap()),
+                ),
+                None => {
                     let PreprocessedImages {
                         pixel_values,
                         image_grid_thw,
@@ -171,54 +166,40 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                     seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
                     seq.multimodal.cached_img_thw = image_grid_thw.clone();
                     (pixel_values, grid_tuple(image_grid_thw.as_ref().unwrap()))
-                };
-                // Single-image batch-1: keep pixel_values as [N_patches, 3, 14, 14] (the shape the
-                // parity-verified vision tower expects); do NOT prepend a batch dim.
-                pixel_values_accum.push(pixel_values);
-                grid_accum.push(grid);
-            }
-
-            if is_prompt {
-                for ((text, seq), &grid) in detok_seqs
-                    .iter_mut()
-                    .zip(input_seqs.iter_mut())
-                    .zip(grid_accum.iter())
-                {
-                    if seq.multimodal.has_changed_prompt {
-                        continue;
-                    }
-                    *text = expand_placeholders(text, &[grid], MERGE);
                 }
-            }
+            };
 
-            let mut all_ids = Vec::new();
-            for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
+            if !seq.multimodal.has_changed_prompt {
+                let detok = tokenizer
+                    .decode(seq.get_toks(), false)
+                    .expect("Detokenization failed!");
+                let detok = expand_placeholders(&detok, &[grid], MERGE);
                 let ids = tokenizer
                     .encode_fast(detok.clone(), false)
                     .expect("Tokenization failed!")
                     .get_ids()
                     .to_vec();
-                if !seq.multimodal.has_changed_prompt {
-                    seq.set_initial_prompt(detok.clone());
-                    seq.set_toks_and_reallocate(ids.clone(), paged_attn_metadata.as_mut());
-                    seq.multimodal.has_changed_prompt = true;
-                }
-                all_ids.push(ids);
+                seq.set_initial_prompt(detok);
+                seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
+                seq.multimodal.has_changed_prompt = true;
             }
 
-            let max_len = all_ids.iter().map(|ids| ids.len()).max().unwrap();
-            let mut rows = Vec::new();
-            for ids in all_ids {
-                let pad = max_len - ids.len();
-                rows.push(Tensor::new([ids, vec![0; pad]].concat(), device).unwrap());
+            grids.push(Some(grid));
+            if is_prompt {
+                // Keep pixel_values as [N_patches, 3, 14, 14] (the shape the parity-verified tower
+                // expects); rows concatenate on dim 0 and the model splits them back by grid.
+                pixel_values_accum.push(pixel_values);
+                vision_rows.push(row);
             }
-            (
-                Some(Tensor::stack(&rows, 0).unwrap()),
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                grid_accum,
-            )
+        }
+
+        let pixel_values =
+            (!pixel_values_accum.is_empty()).then(|| Tensor::cat(&pixel_values_accum, 0).unwrap());
+        // All-None means no row carries an image at all: let the model take the text-embed path.
+        let image_grid_thw = if grids.iter().all(Option::is_none) {
+            Vec::new()
         } else {
-            (None, None, Vec::new())
+            grids
         };
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
@@ -265,27 +246,20 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             .unwrap()
         };
 
-        // On decode the model recomputes mrope positions from the full token history, so
-        // input_ids_full must be the whole sequence (prompt + generated), not just the new token.
-        let input_ids_full = match (new_input, is_prompt) {
-            (Some(new_input), _) => new_input,
-            (None, _) => {
-                let max_len = input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks().len())
-                    .max()
-                    .unwrap_or(0);
-                let mut rows = Vec::with_capacity(input_seqs.len());
-                for seq in input_seqs.iter() {
-                    let mut ids = seq.get_toks().to_vec();
-                    ids.resize(max_len, 0);
-                    rows.push(Tensor::new(ids, device).unwrap());
-                }
-                Tensor::stack(&rows, 0).unwrap()
-            }
-        };
-
-        let pixel_values = if is_prompt { pixel_values } else { None };
+        // The model recomputes mrope positions from the full token history, so input_ids_full is each
+        // row's whole sequence (prompt + generated), not just this pass's window.
+        let max_len = input_seqs
+            .iter()
+            .map(|seq| seq.get_toks().len())
+            .max()
+            .unwrap_or(0);
+        let mut rows = Vec::with_capacity(input_seqs.len());
+        for seq in input_seqs.iter() {
+            let mut ids = seq.get_toks().to_vec();
+            ids.resize(max_len, 0);
+            rows.push(Tensor::new(ids, device).unwrap());
+        }
+        let input_ids_full = Tensor::stack(&rows, 0).unwrap();
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -296,6 +270,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             model_specific_args: Box::new(PaddleOcrVlVisionSpecificArgs {
                 input_ids_full,
                 image_grid_thw,
+                vision_rows,
             }),
             paged_attn_meta,
             flash_meta,
@@ -357,7 +332,6 @@ impl ImagePreProcessor for PaddleOcrVlImageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     // Two images in one message used to be silently reduced to the first, then panic in
     // `expand_placeholders` on the second placeholder's missing grid. It must be a clean error.
     #[test]

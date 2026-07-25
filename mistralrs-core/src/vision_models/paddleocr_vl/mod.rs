@@ -142,11 +142,14 @@ impl IsqModel for PaddleOcrVlModel {
 
 /// Model-specific args threaded alongside `input_ids` through the engine. `input_ids_full` is each
 /// row's whole prompt (so mrope positions/`delta` recompute identically every step, matching
-/// qwen3_vl's stateless scheme); `image_grid_thw` is one `(t, h, w)` patch grid per batch row (one
-/// image per OCR request), empty for text-only prompts and all-text decode.
+/// qwen3_vl's stateless scheme). `image_grid_thw` holds one `(t, h, w)` patch grid per batch row
+/// (`None` for a text-only row), empty only when no row carries an image; mrope needs it on every
+/// pass. `vision_rows` names the rows whose patches are in `pixel_values` this pass, in concat
+/// order: empty on decode and on prefill chunks that hold no image tokens.
 pub(crate) struct PaddleOcrVlVisionSpecificArgs {
     pub input_ids_full: Tensor,
-    pub image_grid_thw: Vec<(usize, usize, usize)>,
+    pub image_grid_thw: Vec<Option<(usize, usize, usize)>>,
+    pub vision_rows: Vec<usize>,
 }
 
 impl MultimodalModel for PaddleOcrVlModel {
@@ -160,6 +163,7 @@ impl MultimodalModel for PaddleOcrVlModel {
         let PaddleOcrVlVisionSpecificArgs {
             input_ids_full,
             image_grid_thw,
+            vision_rows,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `PaddleOcrVlVisionSpecificArgs`");
@@ -176,7 +180,10 @@ impl MultimodalModel for PaddleOcrVlModel {
         let grids: Vec<Vec<(usize, usize, usize)>> = if image_grid_thw.is_empty() {
             vec![Vec::new(); batch]
         } else {
-            image_grid_thw.iter().map(|&g| vec![g]).collect()
+            image_grid_thw
+                .iter()
+                .map(|g| g.iter().copied().collect())
+                .collect()
         };
         let (full_pos, deltas) =
             get_rope_index_batched(&input_ids_full, &grids, image_token_id, merge, dev)?;
@@ -187,25 +194,30 @@ impl MultimodalModel for PaddleOcrVlModel {
             seqlen_offsets,
         )?;
 
-        // Prefill-with-image runs vision -> connector -> masked-scatter merge per batch row (each row
-        // its own image); `pixel_values` is every row's patches concatenated on dim 0, split back by
-        // each grid's t*h*w. Text/decode is a pure on-device token embed of the current window.
-        let embeds = match pixel_values {
-            Some(pv) => {
-                let mut offset = 0;
-                let mut rows = Vec::with_capacity(batch);
-                for (b, &(t, h, w)) in image_grid_thw.iter().enumerate() {
-                    let post_ln =
-                        self.vision
-                            .forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
-                    offset += t * h * w;
-                    let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
-                    let row_ids = input_ids.narrow(0, b, 1)?.flatten_all()?;
-                    rows.push(self.merger.forward(&row_ids, &image_embeds)?);
-                }
-                Tensor::stack(&rows, 0)?
+        // Each row in `vision_rows` runs vision -> connector -> masked-scatter merge over its own
+        // image; `pixel_values` is those rows' patches concatenated on dim 0, split back by each
+        // grid's t*h*w. Every other row (text-only, decode, or a prefill chunk outside the image
+        // span) is a plain on-device token embed of the current window.
+        let embeds = if vision_rows.is_empty() {
+            self.merger.embed_tokens(input_ids)?
+        } else {
+            let pv = pixel_values.expect("vision rows without pixel values");
+            let text = self.merger.embed_tokens(input_ids)?;
+            let mut rows = (0..batch)
+                .map(|b| text.narrow(0, b, 1)?.squeeze(0))
+                .collect::<Result<Vec<_>>>()?;
+            let mut offset = 0;
+            for &b in &vision_rows {
+                let (t, h, w) = image_grid_thw[b].expect("vision row without a grid");
+                let post_ln = self
+                    .vision
+                    .forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
+                offset += t * h * w;
+                let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
+                let row_ids = input_ids.narrow(0, b, 1)?.flatten_all()?;
+                rows[b] = self.merger.forward(&row_ids, &image_embeds)?;
             }
-            None => self.merger.embed_tokens(input_ids)?,
+            Tensor::stack(&rows, 0)?
         };
 
         // Engine causal mask: batch-aware; `Custom` on prefill, `None` on single-token decode.
@@ -217,8 +229,7 @@ impl MultimodalModel for PaddleOcrVlModel {
         )?;
 
         let mut guard = self.cache.normal();
-        // Paged metadata is threaded through but inert until the loader enables paged attention:
-        // `paged_metadata` is None on the NormalCache path, so the text model falls back to Sdpa.
+        // `None` on the NormalCache path, where the text model falls back to Sdpa.
         let paged = ctx.paged_metadata();
         let paged_ref = paged.as_ref().map(|(kv, meta)| (kv.as_slice(), *meta));
         let logits = self
@@ -251,6 +262,7 @@ impl MultimodalModel for PaddleOcrVlModel {
         Box::new(PaddleOcrVlVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
             image_grid_thw: Vec::new(),
+            vision_rows: Vec::new(),
         })
     }
 }
