@@ -161,15 +161,13 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                         pixel_values,
                         image_grid_thw,
                         ..
-                    } = self
-                        .preprocess(
-                            seq.clone_images().expect("Need images by this point."),
-                            vec![],
-                            config,
-                            device,
-                            (usize::MAX, usize::MAX),
-                        )
-                        .expect("Preprocessing failed");
+                    } = self.preprocess(
+                        seq.clone_images().expect("Need images by this point."),
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX),
+                    )?;
                     seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
                     seq.multimodal.cached_img_thw = image_grid_thw.clone();
                     (pixel_values, grid_tuple(image_grid_thw.as_ref().unwrap()))
@@ -320,15 +318,21 @@ impl ImagePreProcessor for PaddleOcrVlImageProcessor {
 
     fn preprocess(
         &self,
-        mut images: Vec<DynamicImage>,
+        images: Vec<DynamicImage>,
         _videos: Vec<Vec<DynamicImage>>,
         _config: &PreProcessorConfig,
         device: &Device,
         (_, _): (usize, usize),
     ) -> candle_core::Result<PreprocessedImages> {
-        // Single image (batch-1 vision path); the model's forward assumes one grid.
-        let img = images.remove(0);
-        let (pixel_values, (t, h, w)) = preprocess_decoded(&img, device)?;
+        // One image per request: the forward maps one grid to one batch row, and the placeholder
+        // expansion has exactly one grid to spend per row. Reject rather than drop the extras.
+        let [img] = &images[..] else {
+            candle_core::bail!(
+                "PaddleOCR-VL takes one image per request, got {}. Send one region crop per request.",
+                images.len()
+            );
+        };
+        let (pixel_values, (t, h, w)) = preprocess_decoded(img, device)?;
         let grid = Tensor::from_vec(vec![t as u32, h as u32, w as u32], (1, 3), device)?;
         Ok(PreprocessedImages {
             pixel_values,
@@ -353,6 +357,29 @@ impl ImagePreProcessor for PaddleOcrVlImageProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Two images in one message used to be silently reduced to the first, then panic in
+    // `expand_placeholders` on the second placeholder's missing grid. It must be a clean error.
+    #[test]
+    fn multiple_images_are_rejected_not_dropped() {
+        let one = || DynamicImage::new_rgb8(64, 64);
+        let call = |images: Vec<DynamicImage>| {
+            PaddleOcrVlImageProcessor.preprocess(
+                images,
+                vec![],
+                &PreProcessorConfig::default(),
+                &Device::Cpu,
+                (usize::MAX, usize::MAX),
+            )
+        };
+        let err = call(vec![one(), one()])
+            .err()
+            .expect("two images must be rejected")
+            .to_string();
+        assert!(err.contains("one image per request"), "{err}");
+        assert!(call(vec![]).is_err(), "zero images must not panic either");
+        assert!(call(vec![one()]).is_ok(), "one image must still work");
+    }
 
     #[test]
     fn expand_placeholder_count_matches_grid() {
