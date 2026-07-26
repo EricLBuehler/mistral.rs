@@ -66,7 +66,11 @@ async fn main() -> Result<()> {
     // Default CPU/f32 (deterministic parity path); set PADDLEOCR_VL_GPU=1 for bf16 on the accelerator.
     let gpu = std::env::var("PADDLEOCR_VL_GPU").is_ok();
     let mut builder = MultimodalModelBuilder::new(&weights_dir)
-        .with_dtype(if gpu { ModelDType::BF16 } else { ModelDType::F32 })
+        .with_dtype(if gpu {
+            ModelDType::BF16
+        } else {
+            ModelDType::F32
+        })
         .with_logging();
     if !gpu {
         builder = builder.with_force_cpu();

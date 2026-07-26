@@ -67,7 +67,9 @@ impl PaddleOcrVlModel {
         // cuda quant projections on cpu ("input must live on CUDA"). Mirrors qwen2vl.
         let real_dev = normal_loading_metadata.real_device.clone();
         let vision = VisionModel::load(
-            vb.pp("visual").pp("vision_model").set_device(real_dev.clone()),
+            vb.pp("visual")
+                .pp("vision_model")
+                .set_device(real_dev.clone()),
             &vcfg,
         )?;
         let connector = Connector::load(
@@ -193,7 +195,9 @@ impl MultimodalModel for PaddleOcrVlModel {
                 let mut offset = 0;
                 let mut rows = Vec::with_capacity(batch);
                 for (b, &(t, h, w)) in image_grid_thw.iter().enumerate() {
-                    let post_ln = self.vision.forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
+                    let post_ln =
+                        self.vision
+                            .forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
                     offset += t * h * w;
                     let image_embeds = self.connector.forward(&post_ln, t, h, w)?;
                     let row_ids = input_ids.narrow(0, b, 1)?.flatten_all()?;

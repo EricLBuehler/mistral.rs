@@ -650,7 +650,7 @@ mod tests {
         }
         let vb = ShardedSafeTensors::wrap(vm, DType::F32, dev.clone());
         let mapper = crate::device_map::DeviceMapSetting::dummy()
-            .into_mapper(cfg.num_hidden_layers, dev, None, &[dev.clone()])
+            .into_mapper(cfg.num_hidden_layers, dev, None, std::slice::from_ref(dev))
             .unwrap();
         ErnieTextModel::load(vb, cfg, &*mapper, false, AttentionImplementation::Eager).unwrap()
     }
