@@ -11,24 +11,30 @@ use std::{any::Any, sync::Arc};
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};
+use either::Either;
 use image::DynamicImage;
+use indexmap::IndexMap;
+use serde_json::Value;
 use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
     paged_attention::block_hash::MultimodalKind,
     pipeline::{
+        processing::default_process,
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
+    request::ReasoningEffort,
     sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::PreProcessorConfig,
         ModelInputs,
     },
+    MessageContent, Tool,
 };
 
 use super::preprocess::{preprocess_decoded, MERGE};
@@ -48,6 +54,49 @@ impl PaddleOcrVlProcessor {
 }
 
 impl Processor for PaddleOcrVlProcessor {
+    // The checkpoint's template reads content as a list of typed parts (it has to, to find the image
+    // part), but a plain text message arrives as a bare string. `Keep` hands that straight to jinja,
+    // which iterates it per character, so `content["type"]` never matches and the text is dropped:
+    // the model then decodes an empty user turn into byte-fallback garbage. Wrap it first.
+    fn process(
+        &self,
+        pipeline: &dyn crate::pipeline::Pipeline,
+        messages: Vec<IndexMap<String, MessageContent>>,
+        add_generation_prompt: bool,
+        add_special_tokens: bool,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+        tools: Vec<Tool>,
+    ) -> anyhow::Result<(Vec<u32>, String)> {
+        let messages = messages
+            .into_iter()
+            .map(|message| {
+                message
+                    .into_iter()
+                    .map(|(key, value)| match (key.as_str(), value) {
+                        ("content", Either::Left(text)) => (
+                            key,
+                            Either::Right(vec![IndexMap::from([
+                                ("type".to_string(), Value::String("text".to_string())),
+                                ("text".to_string(), Value::String(text)),
+                            ])]),
+                        ),
+                        (_, value) => (key, value),
+                    })
+                    .collect()
+            })
+            .collect();
+        default_process(
+            pipeline,
+            messages,
+            add_generation_prompt,
+            add_special_tokens,
+            enable_thinking,
+            reasoning_effort,
+            self.template_action(),
+            tools,
+        )
+    }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(PaddleOcrVlImageProcessor)
     }

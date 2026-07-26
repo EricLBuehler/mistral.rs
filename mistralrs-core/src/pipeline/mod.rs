@@ -18,7 +18,7 @@ mod macros;
 mod multimodal;
 mod normal;
 mod paths;
-mod processing;
+pub(crate) mod processing;
 mod prompt_chunks;
 mod response;
 pub(crate) mod sampling;
