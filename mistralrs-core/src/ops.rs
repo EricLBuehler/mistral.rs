@@ -4099,6 +4099,11 @@ pub(crate) fn quantized_ffn(
 ) -> Result<Tensor> {
     #[cfg(feature = "cuda")]
     if let Some(activation_type) = glu_activation_type(act) {
+        if let Some(out) =
+            mistralrs_quant::try_fused_quantized_ffn(xs, gate, up, down, activation_type)?
+        {
+            return Ok(out);
+        }
         if let Some(inter) =
             mistralrs_quant::try_fused_quantized_gate_up(xs, gate, up, activation_type)?
         {

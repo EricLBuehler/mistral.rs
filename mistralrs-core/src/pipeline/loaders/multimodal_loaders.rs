@@ -95,8 +95,18 @@ pub trait MultimodalModel:
     fn supports_cuda_decode_graphs(&self) -> bool {
         false
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs_for_args(&self, _model_specific_args: &dyn Any) -> bool {
+        self.supports_cuda_decode_graphs()
+    }
     fn requires_uniform_completion_batch(&self) -> bool {
         self.is_block_diffusion()
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
+    fn supports_mixed_media_batches(&self) -> bool {
+        false
     }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
@@ -111,9 +121,10 @@ pub trait MultimodalModel:
     fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
         None
     }
-    /// Reset model-specific state (e.g. cached audio embeddings) between requests.
-    /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
+    fn reset_model_specific_state_for_sequences(&self, _sequence_ids: &[usize]) {
+        self.reset_model_specific_state();
+    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
@@ -1795,7 +1806,7 @@ impl MultimodalModelLoader for VLlamaLoader {
         Arc::new(MLlamaProcessor::new())
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         false
@@ -2190,7 +2201,7 @@ impl MultimodalModelLoader for Qwen2VLLoader {
         Arc::new(Qwen2VLProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
@@ -3434,7 +3445,7 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
         Arc::new(Qwen2_5VLProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
@@ -4726,12 +4737,12 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
             hidden_size: cfg.hidden_size,
-            num_kv_heads: cfg.num_attention_heads,
+            num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: None,
+            sliding_window: Some(cfg.attention_chunk_size),
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::StandardNoFlashInfer,
         };
 
         Ok(Box::new(cfg))
@@ -4796,7 +4807,7 @@ impl MultimodalModelLoader for Gemma3nLoader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
@@ -7140,10 +7151,10 @@ impl MultimodalModelLoader for VoxtralLoader {
         Arc::new(VoxtralProcessor::new(&cfg))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VoxtralPrefixer)
@@ -7327,6 +7338,19 @@ impl DeviceMappedModelLoader for VoxtralLoader {
 
 pub struct Gemma4Loader;
 
+fn supports_gemma4_incremental_cache(config: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(config)
+        .ok()
+        .and_then(|config| {
+            config
+                .pointer("/text_config/use_bidirectional_attention")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        != Some("all")
+}
+
 #[allow(dead_code)]
 pub struct Gemma4Prefixer;
 
@@ -7396,13 +7420,15 @@ impl MultimodalModelLoader for Gemma4Loader {
             raw_audio_frame_size,
             is_unified: cfg.is_unified(),
             decode_window: None,
+            bidirectional_attention: cfg.text_config.bidirectional_attention(),
+            vision_attention_on_full_layers: false,
         }))
     }
-    fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
-    fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+    fn supports_prefix_cacher(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma4Prefixer)
@@ -8237,13 +8263,15 @@ impl MultimodalModelLoader for DiffusionGemmaLoader {
             raw_audio_frame_size: None,
             is_unified: false,
             decode_window: Some(cfg.canvas_length),
+            bidirectional_attention: cfg.text_config.bidirectional_attention(),
+            vision_attention_on_full_layers: true,
         }))
     }
-    fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
-    fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+    fn supports_prefix_cacher(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma4Prefixer)
@@ -8522,5 +8550,35 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn mllama_enables_paged_attention_without_prefix_caching() {
+        let loader = VLlamaLoader;
+        assert!(loader.supports_paged_attention(""));
+        assert!(!loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn gemma3n_enables_paged_attention_and_prefix_caching() {
+        let loader = Gemma3nLoader;
+        assert!(loader.supports_paged_attention(""));
+        assert!(loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn gemma4_all_bidirectional_disables_incremental_cache() {
+        let all = r#"{"text_config":{"use_bidirectional_attention":"all"}}"#;
+        let vision = r#"{"text_config":{"use_bidirectional_attention":"vision"}}"#;
+
+        for loader in [
+            &Gemma4Loader as &dyn MultimodalModelLoader,
+            &DiffusionGemmaLoader as &dyn MultimodalModelLoader,
+        ] {
+            assert!(!loader.supports_paged_attention(all));
+            assert!(!loader.supports_prefix_cacher(all));
+            assert!(loader.supports_paged_attention(vision));
+            assert!(loader.supports_prefix_cacher(vision));
+        }
     }
 }

@@ -575,6 +575,7 @@ impl CudaDecodeGraphMetadataBuffers {
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
+            full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
             prefill_head_dim: metadata.prefill_head_dim,

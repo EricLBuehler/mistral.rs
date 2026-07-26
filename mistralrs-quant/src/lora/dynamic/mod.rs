@@ -16,8 +16,9 @@ mod reference;
 mod registry;
 
 pub use execution::{
-    with_lora_execution, LoraAdapterWeights, LoraExecution, LoraExecutionArena,
-    LoraExecutionArenaStats, LoraSlotId, LoraWeights,
+    with_lora_execution, with_lora_execution_repeated_row, with_lora_execution_row_range,
+    LoraAdapterWeights, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraSlotId,
+    LoraWeights,
 };
 pub use expert::{
     add_expert_delta_reference, DynamicLoraWeights, LoraExpertDelta, LoraExpertExecution,

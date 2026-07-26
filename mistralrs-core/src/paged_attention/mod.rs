@@ -34,6 +34,43 @@ use tracing::info;
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
 
+pub(crate) fn block_aligned_sliding_window_start(
+    full_len: usize,
+    query_len: usize,
+    window: usize,
+    block_size: usize,
+) -> usize {
+    let retained_len = window
+        .saturating_sub(1)
+        .saturating_add(query_len)
+        .min(full_len);
+    ((full_len - retained_len) / block_size) * block_size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::block_aligned_sliding_window_start;
+
+    #[test]
+    fn sliding_window_retains_prior_window_and_whole_query() {
+        assert_eq!(block_aligned_sliding_window_start(100, 1, 4, 32), 96);
+        assert_eq!(block_aligned_sliding_window_start(100, 10, 4, 32), 64);
+        assert_eq!(block_aligned_sliding_window_start(8, 8, 4, 32), 0);
+
+        for full_len in 1..130 {
+            for query_len in 1..=full_len {
+                for window in [1, 2, 4, 31, 32, 33, 128] {
+                    let start = block_aligned_sliding_window_start(full_len, query_len, window, 32);
+                    let required_start =
+                        full_len.saturating_sub(window.saturating_sub(1).saturating_add(query_len));
+                    assert!(start <= required_start);
+                    assert!(required_start - start < 32);
+                }
+            }
+        }
+    }
+}
+
 /// All memory counts in MB. Default for block size is 32.
 #[derive(Clone, Copy, Debug)]
 pub struct PagedAttentionConfig {

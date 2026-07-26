@@ -1,24 +1,29 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::paged_attention::block_hash::MultimodalKind;
-use std::{any::Any, sync::Arc};
+use std::{any::Any, ops::Range, sync::Arc};
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
-use regex::Regex;
 use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
-    vision_models::ModelInputs,
+    sequence::Sequence,
+    vision_models::{
+        multimodal_layout::{
+            MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout,
+            PackedMultimodalLayout, RequestMultimodalLayout,
+        },
+        ModelInputs,
+    },
 };
 
 use crate::vision_models::{
@@ -27,7 +32,7 @@ use crate::vision_models::{
     processor_config::ProcessorConfig,
 };
 
-use super::MiniCpmOSpecificArgs;
+use super::{MiniCpmOLegacyMap, MiniCpmOSpecificArgs, MiniCpmOVisualInput};
 
 const DEFAULT_MAX_SLICE_NUMS: usize = 9;
 const DEFAULT_SCALE_RESOLUTION: usize = 448;
@@ -42,6 +47,27 @@ const DEFAULT_SLICE_END_TOKEN: &str = "</slice>";
 const DEFAULT_UNK_TOKEN: &str = "<unk>";
 const DEFAULT_USE_IMAGE_ID: bool = false;
 const DEFAULT_SLICE_MODE: bool = true;
+const RAW_IMAGE_TAG: &str = "(<image>./</image>)";
+
+#[derive(Clone, Copy)]
+struct MiniCpmOTokenIds {
+    image_start: u32,
+    image_end: u32,
+    slice_start: u32,
+    slice_end: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MiniCpmOPromptItem {
+    placeholder: Range<usize>,
+    embedding_spans: Vec<Range<usize>>,
+}
+
+#[derive(Clone, Debug)]
+struct SelectedPromptItem {
+    source_index: usize,
+    item: MiniCpmOPromptItem,
+}
 
 pub struct MiniCpmOImageProcessor {
     config: PreProcessorConfig,
@@ -85,10 +111,164 @@ impl Processor for MiniCpmOProcessor {
     }
 }
 
+fn parse_prompt_items(
+    tokens: &[u32],
+    token_ids: MiniCpmOTokenIds,
+) -> anyhow::Result<Vec<MiniCpmOPromptItem>> {
+    enum OpenSpan {
+        Image(usize),
+        Slice(usize),
+    }
+
+    let mut items = Vec::new();
+    let mut current = None;
+    let mut open = None;
+    for (position, &token) in tokens.iter().enumerate() {
+        match open {
+            Some(OpenSpan::Image(start)) => {
+                if token == token_ids.image_end {
+                    if position == start + 1 {
+                        anyhow::bail!("MiniCPMO image placeholder is empty");
+                    }
+                    current = Some(MiniCpmOPromptItem {
+                        placeholder: start..position + 1,
+                        embedding_spans: std::iter::once(start + 1..position).collect(),
+                    });
+                    open = None;
+                } else if token == token_ids.image_start
+                    || token == token_ids.slice_start
+                    || token == token_ids.slice_end
+                {
+                    anyhow::bail!("MiniCPMO image placeholder delimiters are malformed");
+                }
+            }
+            Some(OpenSpan::Slice(start)) => {
+                if token == token_ids.slice_end {
+                    if position == start + 1 {
+                        anyhow::bail!("MiniCPMO slice placeholder is empty");
+                    }
+                    let item = current.as_mut().ok_or_else(|| {
+                        anyhow::Error::msg("MiniCPMO slice appears before an image placeholder")
+                    })?;
+                    item.embedding_spans.push(start + 1..position);
+                    item.placeholder.end = position + 1;
+                    open = None;
+                } else if token == token_ids.image_start
+                    || token == token_ids.image_end
+                    || token == token_ids.slice_start
+                {
+                    anyhow::bail!("MiniCPMO slice placeholder delimiters are malformed");
+                }
+            }
+            None if token == token_ids.image_start => {
+                if let Some(item) = current.take() {
+                    items.push(item);
+                }
+                open = Some(OpenSpan::Image(position));
+            }
+            None if token == token_ids.slice_start => {
+                if current.is_none() {
+                    anyhow::bail!("MiniCPMO slice appears before an image placeholder");
+                }
+                open = Some(OpenSpan::Slice(position));
+            }
+            None if token == token_ids.image_end || token == token_ids.slice_end => {
+                anyhow::bail!("MiniCPMO placeholder has an unmatched closing delimiter");
+            }
+            None => {}
+        }
+    }
+    if open.is_some() {
+        anyhow::bail!("MiniCPMO placeholder has an unmatched opening delimiter");
+    }
+    if let Some(item) = current {
+        items.push(item);
+    }
+    Ok(items)
+}
+
+fn prompt_features(
+    items: &[MiniCpmOPromptItem],
+    hashes: &[u64],
+) -> anyhow::Result<Vec<MultiModalFeature>> {
+    if items.len() != hashes.len() {
+        anyhow::bail!(
+            "MiniCPMO has {} image placeholders but {} image inputs",
+            items.len(),
+            hashes.len()
+        );
+    }
+    Ok(items
+        .iter()
+        .zip(hashes)
+        .enumerate()
+        .map(|(item_index, (item, &hash))| MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: item_index..item_index + 1,
+            hashes: vec![hash],
+            offset: item.placeholder.start,
+            length: item.placeholder.len(),
+            attention_policy: MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        })
+        .collect())
+}
+
+fn select_prompt_items(
+    items: &[MiniCpmOPromptItem],
+    query: Range<usize>,
+    token_count: usize,
+) -> anyhow::Result<Vec<SelectedPromptItem>> {
+    if query.start > query.end || query.end > token_count {
+        anyhow::bail!("MiniCPMO active prompt range is outside the token sequence");
+    }
+    let mut selected = Vec::new();
+    for (source_index, item) in items.iter().enumerate() {
+        let overlaps = item.placeholder.start < query.end && query.start < item.placeholder.end;
+        if !overlaps {
+            continue;
+        }
+        if item.placeholder.start < query.start || item.placeholder.end > query.end {
+            anyhow::bail!("MiniCPMO image placeholder must be scheduled as a complete span");
+        }
+        selected.push(SelectedPromptItem {
+            source_index,
+            item: MiniCpmOPromptItem {
+                placeholder: item.placeholder.start - query.start
+                    ..item.placeholder.end - query.start,
+                embedding_spans: item
+                    .embedding_spans
+                    .iter()
+                    .map(|span| span.start - query.start..span.end - query.start)
+                    .collect(),
+            },
+        });
+    }
+    Ok(selected)
+}
+
 impl InputsProcessor for MiniCpmOImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let tokenizer = tokenizer.ok_or_else(|| {
+            anyhow::Error::msg("MiniCpmOImageProcessor requires a specified tokenizer.")
+        })?;
+        for seq in input_seqs {
+            self.prepare_prompt(&tokenizer, seq, paged_attn_metadata.as_deref_mut())?;
+        }
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -121,238 +301,160 @@ impl InputsProcessor for MiniCpmOImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
-
-        let (pixel_values_all, image_bound, tgt_sizes) = if has_images {
-            const IMAGE_TAG: &str = "(<image>./</image>)";
-            const IMAGE_PATTERN: &str = r"\(<image>./</image>\)";
-            const AUDIO_PATTERN: &str = r"\(<audio>./</audio>\)";
-
-            let image_pattern = Regex::new(IMAGE_PATTERN).unwrap();
-            let _audio_pattern = Regex::new(AUDIO_PATTERN).unwrap();
-            let split_pattern = Regex::new(&format!(r"({IMAGE_PATTERN}|{AUDIO_PATTERN})")).unwrap();
-
-            let mut pixel_values_accum = Vec::new();
-            let mut tgt_sizes_accum = Vec::new();
-            let mut image_bounds_accum = Vec::new();
-
+        let preserve_images = input_seqs
+            .iter()
+            .map(|seq| !seq.multimodal.has_changed_prompt)
+            .collect::<Vec<_>>();
+        if is_prompt {
             for seq in input_seqs.iter_mut() {
-                let PreprocessedImages {
-                    pixel_values: _,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list,
-                    tgt_sizes,
-                    image_sizes_all,
-                    num_crops: _,
-                } = self
-                    .preprocess(
+                self.prepare_prompt(&tokenizer, seq, paged_attn_metadata.as_mut())?;
+            }
+        }
+
+        let token_ids = self.token_ids(&tokenizer)?;
+        let expected_span_len = config
+            .image_feature_size
+            .unwrap_or(DEFAULT_IMAGE_FEATURE_SIZE);
+        let mut visual_inputs = Vec::new();
+        let mut legacy_maps = (0..input_seqs.len())
+            .map(|_| Vec::new())
+            .collect::<Vec<_>>();
+        let mut requests = Vec::with_capacity(input_seqs.len());
+
+        if is_prompt {
+            for (seq_index, seq) in input_seqs.iter_mut().enumerate() {
+                let tokens = seq.get_toks().to_vec();
+                let items = parse_prompt_items(&tokens, token_ids)?;
+                let query = seq
+                    .active_prompt_local_query_range()
+                    .unwrap_or_else(|| seq.prefix_cache_len().min(tokens.len())..tokens.len());
+                let selected = select_prompt_items(&items, query.clone(), tokens.len())?;
+                let chunked_view = seq.is_chunked_prefill_view();
+
+                let mut selected_media = Vec::with_capacity(selected.len());
+                if !selected.is_empty() {
+                    let hashes = seq.image_hashes().unwrap_or_default().to_vec();
+                    let images = if preserve_images[seq_index] {
+                        seq.clone_images()
+                    } else {
                         seq.take_images()
-                            .expect("Need to have images by this point."),
+                    }
+                    .ok_or_else(|| {
+                        anyhow::Error::msg("MiniCPMO image placeholders are missing image inputs")
+                    })?;
+
+                    if chunked_view {
+                        if selected.len() != images.len() || selected.len() != hashes.len() {
+                            anyhow::bail!(
+                                "MiniCPMO active prompt has {} placeholders, {} images, and {} hashes",
+                                selected.len(),
+                                images.len(),
+                                hashes.len()
+                            );
+                        }
+                        for ((selected, image), hash) in
+                            selected.into_iter().zip(images).zip(hashes)
+                        {
+                            selected_media.push((selected, image, hash));
+                        }
+                    } else {
+                        for selected in selected {
+                            let image =
+                                images.get(selected.source_index).cloned().ok_or_else(|| {
+                                    anyhow::Error::msg(
+                                        "MiniCPMO image inputs do not cover the active prompt",
+                                    )
+                                })?;
+                            let hash = *hashes.get(selected.source_index).ok_or_else(|| {
+                                anyhow::Error::msg(
+                                    "MiniCPMO image hashes do not cover the active prompt",
+                                )
+                            })?;
+                            selected_media.push((selected, image, hash));
+                        }
+                    }
+                }
+
+                let mut layout_items = Vec::with_capacity(selected_media.len());
+                for (item_index, (selected, image, hash)) in selected_media.into_iter().enumerate()
+                {
+                    if selected
+                        .item
+                        .embedding_spans
+                        .iter()
+                        .any(|span| span.len() != expected_span_len)
+                    {
+                        anyhow::bail!(
+                            "MiniCPMO image placeholder span does not match the configured feature size"
+                        );
+                    }
+                    let PreprocessedImages {
+                        pixel_values_list,
+                        tgt_sizes,
+                        ..
+                    } = self.preprocess(
+                        vec![image],
                         vec![],
                         config,
                         device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
-                    )
-                    .expect("Preprocessing failed");
-                let pixel_values_list = pixel_values_list.unwrap();
-                let tgt_sizes = tgt_sizes.unwrap();
-                let image_sizes_all = image_sizes_all.unwrap();
-
-                let text = tokenizer
-                    .decode(seq.get_toks(), false)
-                    .expect("Detokenization failed!");
-
-                let mut text_chunks = {
-                    let mut results = Vec::new();
-                    let mut last_end = 0;
-
-                    for m in split_pattern.find_iter(&text) {
-                        // Anything between last_end and m.start() is unmatched
-                        if m.start() > last_end {
-                            results.push((false, &text[last_end..m.start()]));
-                        }
-                        results.push((true, m.as_str()));
-                        last_end = m.end();
-                    }
-                    // Handle the trailing unmatched part (if any)
-                    if last_end < text.len() {
-                        results.push((false, &text[last_end..]));
+                        (usize::MAX, usize::MAX),
+                    )?;
+                    let pixel_values = pixel_values_list.ok_or_else(|| {
+                        anyhow::Error::msg("MiniCPMO preprocessing omitted pixel values")
+                    })?;
+                    let tgt_sizes = tgt_sizes.ok_or_else(|| {
+                        anyhow::Error::msg("MiniCPMO preprocessing omitted target sizes")
+                    })?;
+                    if pixel_values.len() != selected.item.embedding_spans.len()
+                        || tgt_sizes.dim(0)? != selected.item.embedding_spans.len()
+                    {
+                        anyhow::bail!(
+                            "MiniCPMO produced {} image slices for {} placeholder spans",
+                            pixel_values.len(),
+                            selected.item.embedding_spans.len()
+                        );
                     }
 
-                    results
-                        .into_iter()
-                        .map(|(_, x)| x.to_string())
-                        .collect::<Vec<_>>()
-                };
-
-                let image_tags = image_pattern.find_iter(&text).collect::<Vec<_>>();
-
-                if !image_tags.is_empty() {
-                    assert_eq!(image_tags.len(), image_sizes_all.len());
+                    let key = MultimodalEncoderKey {
+                        kind: MultimodalKind::Image,
+                        hash,
+                    };
+                    visual_inputs.push(MiniCpmOVisualInput {
+                        key,
+                        pixel_values,
+                        tgt_sizes,
+                    });
+                    let mut embedding_maps =
+                        Vec::with_capacity(selected.item.embedding_spans.len());
+                    for (source_output, destination) in
+                        selected.item.embedding_spans.iter().cloned().enumerate()
+                    {
+                        legacy_maps[seq_index].push(MiniCpmOLegacyMap {
+                            key,
+                            source_output,
+                            destination: destination.clone(),
+                        });
+                        embedding_maps.push(MultimodalEmbeddingMap::contiguous(
+                            destination,
+                            0,
+                            source_output,
+                        )?);
+                    }
+                    layout_items.push(MultimodalItemLayout::new(
+                        key,
+                        item_index,
+                        selected.item.placeholder,
+                        MultimodalAttentionPolicy::Causal,
+                        embedding_maps,
+                    )?);
                 }
-
-                let mut image_id = 0;
-                for chunk in &mut text_chunks {
-                    if chunk == IMAGE_TAG {
-                        *chunk =
-                            self.get_slice_image_placeholder(image_sizes_all[image_id], image_id);
-                        image_id += 1;
-                    }
-                }
-
-                let final_text = text_chunks.join("");
-
-                let input_ids = tokenizer
-                    .encode_fast(final_text.clone(), false)
-                    .unwrap()
-                    .get_ids()
-                    .to_vec();
-
-                if !seq.multimodal.has_changed_prompt {
-                    seq.set_initial_prompt(final_text.clone());
-
-                    // Build mm_features for position-aware prefix cache hashing
-                    if seq.mm_features().is_empty() {
-                        if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                            let im_start = tokenizer
-                                .encode_fast(
-                                    self.config
-                                        .im_start_token
-                                        .clone()
-                                        .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
-                                    false,
-                                )
-                                .unwrap()
-                                .get_ids()[0];
-                            let im_end = tokenizer
-                                .encode_fast(
-                                    self.config
-                                        .im_end_token
-                                        .clone()
-                                        .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
-                                    false,
-                                )
-                                .unwrap()
-                                .get_ids()[0];
-                            let ranges = find_image_delimited_ranges(&input_ids, im_start, im_end);
-                            seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges,
-                                &hashes,
-                                MultimodalKind::Image,
-                            ));
-                        }
-                    }
-
-                    seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata.as_mut());
-                    seq.multimodal.has_changed_prompt = true;
-                }
-
-                let image_bounds = {
-                    let im_start_id = tokenizer
-                        .encode_fast(
-                            self.config
-                                .im_start_token
-                                .clone()
-                                .unwrap_or(DEFAULT_IM_START_TOKEN.to_string()),
-                            false,
-                        )
-                        .unwrap()
-                        .get_ids()[0];
-                    let im_end_id = tokenizer
-                        .encode_fast(
-                            self.config
-                                .im_end_token
-                                .clone()
-                                .unwrap_or(DEFAULT_IM_END_TOKEN.to_string()),
-                            false,
-                        )
-                        .unwrap()
-                        .get_ids()[0];
-                    let slice_start_id = tokenizer
-                        .encode_fast(
-                            self.config
-                                .slice_start_token
-                                .clone()
-                                .unwrap_or(DEFAULT_SLICE_START_TOKEN.to_string()),
-                            false,
-                        )
-                        .unwrap()
-                        .get_ids()[0];
-                    let slice_end_id = tokenizer
-                        .encode_fast(
-                            self.config
-                                .slice_end_token
-                                .clone()
-                                .unwrap_or(DEFAULT_SLICE_END_TOKEN.to_string()),
-                            false,
-                        )
-                        .unwrap()
-                        .get_ids()[0];
-
-                    let image_start_idx = input_ids
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &id)| {
-                            if id == im_start_id || id == slice_start_id {
-                                Some(i as u32 + 1)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
-                    let image_end_idx = input_ids
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, &id)| {
-                            if id == im_end_id || id == slice_end_id {
-                                Some(i as u32)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>();
-
-                    let valid_image_nums = image_start_idx.len().max(image_end_idx.len());
-
-                    let image_start_idx = Tensor::from_slice(
-                        &image_start_idx[..valid_image_nums],
-                        (valid_image_nums, 1),
-                        device,
-                    )
-                    .unwrap();
-                    let image_end_idx = Tensor::from_slice(
-                        &image_end_idx[..valid_image_nums],
-                        (valid_image_nums, 1),
-                        device,
-                    )
-                    .unwrap();
-
-                    Tensor::cat(&[image_start_idx, image_end_idx], 1).unwrap()
-                };
-
-                pixel_values_accum.push(pixel_values_list);
-                tgt_sizes_accum.push(tgt_sizes);
-                image_bounds_accum.push(image_bounds);
+                requests.push(RequestMultimodalLayout {
+                    sequence_id: *seq.id(),
+                    query: 0..query.len(),
+                    items: layout_items,
+                });
             }
-
-            (
-                Some(pixel_values_accum),
-                Some(image_bounds_accum),
-                Some(tgt_sizes_accum),
-            )
-        } else {
-            (None, None, None)
-        };
+        }
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:
@@ -378,8 +480,7 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         } else {
             get_completion_input(
                 input_seqs
@@ -394,98 +495,48 @@ impl InputsProcessor for MiniCpmOImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         };
 
-        // Trim pixel_values_all, image_bound, and tgt_sizes to exclude slices
-        // already covered by the prefix cache.
-        let (mut pixel_values_all, mut image_bound, mut tgt_sizes) =
-            (pixel_values_all, image_bound, tgt_sizes);
-        if is_prompt {
-            if let (Some(ref mut pv_all), Some(ref mut ib_all), Some(ref mut ts_all)) =
-                (&mut pixel_values_all, &mut image_bound, &mut tgt_sizes)
-            {
-                let mut any_remaining = false;
-                for (seq_idx, seq) in input_seqs.iter().enumerate() {
-                    let prefix_len = seq.prefix_cache_len();
-                    if prefix_len == 0 {
-                        if !pv_all[seq_idx].is_empty() {
-                            any_remaining = true;
-                        }
-                        continue;
-                    }
-
-                    let bounds = ib_all[seq_idx].to_vec2::<u32>().unwrap();
-                    let cached_slices = bounds
-                        .iter()
-                        .filter(|row| (row[0] as usize) < prefix_len)
-                        .count();
-
-                    if cached_slices == 0 {
-                        if !pv_all[seq_idx].is_empty() {
-                            any_remaining = true;
-                        }
-                        continue;
-                    }
-
-                    let remaining = bounds.len() - cached_slices;
-                    // Trim pixel_values
-                    pv_all[seq_idx] = pv_all[seq_idx].split_off(cached_slices);
-
-                    if remaining > 0 {
-                        any_remaining = true;
-                        // Trim tgt_sizes
-                        ts_all[seq_idx] =
-                            ts_all[seq_idx].narrow(0, cached_slices, remaining).unwrap();
-                        // Adjust image_bound positions: subtract prefix_cache_len
-                        let adjusted: Vec<Vec<u32>> = bounds[cached_slices..]
-                            .iter()
-                            .map(|row| vec![row[0] - prefix_len as u32, row[1] - prefix_len as u32])
-                            .collect();
-                        ib_all[seq_idx] = Tensor::new(adjusted, device).unwrap();
-                    } else {
-                        // All slices cached for this sequence
-                        ts_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
-                        ib_all[seq_idx] = Tensor::zeros((0, 2), DType::U32, device).unwrap();
-                    }
-                }
-                if !any_remaining {
-                    pixel_values_all = None;
-                    image_bound = None;
-                    tgt_sizes = None;
+        if !is_prompt {
+            legacy_maps = (0..input.dim(0)?).map(|_| Vec::new()).collect();
+        }
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    anyhow::Error::msg("packed MiniCPMO prefill requires logical query lengths")
+                })?;
+            if requests.len() != query_lens.len() {
+                anyhow::bail!("MiniCPMO packed request metadata length mismatch");
+            }
+            for (request, &query_len) in requests.iter().zip(query_lens) {
+                if request.query.len() != query_len {
+                    anyhow::bail!(
+                        "MiniCPMO packed query has {} tokens but input metadata has {query_len}",
+                        request.query.len()
+                    );
                 }
             }
-        }
-
-        let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
+            let layout = PackedMultimodalLayout::new(&requests)?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "MiniCPMO packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
         } else {
-            vec![]
+            None
         };
-
         let args = MiniCpmOSpecificArgs {
-            pixel_values_all,
-            tgt_sizes,
-            image_bound,
-            image_hashes,
+            visual_inputs,
+            legacy_maps,
+            packed_layout,
         };
 
-        // Dummy pixel values - real ones are in model specific args
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
             seqlen_offsets: positions,
@@ -510,6 +561,106 @@ impl InputsProcessor for MiniCpmOImageProcessor {
 }
 
 impl MiniCpmOImageProcessor {
+    fn token_ids(&self, tokenizer: &Tokenizer) -> anyhow::Result<MiniCpmOTokenIds> {
+        let token_id =
+            |configured: &Option<String>, default: &str, name: &str| -> anyhow::Result<u32> {
+                let token = configured.as_deref().unwrap_or(default);
+                tokenizer.token_to_id(token).ok_or_else(|| {
+                    anyhow::Error::msg(format!(
+                        "MiniCPMO tokenizer is missing the {name} token {token:?}"
+                    ))
+                })
+            };
+        Ok(MiniCpmOTokenIds {
+            image_start: token_id(
+                &self.config.im_start_token,
+                DEFAULT_IM_START_TOKEN,
+                "image start",
+            )?,
+            image_end: token_id(&self.config.im_end_token, DEFAULT_IM_END_TOKEN, "image end")?,
+            slice_start: token_id(
+                &self.config.slice_start_token,
+                DEFAULT_SLICE_START_TOKEN,
+                "slice start",
+            )?,
+            slice_end: token_id(
+                &self.config.slice_end_token,
+                DEFAULT_SLICE_END_TOKEN,
+                "slice end",
+            )?,
+        })
+    }
+
+    fn prepare_prompt(
+        &self,
+        tokenizer: &Tokenizer,
+        seq: &mut Sequence,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        if seq.multimodal.has_changed_prompt || !seq.has_images() {
+            return Ok(());
+        }
+        let images = seq
+            .images()
+            .ok_or_else(|| anyhow::Error::msg("MiniCPMO prompt is missing image inputs"))?;
+        let prompt = tokenizer
+            .decode(seq.get_toks(), false)
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?;
+        let fragments = prompt.split(RAW_IMAGE_TAG).collect::<Vec<_>>();
+        let raw_placeholder_count = fragments.len() - 1;
+        let prompt = if raw_placeholder_count == 0 {
+            prompt
+        } else {
+            if raw_placeholder_count != images.len() {
+                anyhow::bail!(
+                    "MiniCPMO has {raw_placeholder_count} raw image placeholders but {} image inputs",
+                    images.len()
+                );
+            }
+            let mut expanded = String::with_capacity(prompt.len());
+            for (image_index, fragment) in fragments[..raw_placeholder_count].iter().enumerate() {
+                expanded.push_str(fragment);
+                expanded.push_str(
+                    &self
+                        .get_slice_image_placeholder(images[image_index].dimensions(), image_index),
+                );
+            }
+            expanded.push_str(fragments[raw_placeholder_count]);
+            expanded
+        };
+        let input_ids = tokenizer
+            .encode_fast(prompt.as_str(), false)
+            .map_err(|err| anyhow::Error::msg(err.to_string()))?
+            .get_ids()
+            .to_vec();
+        let items = parse_prompt_items(&input_ids, self.token_ids(tokenizer)?)?;
+        let hashes = seq.image_hashes().unwrap_or_default().to_vec();
+        let features = prompt_features(&items, &hashes)?;
+        let expected_span_len = self
+            .config
+            .image_feature_size
+            .unwrap_or(DEFAULT_IMAGE_FEATURE_SIZE);
+        if items
+            .iter()
+            .flat_map(|item| &item.embedding_spans)
+            .any(|span| span.len() != expected_span_len)
+        {
+            anyhow::bail!(
+                "MiniCPMO image placeholder span does not match the configured feature size"
+            );
+        }
+
+        let has_prefill_toks = seq.has_prefill_toks();
+        seq.set_initial_prompt(prompt);
+        seq.set_mm_features(features);
+        seq.set_toks_and_reallocate(input_ids.clone(), paged_attn_metadata);
+        if has_prefill_toks {
+            seq.set_prefill_toks(input_ids);
+        }
+        seq.multimodal.has_changed_prompt = true;
+        Ok(())
+    }
+
     fn get_sliced_grid(
         &self,
         (w, h): (usize, usize),
@@ -517,7 +668,7 @@ impl MiniCpmOImageProcessor {
         scale_resolution: usize,
         never_split: bool,
     ) -> Option<(usize, usize)> {
-        let log_ratio = ((w / h) as f32).ln();
+        let log_ratio = (w as f32 / h as f32).ln();
         let ratio = (w * h) as f32 / (scale_resolution * scale_resolution) as f32;
         let multiple = ratio.ceil().min(max_slice_nums as f32);
         if multiple <= 1. || never_split {
@@ -571,7 +722,7 @@ impl MiniCpmOImageProcessor {
         if w * h > scale_resolution * scale_resolution || allow_upscale {
             let r = w as f32 / h as f32;
             h = (scale_resolution as f32 / r.sqrt()) as usize;
-            w = (scale_resolution as f32 * r) as usize;
+            w = (h as f32 * r) as usize;
         }
         let best_w = self.ensure_divide(w, patch_size);
         let best_h = self.ensure_divide(h, patch_size);
@@ -589,8 +740,8 @@ impl MiniCpmOImageProcessor {
         let refine_w = self.ensure_divide(w, grid_x);
         let refine_h = self.ensure_divide(h, grid_y);
 
-        let grid_w = refine_h / grid_x;
-        let grid_h = refine_w / grid_y;
+        let grid_w = refine_w / grid_x;
+        let grid_h = refine_h / grid_y;
 
         let best_grid_size = self.find_best_resize(
             (grid_w, grid_h),
@@ -767,7 +918,9 @@ impl MiniCpmOImageProcessor {
         let grid = self.get_sliced_grid(
             (image_size.0 as usize, image_size.1 as usize),
             max_slice_nums,
-            DEFAULT_SCALE_RESOLUTION,
+            self.config
+                .scale_resolution
+                .unwrap_or(DEFAULT_SCALE_RESOLUTION),
             false,
         );
 
@@ -876,5 +1029,129 @@ impl ImagePreProcessor for MiniCpmOImageProcessor {
             image_sizes_all: Some(image_sizes),
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TOKEN_IDS: MiniCpmOTokenIds = MiniCpmOTokenIds {
+        image_start: 1,
+        image_end: 2,
+        slice_start: 3,
+        slice_end: 4,
+    };
+
+    #[test]
+    fn prompt_parser_groups_slices_with_their_raw_image() {
+        let items =
+            parse_prompt_items(&[9, 1, 7, 7, 2, 8, 3, 7, 7, 4, 9, 1, 7, 7, 2], TOKEN_IDS).unwrap();
+        assert_eq!(
+            items,
+            vec![
+                MiniCpmOPromptItem {
+                    placeholder: 1..10,
+                    embedding_spans: vec![2..4, 7..9],
+                },
+                MiniCpmOPromptItem {
+                    placeholder: 11..15,
+                    embedding_spans: std::iter::once(12..14).collect(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn prompt_parser_rejects_malformed_delimiters() {
+        assert!(parse_prompt_items(&[3, 7, 4], TOKEN_IDS).is_err());
+        assert!(parse_prompt_items(&[1, 7, 3, 2], TOKEN_IDS).is_err());
+        assert!(parse_prompt_items(&[1, 7], TOKEN_IDS).is_err());
+        assert!(parse_prompt_items(&[1, 2, 4], TOKEN_IDS).is_err());
+    }
+
+    #[test]
+    fn prompt_features_cover_the_complete_raw_item() {
+        let items = parse_prompt_items(&[1, 7, 2, 3, 7, 4, 9, 1, 7, 2], TOKEN_IDS).unwrap();
+        let features = prompt_features(&items, &[11, 12]).unwrap();
+        assert_eq!(features.len(), 2);
+        assert_eq!(features[0].offset, 0);
+        assert_eq!(features[0].length, 6);
+        assert_eq!(features[0].item_range, 0..1);
+        assert_eq!(features[0].hashes, vec![11]);
+        assert_eq!(features[1].offset, 7);
+        assert_eq!(features[1].length, 3);
+        assert_eq!(features[1].item_range, 1..2);
+        assert!(prompt_features(&items, &[11]).is_err());
+    }
+
+    #[test]
+    fn active_query_requires_and_shifts_a_complete_item() {
+        let items = vec![MiniCpmOPromptItem {
+            placeholder: 4..11,
+            embedding_spans: vec![5..7, 8..10],
+        }];
+        let selected = select_prompt_items(&items, 4..12, 12).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].item.placeholder, 0..7);
+        assert_eq!(selected[0].item.embedding_spans, vec![1..3, 4..6]);
+        assert!(select_prompt_items(&items, 5..12, 12).is_err());
+        assert!(select_prompt_items(&items, 0..10, 12).is_err());
+    }
+
+    #[test]
+    fn packed_layout_keeps_text_only_rows_and_slice_outputs() {
+        let key = MultimodalEncoderKey {
+            kind: MultimodalKind::Image,
+            hash: 17,
+        };
+        let layout = PackedMultimodalLayout::new(&[
+            RequestMultimodalLayout {
+                sequence_id: 1,
+                query: 0..6,
+                items: vec![MultimodalItemLayout::new(
+                    key,
+                    0,
+                    1..5,
+                    MultimodalAttentionPolicy::Causal,
+                    vec![
+                        MultimodalEmbeddingMap::contiguous(2..3, 0, 0).unwrap(),
+                        MultimodalEmbeddingMap::contiguous(4..5, 0, 1).unwrap(),
+                    ],
+                )
+                .unwrap()],
+            },
+            RequestMultimodalLayout {
+                sequence_id: 2,
+                query: 0..3,
+                items: Vec::new(),
+            },
+        ])
+        .unwrap();
+        assert_eq!(layout.token_count(), 9);
+        assert_eq!(layout.destination_positions(0), vec![2, 4]);
+    }
+
+    #[test]
+    fn image_slicing_matches_reference_geometry() {
+        let processor = MiniCpmOImageProcessor {
+            config: PreProcessorConfig::default(),
+        };
+        assert_eq!(
+            processor.get_sliced_grid((896, 448), 9, 448, false),
+            Some((2, 1))
+        );
+        assert_eq!(
+            processor.get_sliced_grid((448, 896), 9, 448, false),
+            Some((1, 2))
+        );
+        assert_eq!(
+            processor.find_best_resize((1600, 900), 448, 14, false),
+            (602, 336)
+        );
+        assert_eq!(
+            processor.get_refine_size((1600, 900), (2, 1), 448, 14, true),
+            (840, 476)
+        );
     }
 }

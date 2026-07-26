@@ -18,15 +18,15 @@ use crate::{
         },
         kv_cache_manager::KVCacheManager,
     },
-    scheduler::{PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
+    scheduler::{modality_signature, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
     sequence::{clamp_prefix_cache_len_for_mm_features, Sequence, SequenceState, StopReason},
-    AdapterGenerationId, TERMINATE_ALL_NEXT_STEP,
+    AdapterGenerationId, Response, TERMINATE_ALL_NEXT_STEP,
 };
 
 use super::CacheConfig;
 
-/// Bucket key: (sequence length bucket, cached prefix, raw request, prompt images, token offset)
-type BucketKey = (usize, usize, Option<usize>, bool, usize);
+/// Bucket key: (sequence length bucket, cached prefix, raw request, media, token offset)
+type BucketKey = (usize, usize, Option<usize>, u8, usize);
 
 const RAGGED_PROMPT_BUCKET_TOKENS: usize = 256;
 
@@ -70,6 +70,8 @@ pub struct PagedAttentionScheduler {
     prefix_caching_enabled: bool,
     requires_uniform_prompt_batch: bool,
     requires_uniform_completion_batch: bool,
+    requires_uniform_media_batch: bool,
+    supports_packed_prefill: bool,
     completion_turn_due: bool,
     /// Block hashes per sequence for prefix caching.
     /// Computed incrementally as sequences grow.
@@ -77,6 +79,7 @@ pub struct PagedAttentionScheduler {
     seq_block_hash_revisions: HashMap<usize, u64>,
     /// Per-sequence waitlist counter for starvation detection.
     waiting_counts: HashMap<usize, usize>,
+    finished_recurrent_indices: Vec<usize>,
 }
 
 impl PagedAttentionScheduler {
@@ -95,10 +98,46 @@ impl PagedAttentionScheduler {
             prefix_caching_enabled: true,
             requires_uniform_prompt_batch: true,
             requires_uniform_completion_batch: true,
+            requires_uniform_media_batch: false,
+            supports_packed_prefill: false,
             completion_turn_due: false,
             seq_block_hashes: HashMap::new(),
             seq_block_hash_revisions: HashMap::new(),
             waiting_counts: HashMap::new(),
+            finished_recurrent_indices: Vec::new(),
+        }
+    }
+
+    fn finish_ignored_sequence(
+        &mut self,
+        seq: Arc<Mutex<Sequence>>,
+        reason: String,
+        recurrent_state_released: bool,
+    ) {
+        let (seq_id, responder, recurrent_state_idx) = {
+            let mut seq_guard = get_mut_arcmutex!(seq);
+            seq_guard.set_state(SequenceState::FinishedIgnored);
+            let recurrent_state_idx = seq_guard.recurrent_state_idx();
+            seq_guard.set_recurrent_state_idx(None);
+            (*seq_guard.id(), seq_guard.responder(), recurrent_state_idx)
+        };
+
+        if let Some(slot_idx) = recurrent_state_idx {
+            if !recurrent_state_released {
+                self.finished_recurrent_indices.push(slot_idx);
+            }
+        }
+
+        self.waiting_counts.remove(&seq_id);
+        self.seq_block_hashes.remove(&seq_id);
+        self.seq_block_hash_revisions.remove(&seq_id);
+        get_mut_arcmutex!(self.kv_cache_manager).free(seq_id);
+
+        if responder
+            .try_send(Response::ValidationError(reason.into()))
+            .is_err()
+        {
+            warn!("Failed to deliver KV cache capacity error for sequence {seq_id}");
         }
     }
 
@@ -160,6 +199,7 @@ impl PagedAttentionScheduler {
         for seq in sequences {
             let seq_guard = get_mut_arcmutex!(seq);
             let effective_len = match (batch_kind, require_uniform_length) {
+                (BatchKind::Prompt, false) if self.supports_packed_prefill => 0,
                 (BatchKind::Prompt, false) => seq_guard.len().div_ceil(RAGGED_PROMPT_BUCKET_TOKENS),
                 (BatchKind::Prompt, true) => {
                     seq_guard.len().saturating_sub(seq_guard.prefix_cache_len())
@@ -175,7 +215,13 @@ impl PagedAttentionScheduler {
                     0
                 },
                 seq_guard.return_raw_logits.then_some(*seq_guard.id()),
-                seq_guard.has_images() && matches!(batch_kind, BatchKind::Prompt),
+                if self.requires_uniform_media_batch
+                    || require_uniform_length && matches!(batch_kind, BatchKind::Prompt)
+                {
+                    modality_signature(&seq_guard)
+                } else {
+                    0
+                },
                 seq_guard.token_offset(),
             );
             drop(seq_guard);
@@ -236,7 +282,7 @@ impl PagedAttentionScheduler {
             .any(|seq| get_mut_arcmutex!(seq).is_prompt())
             || completion_turn_due && !self.running.is_empty();
         while !completion_due && !self.waiting.is_empty() {
-            let mut did_ignore = false;
+            let mut ignore_reason = None;
             let seq = self.waiting.front().unwrap().clone();
 
             if self.running.len() >= self.config.max_num_seqs {
@@ -250,6 +296,7 @@ impl PagedAttentionScheduler {
             let mm_features = seq_guard.mm_features().to_vec();
             let adapter_generation = seq_guard.adapter_generation();
             let block_hash_revision = seq_guard.block_hash_revision();
+            let return_raw_logits = seq_guard.return_raw_logits;
             drop(seq_guard);
 
             // Compute block hashes for prefix cache lookup
@@ -268,7 +315,7 @@ impl PagedAttentionScheduler {
 
             // Look up prefix cache hits
             let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-            let mut computed = if self.prefix_caching_enabled {
+            let mut computed = if self.prefix_caching_enabled && !return_raw_logits {
                 kv_mgr.get_computed_blocks(&block_hashes, num_tokens)
             } else {
                 super::kv_cache_manager::ComputedBlocks {
@@ -277,24 +324,6 @@ impl PagedAttentionScheduler {
                 }
             };
             drop(kv_mgr);
-
-            if computed.num_computed_tokens > 0 {
-                if let Some(validator) = prefix_validator.as_deref_mut() {
-                    let mut seq_guard = get_mut_arcmutex!(seq);
-                    let valid_tokens = validator.validate_prefix_cache_hit(
-                        &mut seq_guard,
-                        &block_hashes,
-                        computed.num_computed_tokens,
-                        self.block_size,
-                    );
-                    drop(seq_guard);
-                    if valid_tokens < computed.num_computed_tokens {
-                        let valid_blocks = valid_tokens / self.block_size;
-                        computed.block_ids.truncate(valid_blocks);
-                        computed.num_computed_tokens = valid_blocks * self.block_size;
-                    }
-                }
-            }
 
             let clamped = clamp_prefix_cache_len_for_mm_features(
                 computed.num_computed_tokens,
@@ -305,6 +334,21 @@ impl PagedAttentionScheduler {
             if clamped < computed.num_computed_tokens {
                 computed.block_ids.truncate(clamped / self.block_size);
                 computed.num_computed_tokens = clamped;
+            }
+            if let Some(validator) = prefix_validator.as_mut() {
+                let mut seq_guard = get_mut_arcmutex!(seq);
+                let valid_tokens = validator.validate_prefix_cache_hit(
+                    &mut seq_guard,
+                    &block_hashes,
+                    computed.num_computed_tokens,
+                    self.block_size,
+                );
+                drop(seq_guard);
+                if valid_tokens < computed.num_computed_tokens {
+                    let valid_blocks = valid_tokens / self.block_size;
+                    computed.block_ids.truncate(valid_blocks);
+                    computed.num_computed_tokens = valid_blocks * self.block_size;
+                }
             }
 
             let num_computed = computed.num_computed_tokens;
@@ -319,10 +363,6 @@ impl PagedAttentionScheduler {
 
             match alloc_result {
                 Some(_) => {
-                    // Allocation succeeded
-                    if num_computed > 0 {
-                        logger.add_prefix_cache_hit();
-                    }
                     // Reset waiting count on successful allocation
                     self.waiting_counts.remove(&seq_id);
                 }
@@ -334,7 +374,11 @@ impl PagedAttentionScheduler {
                     if *count > WAITING_TIMEOUT {
                         // Try to preempt a running sequence
                         if let Some(seq_to_preempt) = self.running.pop_back() {
+                            let preempted_id = *get_mut_arcmutex!(seq_to_preempt).id();
+                            let waiting_seq = self.waiting.pop_front().unwrap();
                             self._preempt(seq_to_preempt);
+                            self.waiting.push_front(waiting_seq);
+                            scheduled.retain(|seq| *get_mut_arcmutex!(seq).id() != preempted_id);
 
                             // Retry allocation
                             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
@@ -346,24 +390,17 @@ impl PagedAttentionScheduler {
                             drop(kv_mgr);
 
                             if retry.is_none() {
-                                let id = seq_id;
-                                warn!(
-                                    "Sequence {id} with length of {num_tokens} tokens still exceeds KV cache size \
-                                     even after evicting another sequence.",
-                                );
-                                get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
-                                did_ignore = true;
+                                ignore_reason = Some(format!(
+                                    "Sequence {seq_id} with {num_tokens} tokens exceeds the \
+                                     available KV cache capacity after preemption."
+                                ));
                             } else {
                                 self.waiting_counts.remove(&seq_id);
                             }
                         } else {
-                            warn!(
-                                "Sequence {seq_id} with length of {num_tokens} tokens is too long and exceeds KV cache size. \
-                                 To fix, increase the maximum sequence length for the KV cache, for example with \
-                                 `--max-seq-len`/ `max_seq_len` in automatic device mapping parameters.",
-                            );
-                            get_mut_arcmutex!(seq).set_state(SequenceState::FinishedIgnored);
-                            did_ignore = true;
+                            ignore_reason = Some(format!(
+                                "Sequence {seq_id} with {num_tokens} tokens exceeds the available KV cache capacity."
+                            ));
                         }
                     } else {
                         break;
@@ -371,41 +408,44 @@ impl PagedAttentionScheduler {
                 }
             }
 
-            let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-            if !scheduled.is_empty()
-                && get_mut_arcmutex!(scheduled[0]).has_images() != new_seq_has_images
+            if let Some(reason) = ignore_reason {
+                warn!("{reason}");
+                let seq = self.waiting.pop_front().unwrap();
+                let recurrent_state_idx = get_mut_arcmutex!(seq).recurrent_state_idx();
+                let recurrent_state_released = if let (Some(slot_idx), Some(validator)) =
+                    (recurrent_state_idx, prefix_validator.as_mut())
+                {
+                    validator.release_recurrent_state(slot_idx)
+                } else {
+                    false
+                };
+                self.finish_ignored_sequence(seq, reason, recurrent_state_released);
+                continue;
+            }
+
+            if num_computed > 0 && get_mut_arcmutex!(seq).record_prefix_cache_hit() {
+                logger.add_prefix_cache_hit();
+            }
+            let new_seq_modality = modality_signature(&*get_mut_arcmutex!(seq));
+            if (self.requires_uniform_prompt_batch || self.requires_uniform_media_batch)
+                && !scheduled.is_empty()
+                && modality_signature(&*get_mut_arcmutex!(scheduled[0])) != new_seq_modality
             {
-                // Free allocated blocks before deferring this image-incompatible sequence
-                if !did_ignore {
-                    let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-                    kv_mgr.free(seq_id);
-                    drop(kv_mgr);
-                }
+                let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+                kv_mgr.free(seq_id);
+                drop(kv_mgr);
                 let seq = self.waiting.pop_front().unwrap();
                 for_waiting_again.push_back(seq);
                 continue;
             }
 
-            if !did_ignore {
-                let mut seq_guard = get_mut_arcmutex!(seq);
-                seq_guard.set_state(SequenceState::RunningPrompt);
-                seq_guard.set_prefix_cache_len(num_computed);
-                seq_guard.set_num_computed_tokens(num_computed);
-            }
+            let mut seq_guard = get_mut_arcmutex!(seq);
+            seq_guard.set_state(SequenceState::RunningPrompt);
+            seq_guard.set_prefix_cache_len(num_computed);
+            seq_guard.set_num_computed_tokens(num_computed);
+            drop(seq_guard);
 
             let seq = self.waiting.pop_front().unwrap();
-            if did_ignore {
-                // Sequence is terminal (FinishedIgnored), do NOT add to running queue.
-                // Clean up associated state and free any allocated blocks.
-                let seq_id = *get_mut_arcmutex!(seq).id();
-                self.waiting_counts.remove(&seq_id);
-                self.seq_block_hashes.remove(&seq_id);
-                self.seq_block_hash_revisions.remove(&seq_id);
-                let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
-                kv_mgr.free(seq_id);
-                drop(kv_mgr);
-                continue;
-            }
             self.running.push_back(seq.clone());
             scheduled.push_back(seq);
         }
@@ -481,9 +521,10 @@ impl PagedAttentionScheduler {
             }
 
             if !finished_with_break {
-                let new_seq_has_images = get_mut_arcmutex!(seq).has_images();
-                if running.is_empty()
-                    || get_mut_arcmutex!(running[0]).has_images() == new_seq_has_images
+                let new_seq_modality = modality_signature(&*get_mut_arcmutex!(seq));
+                if !self.requires_uniform_media_batch
+                    || running.is_empty()
+                    || modality_signature(&*get_mut_arcmutex!(running[0])) == new_seq_modality
                 {
                     running.push_back(seq);
                 } else {
@@ -628,6 +669,7 @@ impl PagedAttentionScheduler {
             self.seq_block_hash_revisions.remove(&id);
             self.waiting_counts.remove(&id);
         }
+        self.finished_recurrent_indices.clear();
     }
 }
 
@@ -647,6 +689,7 @@ impl PagedAttentionScheduler {
         let adapter_generation = seq_guard.adapter_generation();
         let block_hash_revision = seq_guard.block_hash_revision();
         let num_computed_tokens = seq_guard.num_computed_tokens();
+        seq_guard.set_num_computed_tokens(0);
         drop(seq_guard);
 
         // Ensure block hashes are up-to-date before freeing
@@ -707,11 +750,14 @@ impl Scheduler for PagedAttentionScheduler {
         self.free_finished_sequence_groups()
     }
     fn get_finished_recurrent_indices(&self) -> Vec<usize> {
-        self.running
-            .iter()
-            .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
-            .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx())
-            .collect()
+        let mut indices = self.finished_recurrent_indices.clone();
+        indices.extend(
+            self.running
+                .iter()
+                .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
+                .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx()),
+        );
+        indices
     }
     fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {
         Some(self.kv_cache_manager.clone())
@@ -725,15 +771,23 @@ impl Scheduler for PagedAttentionScheduler {
     fn set_requires_uniform_completion_batch(&mut self, required: bool) {
         self.requires_uniform_completion_batch = required;
     }
+    fn set_requires_uniform_media_batch(&mut self, required: bool) {
+        self.requires_uniform_media_batch = required;
+    }
+    fn set_supports_packed_prefill(&mut self, supported: bool) {
+        self.supports_packed_prefill = supported;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        paged_attention::PagedCacheType,
+        paged_attention::{block_hash::MultimodalKind, PagedCacheType},
         sampler::Sampler,
+        scheduler::IMAGE_MODALITY,
         sequence::{SeqStepType, SequenceGroup, SequenceRecognizer},
+        AudioInput, VideoInput,
     };
     use tokio::sync::{mpsc::channel, Mutex as TokioMutex};
 
@@ -749,12 +803,38 @@ mod tests {
         )
     }
 
-    fn test_sequence_with_images(
+    #[derive(Default)]
+    struct RecordingPrefixValidator {
+        cached_tokens: Vec<usize>,
+        released_slots: Vec<usize>,
+    }
+
+    impl PagedPrefixCacheValidator for RecordingPrefixValidator {
+        fn validate_prefix_cache_hit(
+            &mut self,
+            _seq: &mut Sequence,
+            _block_hashes: &[BlockHash],
+            cached_tokens: usize,
+            _block_size: usize,
+        ) -> usize {
+            self.cached_tokens.push(cached_tokens);
+            cached_tokens
+        }
+
+        fn release_recurrent_state(&mut self, slot_idx: usize) -> bool {
+            self.released_slots.push(slot_idx);
+            true
+        }
+    }
+
+    fn test_sequence_with_media_and_receiver(
         id: usize,
         len: usize,
         input_images: Option<Vec<image::DynamicImage>>,
-    ) -> Arc<Mutex<Sequence>> {
-        let (tx, _rx) = channel(1);
+        input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
+    ) -> (Arc<Mutex<Sequence>>, tokio::sync::mpsc::Receiver<Response>) {
+        let (tx, rx) = channel(1);
         let sampler = Sampler::new(
             None,
             0,
@@ -791,8 +871,8 @@ mod tests {
             None,
             None,
             input_images,
-            None,
-            None,
+            input_audios,
+            input_videos,
             Some(8),
             None,
             None,
@@ -804,17 +884,171 @@ mod tests {
             vec![],
         );
         seq.set_state(SequenceState::RunningCompletion);
-        Arc::new(Mutex::new(seq))
+        (Arc::new(Mutex::new(seq)), rx)
+    }
+
+    fn test_sequence_with_media(
+        id: usize,
+        len: usize,
+        input_images: Option<Vec<image::DynamicImage>>,
+        input_audios: Option<Vec<AudioInput>>,
+        input_videos: Option<Vec<VideoInput>>,
+    ) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_media_and_receiver(id, len, input_images, input_audios, input_videos).0
+    }
+
+    fn test_sequence_with_images(
+        id: usize,
+        len: usize,
+        input_images: Option<Vec<image::DynamicImage>>,
+    ) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_media(id, len, input_images, None, None)
     }
 
     fn test_sequence(id: usize, len: usize) -> Arc<Mutex<Sequence>> {
         test_sequence_with_images(id, len, None)
     }
 
+    fn test_audio_sequence(id: usize, len: usize) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_media(
+            id,
+            len,
+            None,
+            Some(vec![AudioInput {
+                samples: vec![0.0],
+                sample_rate: 16_000,
+                channels: 1,
+            }]),
+            None,
+        )
+    }
+
+    fn test_video_sequence(id: usize, len: usize) -> Arc<Mutex<Sequence>> {
+        test_sequence_with_media(
+            id,
+            len,
+            None,
+            None,
+            Some(vec![VideoInput::from_frames(
+                vec![image::DynamicImage::new_rgb8(1, 1)],
+                24.0,
+                None,
+            )]),
+        )
+    }
+
+    #[test]
+    fn preempted_prompt_validates_zero_token_recurrent_state() {
+        let mut scheduler = test_scheduler();
+        let seq = test_sequence(0, 4);
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(4);
+            seq.set_num_computed_tokens(4);
+            seq.set_recurrent_state_idx(Some(7));
+        }
+        scheduler._preempt(seq.clone());
+
+        {
+            let seq = get_mut_arcmutex!(seq);
+            assert_eq!(seq.getstate(), SequenceState::Waiting);
+            assert_eq!(seq.prefix_cache_len(), 0);
+            assert_eq!(seq.num_computed_tokens(), 0);
+        }
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = RecordingPrefixValidator::default();
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(validator.cached_tokens, vec![0]);
+    }
+
+    #[test]
+    fn prefix_validator_observes_the_clamped_cache_boundary() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 24];
+        let features = vec![MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![1],
+            offset: 12,
+            length: 8,
+            attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &features, &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, 16);
+            kv_mgr.free(99);
+        }
+
+        let seq = test_sequence(0, tokens.len());
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_state(SequenceState::Waiting);
+            seq.set_mm_features(features);
+        }
+        scheduler.waiting.push_back(seq);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = RecordingPrefixValidator::default();
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+
+        assert_eq!(validator.cached_tokens, vec![8]);
+        assert_eq!(output.num_cached_tokens, vec![8]);
+    }
+
+    #[test]
+    fn ignored_prompt_finishes_before_modality_requeue() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_media_batch = true;
+
+        let first = test_sequence(0, 4);
+        get_mut_arcmutex!(first).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(first);
+
+        let (oversized, mut receiver) = test_sequence_with_media_and_receiver(
+            1,
+            1_025,
+            Some(vec![image::DynamicImage::new_rgb8(1, 1)]),
+            None,
+            None,
+        );
+        {
+            let mut oversized = get_mut_arcmutex!(oversized);
+            oversized.set_state(SequenceState::Waiting);
+            oversized.set_recurrent_state_idx(Some(7));
+        }
+        scheduler.waiting.push_back(oversized.clone());
+        scheduler.waiting_counts.insert(1, WAITING_TIMEOUT);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = RecordingPrefixValidator::default();
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 0);
+        assert!(scheduler.waiting.is_empty());
+        assert_eq!(
+            get_mut_arcmutex!(oversized).getstate(),
+            SequenceState::FinishedIgnored
+        );
+        assert_eq!(get_mut_arcmutex!(oversized).recurrent_state_idx(), None);
+        assert_eq!(validator.released_slots, vec![7]);
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Response::ValidationError(_))
+        ));
+    }
+
     #[test]
     fn ragged_completion_batch_keeps_all_sequences_running() {
         let mut scheduler = test_scheduler();
         scheduler.requires_uniform_completion_batch = false;
+        scheduler.requires_uniform_media_batch = false;
         scheduler.running.push_back(test_sequence(0, 4));
         scheduler.running.push_back(test_sequence(1, 7));
 
@@ -822,6 +1056,57 @@ mod tests {
 
         assert_eq!(scheduler.running.len(), 2);
         assert!(scheduler.waiting.is_empty());
+    }
+
+    #[test]
+    fn ragged_completion_batch_separates_incompatible_media() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_completion_batch = false;
+        scheduler.requires_uniform_media_batch = true;
+        scheduler.running.push_back(test_sequence(0, 4));
+        scheduler.running.push_back(test_sequence_with_images(
+            1,
+            7,
+            Some(vec![image::DynamicImage::new_rgb8(1, 1)]),
+        ));
+
+        scheduler.enforce_completion_compatibility();
+
+        assert_eq!(scheduler.running.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+    }
+
+    #[test]
+    fn completion_media_signature_survives_consumed_prompt_inputs() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_completion_batch = false;
+        scheduler.requires_uniform_media_batch = true;
+        scheduler.running.push_back(test_sequence(0, 4));
+        let image =
+            test_sequence_with_images(1, 7, Some(vec![image::DynamicImage::new_rgb8(1, 1)]));
+        {
+            let mut image = get_mut_arcmutex!(image);
+            image.set_mm_features(vec![MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![1],
+                offset: 0,
+                length: 1,
+                attention_policy:
+                    crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            }]);
+            image.multimodal.has_changed_prompt = true;
+            assert_eq!(image.take_images().unwrap().len(), 1);
+            assert!(!image.has_images());
+            assert_eq!(modality_signature(&image), IMAGE_MODALITY);
+        }
+        scheduler.running.push_back(image);
+
+        scheduler.enforce_completion_compatibility();
+
+        assert_eq!(scheduler.running.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
     }
 
     #[test]
@@ -868,9 +1153,68 @@ mod tests {
     }
 
     #[test]
-    fn ragged_prompt_batch_bounds_padding() {
+    fn ragged_prompt_batch_mixes_media_and_text_sequences() {
         let mut scheduler = test_scheduler();
-        let prompts = VecDeque::from([test_sequence(0, 4), test_sequence(1, 300)]);
+        scheduler.requires_uniform_media_batch = false;
+        let prompts = VecDeque::from([
+            test_sequence(0, 4),
+            test_sequence_with_images(1, 7, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, false);
+
+        assert_eq!(scheduled.len(), 2);
+        assert!(scheduler.waiting.is_empty());
+    }
+
+    #[test]
+    fn ragged_prompt_batch_mixes_distinct_media_modalities() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_media_batch = false;
+        let prompts = VecDeque::from([
+            test_sequence_with_images(0, 4, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+            test_audio_sequence(1, 7),
+            test_video_sequence(2, 5),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, false);
+
+        assert_eq!(scheduled.len(), 3);
+        assert!(scheduler.waiting.is_empty());
+    }
+
+    #[test]
+    fn uniform_prompt_batch_separates_media_and_text_sequences() {
+        let mut scheduler = test_scheduler();
+        let prompts = VecDeque::from([
+            test_sequence(0, 4),
+            test_sequence_with_images(1, 4, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, true);
+
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+    }
+
+    #[test]
+    fn ragged_prompt_batch_separates_incompatible_media() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_prompt_batch = false;
+        scheduler.requires_uniform_media_batch = true;
+        let prompts = VecDeque::from([
+            test_sequence(0, 4),
+            test_sequence_with_images(1, 7, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+        ]);
 
         for seq in &prompts {
             get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
@@ -879,12 +1223,69 @@ mod tests {
 
         assert_eq!(scheduled.len(), 1);
         assert_eq!(scheduler.waiting.len(), 1);
-        assert_eq!(get_mut_arcmutex!(scheduled[0]).len(), 4);
     }
 
     #[test]
-    fn ragged_prompt_batch_preserves_fcfs_across_buckets() {
+    fn uniform_prompt_batch_separates_image_and_audio_sequences() {
         let mut scheduler = test_scheduler();
+        let prompts = VecDeque::from([
+            test_sequence_with_images(0, 4, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+            test_audio_sequence(1, 4),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, true);
+
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+    }
+
+    #[test]
+    fn uniform_prompt_batch_separates_image_and_video_sequences() {
+        let mut scheduler = test_scheduler();
+        let prompts = VecDeque::from([
+            test_sequence_with_images(0, 4, Some(vec![image::DynamicImage::new_rgb8(1, 1)])),
+            test_video_sequence(1, 4),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, true);
+
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+    }
+
+    #[test]
+    fn ragged_prompt_batch_keeps_unequal_lengths() {
+        let mut scheduler = test_scheduler();
+        scheduler.supports_packed_prefill = true;
+        let prompts = VecDeque::from([
+            test_sequence(0, 4),
+            test_sequence(1, 300),
+            test_sequence(2, 600),
+        ]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, false);
+
+        let scheduled_ids: Vec<_> = scheduled
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect();
+        assert_eq!(scheduled_ids, vec![0, 1, 2]);
+        assert!(scheduler.waiting.is_empty());
+    }
+
+    #[test]
+    fn ragged_prompt_batch_preserves_fcfs_order() {
+        let mut scheduler = test_scheduler();
+        scheduler.supports_packed_prefill = true;
         scheduler.waiting.push_back(test_sequence(4, 8));
         let prompts = VecDeque::from([
             test_sequence(0, 300),
@@ -898,14 +1299,32 @@ mod tests {
         }
         let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, false);
 
-        assert_eq!(scheduled.len(), 1);
-        assert_eq!(*get_mut_arcmutex!(scheduled[0]).id(), 0);
+        let scheduled_ids: Vec<_> = scheduled
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect();
+        assert_eq!(scheduled_ids, vec![0, 1, 2, 3]);
         let waiting_ids: Vec<_> = scheduler
             .waiting
             .iter()
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect();
-        assert_eq!(waiting_ids, vec![1, 2, 3, 4]);
+        assert_eq!(waiting_ids, vec![4]);
+    }
+
+    #[test]
+    fn padded_ragged_prompt_batch_bounds_padding() {
+        let mut scheduler = test_scheduler();
+        let prompts = VecDeque::from([test_sequence(0, 4), test_sequence(1, 300)]);
+
+        for seq in &prompts {
+            get_mut_arcmutex!(seq).set_state(SequenceState::RunningPrompt);
+        }
+        let scheduled = scheduler.bucket_and_preempt_sequences(prompts, BatchKind::Prompt, false);
+
+        assert_eq!(scheduled.len(), 1);
+        assert_eq!(scheduler.waiting.len(), 1);
+        assert_eq!(get_mut_arcmutex!(scheduled[0]).len(), 4);
     }
 
     #[test]
@@ -959,6 +1378,76 @@ mod tests {
 
         assert_eq!(scheduled.len(), 1);
         assert_eq!(scheduler.waiting.len(), 1);
+    }
+
+    #[test]
+    fn raw_logits_prompt_bypasses_reusable_prefix_blocks() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 16];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, scheduler.block_size);
+            kv_mgr.free(99);
+            assert_eq!(
+                kv_mgr
+                    .get_computed_blocks(&hashes, tokens.len())
+                    .num_computed_tokens,
+                scheduler.block_size
+            );
+        }
+
+        let raw = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(raw).return_raw_logits = true;
+        get_mut_arcmutex!(raw).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(raw);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.num_cached_tokens, vec![0]);
+        assert_eq!(get_mut_arcmutex!(output.scheduled[0]).prefix_cache_len(), 0);
+        let kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+        assert_eq!(
+            kv_mgr
+                .get_computed_blocks(&hashes, tokens.len())
+                .num_computed_tokens,
+            scheduler.block_size
+        );
+    }
+
+    #[test]
+    fn preempted_prefix_cache_hit_is_counted_once() {
+        let mut scheduler = test_scheduler();
+        let tokens = vec![1; 16];
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, scheduler.block_size);
+            kv_mgr.free(99);
+        }
+
+        let seq = test_sequence(0, tokens.len());
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        logger.add_new_sequence();
+        let first = scheduler.schedule(&logger, None);
+
+        assert_eq!(first.num_cached_tokens, vec![scheduler.block_size]);
+        assert_eq!(logger.prefix_cache_stats(), (1, 1));
+
+        let seq = first.scheduled[0].clone();
+        scheduler.running.clear();
+        scheduler.completion_turn_due = false;
+        scheduler._preempt(seq);
+        let second = scheduler.schedule(&logger, None);
+
+        assert_eq!(second.num_cached_tokens, vec![scheduler.block_size]);
+        assert_eq!(logger.prefix_cache_stats(), (1, 1));
     }
 
     #[test]

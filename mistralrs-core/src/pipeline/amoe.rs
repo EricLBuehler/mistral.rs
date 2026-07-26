@@ -256,6 +256,10 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).requires_uniform_completion_batch()
     }
 
+    fn requires_uniform_media_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_media_batch()
+    }
+
     fn supports_batched_cuda_sampling(&self) -> bool {
         get_mut_arcmutex!(self.target).supports_batched_cuda_sampling()
     }

@@ -1094,6 +1094,9 @@ impl NormalModel for Glm4MoeLite {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Glm4MoeLite {}

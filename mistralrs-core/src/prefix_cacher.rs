@@ -4,8 +4,11 @@ use itertools::Itertools;
 use tracing::info;
 
 use crate::{
-    kv_cache::RecurrentStateSnapshot, paged_attention::block_hash::BlockHash, pipeline::KvCache,
-    sequence::Sequence, AdapterGenerationId,
+    kv_cache::RecurrentStateSnapshot,
+    paged_attention::block_hash::{BlockHash, MultiModalFeature, MultimodalKind},
+    pipeline::KvCache,
+    sequence::Sequence,
+    AdapterGenerationId,
 };
 
 #[derive(PartialEq, Eq, Debug, Hash)]
@@ -52,11 +55,16 @@ impl From<Vec<u32>> for CacheKey {
 #[derive(Clone)]
 struct CacheElement {
     cache: Vec<Option<KvCache>>,
-    /// Recurrent state snapshots for hybrid models (one per recurrent layer)
-    recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
+    recurrent_snapshots: Option<CachedRecurrentState>,
     audio_hashes: Option<Vec<u64>>,
     image_hashes: Option<Vec<u64>>,
     video_hashes: Option<Vec<u64>>,
+}
+
+#[derive(Clone)]
+struct CachedRecurrentState {
+    len: usize,
+    snapshots: Vec<RecurrentStateSnapshot>,
 }
 
 impl CacheElement {
@@ -66,6 +74,88 @@ impl CacheElement {
             .flatten()
             .all(|layer| layer.try_set_len(len).is_ok())
     }
+
+    fn coverage_len(&self) -> usize {
+        self.cache
+            .iter()
+            .flatten()
+            .filter(|layer| !matches!(layer, KvCache::Shared { .. }))
+            .map(KvCache::current_seq_len)
+            .min()
+            .unwrap_or(0)
+    }
+}
+
+fn clamp_normal_prefix_len(prefix_len: usize, features: &[MultiModalFeature]) -> usize {
+    let mut prefix_len = prefix_len;
+    loop {
+        let next = features
+            .iter()
+            .filter(|feature| {
+                matches!(feature.kind, MultimodalKind::Image | MultimodalKind::Audio)
+                    && feature.offset < prefix_len
+                    && prefix_len < feature.end()
+            })
+            .map(|feature| feature.offset)
+            .min()
+            .unwrap_or(prefix_len);
+        if next == prefix_len {
+            return prefix_len;
+        }
+        prefix_len = next;
+    }
+}
+
+fn clamp_prefix_len_for_media_hashes(
+    prefix_len: usize,
+    features: &[MultiModalFeature],
+    kind: MultimodalKind,
+    matching_items: usize,
+    input_items: usize,
+) -> usize {
+    if matching_items >= input_items {
+        return prefix_len;
+    }
+    features
+        .iter()
+        .filter(|feature| {
+            feature.kind == kind
+                && feature.item_range.end > matching_items
+                && feature.item_range.start < input_items
+        })
+        .map(|feature| feature.offset)
+        .min()
+        .map_or(prefix_len, |offset| prefix_len.min(offset))
+}
+
+fn fully_cached_item_count(
+    prefix_len: usize,
+    features: &[MultiModalFeature],
+    kind: MultimodalKind,
+    item_count: usize,
+) -> usize {
+    (0..item_count)
+        .take_while(|&item| {
+            let mut item_features = features
+                .iter()
+                .filter(|feature| feature.kind == kind && feature.item_range.contains(&item))
+                .peekable();
+            item_features.peek().is_some()
+                && item_features.all(|feature| feature.end() <= prefix_len)
+        })
+        .count()
+}
+
+fn features_cover_items(
+    features: &[MultiModalFeature],
+    kind: MultimodalKind,
+    item_count: usize,
+) -> bool {
+    (0..item_count).all(|item| {
+        features
+            .iter()
+            .any(|feature| feature.kind == kind && feature.item_range.contains(&item))
+    })
 }
 
 pub struct PrefixCacheManagerV2 {
@@ -83,7 +173,7 @@ pub enum MatchingCache {
         recurrent_snapshots: Option<Vec<RecurrentStateSnapshot>>,
         images_to_keep: usize,
         audios_to_keep: usize,
-        videos_to_keep: usize,
+        video_frames_to_keep: usize,
         toks: Vec<u32>,
         offset: usize,
     },
@@ -122,6 +212,16 @@ impl PrefixCacheManagerV2 {
         // PrefixCacheManagerV2 only handles non-paged attention caching.
         if !self.has_paged_attention {
             let cache = seq.normal_cache().to_vec();
+            let recurrent_snapshots = recurrent_snapshots.map(|snapshots| CachedRecurrentState {
+                len: cache
+                    .iter()
+                    .flatten()
+                    .filter(|layer| !matches!(layer, KvCache::Shared { .. }))
+                    .map(KvCache::current_seq_len)
+                    .min()
+                    .unwrap_or(0),
+                snapshots,
+            });
 
             self.caches.insert(
                 CacheKey::new(seq.get_toks().to_vec(), seq.adapter_generation()),
@@ -273,6 +373,7 @@ impl PrefixCacheManagerV2 {
         &mut self,
         toks: &[u32],
         adapter_generation: Option<AdapterGenerationId>,
+        mm_features: &[MultiModalFeature],
         image_hashes: Option<&[u64]>,
         audio_hashes: Option<&[u64]>,
         video_hashes: Option<&[u64]>,
@@ -287,12 +388,28 @@ impl PrefixCacheManagerV2 {
             // PrefixCacheManagerV2 only handles non-paged attention caching.
             return Ok(None);
         }
+        if video_hashes.is_some_and(|hashes| !hashes.is_empty()) {
+            return Ok(None);
+        }
+        if image_hashes.is_some_and(|hashes| {
+            !features_cover_items(mm_features, MultimodalKind::Image, hashes.len())
+        }) || audio_hashes.is_some_and(|hashes| {
+            !features_cover_items(mm_features, MultimodalKind::Audio, hashes.len())
+        }) {
+            return Ok(None);
+        }
 
         let toks = Tokens(toks.to_vec());
 
-        let mut best_match: Option<(usize, &CacheElement, usize, usize, usize)> = None;
+        let mut best_match: Option<(usize, &CacheElement)> = None;
         for (k, v) in &self.caches {
             if k.adapter_generation != adapter_generation {
+                continue;
+            }
+            if v.video_hashes
+                .as_ref()
+                .is_some_and(|hashes| !hashes.is_empty())
+            {
                 continue;
             }
             let match_len = toks.shared_prefix_len(&k.tokens);
@@ -324,54 +441,47 @@ impl PrefixCacheManagerV2 {
                 None => 0,
             };
 
-            // Vision/audio models can use repeated placeholder tokens (e.g. <image_soft_token>)
-            // that are identical regardless of the actual image/audio content. This means
-            // token-level matching can extend through image/audio regions even when the
-            // underlying content differs, leaving stale vision/audio encoder outputs in the
-            // KV cache. Skip entries where any overlapping images or audios diverge.
-            let cached_image_count = v.image_hashes.as_ref().map_or(0, |h| h.len());
             let input_image_count = image_hashes.map_or(0, |h| h.len());
-            if images_match_until < input_image_count.min(cached_image_count) {
-                continue;
-            }
-
-            let cached_audio_count = v.audio_hashes.as_ref().map_or(0, |h| h.len());
             let input_audio_count = audio_hashes.map_or(0, |h| h.len());
-            if audios_match_until < input_audio_count.min(cached_audio_count) {
-                continue;
-            }
-
-            let videos_match_until = match video_hashes {
-                Some(input_hashes) => match &v.video_hashes {
-                    Some(cached_hashes) => input_hashes
-                        .iter()
-                        .zip(cached_hashes)
-                        .take_while(|(a, b)| a == b)
-                        .count(),
-                    None => 0,
-                },
-                None => 0,
-            };
-
-            let cached_video_count = v.video_hashes.as_ref().map_or(0, |h| h.len());
-            let input_video_count = video_hashes.map_or(0, |h| h.len());
-            if videos_match_until < input_video_count.min(cached_video_count) {
+            if v.image_hashes.as_ref().map_or(0, Vec::len) > input_image_count
+                || v.audio_hashes.as_ref().map_or(0, Vec::len) > input_audio_count
+            {
                 continue;
             }
 
             // The cache holds kv only for forwarded positions; a finished sequence's
             // final sampled token has no kv row, so clamp the text match to coverage.
             // Shared layers mirror their owner and always report zero, so skip them.
-            let cache_len = v
-                .cache
-                .iter()
-                .flatten()
-                .filter(|l| !matches!(l, KvCache::Shared { .. }))
-                .map(|l| l.current_seq_len())
-                .min()
-                .unwrap_or(0);
+            let cache_len = v.coverage_len();
             let match_len = match_len.min(cache_len);
+            let match_len = clamp_prefix_len_for_media_hashes(
+                match_len,
+                mm_features,
+                MultimodalKind::Image,
+                images_match_until,
+                input_image_count,
+            );
+            let match_len = clamp_prefix_len_for_media_hashes(
+                match_len,
+                mm_features,
+                MultimodalKind::Audio,
+                audios_match_until,
+                input_audio_count,
+            );
+            let match_len = clamp_normal_prefix_len(match_len, mm_features);
             if match_len == 0 {
+                continue;
+            }
+            let cached_input_images = image_hashes.map_or(0, |hashes| {
+                fully_cached_item_count(match_len, mm_features, MultimodalKind::Image, hashes.len())
+            });
+            if images_match_until < cached_input_images {
+                continue;
+            }
+            let cached_input_audios = audio_hashes.map_or(0, |hashes| {
+                fully_cached_item_count(match_len, mm_features, MultimodalKind::Audio, hashes.len())
+            });
+            if audios_match_until < cached_input_audios {
                 continue;
             }
 
@@ -382,48 +492,42 @@ impl PrefixCacheManagerV2 {
             if !v.can_rewind_to(match_len) {
                 continue;
             }
-
-            if best_match
+            if v.recurrent_snapshots
                 .as_ref()
-                .is_none_or(|(len, _, _, _, _)| match_len > *len)
+                .is_some_and(|state| state.len != match_len)
             {
-                best_match = Some((
-                    match_len,
-                    v,
-                    images_match_until,
-                    audios_match_until,
-                    videos_match_until,
-                ));
+                continue;
+            }
+
+            if best_match.as_ref().is_none_or(|(len, _)| match_len > *len) {
+                best_match = Some((match_len, v));
             }
         }
 
-        if let Some((
-            match_len,
-            cache_element,
-            images_match_until,
-            audios_match_until,
-            videos_match_until,
-        )) = best_match
-        {
+        if let Some((match_len, cache_element)) = best_match {
             let new_toks = toks.0[match_len..].to_vec();
             if new_toks.is_empty() {
                 return Ok(None);
             }
 
             let mut cache = cache_element.clone();
-            // Count how many input images are not already cached
             let images_to_keep = if let Some(input_hashes) = image_hashes {
-                input_hashes.len().saturating_sub(images_match_until)
+                input_hashes.len().saturating_sub(fully_cached_item_count(
+                    match_len,
+                    mm_features,
+                    MultimodalKind::Image,
+                    input_hashes.len(),
+                ))
             } else {
                 0
             };
             let audios_to_keep = if let Some(input_hashes) = audio_hashes {
-                input_hashes.len().saturating_sub(audios_match_until)
-            } else {
-                0
-            };
-            let videos_to_keep = if let Some(input_hashes) = video_hashes {
-                input_hashes.len().saturating_sub(videos_match_until)
+                input_hashes.len().saturating_sub(fully_cached_item_count(
+                    match_len,
+                    mm_features,
+                    MultimodalKind::Audio,
+                    input_hashes.len(),
+                ))
             } else {
                 0
             };
@@ -437,10 +541,10 @@ impl PrefixCacheManagerV2 {
             }
             return Ok(Some(MatchingCache::Normal {
                 normal: cache.cache,
-                recurrent_snapshots: cache.recurrent_snapshots,
+                recurrent_snapshots: cache.recurrent_snapshots.map(|state| state.snapshots),
                 images_to_keep,
                 audios_to_keep,
-                videos_to_keep,
+                video_frames_to_keep: 0,
                 toks: new_toks,
                 offset: match_len,
             }));
@@ -454,9 +558,14 @@ impl PrefixCacheManagerV2 {
 mod tests {
     use candle_core::{DType, Device, Tensor};
 
-    use super::{CacheElement, CacheKey, MatchingCache, PrefixCacheManagerV2};
+    use super::{
+        CacheElement, CacheKey, CachedRecurrentState, MatchingCache, PrefixCacheManagerV2,
+    };
     use crate::{
-        kv_cache::{KvCache, RotatingCache, SingleCache},
+        kv_cache::{KvCache, RecurrentStateSnapshot, RotatingCache, SingleCache},
+        paged_attention::block_hash::{
+            MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind,
+        },
         AdapterGenerationId,
     };
 
@@ -485,6 +594,13 @@ mod tests {
         Ok(KvCache::Normal { k, v })
     }
 
+    fn make_recurrent_snapshot() -> candle_core::Result<RecurrentStateSnapshot> {
+        Ok(RecurrentStateSnapshot {
+            conv_state: Tensor::zeros((1, 1, 1), DType::F32, &Device::Cpu)?,
+            recurrent_state: Tensor::zeros((1, 1, 1), DType::F32, &Device::Cpu)?,
+        })
+    }
+
     fn generation(value: u8) -> AdapterGenerationId {
         AdapterGenerationId::from_bytes([value; 32])
     }
@@ -508,13 +624,13 @@ mod tests {
 
         let query = [1, 2, 3, 4];
         assert!(prefix_cacher
-            .search_for_matching_cache(&query, None, None, None, None)?
+            .search_for_matching_cache(&query, None, &[], None, None, None)?
             .is_none());
         assert!(prefix_cacher
-            .search_for_matching_cache(&query, Some(generation_b), None, None, None)?
+            .search_for_matching_cache(&query, Some(generation_b), &[], None, None, None)?
             .is_none());
         assert!(prefix_cacher
-            .search_for_matching_cache(&query, Some(generation_a), None, None, None)?
+            .search_for_matching_cache(&query, Some(generation_a), &[], None, None, None)?
             .is_some());
 
         Ok(())
@@ -548,6 +664,7 @@ mod tests {
         let hit = prefix_cacher.search_for_matching_cache(
             &[1, 2, 3, 4, 5, 6, 7, 99],
             None,
+            &[],
             None,
             None,
             None,
@@ -582,6 +699,7 @@ mod tests {
         let hit = prefix_cacher.search_for_matching_cache(
             &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
             None,
+            &[],
             None,
             None,
             None,
@@ -594,6 +712,373 @@ mod tests {
             }
             None => panic!("expected exact-extension prefix-cache hit"),
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn hybrid_snapshot_only_matches_its_exact_boundary() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6, 7, 8].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(8)?)],
+                recurrent_snapshots: Some(CachedRecurrentState {
+                    len: 8,
+                    snapshots: vec![make_recurrent_snapshot()?],
+                }),
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 9].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(4)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+
+        let exact = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 8, 10],
+            None,
+            &[],
+            None,
+            None,
+            None,
+        )?;
+        match exact {
+            Some(MatchingCache::Normal {
+                recurrent_snapshots,
+                offset,
+                ..
+            }) => {
+                assert_eq!(offset, 8);
+                assert!(recurrent_snapshots.is_some());
+            }
+            None => panic!("expected an exact hybrid snapshot hit"),
+        }
+
+        let partial = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 10],
+            None,
+            &[],
+            None,
+            None,
+            None,
+        )?;
+        match partial {
+            Some(MatchingCache::Normal {
+                recurrent_snapshots,
+                offset,
+                ..
+            }) => {
+                assert_eq!(offset, 3);
+                assert!(recurrent_snapshots.is_none());
+            }
+            None => panic!("expected the shorter non-hybrid cache hit"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_multimodal_hit_clamps_and_retains_boundary_items() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6, 7, 8].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(8)?)],
+                recurrent_snapshots: None,
+                image_hashes: Some(vec![11, 22]),
+                audio_hashes: Some(vec![33]),
+                video_hashes: None,
+            },
+        );
+        let features = vec![
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![11],
+                offset: 1,
+                length: 2,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+            MultiModalFeature {
+                kind: MultimodalKind::Audio,
+                item_range: 0..1,
+                hashes: vec![33],
+                offset: 5,
+                length: 2,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 1..2,
+                hashes: vec![22],
+                offset: 6,
+                length: 3,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+        ];
+
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+            None,
+            &features,
+            Some(&[11, 22]),
+            Some(&[33]),
+            None,
+        )?;
+
+        match hit {
+            Some(MatchingCache::Normal {
+                images_to_keep,
+                audios_to_keep,
+                toks,
+                offset,
+                ..
+            }) => {
+                assert_eq!(offset, 5);
+                assert_eq!(toks, vec![6, 7, 8, 9]);
+                assert_eq!(images_to_keep, 1);
+                assert_eq!(audios_to_keep, 1);
+            }
+            None => panic!("expected a boundary-clamped multimodal prefix-cache hit"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_multimodal_hit_reuses_text_before_a_hash_mismatch() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4, 5, 6, 7, 8].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(8)?)],
+                recurrent_snapshots: None,
+                image_hashes: Some(vec![11, 22]),
+                audio_hashes: None,
+                video_hashes: None,
+            },
+        );
+        let features = vec![
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![11],
+                offset: 2,
+                length: 2,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 1..2,
+                hashes: vec![99],
+                offset: 6,
+                length: 2,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+        ];
+
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9],
+            None,
+            &features,
+            Some(&[11, 99]),
+            None,
+            None,
+        )?;
+
+        match hit {
+            Some(MatchingCache::Normal {
+                images_to_keep,
+                toks,
+                offset,
+                ..
+            }) => {
+                assert_eq!(offset, 6);
+                assert_eq!(toks, vec![7, 8, 9]);
+                assert_eq!(images_to_keep, 1);
+            }
+            None => panic!("expected reuse before the mismatched image"),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_prefix_cache_rejects_video_hits() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(3)?)],
+                recurrent_snapshots: None,
+                image_hashes: None,
+                audio_hashes: None,
+                video_hashes: Some(vec![44]),
+            },
+        );
+
+        assert!(prefix_cacher
+            .search_for_matching_cache(&[1, 2, 3, 4], None, &[], None, None, Some(&[44]))?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache(&[1, 2, 3, 4], None, &[], None, None, None)?
+            .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_multimodal_hit_rejects_empty_layout() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(3)?)],
+                recurrent_snapshots: None,
+                image_hashes: Some(vec![11]),
+                audio_hashes: Some(vec![22]),
+                video_hashes: None,
+            },
+        );
+
+        assert!(prefix_cacher
+            .search_for_matching_cache(&[1, 2, 3, 4], None, &[], Some(&[11]), Some(&[22]), None,)?
+            .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_multimodal_hit_rejects_incomplete_layout() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3, 4].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(4)?)],
+                recurrent_snapshots: None,
+                image_hashes: Some(vec![11, 22]),
+                audio_hashes: Some(vec![33]),
+                video_hashes: None,
+            },
+        );
+        let image_features = vec![
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 0..1,
+                hashes: vec![11],
+                offset: 1,
+                length: 1,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+            MultiModalFeature {
+                kind: MultimodalKind::Image,
+                item_range: 1..2,
+                hashes: vec![22],
+                offset: 2,
+                length: 1,
+                attention_policy: MultimodalAttentionPolicy::Causal,
+                splittable: false,
+            },
+        ];
+
+        assert!(prefix_cacher
+            .search_for_matching_cache(
+                &[1, 2, 3, 4, 5],
+                None,
+                &image_features[..1],
+                Some(&[11, 22]),
+                Some(&[33]),
+                None,
+            )?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache(
+                &[1, 2, 3, 4, 5],
+                None,
+                &image_features,
+                Some(&[11, 22]),
+                Some(&[33]),
+                None,
+            )?
+            .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn normal_multimodal_hit_without_hashes_stops_before_first_item() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+        prefix_cacher.caches.insert(
+            vec![1, 2, 3].into(),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(3)?)],
+                recurrent_snapshots: None,
+                image_hashes: None,
+                audio_hashes: None,
+                video_hashes: None,
+            },
+        );
+        let features = vec![MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range: 0..1,
+            hashes: vec![11],
+            offset: 1,
+            length: 1,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }];
+
+        let hit = prefix_cacher.search_for_matching_cache(
+            &[1, 2, 3, 4],
+            None,
+            &features,
+            Some(&[11]),
+            None,
+            None,
+        )?;
+        match hit {
+            Some(MatchingCache::Normal {
+                images_to_keep,
+                toks,
+                offset,
+                ..
+            }) => {
+                assert_eq!(offset, 1);
+                assert_eq!(toks, vec![2, 3, 4]);
+                assert_eq!(images_to_keep, 1);
+            }
+            None => panic!("expected reuse before the unverifiable image"),
+        }
+
+        let leading_feature = [MultiModalFeature {
+            offset: 0,
+            ..features[0].clone()
+        }];
+        assert!(prefix_cacher
+            .search_for_matching_cache(
+                &[1, 2, 3, 4],
+                None,
+                &leading_feature,
+                Some(&[11]),
+                None,
+                None,
+            )?
+            .is_none());
 
         Ok(())
     }

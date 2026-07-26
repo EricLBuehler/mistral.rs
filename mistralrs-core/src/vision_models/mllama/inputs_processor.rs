@@ -57,6 +57,10 @@ impl Processor for MLlamaProcessor {
         })
     }
 
+    fn retain_prefix_cached_images(&self) -> bool {
+        true
+    }
+
     fn get_special_tokens(&self) -> &[&'static str] {
         &[IMAGE_TOKEN, "<|python_tag|>"]
     }
@@ -113,12 +117,13 @@ fn get_cross_attention_token_mask_for_query(
     image_token_id: u32,
     query_len: usize,
     future_query_len: usize,
-) -> Vec<(i64, i64)> {
+    num_images: usize,
+) -> Result<Vec<(i64, i64)>> {
     let committed_query_len = query_len.saturating_sub(future_query_len);
     let query_start = input_ids.len().saturating_sub(committed_query_len);
     let query_end = input_ids.len();
 
-    get_cross_attention_token_mask(input_ids, image_token_id)
+    let mut masks = get_cross_attention_token_mask(input_ids, image_token_id)
         .into_iter()
         .map(|(start, end)| {
             let end = if end == -1 { query_end } else { end as usize };
@@ -138,7 +143,15 @@ fn get_cross_attention_token_mask_for_query(
                 (0, 0)
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if masks.len() > num_images {
+        candle_core::bail!(
+            "Mllama prompt contains {} image tokens but only {num_images} images",
+            masks.len()
+        );
+    }
+    masks.resize(num_images, (0, 0));
+    Ok(masks)
 }
 
 // Convert the cross attention mask indices to a cross attention mask 4D array.
@@ -160,7 +173,17 @@ fn convert_sparse_cross_attention_mask_to_dense(
     dev: &Device,
 ) -> candle_core::Result<Tensor> {
     let bs = cross_attn_token_mask.len();
-    let max_num_images = cross_attn_token_mask.iter().map(|x| x.len()).max().unwrap();
+    if bs == 0 || num_tiles.len() != bs {
+        candle_core::bail!("Mllama cross-attention mask has inconsistent batch dimensions");
+    }
+    if cross_attn_token_mask
+        .iter()
+        .zip(&num_tiles)
+        .any(|(masks, tiles)| masks.len() != tiles.len())
+    {
+        candle_core::bail!("Mllama cross-attention mask has inconsistent image dimensions");
+    }
+    let max_num_images = cross_attn_token_mask.iter().map(Vec::len).max().unwrap();
 
     let mut cross_attention_mask = Tensor::zeros(
         (bs, length, max_num_images, max_num_tiles),
@@ -174,6 +197,9 @@ fn convert_sparse_cross_attention_mask_to_dense(
         for (mask_idx, ((start, end), mask_num_tiles)) in
             sample_masks.into_iter().zip(sample_num_tiles).enumerate()
         {
+            if start < 0 || mask_num_tiles > max_num_tiles {
+                candle_core::bail!("Mllama cross-attention mask has invalid image metadata");
+            }
             let mut end = end.min(length as i64);
             if end == -1 {
                 end = length as i64;
@@ -207,6 +233,11 @@ fn pad_preprocessed_image_inputs(
     max_num_images: usize,
 ) -> candle_core::Result<(Tensor, Tensor, Tensor)> {
     let num_images = pixel_values.dim(0)?;
+    if num_images > max_num_images {
+        candle_core::bail!(
+            "Mllama cached image count {num_images} exceeds batch capacity {max_num_images}"
+        );
+    }
     if num_images == max_num_images {
         return Ok((pixel_values, aspect_ratio_ids, aspect_ratio_mask));
     }
@@ -262,7 +293,17 @@ impl InputsProcessor for MLlamaImageProcessor {
         for seq in input_seqs.iter_mut() {
             if seq.mm_features().is_empty() {
                 if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                    let ranges = find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
+                    let ranges = find_image_placeholder_ranges(
+                        seq.prompt_position_source_toks(),
+                        img_tok_id,
+                    );
+                    if ranges.len() != hashes.len() {
+                        anyhow::bail!(
+                            "Mllama prompt contains {} image tokens but has {} images",
+                            ranges.len(),
+                            hashes.len()
+                        );
+                    }
                     seq.set_mm_features(build_mm_features_from_ranges(
                         &ranges,
                         &hashes,
@@ -307,13 +348,13 @@ impl InputsProcessor for MLlamaImageProcessor {
             inputs:
                 text_models_inputs_processor::InputMetadata {
                     input,
-                    positions: _,
-                    context_lens: _,
-                    position_ids: _,
-                    paged_attn_meta: _,
-                    flash_meta: _,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
                 },
-            seq_indices: _,
+            seq_indices,
         } = if is_prompt {
             get_prompt_input(
                 input_seqs
@@ -346,13 +387,74 @@ impl InputsProcessor for MLlamaImageProcessor {
             )
             .unwrap()
         };
+        let query_lens = match paged_attn_meta
+            .as_ref()
+            .and_then(|metadata| metadata.query_lens.clone())
+        {
+            Some(query_lens) => query_lens,
+            None if flash_meta.packed => {
+                anyhow::bail!("packed Mllama input is missing logical query lengths")
+            }
+            None => vec![input.dim(1)?; input_seqs.len()],
+        };
+        let physical_batch = input.dim(0)?;
+        let physical_tokens = input.dim(1)?;
+        let query_tokens = query_lens.iter().try_fold(0usize, |total, &query_len| {
+            total
+                .checked_add(query_len)
+                .ok_or_else(|| anyhow::anyhow!("Mllama logical query length overflow"))
+        })?;
+        if query_lens.len() != input_seqs.len()
+            || query_lens.contains(&0)
+            || flash_meta.packed && (physical_batch != 1 || query_tokens != physical_tokens)
+            || !flash_meta.packed
+                && (physical_batch != input_seqs.len()
+                    || query_lens
+                        .iter()
+                        .any(|&query_len| query_len > physical_tokens))
+        {
+            anyhow::bail!("Mllama input has inconsistent logical query lengths");
+        }
+        let max_query_len = query_lens.iter().copied().max().unwrap_or(0);
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
+        let image_token_id = tokenizer
+            .encode_fast(IMAGE_TOKEN, false)
+            .unwrap()
+            .get_ids()
+            .to_vec();
+        let image_token_id = if image_token_id.len() == 1 {
+            image_token_id[0]
+        } else {
+            anyhow::bail!("{IMAGE_TOKEN} encoding should be one token, got {image_token_id:?}");
+        };
         let image_counts = input_seqs
             .iter()
-            .map(|seq| seq.image_hashes().map_or(0, <[u64]>::len))
+            .map(|seq| seq.multimodal.image_hashes().map_or(0, <[u64]>::len))
             .collect::<Vec<_>>();
+        let image_token_counts = input_seqs
+            .iter()
+            .map(|seq| {
+                seq.prompt_position_source_toks()
+                    .iter()
+                    .filter(|&&token| token == image_token_id)
+                    .count()
+            })
+            .collect::<Vec<_>>();
+        if input_seqs
+            .iter()
+            .zip(&image_token_counts)
+            .zip(&image_counts)
+            .any(|((seq, &token_count), &image_count)| {
+                token_count > image_count
+                    || !seq.is_chunked_prefill_view() && token_count != image_count
+            })
+        {
+            anyhow::bail!(
+                "The number of image tokens in each batch {image_token_counts:?} should match the number of images {image_counts:?}. Perhaps you forgot a `<|image|>` tag?"
+            );
+        }
         let has_any_images = image_counts.iter().any(|&count| count > 0);
         let has_images = image_counts.iter().all(|&count| count > 0);
         if has_any_images && !has_images {
@@ -368,26 +470,7 @@ impl InputsProcessor for MLlamaImageProcessor {
             let mut num_tiles_accum = Vec::new();
 
             let bs = input_seqs.len();
-            let detokenized = tokenizer
-                .decode_batch(
-                    &input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks())
-                        .collect::<Vec<_>>(),
-                    false,
-                )
-                .expect("Detokenization failed!");
-            let n_images_in_text = detokenized
-                .iter()
-                .map(|text| text.matches(IMAGE_TOKEN).count())
-                .collect::<Vec<_>>();
             let n_images_in_images = image_counts;
-
-            if n_images_in_text != n_images_in_images {
-                return Err(anyhow::Error::msg(format!(
-                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
-                )));
-            }
 
             let max_num_images = *n_images_in_images
                 .iter()
@@ -450,6 +533,13 @@ impl InputsProcessor for MLlamaImageProcessor {
                         (pixel_values, aspect_ratio_ids, aspect_ratio_mask, num_tiles)
                     }
                 };
+                if pixel_values.dim(0)? != num_images
+                    || aspect_ratio_ids.dim(0)? != num_images
+                    || aspect_ratio_mask.dim(0)? != num_images
+                    || num_tiles.len() != num_images
+                {
+                    anyhow::bail!("Mllama cached image inputs have inconsistent cardinality");
+                }
                 let (pixel_values, aspect_ratio_ids, aspect_ratio_mask) =
                     pad_preprocessed_image_inputs(
                         pixel_values,
@@ -464,10 +554,13 @@ impl InputsProcessor for MLlamaImageProcessor {
 
                 // Build mm_features for position-aware prefix cache hashing
                 if seq.mm_features().is_empty() {
-                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        let img_tok_id =
-                            tokenizer.encode_fast(IMAGE_TOKEN, false).unwrap().get_ids()[0];
-                        let ranges = find_image_placeholder_ranges(seq.get_toks(), img_tok_id);
+                    if let Some(hashes) =
+                        seq.multimodal.image_hashes().map(|hashes| hashes.to_vec())
+                    {
+                        let ranges = find_image_placeholder_ranges(
+                            seq.prompt_position_source_toks(),
+                            image_token_id,
+                        );
                         seq.set_mm_features(build_mm_features_from_ranges(
                             &ranges,
                             &hashes,
@@ -480,17 +573,6 @@ impl InputsProcessor for MLlamaImageProcessor {
             }
 
             // Create cross attn mask
-            let image_token_id = tokenizer
-                .encode_fast(IMAGE_TOKEN, false)
-                .unwrap()
-                .get_ids()
-                .to_vec();
-            let image_token_id = if image_token_id.len() == 1 {
-                image_token_id[0]
-            } else {
-                panic!("{IMAGE_TOKEN} encoding should be one token, got {image_token_id:?}");
-            };
-            let query_len = input.dim(1).unwrap();
             let future_query_len = if is_prompt {
                 0
             } else {
@@ -498,15 +580,18 @@ impl InputsProcessor for MLlamaImageProcessor {
             };
             let cross_attention_token_mask = input_seqs
                 .iter()
-                .map(|seq| {
+                .zip(&query_lens)
+                .zip(&n_images_in_images)
+                .map(|((seq, &query_len), &num_images)| {
                     get_cross_attention_token_mask_for_query(
-                        seq.get_toks(),
+                        seq.prompt_position_source_toks(),
                         image_token_id,
                         query_len,
                         future_query_len,
+                        num_images,
                     )
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>>>()?;
 
             let cross_attn_mask = convert_sparse_cross_attention_mask_to_dense(
                 cross_attention_token_mask,
@@ -515,7 +600,7 @@ impl InputsProcessor for MLlamaImageProcessor {
                     .read()
                     .unwrap()
                     .expect("`max_image_tiles` must be set!"),
-                query_len,
+                max_query_len,
                 input.device(),
             );
 
@@ -534,54 +619,15 @@ impl InputsProcessor for MLlamaImageProcessor {
             (None, None, None, None)
         };
 
-        let text_models_inputs_processor::InnerInputProcessorOutput {
-            inputs:
-                text_models_inputs_processor::InputMetadata {
-                    input,
-                    positions,
-                    context_lens,
-                    position_ids,
-                    paged_attn_meta,
-                    flash_meta,
-                },
-            seq_indices,
-        } = if is_prompt {
-            get_prompt_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                last_n_context_len,
-                return_raw_logits,
-                paged_attn_metadata.as_mut(),
-                mapper,
-                sliding_window,
-            )
-            .unwrap()
-        } else {
-            get_completion_input(
-                input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks())
-                    .collect::<Vec<_>>(),
-                input_seqs,
-                device,
-                no_kv_cache,
-                last_n_context_len,
-                return_raw_logits,
-                paged_attn_metadata.as_mut(),
-                mapper,
-                sliding_window,
-            )
-            .unwrap()
-        };
-
         let image_hashes: Vec<Vec<u64>> = if has_images {
             input_seqs
                 .iter()
-                .map(|seq| seq.image_hashes().map(<[u64]>::to_vec).unwrap_or_default())
+                .map(|seq| {
+                    seq.multimodal
+                        .image_hashes()
+                        .map(<[u64]>::to_vec)
+                        .unwrap_or_default()
+                })
                 .collect()
         } else {
             vec![]
@@ -1055,17 +1101,23 @@ impl ImagePreProcessor for MLlamaImageProcessor {
 mod tests {
     use super::{
         convert_sparse_cross_attention_mask_to_dense, get_cross_attention_token_mask_for_query,
-        pad_preprocessed_image_inputs,
+        pad_preprocessed_image_inputs, MLlamaProcessor,
     };
+    use crate::pipeline::Processor;
     use candle_core::{DType, Device, Tensor};
 
     const IMAGE_TOKEN_ID: u32 = 128_256;
 
     #[test]
+    fn normal_prefix_cache_retains_cross_attention_images() {
+        assert!(MLlamaProcessor.retain_prefix_cached_images());
+    }
+
+    #[test]
     fn decode_query_keeps_last_image_visible() {
         let input = [IMAGE_TOKEN_ID, 10, 11, 12];
         assert_eq!(
-            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 1, 0),
+            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 1, 0, 1).unwrap(),
             vec![(0, 1)]
         );
     }
@@ -1074,14 +1126,47 @@ mod tests {
     fn decode_query_preserves_multi_image_routing() {
         let input = [IMAGE_TOKEN_ID, 10, IMAGE_TOKEN_ID, 11];
         assert_eq!(
-            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 1, 0),
+            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 1, 0, 2).unwrap(),
             vec![(0, 0), (0, 1)]
         );
 
         let consecutive = [IMAGE_TOKEN_ID, IMAGE_TOKEN_ID, 11];
         assert_eq!(
-            get_cross_attention_token_mask_for_query(&consecutive, IMAGE_TOKEN_ID, 1, 0),
+            get_cross_attention_token_mask_for_query(&consecutive, IMAGE_TOKEN_ID, 1, 0, 2)
+                .unwrap(),
             vec![(0, 1), (0, 1)]
+        );
+    }
+
+    #[test]
+    fn prompt_chunk_masks_only_its_logical_query_suffix() {
+        let input = [IMAGE_TOKEN_ID, 10, IMAGE_TOKEN_ID, 11, 12];
+        assert_eq!(
+            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 2, 0, 2).unwrap(),
+            vec![(0, 0), (0, 2)]
+        );
+    }
+
+    #[test]
+    fn prompt_chunk_masks_future_images() {
+        let before_images = [10, 11];
+        assert_eq!(
+            get_cross_attention_token_mask_for_query(&before_images, IMAGE_TOKEN_ID, 2, 0, 2)
+                .unwrap(),
+            vec![(0, 0), (0, 0)]
+        );
+
+        let before_second_image = [IMAGE_TOKEN_ID, 10, 11];
+        assert_eq!(
+            get_cross_attention_token_mask_for_query(
+                &before_second_image,
+                IMAGE_TOKEN_ID,
+                2,
+                0,
+                2,
+            )
+            .unwrap(),
+            vec![(0, 2), (0, 0)]
         );
     }
 
@@ -1089,9 +1174,15 @@ mod tests {
     fn speculative_query_keeps_future_tokens_image_conditioned() {
         let input = [IMAGE_TOKEN_ID, 10, 11];
         assert_eq!(
-            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 3, 2),
+            get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 3, 2, 1).unwrap(),
             vec![(0, 3)]
         );
+    }
+
+    #[test]
+    fn image_token_count_cannot_exceed_media_count() {
+        let input = [IMAGE_TOKEN_ID, IMAGE_TOKEN_ID];
+        assert!(get_cross_attention_token_mask_for_query(&input, IMAGE_TOKEN_ID, 2, 0, 1).is_err());
     }
 
     #[test]
@@ -1113,6 +1204,18 @@ mod tests {
     }
 
     #[test]
+    fn dense_mask_rejects_image_cardinality_mismatch() {
+        assert!(convert_sparse_cross_attention_mask_to_dense(
+            vec![vec![(0, 1), (0, 0)]],
+            vec![vec![1]],
+            2,
+            1,
+            &Device::Cpu,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn cached_image_inputs_are_padded_for_new_batch_shape() {
         let pixels = Tensor::zeros((1, 2, 3, 4, 4), DType::F32, &Device::Cpu).unwrap();
         let ids = Tensor::new(&[3i64], &Device::Cpu).unwrap();
@@ -1122,5 +1225,13 @@ mod tests {
         assert_eq!(pixels.dims(), &[2, 2, 3, 4, 4]);
         assert_eq!(ids.to_vec1::<i64>().unwrap(), vec![3, 0]);
         assert_eq!(mask.to_vec2::<i64>().unwrap(), vec![vec![1, 1], vec![1, 0]]);
+    }
+
+    #[test]
+    fn cached_image_inputs_cannot_exceed_batch_shape() {
+        let pixels = Tensor::zeros((2, 2, 3, 4, 4), DType::F32, &Device::Cpu).unwrap();
+        let ids = Tensor::new(&[3i64, 4], &Device::Cpu).unwrap();
+        let mask = Tensor::new(&[[1i64, 1], [1, 1]], &Device::Cpu).unwrap();
+        assert!(pad_preprocessed_image_inputs(pixels, ids, mask, 1).is_err());
     }
 }

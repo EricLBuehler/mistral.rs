@@ -116,15 +116,15 @@ pub use isq_executor::{
 pub use lora::{
     add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
     load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
-    register_dynamic_lora_site, with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights,
-    LoraAdapterWeights, LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats,
-    LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection,
-    LoraExpertProjectionNames, LoraExpertProjectionWeights, LoraExpertSiteHandle,
-    LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec,
-    LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules,
-    LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode, RoutedLoraMetadataLayout,
-    RoutedLoraProjectionLayout, StaticLoraConfig, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
-    ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+    register_dynamic_lora_site, with_lora_execution, with_lora_execution_repeated_row,
+    with_lora_execution_row_range, DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights,
+    LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraExpertDelta,
+    LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection, LoraExpertProjectionNames,
+    LoraExpertProjectionWeights, LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights,
+    LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey,
+    LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, RoutedLoraAdapterWeight,
+    RoutedLoraInputMode, RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, StaticLoraConfig,
+    ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
 };
 #[cfg(feature = "cuda")]
 pub use lora::{
@@ -1317,6 +1317,78 @@ impl Module for dyn QuantMethod {
 }
 
 #[cfg(feature = "cuda")]
+pub fn try_fused_quantized_ffn(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    down: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some()
+        || up.stats_snapshot().is_some()
+        || down.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() || down.is_dynamic_lora_active()
+    {
+        return Ok(None);
+    }
+    if gate.has_bias() || up.has_bias() || down.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let (flat_batch, k) = match xs.dims() {
+        [batch, k] => (*batch, *k),
+        [batch, rows, k] => (*batch * *rows, *k),
+        _ => return Ok(None),
+    };
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(down_q) = down.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.dtype() != up_q.dtype()
+        || !gguf::fast_mmq::supports(gate_q.dtype())
+        || !gguf::fast_mmq::supports(down_q.dtype())
+    {
+        return Ok(None);
+    }
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+    let (intermediate, gate_cols) = gate_q.shape().dims2()?;
+    let (_, down_cols) = down_q.shape().dims2()?;
+    if gate_cols != k || down_cols != intermediate {
+        return Ok(None);
+    }
+    if !gate_q.device().same_device(xs.device())
+        || !up_q.device().same_device(xs.device())
+        || !down_q.device().same_device(xs.device())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmq::fused_ffn(
+        &gate_q, &up_q, &down_q, xs, activation,
+    )?))
+}
+
+#[cfg(feature = "cuda")]
 pub fn try_fused_quantized_gate_up(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -1324,6 +1396,9 @@ pub fn try_fused_quantized_gate_up(
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
     if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
         return Ok(None);
     }
     if gate.has_bias() || up.has_bias() {
@@ -1342,9 +1417,6 @@ pub fn try_fused_quantized_gate_up(
     if gate_q.dtype() != up_q.dtype() {
         return Ok(None);
     }
-    if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
-        return Ok(None);
-    }
     if gate_q.shape() != up_q.shape() {
         return Ok(None);
     }
@@ -1353,7 +1425,7 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, ncols) = gate_q.shape().dims2()?;
@@ -1361,9 +1433,21 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_glu(
-        &gate_q, &up_q, xs, activation,
-    )?))
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    } else {
+        if !gguf::fast_mmq::supports(gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    }
 }
 
 /// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
@@ -1399,6 +1483,10 @@ pub fn try_fused_quantized_qkv(
     if !xs.device().is_cuda() {
         return Ok(None);
     }
+    if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }
@@ -1416,7 +1504,7 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     };
     let dtype = q_q.dtype();
-    if dtype != k_q.dtype() || dtype != v_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
+    if dtype != k_q.dtype() || dtype != v_q.dtype() {
         return Ok(None);
     }
 
@@ -1424,7 +1512,7 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, q_cols) = q_q.shape().dims2()?;
@@ -1434,7 +1522,17 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    } else {
+        if !gguf::fast_mmq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    }
 }
 
 /// Metal fused gate+up: single Metal kernel that does both matmuls with shared

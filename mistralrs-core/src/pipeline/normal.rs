@@ -94,6 +94,15 @@ pub struct NormalPipeline {
     dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
+fn normal_model_requires_uniform_prompt_batch(
+    is_hybrid: bool,
+    packed_prefill_available: bool,
+    is_xlora: bool,
+    has_speculative_proposer: bool,
+) -> bool {
+    (is_hybrid && !packed_prefill_available) || is_xlora || has_speculative_proposer
+}
+
 /// A loader for a "normal" (non-quantized) model.
 pub struct NormalLoader {
     inner: Box<dyn NormalModelLoader>,
@@ -1174,7 +1183,17 @@ impl NormalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
-        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+        let hybrid_state_key = if self.model.cache().is_hybrid() {
+            self.model
+                .cache()
+                .hybrid()
+                .state_indices_host()
+                .map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?
+            .with_state_key(hybrid_state_key);
 
         let mut state = self
             .cuda_decode_graph
@@ -1204,6 +1223,11 @@ impl NormalPipeline {
         .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
         let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
         input_ids.device().synchronize()?;
+        let retained_tensors = if self.model.cache().is_hybrid() {
+            self.model.cache().hybrid().state_index_tensors()
+        } else {
+            Vec::new()
+        };
 
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
@@ -1215,7 +1239,7 @@ impl NormalPipeline {
                 metadata,
                 model_metadata: self.metadata.model_metadata.as_deref(),
                 warmup_logits: &warmup_logits,
-                retained_tensors: Vec::new(),
+                retained_tensors,
             },
             |graph_input_ids, graph_metadata| {
                 let mut ctx = ModelForwardContext::new(
@@ -1247,29 +1271,6 @@ impl NormalPipeline {
 }
 
 impl NormalPipeline {
-    fn lora_execution(
-        &self,
-        input_ids: &Tensor,
-        adapter_leases: &[Option<crate::AdapterLease>],
-    ) -> candle_core::Result<Option<Arc<mistralrs_quant::LoraExecution>>> {
-        if adapter_leases.iter().all(Option::is_none) {
-            return Ok(None);
-        }
-        let (batch, sequence_length) = input_ids.dims2()?;
-        if adapter_leases.len() != batch {
-            candle_core::bail!(
-                "adapter lease count {} does not match model batch size {batch}",
-                adapter_leases.len()
-            );
-        }
-        let runtime = self.dynamic_lora.as_ref().ok_or_else(|| {
-            candle_core::Error::msg(
-                "request selected an adapter on a pipeline without dynamic LoRA",
-            )
-        })?;
-        runtime.execution(adapter_leases, sequence_length).map(Some)
-    }
-
     fn recurrent_metadata(&self, batch_kind: RecurrentBatchKind) -> Option<RecurrentMetadata> {
         if !self.model.cache().is_hybrid() {
             return None;
@@ -1285,9 +1286,12 @@ impl NormalPipeline {
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
     fn requires_uniform_prompt_batch(&self) -> bool {
-        self.model.cache().is_hybrid()
-            || self.model.is_xlora()
-            || self.model.has_speculative_proposer()
+        normal_model_requires_uniform_prompt_batch(
+            self.model.cache().is_hybrid(),
+            self.supports_packed_prefill(),
+            self.model.is_xlora(),
+            self.model.has_speculative_proposer(),
+        )
     }
 
     fn requires_uniform_completion_batch(&self) -> bool {
@@ -1300,9 +1304,17 @@ impl Pipeline for NormalPipeline {
 
     fn supports_packed_prefill(&self) -> bool {
         self.model.supports_packed_prefill()
-            && !self.model.cache().is_hybrid()
+            && self.metadata.cache_engine.is_some()
             && !self.model.is_xlora()
             && !self.model.has_speculative_proposer()
+            && self.model.device().is_cuda()
+            && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
+            && crate::using_flash_attn()
+            && crate::attention::flash_backend_supports_sdpa(
+                self.model.config().k_head_dim,
+                false,
+                self.metadata.sliding_window.is_some(),
+            )
             && matches!(self.metadata.activation_dtype, DType::F16 | DType::BF16)
     }
 
@@ -1328,7 +1340,13 @@ impl Pipeline for NormalPipeline {
             recurrent_batch_kind,
             adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
-        let lora_execution = self.lora_execution(&input_ids, &adapter_leases)?;
+        let lora_execution = super::resolve_lora_execution(
+            self.dynamic_lora.as_deref(),
+            &input_ids,
+            paged_attn_meta.as_ref(),
+            &flash_meta,
+            &adapter_leases,
+        )?;
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
             (Some(cache_engine), Some(meta)) => Some((cache_engine, meta)),
@@ -1613,5 +1631,33 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normal_model_requires_uniform_prompt_batch;
+
+    #[test]
+    fn hybrid_models_require_uniform_prompts_until_packed_prefill_is_proven() {
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, false, false, false
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
+            true, true, false, false
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
+            false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn xlora_and_speculative_models_remain_uniform() {
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, true, true, false
+        ));
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, true, false, true
+        ));
     }
 }

@@ -78,6 +78,7 @@ pub mod text_models_inputs_processor {
         },
         get_mut_arcmutex,
         paged_attention::{
+            block_aligned_sliding_window_start,
             block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
             AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
@@ -136,6 +137,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub full_mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
         pub(crate) enable_packed_prefill: bool,
         /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
         /// canvas generation until the prompt is fully encoded.
@@ -144,14 +146,29 @@ pub mod text_models_inputs_processor {
 
     impl PagedAttentionMeta {
         pub(crate) fn set_noncausal_mm_context(&mut self, input_seqs: &[&mut Sequence]) {
+            self.set_noncausal_mm_context_views(input_seqs, true);
+        }
+
+        pub(crate) fn set_noncausal_mm_context_views(
+            &mut self,
+            input_seqs: &[&mut Sequence],
+            include_full_attention: bool,
+        ) {
             self.mm_prefix_ranges_by_seq_id.clear();
+            self.full_mm_prefix_ranges_by_seq_id.clear();
             for seq in input_seqs {
-                let ranges = noncausal_mm_ranges(seq.mm_features(), self.sliding_window);
-                if !ranges.is_empty() {
-                    self.mm_prefix_ranges_by_seq_id.insert(*seq.id(), ranges);
+                let full_ranges = noncausal_mm_ranges(seq.mm_features(), None);
+                if !full_ranges.is_empty() {
+                    if include_full_attention {
+                        self.full_mm_prefix_ranges_by_seq_id
+                            .insert(*seq.id(), full_ranges.clone());
+                    }
+                    self.mm_prefix_ranges_by_seq_id
+                        .insert(*seq.id(), full_ranges);
                 }
             }
-            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty();
+            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty()
+                || !self.full_mm_prefix_ranges_by_seq_id.is_empty();
         }
     }
 
@@ -179,6 +196,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
@@ -219,6 +237,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -454,6 +473,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
+                full_mm_prefix_ranges: self.full_mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
                 prefill_key_value_heads: self.prefill_key_value_heads,
                 prefill_head_dim: self.prefill_head_dim,
@@ -473,8 +493,7 @@ pub mod text_models_inputs_processor {
     /// lengths for normal batches and logical lengths when `packed` is true.
     ///
     /// `logical_k` describes full logical K lengths. `sliding_k`, when present,
-    /// describes retained K lengths after a rotating/sliding KV cache has already
-    /// truncated K/V to the configured window.
+    /// describes the physical K lengths returned by a rotating/sliding KV cache.
     ///
     /// For the **prefix cache path**, K/V are gathered from the paged cache into a
     /// packed (non-padded) layout via `gather_kv_cache`. The packed K/V lengths are
@@ -504,6 +523,11 @@ pub mod text_models_inputs_processor {
         pub sliding_k: Option<FlashKMeta>,
         pub causal: bool,
         pub(crate) packed: bool,
+        #[cfg_attr(
+            not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")),
+            allow(dead_code)
+        )]
+        pub(crate) varlen_segment_lens: Option<Vec<usize>>,
     }
 
     impl FlashParams {
@@ -515,6 +539,7 @@ pub mod text_models_inputs_processor {
                 sliding_k: None,
                 causal,
                 packed: false,
+                varlen_segment_lens: None,
             }
         }
 
@@ -591,6 +616,40 @@ pub mod text_models_inputs_processor {
         Ok(positions)
     }
 
+    fn sliding_k_lengths(
+        seqlens_q: &[u32],
+        seqlens_k: &[u32],
+        sliding_window: usize,
+    ) -> Result<Vec<u32>> {
+        if seqlens_q.len() != seqlens_k.len() {
+            anyhow::bail!(
+                "sliding FlashAttention metadata length mismatch: q={} k={}",
+                seqlens_q.len(),
+                seqlens_k.len()
+            );
+        }
+        let window = u32::try_from(sliding_window)?;
+        seqlens_q
+            .iter()
+            .zip(seqlens_k)
+            .map(|(&query_len, &logical_k_len)| {
+                let past_len = logical_k_len.checked_sub(query_len).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "sliding FlashAttention query length {query_len} exceeds K length {logical_k_len}"
+                    )
+                })?;
+                if query_len > 1 {
+                    past_len
+                        .min(window)
+                        .checked_add(query_len)
+                        .ok_or_else(|| anyhow::anyhow!("sliding FlashAttention K length overflow"))
+                } else {
+                    Ok(logical_k_len.min(window))
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn make_flash_params(
         device: &Device,
         mapper: Option<&dyn DeviceMapper>,
@@ -610,11 +669,7 @@ pub mod text_models_inputs_processor {
         };
         let sliding_k = sliding_window
             .map(|window| -> Result<FlashKMeta> {
-                let window = window as u32;
-                let sliding_seqlens_k = seqlens_k
-                    .iter()
-                    .map(|len| (*len).min(window))
-                    .collect::<Vec<_>>();
+                let sliding_seqlens_k = sliding_k_lengths(seqlens_q, seqlens_k, window)?;
                 let (sliding_max_k, sliding_cumulative_seqlens_k) =
                     cumulative_seqlens_map(&sliding_seqlens_k, &devices)?;
                 Ok(FlashKMeta {
@@ -631,6 +686,7 @@ pub mod text_models_inputs_processor {
             sliding_k,
             causal,
             packed,
+            varlen_segment_lens: None,
         })
     }
 
@@ -686,11 +742,9 @@ pub mod text_models_inputs_processor {
             && last_n_context_len.is_none()
             && chunk_offset_toks == 0
             && !has_any_cache_hit
-            && sliding_window.is_none()
             && paged_attn_metadata.as_ref().is_some_and(|metadata| {
                 metadata.enable_packed_prefill
                     && metadata.is_final_prompt_chunk
-                    && !metadata.has_noncausal_mm_context
                     && metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
             });
         if packed_prefill {
@@ -807,21 +861,32 @@ pub mod text_models_inputs_processor {
                 full_paged_attn_context_lens.push(full_context_len);
 
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let window_start = full_context_len.saturating_sub(sliding_window);
-                    let block_aligned_start = (window_start / paged_attn_metadata.block_size)
-                        * paged_attn_metadata.block_size;
-                    if block_aligned_start <= slot_start {
-                        let paged_context_len = full_context_len - block_aligned_start;
-                        let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
-                        let needed_blocks =
-                            paged_context_len.div_ceil(paged_attn_metadata.block_size);
-                        let slide_end = (slide_idx + needed_blocks).min(table.len());
-                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                        paged_attn_context_lens.push((0..paged_context_len).collect());
-                    } else {
-                        block_tables.push(table.clone());
-                        paged_attn_context_lens.push(ctxt_len);
+                    let mut block_aligned_start = block_aligned_sliding_window_start(
+                        full_context_len,
+                        new_len,
+                        sliding_window,
+                        paged_attn_metadata.block_size,
+                    );
+                    if let Some(mm_start) = paged_attn_metadata
+                        .mm_prefix_ranges_by_seq_id
+                        .get(seq_id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|&&(start, end)| start < slot_end && slot_start < end)
+                        .map(|&(start, _)| start)
+                        .min()
+                    {
+                        block_aligned_start = block_aligned_start.min(
+                            mm_start / paged_attn_metadata.block_size
+                                * paged_attn_metadata.block_size,
+                        );
                     }
+                    let paged_context_len = full_context_len - block_aligned_start;
+                    let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
+                    let needed_blocks = paged_context_len.div_ceil(paged_attn_metadata.block_size);
+                    let slide_end = (slide_idx + needed_blocks).min(table.len());
+                    block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                    paged_attn_context_lens.push((0..paged_context_len).collect());
                 } else {
                     block_tables.push(table.clone());
                     paged_attn_context_lens.push(ctxt_len);
@@ -945,6 +1010,7 @@ pub mod text_models_inputs_processor {
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
             let mut mm_prefix_ranges_map = HashMap::new();
+            let mut full_mm_prefix_ranges_map = HashMap::new();
             let mut full_block_tables_map = HashMap::new();
             let mut full_context_lens_map = HashMap::new();
             let mut paged_kv_indptr_map = HashMap::new();
@@ -1031,6 +1097,18 @@ pub mod text_models_inputs_processor {
                 &paged_context_lens_for_fi,
                 &prefill_query_lens,
             )?;
+            let full_kv_window_starts = vec![0; seq_ids.len()];
+            let full_mm_prefix_ranges_tensor = if sliding_window.is_some() {
+                crate::paged_attention::mm_prefix::make_ranges_tensor(
+                    seq_ids,
+                    &paged_attn_metadata.full_mm_prefix_ranges_by_seq_id,
+                    &full_kv_window_starts,
+                    &full_paged_attn_context_lens,
+                    &prefill_query_lens,
+                )?
+            } else {
+                None
+            };
 
             for device in devices {
                 slot_mappings_map
@@ -1047,6 +1125,12 @@ pub mod text_models_inputs_processor {
                     mm_prefix_ranges_map.insert(
                         device.location(),
                         mm_prefix_ranges_tensor.clone().to_device(&device)?,
+                    );
+                }
+                if let Some(full_mm_prefix_ranges_tensor) = &full_mm_prefix_ranges_tensor {
+                    full_mm_prefix_ranges_map.insert(
+                        device.location(),
+                        full_mm_prefix_ranges_tensor.clone().to_device(&device)?,
                     );
                 }
                 paged_kv_indptr_map.insert(
@@ -1195,15 +1279,18 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 is_final_prompt_chunk: paged_attn_metadata.is_final_prompt_chunk,
                 prompt_chunk_attention_policy,
-                // Per-forward flag: only true when a noncausal range actually reaches this
-                // chunk's query rows. The sticky per-conversation flag lives on
-                // PagedAttentionMeta; using it here would disable the fast prefill paths for
-                // every chunk after an image has scrolled out of the sliding window.
-                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some(),
+                // Keep the slow path local to chunks whose query rows overlap a noncausal range.
+                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
+                    || full_mm_prefix_ranges_tensor.is_some(),
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
                     Some(mm_prefix_ranges_map)
+                },
+                full_mm_prefix_ranges: if full_mm_prefix_ranges_map.is_empty() {
+                    None
+                } else {
+                    Some(full_mm_prefix_ranges_map)
                 },
                 prefill_attention_heads: paged_attn_metadata.prefill_attention_heads,
                 prefill_key_value_heads: paged_attn_metadata.prefill_key_value_heads,
@@ -1713,6 +1800,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -1799,7 +1887,7 @@ pub mod text_models_inputs_processor {
                 None
             },
             sliding_window,
-            input_seqs.iter().all(|seq| seq.adapter_lease().is_none()),
+            true,
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,
@@ -2221,6 +2309,56 @@ pub mod text_models_inputs_processor {
 
             assert_eq!(params.max_q, 4);
             assert_eq!(cumulative, vec![0, 3, 4, 8]);
+        }
+
+        #[test]
+        fn sliding_single_token_uses_the_retained_window() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 1], &[0, 101], 4).unwrap(),
+                vec![0, 4]
+            );
+        }
+
+        #[test]
+        fn sliding_query_longer_than_the_window_keeps_the_full_query() {
+            assert_eq!(sliding_k_lengths(&[0, 8], &[0, 8], 4).unwrap(), vec![0, 8]);
+        }
+
+        #[test]
+        fn sliding_cached_multi_token_append_keeps_retained_and_new_tokens() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 3], &[0, 103], 4).unwrap(),
+                vec![0, 7]
+            );
+        }
+
+        #[test]
+        fn fresh_packed_sliding_metadata_preserves_logical_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 6],
+                &[0, 3, 1, 6],
+                Some(4),
+                true,
+                true,
+            )
+            .unwrap();
+            let sliding = params.sliding_k.unwrap();
+
+            assert_eq!(sliding.max, 6);
+            assert_eq!(
+                sliding.cumulative_seqlens[&Device::Cpu.location()]
+                    .to_vec1::<u32>()
+                    .unwrap(),
+                vec![0, 3, 4, 10]
+            );
+        }
+
+        #[test]
+        fn sliding_metadata_rejects_inconsistent_lengths() {
+            assert!(sliding_k_lengths(&[0, 2], &[0], 4).is_err());
+            assert!(sliding_k_lengths(&[0, 3], &[0, 2], 4).is_err());
         }
     }
 }

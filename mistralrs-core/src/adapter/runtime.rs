@@ -612,6 +612,41 @@ impl DynamicLoraRuntime {
             sequence_length,
             self.execution_arena.clone(),
         );
+        self.install_execution_adapters(adapter_leases, &mut execution)?;
+        Ok(Arc::new(execution))
+    }
+
+    pub(crate) fn ragged_execution(
+        &self,
+        adapter_leases: &[Option<AdapterLease>],
+        sequence_lengths: &[usize],
+    ) -> candle_core::Result<Arc<LoraExecution>> {
+        if adapter_leases.len() != sequence_lengths.len() {
+            candle_core::bail!(
+                "adapter lease count {} does not match logical sequence count {}",
+                adapter_leases.len(),
+                sequence_lengths.len()
+            );
+        }
+        let sequence_slots = adapter_leases
+            .iter()
+            .map(|lease| lease.as_ref().map(AdapterLease::slot))
+            .collect::<Vec<_>>();
+        let mut execution = LoraExecution::from_ragged_sequence_slots_with_arena(
+            self.layers.runtime_id(),
+            &sequence_slots,
+            sequence_lengths,
+            self.execution_arena.clone(),
+        );
+        self.install_execution_adapters(adapter_leases, &mut execution)?;
+        Ok(Arc::new(execution))
+    }
+
+    fn install_execution_adapters(
+        &self,
+        adapter_leases: &[Option<AdapterLease>],
+        execution: &mut LoraExecution,
+    ) -> candle_core::Result<()> {
         let mut installed = HashSet::new();
         for lease in adapter_leases.iter().flatten() {
             let slot = lease.slot();
@@ -627,7 +662,7 @@ impl DynamicLoraRuntime {
             }
             execution.insert_adapter(slot, resident.weights().clone())?;
         }
-        Ok(Arc::new(execution))
+        Ok(())
     }
 }
 
