@@ -12,14 +12,16 @@
 //! then one `index_select` with a per-position index that points text rows at themselves and
 //! image rows at the running image counter. General over any mask layout (multi-image too).
 
+use std::sync::Arc;
+
 use crate::layers::embedding;
 use crate::utils::unvarbuilder::UnVarBuilder;
 use candle_core::{DType, Result, Tensor};
-use candle_nn::{Embedding, Module};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 pub struct Merger {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    dtype: DType,
     image_token_id: i64,
 }
 
@@ -33,6 +35,7 @@ impl Merger {
     ) -> Result<Self> {
         Ok(Self {
             embed_tokens: embedding(vocab, hidden, vb.pp("embed_tokens"), &None)?,
+            dtype: vb.dtype(),
             image_token_id,
         })
     }
@@ -40,7 +43,8 @@ impl Merger {
     /// Embed `input_ids` `[batch, seq]` -> `[batch, seq, D]` on-device (no host round-trip), for the
     /// text/decode hot path. Pure token embedding, no image scatter.
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(&input_ids.to_dtype(DType::U32)?)
+        self.embed_tokens
+            .embedding_forward(&input_ids.to_dtype(DType::U32)?, self.dtype)
     }
 
     /// `input_ids` `[S]` (i64), `image_embeds` `[K, D]` (connector output). Returns `[S, D]`.
@@ -50,7 +54,7 @@ impl Merger {
         // candle Embedding gathers with u32 indices.
         let ids_u32: Vec<u32> = ids.iter().map(|&v| v as u32).collect();
         let idx_emb = Tensor::from_vec(ids_u32, s, input_ids.device())?;
-        let text = self.embed_tokens.forward(&idx_emb)?; // [S, D]
+        let text = self.embed_tokens.embedding_forward(&idx_emb, self.dtype)?; // [S, D]
 
         // Gather index into cat([text ; image_embeds]): text rows -> self, image rows -> S+counter.
         let mut gather = Vec::with_capacity(s);

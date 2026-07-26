@@ -5972,6 +5972,13 @@ impl MultimodalModelLoader for PaddleOcrVlLoader {
 }
 
 impl IsqModelLoader for PaddleOcrVlLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6066,6 +6073,7 @@ impl DeviceMappedModelLoader for PaddleOcrVlLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: PaddleOcrVlConfig = serde_json::from_str(config)?;
@@ -9820,6 +9828,9 @@ mod tests {
             )?;
             assert_eq!(expanded - base, expected_ple_vocab_delta, "{default}");
         }
+
+        Ok(())
+    }
 
     fn paddleocr_vl_config_json() -> String {
         include_str!("../../vision_models/paddleocr_vl/reference_config.json").to_string()

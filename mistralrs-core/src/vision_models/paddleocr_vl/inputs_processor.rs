@@ -369,6 +369,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
+            adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
             recurrent_batch_kind: if is_prompt {
                 crate::pipeline::RecurrentBatchKind::Prefill
             } else {
