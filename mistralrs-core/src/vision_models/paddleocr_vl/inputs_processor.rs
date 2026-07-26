@@ -167,9 +167,13 @@ fn register_image_span(seq: &mut Sequence, ids: &[u32], tokenizer: &Tokenizer) {
     }
 }
 
-fn grid_tuple(grid: &Tensor) -> (usize, usize, usize) {
-    let g = grid.to_vec2::<u32>().unwrap();
-    (g[0][0] as usize, g[0][1] as usize, g[0][2] as usize)
+/// Every `(t, h, w)` row of a `[n_images, 3]` grid tensor, in message order.
+fn grid_rows(grid: &Tensor) -> Vec<(usize, usize, usize)> {
+    grid.to_vec2::<u32>()
+        .unwrap()
+        .into_iter()
+        .map(|g| (g[0] as usize, g[1] as usize, g[2] as usize))
+        .collect()
 }
 
 impl InputsProcessor for PaddleOcrVlImageProcessor {
@@ -214,7 +218,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
         // get_rope_index emits a position block for every grid it is handed, and the first prompt
         // chunk stops before the span, so a grid there would emit positions for absent tokens.
         let image_pad_id = tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_PLACEHOLDER);
-        let mut grids: Vec<Option<(usize, usize, usize)>> = Vec::with_capacity(input_seqs.len());
+        let mut grids: Vec<Vec<(usize, usize, usize)>> = Vec::with_capacity(input_seqs.len());
         let mut pixel_values_accum = Vec::new();
         let mut vision_rows: Vec<usize> = Vec::new();
 
@@ -226,14 +230,15 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                         .cached_img_thw
                         .as_ref()
                         .filter(|_| window_has_image_toks)
-                        .map(grid_tuple),
+                        .map(grid_rows)
+                        .unwrap_or_default(),
                 );
                 continue;
             }
-            let (pixel_values, grid) = match &seq.multimodal.cached_pixel_values {
+            let (pixel_values, row_grids) = match &seq.multimodal.cached_pixel_values {
                 Some(cached) => (
                     cached.clone(),
-                    grid_tuple(seq.multimodal.cached_img_thw.as_ref().unwrap()),
+                    grid_rows(seq.multimodal.cached_img_thw.as_ref().unwrap()),
                 ),
                 None => {
                     let PreprocessedImages {
@@ -249,7 +254,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                     )?;
                     seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
                     seq.multimodal.cached_img_thw = image_grid_thw.clone();
-                    (pixel_values, grid_tuple(image_grid_thw.as_ref().unwrap()))
+                    (pixel_values, grid_rows(image_grid_thw.as_ref().unwrap()))
                 }
             };
 
@@ -257,7 +262,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                 let detok = tokenizer
                     .decode(seq.get_toks(), false)
                     .expect("Detokenization failed!");
-                let detok = expand_placeholders(&detok, &[grid], MERGE);
+                let detok = expand_placeholders(&detok, &row_grids, MERGE);
                 let ids = tokenizer
                     .encode_fast(detok.clone(), false)
                     .expect("Tokenization failed!")
@@ -270,7 +275,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                 seq.multimodal.has_changed_prompt = true;
             }
 
-            grids.push(Some(grid));
+            grids.push(row_grids);
             if is_prompt {
                 // Keep pixel_values as [N_patches, 3, 14, 14] (the shape the parity-verified tower
                 // expects); rows concatenate on dim 0 and the model splits them back by grid.
@@ -281,8 +286,8 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
 
         let pixel_values =
             (!pixel_values_accum.is_empty()).then(|| Tensor::cat(&pixel_values_accum, 0).unwrap());
-        // All-None means no row carries an image at all: let the model take the text-embed path.
-        let image_grid_thw = if grids.iter().all(Option::is_none) {
+        // All-empty means no row carries an image at all: let the model take the text-embed path.
+        let image_grid_thw = if grids.iter().all(Vec::is_empty) {
             Vec::new()
         } else {
             grids
@@ -385,18 +390,21 @@ impl ImagePreProcessor for PaddleOcrVlImageProcessor {
         device: &Device,
         (_, _): (usize, usize),
     ) -> candle_core::Result<PreprocessedImages> {
-        // One image per request: the forward maps one grid to one batch row, and the placeholder
-        // expansion has exactly one grid to spend per row. Reject rather than drop the extras.
-        let [img] = &images[..] else {
-            candle_core::bail!(
-                "PaddleOCR-VL takes one image per request, got {}. Send one region crop per request.",
-                images.len()
-            );
-        };
-        let (pixel_values, (t, h, w)) = preprocess_decoded(img, device)?;
-        let grid = Tensor::from_vec(vec![t as u32, h as u32, w as u32], (1, 3), device)?;
+        if images.is_empty() {
+            candle_core::bail!("PaddleOCR-VL needs at least one image.");
+        }
+        // Patches of every image concatenated on dim 0, with one grid row each, in message order.
+        // The forward splits them back by each grid's t*h*w.
+        let mut patches = Vec::with_capacity(images.len());
+        let mut grid = Vec::with_capacity(images.len() * 3);
+        for img in &images {
+            let (px, (t, h, w)) = preprocess_decoded(img, device)?;
+            patches.push(px);
+            grid.extend([t as u32, h as u32, w as u32]);
+        }
+        let grid = Tensor::from_vec(grid, (images.len(), 3), device)?;
         Ok(PreprocessedImages {
-            pixel_values,
+            pixel_values: Tensor::cat(&patches, 0)?,
             pixel_attention_mask: None,
             image_sizes: None,
             num_img_tokens: None,
@@ -487,10 +495,10 @@ mod tests {
     }
 
     // Two images in one message used to be silently reduced to the first, then panic in
-    // `expand_placeholders` on the second placeholder's missing grid. It must be a clean error.
+    // `expand_placeholders` on the second placeholder's missing grid. Each image must get its own
+    // grid row, and the patches must concatenate in message order.
     #[test]
-    fn multiple_images_are_rejected_not_dropped() {
-        let one = || DynamicImage::new_rgb8(64, 64);
+    fn every_image_gets_its_own_grid_row() {
         let call = |images: Vec<DynamicImage>| {
             PaddleOcrVlImageProcessor.preprocess(
                 images,
@@ -500,13 +508,25 @@ mod tests {
                 (usize::MAX, usize::MAX),
             )
         };
-        let err = call(vec![one(), one()])
-            .err()
-            .expect("two images must be rejected")
-            .to_string();
-        assert!(err.contains("one image per request"), "{err}");
-        assert!(call(vec![]).is_err(), "zero images must not panic either");
-        assert!(call(vec![one()]).is_ok(), "one image must still work");
+        let out = call(vec![
+            DynamicImage::new_rgb8(64, 64),
+            DynamicImage::new_rgb8(128, 64),
+        ])
+        .expect("two images must be accepted");
+        let grid = out.image_grid_thw.expect("grid");
+        assert_eq!(grid.dims(), &[2, 3], "one grid row per image");
+        let rows = grid_rows(&grid);
+        assert_ne!(
+            rows[0], rows[1],
+            "differently sized images need different grids"
+        );
+        let patches: usize = rows.iter().map(|&(t, h, w)| t * h * w).sum();
+        assert_eq!(
+            out.pixel_values.dim(0).unwrap(),
+            patches,
+            "patches must be both images concatenated"
+        );
+        assert!(call(vec![]).is_err(), "zero images must not panic");
     }
 
     #[test]

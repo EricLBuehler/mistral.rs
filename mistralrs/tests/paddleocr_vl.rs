@@ -148,29 +148,29 @@ async fn text_only_matches_transformers_golden() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One image per request. Two used to be silently reduced to the first and then panic on the second
-/// placeholder's missing grid, taking the engine worker down with it.
+/// Two images in one message used to be reduced to the first and then panic on the second
+/// placeholder's missing grid. Both must be read, so the answer mentions content from each.
 #[tokio::test]
-async fn extra_images_are_rejected_and_the_engine_survives() -> anyhow::Result<()> {
-    skip_unless_weights!("multi-image rejection");
+async fn two_images_in_one_message_are_both_read() -> anyhow::Result<()> {
+    skip_unless_weights!("multi-image");
     let model = build(false).await?;
     let image = image::open(format!("{}/ocr.png", fixtures()))?;
+    let one = text(
+        &model
+            .send_chat_request(ocr_request(image.clone(), 24))
+            .await?,
+    );
     let two = RequestBuilder::from(MultimodalMessages::new().add_image_message(
         TextMessageRole::User,
         PROMPT,
-        vec![image.clone(), image.clone()],
+        vec![image.clone(), image],
     ))
-    .set_sampler_max_len(8);
-    let err = model
-        .send_chat_request(two)
-        .await
-        .err()
-        .expect("two images must be rejected")
-        .to_string();
-    assert!(err.contains("one image per request"), "{err}");
+    .set_sampler_max_len(24);
+    let both = text(&model.send_chat_request(two).await?);
+    assert!(!one.trim().is_empty(), "single image produced no output");
     assert!(
-        !text(&model.send_chat_request(ocr_request(image, 8)).await?).is_empty(),
-        "engine did not survive the rejected request"
+        !both.trim().is_empty(),
+        "two images produced no output (they used to panic the engine worker)"
     );
     Ok(())
 }
