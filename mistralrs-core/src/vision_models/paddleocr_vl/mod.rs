@@ -19,13 +19,20 @@ use std::any::Any;
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::layers::CausalMasker;
 use crate::layers_masker::{CausalMaskConfig, PastKvLenCache};
+use crate::paged_attention::encoder_cache::{CacheModality, EncoderCacheManager};
 use crate::paged_attention::{AttentionImplementation, KvCacheLayout, ModelConfigMetadata};
 use crate::pipeline::{
     EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
 };
+
+/// Connector outputs held for reuse; one OCR page is a few hundred KB of embeds.
+const ENCODER_CACHE_ENTRIES: usize = 32;
 
 use config::Config;
 use connector::Connector;
@@ -49,6 +56,11 @@ pub struct PaddleOcrVlModel {
     max_seq_len: usize,
     config_meta: ModelConfigMetadata,
     cache: EitherCache,
+    // A preempted sequence re-prefills its whole prompt, which would otherwise re-run the tower over
+    // an image whose output cannot have changed. Keyed by image content hash.
+    encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    encoder_cache_hits: Arc<AtomicUsize>,
+    encoder_cache_misses: Arc<AtomicUsize>,
 }
 
 impl PaddleOcrVlModel {
@@ -118,6 +130,9 @@ impl PaddleOcrVlModel {
                 tcfg.num_hidden_layers,
                 cfg.max_position_embeddings,
             )),
+            encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(ENCODER_CACHE_ENTRIES))),
+            encoder_cache_hits: Arc::new(AtomicUsize::new(0)),
+            encoder_cache_misses: Arc::new(AtomicUsize::new(0)),
         })
     }
 }
@@ -149,6 +164,8 @@ impl IsqModel for PaddleOcrVlModel {
 pub(crate) struct PaddleOcrVlVisionSpecificArgs {
     pub input_ids_full: Tensor,
     pub image_grid_thw: Vec<Vec<(usize, usize, usize)>>,
+    /// Content hash per image per row, for the encoder cache.
+    pub image_hashes: Vec<Vec<u64>>,
     pub vision_rows: Vec<usize>,
 }
 
@@ -163,6 +180,7 @@ impl MultimodalModel for PaddleOcrVlModel {
         let PaddleOcrVlVisionSpecificArgs {
             input_ids_full,
             image_grid_thw,
+            image_hashes,
             vision_rows,
         } = *model_specific_args
             .downcast()
@@ -207,12 +225,32 @@ impl MultimodalModel for PaddleOcrVlModel {
             let mut offset = 0;
             for &b in &vision_rows {
                 let mut embeds_per_image = Vec::with_capacity(image_grid_thw[b].len());
-                for &(t, h, w) in &image_grid_thw[b] {
-                    let post_ln =
-                        self.vision
-                            .forward(&pv.narrow(0, offset, t * h * w)?, t, h, w)?;
-                    offset += t * h * w;
-                    embeds_per_image.push(self.connector.forward(&post_ln, t, h, w)?);
+                for (i, &(t, h, w)) in image_grid_thw[b].iter().enumerate() {
+                    let key = image_hashes.get(b).and_then(|hs| hs.get(i)).copied();
+                    let hit = key.and_then(|k| {
+                        let mut guard = self.encoder_cache.lock().expect("encoder cache poisoned");
+                        guard.get(CacheModality::Image, k).map(|out| out[0].clone())
+                    });
+                    let patches = t * h * w;
+                    if let Some(embeds) = hit {
+                        self.encoder_cache_hits.fetch_add(1, Ordering::Relaxed);
+                        offset += patches;
+                        embeds_per_image.push(embeds);
+                        continue;
+                    }
+                    self.encoder_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    let post_ln = self
+                        .vision
+                        .forward(&pv.narrow(0, offset, patches)?, t, h, w)?;
+                    offset += patches;
+                    let embeds = self.connector.forward(&post_ln, t, h, w)?;
+                    if let Some(k) = key {
+                        self.encoder_cache
+                            .lock()
+                            .expect("encoder cache poisoned")
+                            .insert(CacheModality::Image, k, vec![embeds.clone()]);
+                    }
+                    embeds_per_image.push(embeds);
                 }
                 let image_embeds = Tensor::cat(&embeds_per_image, 0)?;
                 let row_ids = input_ids.narrow(0, b, 1)?.flatten_all()?;
@@ -263,10 +301,17 @@ impl MultimodalModel for PaddleOcrVlModel {
     fn config(&self) -> &ModelConfigMetadata {
         &self.config_meta
     }
+    fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
+        Some((
+            self.encoder_cache_hits.clone(),
+            self.encoder_cache_misses.clone(),
+        ))
+    }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(PaddleOcrVlVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
             image_grid_thw: Vec::new(),
+            image_hashes: Vec::new(),
             vision_rows: Vec::new(),
         })
     }

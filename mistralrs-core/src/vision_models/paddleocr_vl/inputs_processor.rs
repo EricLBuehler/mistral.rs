@@ -219,6 +219,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
         // chunk stops before the span, so a grid there would emit positions for absent tokens.
         let image_pad_id = tokenizer.token_to_id(PaddleOcrVlProcessor::IMAGE_PLACEHOLDER);
         let mut grids: Vec<Vec<(usize, usize, usize)>> = Vec::with_capacity(input_seqs.len());
+        let mut hashes: Vec<Vec<u64>> = Vec::with_capacity(input_seqs.len());
         let mut pixel_values_accum = Vec::new();
         let mut vision_rows: Vec<usize> = Vec::new();
 
@@ -233,6 +234,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
                         .map(grid_rows)
                         .unwrap_or_default(),
                 );
+                hashes.push(Vec::new());
                 continue;
             }
             let (pixel_values, row_grids) = match &seq.multimodal.cached_pixel_values {
@@ -276,6 +278,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             }
 
             grids.push(row_grids);
+            hashes.push(seq.image_hashes().map(<[u64]>::to_vec).unwrap_or_default());
             if is_prompt {
                 // Keep pixel_values as [N_patches, 3, 14, 14] (the shape the parity-verified tower
                 // expects); rows concatenate on dim 0 and the model splits them back by grid.
@@ -361,6 +364,7 @@ impl InputsProcessor for PaddleOcrVlImageProcessor {
             model_specific_args: Box::new(PaddleOcrVlVisionSpecificArgs {
                 input_ids_full,
                 image_grid_thw,
+                image_hashes: hashes,
                 vision_rows,
             }),
             paged_attn_meta,
