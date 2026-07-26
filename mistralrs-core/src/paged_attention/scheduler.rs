@@ -410,6 +410,10 @@ impl PagedAttentionScheduler {
         self.sort_running_by_priority_fcfs();
 
         let mut running: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
+        // Sequences whose image-ness disagrees with the batch being formed. They must not go back on
+        // self.running: this loop drains it, so re-queueing spins forever once every remaining
+        // sequence disagrees (a text-only request arriving next to an image one hangs the engine).
+        let mut deferred: VecDeque<Arc<Mutex<Sequence>>> = VecDeque::new();
         while !self.running.is_empty() {
             let seq = self.running.pop_front().unwrap();
             let mut finished_with_break = false;
@@ -450,11 +454,15 @@ impl PagedAttentionScheduler {
                 {
                     running.push_back(seq);
                 } else {
-                    self.running.push_back(seq);
+                    deferred.push_back(seq);
                 }
             }
         }
         self.running = running;
+        // Retry the deferred ones in a later step, the same way the length bucketing does.
+        for seq in deferred {
+            self._preempt(seq);
+        }
 
         // Bucket running completions by sequence length
         let running_for_bucket = std::mem::take(&mut self.running);

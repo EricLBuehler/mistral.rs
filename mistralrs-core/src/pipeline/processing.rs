@@ -55,31 +55,16 @@ pub trait Processor {
         //     }
         // }
 
-        let prompt = apply_chat_template(
+        default_process(
             pipeline,
             messages,
             add_generation_prompt,
+            add_special_tokens,
             enable_thinking,
             reasoning_effort,
             self.template_action(),
             tools,
-        )?;
-        // Templates own their special tokens (HF apply_chat_template convention): when
-        // the rendered prompt already starts with bos, letting the tokenizer add it
-        // again doubles it (gemma-family tokenizers add bos in their post-processor).
-        let add_special_tokens = add_special_tokens
-            && !pipeline
-                .get_chat_template()
-                .and_then(|t| t.bos_tok())
-                .is_some_and(|bos| prompt.starts_with(&bos));
-        let encoding = pipeline
-            .tokenizer()
-            .with_context(|| {
-                "Default `Processor::process` requires the model to have a tokenizer."
-            })?
-            .encode_fast(prompt.clone(), add_special_tokens)
-            .map_err(anyhow::Error::msg)?;
-        Ok((encoding.get_ids().to_vec(), prompt))
+        )
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
     fn get_special_tokens(&self) -> &[&'static str];
@@ -122,6 +107,44 @@ fn move_audio_after_text(content: MessageContent) -> MessageContent {
         .partition(|row| row.get("type").and_then(|value| value.as_str()) != Some("audio"));
     non_audio.extend(audio);
     Either::Right(non_audio)
+}
+
+/// Body of the default [`Processor::process`], split out so a processor that only needs to massage
+/// the messages first can reuse the rest instead of restating the tokenizer handling.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn default_process(
+    pipeline: &dyn Pipeline,
+    messages: Vec<IndexMap<String, MessageContent>>,
+    add_generation_prompt: bool,
+    add_special_tokens: bool,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
+    action: MessagesAction,
+    tools: Vec<Tool>,
+) -> Result<(Vec<u32>, String)> {
+    let prompt = apply_chat_template(
+        pipeline,
+        messages,
+        add_generation_prompt,
+        enable_thinking,
+        reasoning_effort,
+        action,
+        tools,
+    )?;
+    // Templates own their special tokens (HF apply_chat_template convention): when
+    // the rendered prompt already starts with bos, letting the tokenizer add it
+    // again doubles it (gemma-family tokenizers add bos in their post-processor).
+    let add_special_tokens = add_special_tokens
+        && !pipeline
+            .get_chat_template()
+            .and_then(|t| t.bos_tok())
+            .is_some_and(|bos| prompt.starts_with(&bos));
+    let encoding = pipeline
+        .tokenizer()
+        .with_context(|| "Default `Processor::process` requires the model to have a tokenizer.")?
+        .encode_fast(prompt.clone(), add_special_tokens)
+        .map_err(anyhow::Error::msg)?;
+    Ok((encoding.get_ids().to_vec(), prompt))
 }
 
 pub(crate) fn apply_chat_template(
