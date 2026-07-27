@@ -300,6 +300,7 @@ use crate::{
     models::quantized_phi3::ModelWeights as QPhi3,
     models::quantized_qwen::ModelWeights as QQwen,
     models::quantized_qwen3::ModelWeights as QQwen3,
+    models::quantized_qwen3_5::ModelWeights as QQwen3_5,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
@@ -320,6 +321,15 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
 
     fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_adapted("`Config` should be GGML Quantized with an Adapter");
+        config.try_into_model()
+    }
+}
+
+impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for QQwen3_5 {
+    type Error = candle_core::Error;
+
+    fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
+        let config = params.expect_quantized("`Config` should be GGUF Quantized");
         config.try_into_model()
     }
 }
