@@ -37,6 +37,71 @@ pub(crate) mod qwen3_vl_moe;
 pub(crate) mod siglip;
 pub(crate) mod voxtral;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChunkedMultimodalRange {
+    pub batch: usize,
+    pub local_start: usize,
+    pub local_end: usize,
+    pub embed_start: usize,
+    pub len: usize,
+}
+
+// Map full-prompt multimodal spans onto the current prompt chunk. The visual
+// embeddings stay packed in full-prompt order, while input_embeds is chunk-local.
+pub(crate) fn chunked_multimodal_ranges(
+    spans_by_batch: &[Vec<(usize, usize)>],
+    seqlen_offsets: &[usize],
+    seq_len: usize,
+) -> Vec<ChunkedMultimodalRange> {
+    let mut ranges = Vec::new();
+    let mut embed_offset = 0usize;
+    for (batch, spans) in spans_by_batch.iter().enumerate() {
+        let chunk_start = seqlen_offsets.get(batch).copied().unwrap_or(0);
+        let chunk_end = chunk_start + seq_len;
+        for &(start, end) in spans {
+            let span_len = end - start;
+            let intersect_start = start.max(chunk_start);
+            let intersect_end = end.min(chunk_end);
+            if intersect_start < intersect_end {
+                let len = intersect_end - intersect_start;
+                ranges.push(ChunkedMultimodalRange {
+                    batch,
+                    local_start: intersect_start - chunk_start,
+                    local_end: intersect_end - chunk_start,
+                    embed_start: embed_offset + (intersect_start - start),
+                    len,
+                });
+            }
+            embed_offset += span_len;
+        }
+    }
+    ranges
+}
+
+// DeepStack layers are packed like the main visual embeddings, so they must be
+// clipped with the same ranges as the local visual masks.
+pub(crate) fn chunked_multimodal_layers(
+    layers: Vec<Tensor>,
+    ranges: &[ChunkedMultimodalRange],
+) -> Result<Vec<Tensor>> {
+    if ranges.is_empty() {
+        return layers
+            .into_iter()
+            .map(|layer| layer.narrow(0, 0, 0))
+            .collect();
+    }
+    layers
+        .into_iter()
+        .map(|layer| {
+            let chunks = ranges
+                .iter()
+                .map(|range| layer.narrow(0, range.embed_start, range.len))
+                .collect::<Result<Vec<_>>>()?;
+            Tensor::cat(&chunks, 0)
+        })
+        .collect()
+}
+
 use crate::pipeline::{
     text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
     RecurrentBatchKind,
