@@ -603,11 +603,12 @@ pub(crate) struct CudaDecodeGraphEntry {
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
+    suspended: bool,
 }
 
 impl CudaDecodeGraphState {
     pub(crate) fn disabled(&self) -> bool {
-        self.disabled
+        self.disabled || self.suspended
     }
 
     pub(crate) fn disable(&mut self) {
@@ -617,6 +618,16 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    pub(crate) fn suspend(&mut self) {
+        self.suspended = true;
+        self.clear();
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.suspended = false;
+        self.clear();
     }
 
     pub(crate) fn replay(
@@ -1146,5 +1157,18 @@ mod tests {
         assert_eq!(graph_context_len(Some(513), None), Some(513));
         assert_eq!(graph_context_len(None, Some(2048)), Some(2048));
         assert_eq!(graph_context_len(None, None), None);
+    }
+
+    #[test]
+    fn graph_suspension_does_not_clear_permanent_disable() {
+        let mut state = CudaDecodeGraphState::default();
+        state.suspend();
+        assert!(state.disabled());
+        state.resume();
+        assert!(!state.disabled());
+        state.disable();
+        state.suspend();
+        state.resume();
+        assert!(state.disabled());
     }
 }

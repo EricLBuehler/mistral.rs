@@ -870,6 +870,11 @@ impl Loader for NormalLoader {
             paged_attn_config
         };
 
+        if paged_attn_config.is_some() {
+            for module in tracker.get().clone() {
+                module.ct.resolve()?;
+            }
+        }
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
@@ -906,6 +911,9 @@ impl Loader for NormalLoader {
         } else {
             (None, None)
         };
+
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
         let llg_factory = build_llg_factory(tokenizer.clone())?;
@@ -995,11 +1003,18 @@ impl IsqPipelineMixin for NormalPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
+        self.cleanup_cuda_graphs();
         super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
     }
 
     fn begin_calibration(&mut self) -> Result<()> {
-        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+        super::isq_flow::begin_calibration(&self.tracked_modules)?;
+        #[cfg(feature = "cuda")]
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .suspend();
+        Ok(())
     }
 
     fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
@@ -1010,11 +1025,21 @@ impl IsqPipelineMixin for NormalPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(
+        self.cleanup_cuda_graphs();
+        let result = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
             save_cimatrix.as_deref(),
-        )
+        );
+        #[cfg(feature = "cuda")]
+        if result.is_ok() || !super::isq_flow::calibration_status(&self.tracked_modules).collecting
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .resume();
+        }
+        result
     }
 }
 

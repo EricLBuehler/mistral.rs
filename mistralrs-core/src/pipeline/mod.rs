@@ -131,6 +131,20 @@ use self::text_models_inputs_processor::{
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
 
+#[cfg(feature = "cuda")]
+pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices {
+        if let Device::Cuda(cuda) = device {
+            cuda.cuda_stream().context().synchronize()?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn resolve_lora_execution(
     runtime: Option<&crate::DynamicLoraRuntime>,
     input_ids: &Tensor,

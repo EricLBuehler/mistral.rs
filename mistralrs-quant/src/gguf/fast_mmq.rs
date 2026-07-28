@@ -1533,8 +1533,8 @@ pub fn grouped_pair(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::quantized::GgmlDType;
     use crate::gguf::fast_mmvq;
+    use candle_core::quantized::GgmlDType;
 
     const BATCH: usize = 3;
     const ROWS: usize = 4;

@@ -63,6 +63,39 @@ pub use uqff::{
     UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
 
+#[doc(hidden)]
+pub fn gguf_affine_adjust_cache_bytes(
+    device: &Device,
+    dtype: DType,
+    available_bytes: usize,
+    requested_cache_bytes: usize,
+    minimum_cache_bytes: usize,
+    may_reduce_cache: bool,
+) -> Result<usize> {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_adjust_cache_bytes(
+            device,
+            dtype,
+            available_bytes,
+            requested_cache_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        )
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (
+            device,
+            dtype,
+            available_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        );
+        Ok(requested_cache_bytes)
+    }
+}
+
 #[cfg(feature = "metal")]
 pub use afq::ops::{
     afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
@@ -1237,6 +1270,23 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn prepare_gguf_affine_raw(
+        &self,
+        _flat_batch: usize,
+        _dtype: DType,
+        _device: &Device,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
+
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
     /// Used by Metal fused QKV / gate-up paths.
     fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
@@ -1349,7 +1399,7 @@ pub fn try_fused_quantized_ffn(
         [batch, rows, k] => (*batch * *rows, *k),
         _ => return Ok(None),
     };
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch < gguf::GGUF_AFFINE_MIN_BATCH {
         return Ok(None);
     }
 
@@ -1362,12 +1412,6 @@ pub fn try_fused_quantized_ffn(
     let Some(down_q) = down.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != up_q.dtype()
-        || !gguf::fast_mmq::supports(gate_q.dtype())
-        || !gguf::fast_mmq::supports(down_q.dtype())
-    {
-        return Ok(None);
-    }
     if gate_q.shape() != up_q.shape() {
         return Ok(None);
     }
@@ -1379,6 +1423,38 @@ pub fn try_fused_quantized_ffn(
     if !gate_q.device().same_device(xs.device())
         || !up_q.device().same_device(xs.device())
         || !down_q.device().same_device(xs.device())
+    {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let down_ready = down.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready && down_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            let intermediate = fused_glu(&gate_out, &up_out, activation)?;
+            drop(gate_out);
+            drop(up_out);
+            let out = down
+                .try_gguf_affine_forward_raw(&intermediate)?
+                .expect("prepared GGUF affine down projection");
+            return Ok(Some(out));
+        }
+    }
+
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    if gate_q.dtype() != up_q.dtype()
+        || !gguf::fast_mmq::supports(gate_q.dtype())
+        || !gguf::fast_mmq::supports(down_q.dtype())
     {
         return Ok(None);
     }
@@ -1401,6 +1477,9 @@ pub fn try_fused_quantized_gate_up(
     if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
         return Ok(None);
     }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() {
+        return Ok(None);
+    }
     if gate.has_bias() || up.has_bias() {
         return Ok(None);
     }
@@ -1414,9 +1493,6 @@ pub fn try_fused_quantized_gate_up(
     let Some(up_q) = up.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != up_q.dtype() {
-        return Ok(None);
-    }
     if gate_q.shape() != up_q.shape() {
         return Ok(None);
     }
@@ -1433,6 +1509,24 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     }
 
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
+        }
+    }
+
+    if gate_q.dtype() != up_q.dtype() {
+        return Ok(None);
+    }
     if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
         if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
             return Ok(None);
@@ -1487,6 +1581,9 @@ pub fn try_fused_quantized_qkv(
     {
         return Ok(None);
     }
+    if q.is_dynamic_lora_active() || k.is_dynamic_lora_active() || v.is_dynamic_lora_active() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }
@@ -1503,10 +1600,6 @@ pub fn try_fused_quantized_qkv(
     let Some(v_q) = v.get_qtensor() else {
         return Ok(None);
     };
-    let dtype = q_q.dtype();
-    if dtype != k_q.dtype() || dtype != v_q.dtype() {
-        return Ok(None);
-    }
 
     let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
         return Ok(None);
@@ -1522,6 +1615,29 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let q_ready = q.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let k_ready = k.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let v_ready = v.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if q_ready && k_ready && v_ready {
+            let q_out = q
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine query projection");
+            let k_out = k
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine key projection");
+            let v_out = v
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine value projection");
+            return Ok(Some((q_out, k_out, v_out)));
+        }
+    }
+
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() {
+        return Ok(None);
+    }
     if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
         if !gguf::fast_mmvq::supports(dtype) {
             return Ok(None);
