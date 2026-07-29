@@ -439,6 +439,7 @@ struct RawConfig {
     bits: Option<usize>,
     group_size: Option<usize>,
     checkpoint_format: Option<String>,
+    config_groups: Option<serde_json::Value>,
     weight_block_size: Option<Vec<usize>>,
     bnb_4bit_quant_type: Option<String>,
 }
@@ -452,18 +453,30 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
         let raw = RawConfig::deserialize(deserializer)?;
 
         match &raw.quant_method {
-            Some(m) if m == "gptq" || m == "awq" => {
-                let bits = raw
-                    .bits
-                    .ok_or_else(|| serde::de::Error::missing_field("bits"))?;
-                let group_size = raw
-                    .group_size
-                    .ok_or_else(|| serde::de::Error::missing_field("group_size"))?;
+            Some(m) if m == "gptq" || m == "awq" || m == "compressed-tensors" => {
+                let (bits, group_size) = if m == "compressed-tensors" {
+                    compressed_tensor_params(&raw).ok_or_else(|| {
+                        serde::de::Error::custom(
+                            "compressed-tensors config is missing num_bits/group_size",
+                        )
+                    })?
+                } else {
+                    (
+                        raw.bits
+                            .ok_or_else(|| serde::de::Error::missing_field("bits"))?,
+                        raw.group_size
+                            .ok_or_else(|| serde::de::Error::missing_field("group_size"))?,
+                    )
+                };
                 Ok(QuantizedConfig::GptqAwq {
                     bits,
                     group_size,
-                    checkpoint_format: raw.checkpoint_format,
-                    is_awq: m == "awq",
+                    checkpoint_format: if m == "compressed-tensors" {
+                        Some("compressed-tensors".to_string())
+                    } else {
+                        raw.checkpoint_format
+                    },
+                    is_awq: m != "gptq",
                 })
             }
             Some(m) if m == "fp8" => {
@@ -503,6 +516,41 @@ impl<'de> Deserialize<'de> for QuantizedConfig {
             },
         }
     }
+}
+
+fn compressed_tensor_params(raw: &RawConfig) -> Option<(usize, usize)> {
+    if let (Some(bits), Some(group_size)) = (raw.bits, raw.group_size) {
+        return Some((bits, group_size));
+    }
+    fn visit(value: &serde_json::Value) -> Option<(usize, usize)> {
+        if let Some(object) = value.as_object() {
+            let bits = object
+                .get("num_bits")
+                .or_else(|| object.get("bits"))
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| value as usize);
+            let group_size = object
+                .get("group_size")
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| value as usize);
+            if let (Some(bits), Some(group_size)) = (bits, group_size) {
+                return Some((bits, group_size));
+            }
+            for child in object.values() {
+                if let Some(params) = visit(child) {
+                    return Some(params);
+                }
+            }
+        } else if let Some(array) = value.as_array() {
+            for child in array {
+                if let Some(params) = visit(child) {
+                    return Some(params);
+                }
+            }
+        }
+        None
+    }
+    raw.config_groups.as_ref().and_then(visit)
 }
 
 impl QuantizedConfig {
