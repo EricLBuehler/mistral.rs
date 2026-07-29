@@ -46,6 +46,233 @@ pub(super) struct CutlassExpertsWeights {
     pub(super) w: StackedExpertWeights,
 }
 
+#[cfg(feature = "cuda")]
+pub(super) struct Wna16ExpertsWeights {
+    pub(super) gate_up: Tensor,
+    pub(super) gate_up_scales: Tensor,
+    pub(super) down: Tensor,
+    pub(super) down_scales: Tensor,
+    pub(super) w_size_n: usize,
+    pub(super) bits: usize,
+    pub(super) group_size: usize,
+    pub(super) zero_point: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl Wna16ExpertsWeights {
+    pub(super) fn load(
+        cfg: &MoEExpertsConfig,
+        vb: ShardedVarBuilder,
+        comm: &Arc<mistralrs_quant::Comm>,
+        quantization_config: &QuantizedConfig,
+    ) -> Result<Self> {
+        if comm.world_size() != 1 {
+            candle_core::bail!("WNA16 MoE experts do not support tensor parallelism");
+        }
+        // Candle's CUDA copy2d path does not provide a kernel for every packed
+        // integer dtype. Assemble the routed tensors on CPU, then transfer the
+        // already-contiguous stacks to CUDA in one copy per projection.
+        let target_device = vb.device().clone();
+        let read_vb = if target_device.is_cuda() {
+            vb.clone().set_device(Device::Cpu)
+        } else {
+            vb.clone()
+        };
+        let QuantizedConfig::GptqAwq {
+            bits,
+            group_size,
+            checkpoint_format,
+            is_awq,
+            ..
+        } = quantization_config
+        else {
+            candle_core::bail!("WNA16 MoE requires GPTQ/AWQ quantization metadata");
+        };
+        if !matches!(bits, 4 | 8) || *group_size == 0 {
+            candle_core::bail!("WNA16 MoE requires 4 or 8 bits and a positive group size");
+        }
+        let compressed = checkpoint_format.as_deref() == Some("compressed-tensors");
+        let legacy_gptq = !compressed && !*is_awq;
+        if !compressed && *is_awq {
+            candle_core::bail!("legacy AWQ MoE experts are not supported by the WNA16 backend");
+        }
+        let pack_factor = 32 / bits;
+        if cfg.hidden_size % pack_factor != 0
+            || cfg.moe_intermediate_size % pack_factor != 0
+            || cfg.hidden_size % group_size != 0
+            || cfg.moe_intermediate_size % group_size != 0
+        {
+            candle_core::bail!(
+                "WNA16 MoE dimensions must be divisible by pack factor and group size"
+            );
+        }
+        let projection = |expert: &ShardedVarBuilder,
+                          name: &str,
+                          out: usize,
+                          input: usize|
+         -> Result<(Tensor, Tensor)> {
+            let vb = expert.pp(name);
+            if compressed {
+                Ok((
+                    vb.get_with_hints_dtype(
+                        (out, input / pack_factor),
+                        "weight_packed",
+                        Shard::default(),
+                        DType::U32,
+                    )?,
+                    vb.get_with_hints_dtype(
+                        (out, input / group_size),
+                        "weight_scale",
+                        Shard::default(),
+                        DType::F32,
+                    )?,
+                ))
+            } else {
+                if !vb.contains_tensor("qzeros") {
+                    candle_core::bail!("classic GPTQ MoE projection {name} is missing qzeros");
+                }
+                let packed = vb
+                    .get_with_hints_dtype(
+                        (input / pack_factor, out),
+                        "qweight",
+                        Shard::default(),
+                        DType::U32,
+                    )?
+                    .t()?
+                    .contiguous()?;
+                let scales = vb
+                    .get_with_hints_dtype(
+                        (input / group_size, out),
+                        "scales",
+                        Shard::default(),
+                        DType::F32,
+                    )?
+                    .t()?
+                    .contiguous()?;
+                Ok((packed, scales))
+            }
+        };
+
+        let mut gate_weights = Vec::with_capacity(cfg.num_experts);
+        let mut gate_scales = Vec::with_capacity(cfg.num_experts);
+        let mut up_weights = Vec::with_capacity(cfg.num_experts);
+        let mut up_scales = Vec::with_capacity(cfg.num_experts);
+        let mut down_weights = Vec::with_capacity(cfg.num_experts);
+        let mut down_scales = Vec::with_capacity(cfg.num_experts);
+        for expert_id in 0..cfg.num_experts {
+            let expert = read_vb.pp(expert_id.to_string());
+            let names = cfg.expert_proj_names;
+            let (gate, gate_scale) = projection(
+                &expert,
+                names.gate,
+                cfg.moe_intermediate_size,
+                cfg.hidden_size,
+            )?;
+            let (up, up_scale) = projection(
+                &expert,
+                names.up,
+                cfg.moe_intermediate_size,
+                cfg.hidden_size,
+            )?;
+            let (down, down_scale) = projection(
+                &expert,
+                names.down,
+                cfg.hidden_size,
+                cfg.moe_intermediate_size,
+            )?;
+            gate_weights.push(gate);
+            gate_scales.push(gate_scale);
+            up_weights.push(up);
+            up_scales.push(up_scale);
+            down_weights.push(down);
+            down_scales.push(down_scale);
+        }
+
+        let gate_up = Tensor::cat(
+            &[
+                &Tensor::stack(&gate_weights, 0)?,
+                &Tensor::stack(&up_weights, 0)?,
+            ],
+            1,
+        )?
+        .contiguous()?;
+        let gate_up_scales = Tensor::cat(
+            &[
+                &Tensor::stack(&gate_scales, 0)?,
+                &Tensor::stack(&up_scales, 0)?,
+            ],
+            1,
+        )?
+        .contiguous()?;
+        let down = Tensor::stack(&down_weights, 0)?.contiguous()?;
+        let down_scales = Tensor::stack(&down_scales, 0)?.contiguous()?;
+        let gate_up = gate_up.to_device(&target_device)?;
+        let gate_up_scales = gate_up_scales.to_device(&target_device)?;
+        let down = down.to_device(&target_device)?;
+        let down_scales = down_scales.to_device(&target_device)?;
+        Ok(Self {
+            gate_up,
+            gate_up_scales,
+            down,
+            down_scales,
+            w_size_n: cfg.moe_intermediate_size,
+            bits: *bits,
+            group_size: *group_size,
+            zero_point: if legacy_gptq {
+                (1usize << (bits - 1)) - 1
+            } else {
+                1usize << (bits - 1)
+            },
+        })
+    }
+
+    pub(super) fn forward_impl(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Result<Tensor> {
+        if forward.lora.is_some() {
+            candle_core::bail!("WNA16 MoE does not support LoRA adapters");
+        }
+        let is_prefill = forward.shape.phase.is_prefill();
+        let (expert_ids, sorted_token_ids) = if is_prefill {
+            use crate::ops::ArgSortOp;
+            forward.topk_ids.flatten_all()?.sort(true)?
+        } else {
+            forward.topk_ids.flatten_all()?.sort_last_dim(true)?
+        };
+        let gate_up = mistralrs_quant::moe::cuda::moe_gemm_wna16(
+            forward.xs_flat,
+            &self.gate_up,
+            &self.gate_up_scales,
+            None,
+            &sorted_token_ids,
+            &expert_ids,
+            config.num_experts_per_tok,
+            self.bits,
+            self.group_size,
+            is_prefill,
+            self.zero_point,
+        )?;
+        let down_inputs = crate::ops::split_mul_and_act(&gate_up, self.w_size_n, config.act)?;
+        let down = mistralrs_quant::moe::cuda::moe_gemm_wna16(
+            &down_inputs,
+            &self.down,
+            &self.down_scales,
+            Some(forward.topk_weights),
+            &sorted_token_ids,
+            &expert_ids,
+            config.num_experts_per_tok,
+            self.bits,
+            self.group_size,
+            is_prefill,
+            self.zero_point,
+        )?;
+        down.reshape((forward.shape.num_tokens, (), forward.shape.hidden_dim))?
+            .sum(D::Minus2)
+    }
+}
+
 /// Below this batch size the grouped-GEMM setup cost exceeds the fused decode kernels.
 #[cfg(feature = "cuda")]
 pub(super) const CUTLASS_MOE_MIN_TOKENS: usize = 64;

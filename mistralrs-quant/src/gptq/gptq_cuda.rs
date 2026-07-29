@@ -465,6 +465,13 @@ pub fn gptq_linear(
     };
 
     let is_awq = *is_awq;
+    // compressed-tensors checkpoints can leave selected modules (for example
+    // lm_head, embeddings, or router weights) in their original dense form.
+    // The global quantization config still reaches this loader, so prefer the
+    // dense tensor whenever the module was explicitly left unquantized.
+    if vb.contains_tensor("weight") {
+        return crate::linear_b(in_dim, out_dim, false, &None, vb);
+    }
     let mut required = vec!["qweight", "qzeros", "scales"];
     if !is_awq {
         required.push("g_idx");
