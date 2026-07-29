@@ -1344,12 +1344,25 @@ mod tests {
         )
     }
 
+    // Dequantization is accelerator-only when built with cuda/metal, so tests must live on that device.
+    fn test_device() -> Result<Device> {
+        #[cfg(feature = "metal")]
+        {
+            Device::new_metal(0)
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            Device::cuda_if_available(0)
+        }
+    }
+
     fn test_layer(bits: HqqBits) -> Result<HqqLayer> {
-        test_layer_on_device(bits, &Device::Cpu)
+        test_layer_on_device(bits, &test_device()?)
     }
 
     fn assert_embedding_matches_dequantized_gather(layer: &HqqLayer) -> Result<()> {
-        let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &Device::Cpu)?;
+        let device = layer.w_q.device().clone();
+        let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &device)?;
         let actual = layer.embedding_forward_raw(&ids)?;
         let expected = layer
             .dequantize()?
@@ -1358,7 +1371,7 @@ mod tests {
 
         assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(actual.dtype(), DType::F32);
-        assert!(actual.device().is_cpu());
+        assert_eq!(actual.device().location(), device.location());
         let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
         assert!(max_diff <= 1e-6, "max_diff={max_diff}");
         Ok(())
@@ -1377,21 +1390,16 @@ mod tests {
     #[test]
     fn hqq_embedding_chunks_preserve_shape_and_values() -> Result<()> {
         const TEST_CHUNK_ELEMENTS: usize = 45;
-        #[cfg(feature = "metal")]
-        let device = Device::new_metal(0)?;
-        #[cfg(not(feature = "metal"))]
-        let device = Device::Cpu;
+        let device = test_device()?;
         let ids = Tensor::from_vec(vec![95u32, 0, 64, 63, 17, 95], (1, 2, 3), &device)?;
 
         for bits in [HqqBits::Four, HqqBits::Eight] {
             let layer = test_layer_on_device(bits, &device)?;
-            let reference_layer = test_layer(bits)?;
             let actual =
                 layer.embedding_forward_raw_with_chunk_elements(&ids, TEST_CHUNK_ELEMENTS)?;
-            let reference_ids = ids.to_device(&Device::Cpu)?;
-            let expected = reference_layer
+            let expected = layer
                 .dequantize()?
-                .index_select(&reference_ids.flatten_all()?, 0)?
+                .index_select(&ids.flatten_all()?, 0)?
                 .reshape((1, 2, 3, TEST_EMBEDDING_DIM))?;
 
             assert_eq!(actual.dims(), &[1, 2, 3, TEST_EMBEDDING_DIM]);
@@ -1415,10 +1423,7 @@ mod tests {
 
     #[test]
     fn hqq_embedding_accepts_empty_ids() -> Result<()> {
-        #[cfg(feature = "metal")]
-        let device = Device::new_metal(0)?;
-        #[cfg(not(feature = "metal"))]
-        let device = Device::Cpu;
+        let device = test_device()?;
         let layer = test_layer_on_device(HqqBits::Four, &device)?;
         let ids = Tensor::zeros(
             super::HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS,
@@ -1437,7 +1442,8 @@ mod tests {
 
     #[test]
     fn hqq4_uqff_embedding_matches_dequantized_gather() -> Result<()> {
-        let layer = test_layer(HqqBits::Four)?;
+        let device = test_device()?;
+        let layer = test_layer_on_device(HqqBits::Four, &device)?;
         let mut tensors = uqff_version_tensors();
         tensors.extend(layer.serialize_uqff("test.embedding", IsqType::HQQ4)?);
         let stamp = std::time::SystemTime::now()
@@ -1456,9 +1462,9 @@ mod tests {
         .map_err(candle_core::Error::wrap)?;
         let reader = UqffReader::open(std::slice::from_ref(&path))?;
         let loaded = reader
-            .load_linear("test.embedding", &Device::Cpu, Shard::default())?
+            .load_linear("test.embedding", &device, Shard::default())?
             .unwrap();
-        let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &Device::Cpu)?;
+        let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &device)?;
         let actual = loaded.embedding_forward_raw(&ids)?;
         let expected = layer
             .dequantize()?

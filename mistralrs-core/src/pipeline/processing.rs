@@ -23,6 +23,8 @@ pub trait ProcessorCreator {
 pub enum MessagesAction {
     // For idefics2, others which use the "new" openai format
     Keep,
+    // Gemma 4 is trained with audio after the instruction.
+    KeepWithAudioAfterText,
     // For everything else
     FlattenOnlyText,
 }
@@ -111,6 +113,17 @@ fn flatten_content(content: MessageContent) -> MessageContent {
     }
 }
 
+fn move_audio_after_text(content: MessageContent) -> MessageContent {
+    let Either::Right(content_rows) = content else {
+        return content;
+    };
+    let (mut non_audio, audio): (Vec<_>, Vec<_>) = content_rows
+        .into_iter()
+        .partition(|row| row.get("type").and_then(|value| value.as_str()) != Some("audio"));
+    non_audio.extend(audio);
+    Either::Right(non_audio)
+}
+
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
@@ -122,6 +135,22 @@ pub(crate) fn apply_chat_template(
 ) -> Result<String> {
     let messages = match action {
         MessagesAction::Keep => messages,
+        MessagesAction::KeepWithAudioAfterText => messages
+            .into_iter()
+            .map(|message| {
+                message
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let value = if key == "content" {
+                            move_audio_after_text(value)
+                        } else {
+                            value
+                        };
+                        (key, value)
+                    })
+                    .collect()
+            })
+            .collect(),
         MessagesAction::FlattenOnlyText => {
             // This is really only for image models. If they need to flatten it s.t. they only see
             // the text, do that.
@@ -177,5 +206,55 @@ impl Processor for BasicProcessor {
     }
     fn template_action(&self) -> MessagesAction {
         MessagesAction::Keep
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use either::Either;
+    use indexmap::IndexMap;
+    use serde_json::Value;
+
+    use super::move_audio_after_text;
+
+    #[test]
+    fn moves_audio_after_text_without_reordering_other_parts() {
+        let content = Either::Right(vec![
+            IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("audio".to_string())),
+                ("id".to_string(), Value::String("first".to_string())),
+            ]),
+            IndexMap::from([("type".to_string(), Value::String("video".to_string()))]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String("transcribe".to_string())),
+            ]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("audio".to_string())),
+                ("id".to_string(), Value::String("second".to_string())),
+            ]),
+        ]);
+
+        let Either::Right(parts) = move_audio_after_text(content) else {
+            panic!("expected multimodal content");
+        };
+        let types = parts
+            .iter()
+            .map(|part| part.get("type").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+        let audio_ids = parts
+            .iter()
+            .filter_map(|part| part.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(types, ["image", "video", "text", "audio", "audio"]);
+        assert_eq!(audio_ids, ["first", "second"]);
+    }
+
+    #[test]
+    fn leaves_string_content_unchanged() {
+        let content = Either::Left("hello".to_string());
+        assert_eq!(move_audio_after_text(content.clone()), content);
     }
 }

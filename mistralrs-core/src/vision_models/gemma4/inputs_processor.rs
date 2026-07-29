@@ -3,7 +3,7 @@
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
-use image::{DynamicImage, GenericImageView};
+use image::{imageops, DynamicImage, GenericImageView, Rgba, RgbaImage};
 use mistralrs_vision::{ApplyTransforms, Rescale, ToTensorNoNorm, Transforms};
 use tokenizers::Tokenizer;
 
@@ -143,7 +143,7 @@ impl Processor for Gemma4Processor {
     }
 
     fn template_action(&self) -> MessagesAction {
-        MessagesAction::Keep
+        MessagesAction::KeepWithAudioAfterText
     }
 }
 
@@ -166,6 +166,16 @@ struct Gemma4ImageProcessor {
 }
 
 type UnifiedImagePreprocessOutput = (Tensor, Tensor, Vec<(u32, u32)>);
+
+fn convert_to_rgb(image: &DynamicImage) -> DynamicImage {
+    if !image.color().has_alpha() {
+        return DynamicImage::ImageRgb8(image.to_rgb8());
+    }
+    let (width, height) = image.dimensions();
+    let mut background = RgbaImage::from_pixel(width, height, Rgba([u8::MAX; 4]));
+    imageops::overlay(&mut background, &image.to_rgba8(), 0, 0);
+    DynamicImage::ImageRgba8(background).into_rgb8().into()
+}
 
 impl Gemma4ImageProcessor {
     /// Compute how many vision soft tokens a single image will produce after
@@ -316,7 +326,7 @@ impl Gemma4ImageProcessor {
 
         for image in images.iter_mut() {
             if do_convert_rgb {
-                *image = DynamicImage::ImageRgb8(image.to_rgb8());
+                *image = convert_to_rgb(image);
             }
         }
 
@@ -1001,7 +1011,7 @@ impl InputsProcessor for Gemma4ImageProcessor {
                         let resample = preprocessor_config.resampling.to_filter()?;
 
                         for frame in &video.frames {
-                            let frame_rgb = DynamicImage::ImageRgb8(frame.to_rgb8());
+                            let frame_rgb = convert_to_rgb(frame);
                             let resized =
                                 frame_rgb.resize_exact(new_w as u32, new_h as u32, resample);
 
@@ -1312,7 +1322,7 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
         for image in images.iter_mut() {
             if do_convert_rgb {
-                *image = DynamicImage::ImageRgb8(image.to_rgb8());
+                *image = convert_to_rgb(image);
             }
         }
 
@@ -1384,8 +1394,27 @@ impl ImagePreProcessor for Gemma4ImageProcessor {
 
 #[cfg(test)]
 mod tests {
-    use super::{cached_tokens_for_ranges, Gemma4Processor, Gemma4ProcessorSettings};
+    use super::{
+        cached_tokens_for_ranges, convert_to_rgb, Gemma4Processor, Gemma4ProcessorSettings,
+    };
     use crate::vision_models::processor_config::ProcessorConfig;
+    use image::{DynamicImage, Rgba, RgbaImage};
+
+    #[test]
+    fn convert_to_rgb_composites_alpha_on_white() {
+        let image = DynamicImage::ImageRgba8(RgbaImage::from_fn(2, 1, |x, _| {
+            if x == 0 {
+                Rgba([10, 20, 30, 0])
+            } else {
+                Rgba([10, 20, 30, u8::MAX])
+            }
+        }));
+
+        let rgb = convert_to_rgb(&image).into_rgb8();
+
+        assert_eq!(rgb.get_pixel(0, 0).0, [u8::MAX; 3]);
+        assert_eq!(rgb.get_pixel(1, 0).0, [10, 20, 30]);
+    }
 
     #[test]
     fn defaults_audio_seq_length_to_reference_cap() {
