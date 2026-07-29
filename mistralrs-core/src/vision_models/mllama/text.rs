@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::{Activation, Module};
@@ -14,9 +14,10 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{embedding_with_legacy_tied_uqff, CausalMasker, Llama3RotaryEmbedding, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        text_models_inputs_processor::PagedAttentionInputMetadata, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -86,6 +87,7 @@ struct MLlamaTextSelfAttention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    paged_attn: Option<PagedAttention>,
 }
 
 impl MLlamaTextSelfAttention {
@@ -93,6 +95,7 @@ impl MLlamaTextSelfAttention {
         cfg: &MLlamaTextConfig,
         vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -141,6 +144,7 @@ impl MLlamaTextSelfAttention {
             num_heads: cfg.num_attention_heads / comm.world_size(),
             num_kv_heads: (cfg.num_key_value_heads / comm.world_size()).max(1),
             head_dim,
+            paged_attn,
         })
     }
 
@@ -150,6 +154,7 @@ impl MLlamaTextSelfAttention {
         attention_mask: &AttentionMask,
         ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (bs, q_len, _) = hidden_states.dims3()?;
 
@@ -183,21 +188,59 @@ impl MLlamaTextSelfAttention {
             .clone();
         let (q, mut k) = self.rope.forward(&q, &k, &positions)?;
 
-        (k, v) = kv_cache.append(&k, &v)?;
-
-        let attn_output = Sdpa
-            .run_attention(
-                &q.contiguous()?,
-                &k.contiguous()?,
-                &v.contiguous()?,
-                attention_mask,
-                None,
-                &self.sdpa_params,
-            )?
-            .transpose(1, 2)?
-            .contiguous()?
-            .reshape((bs, q_len, ()))?
-            .to_dtype(q.dtype())?;
+        let metadata = ctx.paged_layer(layer_idx);
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    Some(ctx.flash_params()),
+                )?,
+                None => {
+                    if matches!(attention_mask, AttentionMask::None) {
+                        candle_core::bail!("Mllama paged self-attention is missing cache metadata");
+                    }
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &input_metadata,
+                        &self.sdpa_params,
+                        Some(ctx.flash_params()),
+                    )?
+                }
+            },
+            None => {
+                (k, v) = kv_cache.append(&k, &v)?;
+                Sdpa.run_attention(
+                    &q.contiguous()?,
+                    &k.contiguous()?,
+                    &v.contiguous()?,
+                    attention_mask,
+                    Some(ctx.flash_params()),
+                    &self.sdpa_params,
+                )?
+            }
+        };
+        attn_output = if matches!(attention_mask, AttentionMask::None) {
+            attn_output.reshape((bs, q_len, ()))?
+        } else {
+            attn_output
+                .transpose(1, 2)?
+                .contiguous()?
+                .reshape((bs, q_len, ()))?
+        }
+        .to_dtype(q.dtype())?;
 
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
@@ -211,16 +254,28 @@ struct MLlamaSelfAttentionDecoderLayer {
     post_attention_layernorm: RmsNorm,
 }
 
+struct MLlamaDecoderLayerLoad<'a> {
+    cfg: &'a MLlamaTextConfig,
+    mapper: &'a dyn DeviceMapper,
+    layer_idx: usize,
+    loading_isq: bool,
+    comm: &'a Arc<mistralrs_quant::Comm>,
+}
+
 impl MLlamaSelfAttentionDecoderLayer {
     fn new(
-        cfg: &MLlamaTextConfig,
         vb: ShardedVarBuilder,
         rope: Arc<Llama3RotaryEmbedding>,
-        mapper: &dyn DeviceMapper,
-        layer_idx: usize,
-        loading_isq: bool,
-        comm: &Arc<mistralrs_quant::Comm>,
+        paged_attn: Option<PagedAttention>,
+        args: MLlamaDecoderLayerLoad<'_>,
     ) -> Result<Self> {
+        let MLlamaDecoderLayerLoad {
+            cfg,
+            mapper,
+            layer_idx,
+            loading_isq,
+            comm,
+        } = args;
         let mlp = MLlamaTextMlp::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
@@ -240,6 +295,7 @@ impl MLlamaSelfAttentionDecoderLayer {
             cfg,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             rope,
+            paged_attn,
             comm,
         )?;
 
@@ -257,14 +313,15 @@ impl MLlamaSelfAttentionDecoderLayer {
         attention_mask: &AttentionMask,
         ctx: &mut ModelForwardContext<'_>,
         kv_cache: &mut KvCache,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states = self
-            .attn
-            .forward(&hidden_states, attention_mask, ctx, kv_cache)?;
+        hidden_states =
+            self.attn
+                .forward(&hidden_states, attention_mask, ctx, kv_cache, layer_idx)?;
         hidden_states = (residual + hidden_states)?;
 
         let residual = &hidden_states;
@@ -286,6 +343,82 @@ struct MLlamaTextCrossAttention {
     num_kv_heads: usize,
     head_dim: usize,
     sdpa_params: SdpaParams,
+}
+
+fn validate_packed_query_lens(
+    query_lens: &[usize],
+    logical_batch: usize,
+    total_tokens: usize,
+) -> Result<()> {
+    if query_lens.len() != logical_batch || query_lens.is_empty() || query_lens.contains(&0) {
+        candle_core::bail!("Mllama packed query lengths do not match the logical batch");
+    }
+    let query_tokens = query_lens.iter().try_fold(0usize, |total, &query_len| {
+        total
+            .checked_add(query_len)
+            .ok_or_else(|| candle_core::Error::msg("Mllama packed query length overflow"))
+    })?;
+    if query_tokens != total_tokens {
+        candle_core::bail!("Mllama packed query lengths do not cover the physical tokens");
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct PackedCrossAttentionShape {
+    physical_batch: usize,
+    total_tokens: usize,
+    state_batch: usize,
+    state_tokens: usize,
+    mask_shape: Option<(usize, usize, usize)>,
+}
+
+fn packed_cross_attention_ranges(
+    shape: PackedCrossAttentionShape,
+    query_lens: &[usize],
+) -> Result<Vec<Range<usize>>> {
+    if shape.physical_batch != 1 {
+        candle_core::bail!("Mllama packed cross-attention requires physical batch size 1");
+    }
+    validate_packed_query_lens(query_lens, shape.state_batch, shape.total_tokens)?;
+    if let Some((mask_batch, max_query_len, mask_tokens)) = shape.mask_shape {
+        if mask_batch != shape.state_batch
+            || mask_tokens != shape.state_tokens
+            || query_lens.iter().any(|&len| len > max_query_len)
+        {
+            candle_core::bail!("Mllama packed cross-attention mask is inconsistent");
+        }
+    }
+
+    let mut offset = 0usize;
+    Ok(query_lens
+        .iter()
+        .map(|&query_len| {
+            let range = offset..offset + query_len;
+            offset += query_len;
+            range
+        })
+        .collect())
+}
+
+fn pack_full_text_row_mask(mask: &Tensor, query_lens: &[usize]) -> Result<Tensor> {
+    let (logical_batch, singleton, max_query_len, tail) = mask.dims4()?;
+    if singleton != 1 || tail != 1 {
+        candle_core::bail!("Mllama full-row mask has invalid dimensions");
+    }
+    validate_packed_query_lens(query_lens, logical_batch, query_lens.iter().sum::<usize>())?;
+    if query_lens.iter().any(|&len| len > max_query_len) {
+        candle_core::bail!("Mllama full-row mask is shorter than a logical query");
+    }
+    let mut rows = Vec::with_capacity(logical_batch);
+    for (batch_idx, &query_len) in query_lens.iter().enumerate() {
+        rows.push(
+            mask.narrow(0, batch_idx, 1)?
+                .narrow(2, 0, query_len)?
+                .squeeze(1)?,
+        );
+    }
+    Tensor::cat(&rows, 1)
 }
 
 impl MLlamaTextCrossAttention {
@@ -352,6 +485,47 @@ impl MLlamaTextCrossAttention {
         })
     }
 
+    fn project_cross_states(
+        &self,
+        cross_attn_states: &Tensor,
+        query_len: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let (batch, state_tokens, _) = cross_attn_states.dims3()?;
+        let (k, v) = if self.k_proj.is_dynamic_lora_active() || self.v_proj.is_dynamic_lora_active()
+        {
+            let mut keys = Vec::with_capacity(batch);
+            let mut values = Vec::with_capacity(batch);
+            for batch_idx in 0..batch {
+                let route_row = batch_idx.checked_mul(query_len).ok_or_else(|| {
+                    candle_core::Error::msg("Mllama cross-attention route row overflow")
+                })?;
+                let states = cross_attn_states.narrow(0, batch_idx, 1)?;
+                let (k, v) = mistralrs_quant::with_lora_execution_repeated_row(
+                    route_row,
+                    state_tokens,
+                    || Ok((self.k_proj.forward(&states)?, self.v_proj.forward(&states)?)),
+                )?;
+                keys.push(k);
+                values.push(v);
+            }
+            (Tensor::cat(&keys, 0)?, Tensor::cat(&values, 0)?)
+        } else {
+            (
+                self.k_proj.forward(cross_attn_states)?,
+                self.v_proj.forward(cross_attn_states)?,
+            )
+        };
+
+        let k = self.k_norm.forward(
+            &k.reshape((batch, (), self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?,
+        )?;
+        let v = v
+            .reshape((batch, (), self.num_kv_heads, self.head_dim))?
+            .transpose(1, 2)?;
+        Ok((k, v))
+    }
+
     fn forward(
         &self,
         hidden_states: &Tensor,
@@ -367,18 +541,12 @@ impl MLlamaTextCrossAttention {
         q = self.q_norm.forward(&q)?;
 
         let (k, v) = if let Some(cross_attn_states) = cross_attn_states {
-            let mut k = self.k_proj.forward(cross_attn_states)?;
-            k = k
-                .reshape((bs, (), self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            k = self.k_norm.forward(&k)?;
-
-            let mut v = self.v_proj.forward(cross_attn_states)?;
-            v = v
-                .reshape((bs, (), self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-
-            (k, v)
+            if cross_attn_states.dim(0)? != bs {
+                candle_core::bail!(
+                    "Mllama cross-attention state batch does not match the query batch"
+                );
+            }
+            self.project_cross_states(cross_attn_states, q_len)?
         } else {
             candle_core::bail!("Cross attn cannot find k,v cache or cross attn hidden states!")
         };
@@ -406,6 +574,48 @@ impl MLlamaTextCrossAttention {
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }
+
+    fn forward_packed(
+        &self,
+        hidden_states: &Tensor,
+        cross_attn_states: &Tensor,
+        attention_mask: &AttentionMask,
+        query_lens: &[usize],
+    ) -> Result<Tensor> {
+        let (physical_batch, total_tokens, _) = hidden_states.dims3()?;
+        let (logical_batch, state_tokens, _) = cross_attn_states.dims3()?;
+        let mask_shape = match attention_mask {
+            AttentionMask::Custom(mask) => Some(mask.dims3()?),
+            _ => None,
+        };
+        let ranges = packed_cross_attention_ranges(
+            PackedCrossAttentionShape {
+                physical_batch,
+                total_tokens,
+                state_batch: logical_batch,
+                state_tokens,
+                mask_shape,
+            },
+            query_lens,
+        )?;
+
+        let mut outputs = Vec::with_capacity(logical_batch);
+        for (batch_idx, range) in ranges.into_iter().enumerate() {
+            let hidden = hidden_states.narrow(1, range.start, range.len())?;
+            let states = cross_attn_states.narrow(0, batch_idx, 1)?;
+            let mask = match attention_mask {
+                AttentionMask::Custom(mask) => AttentionMask::Custom(
+                    mask.narrow(0, batch_idx, 1)?.narrow(1, 0, range.len())?,
+                ),
+                other => other.clone(),
+            };
+            outputs.push(mistralrs_quant::with_lora_execution_row_range(
+                range.clone(),
+                || self.forward(&hidden, Some(&states), &mask),
+            )?);
+        }
+        Tensor::cat(&outputs, 1)
+    }
 }
 
 struct MLlamaCrossAttentionDecoderLayer {
@@ -418,14 +628,14 @@ struct MLlamaCrossAttentionDecoderLayer {
 }
 
 impl MLlamaCrossAttentionDecoderLayer {
-    fn new(
-        cfg: &MLlamaTextConfig,
-        vb: ShardedVarBuilder,
-        mapper: &dyn DeviceMapper,
-        layer_idx: usize,
-        loading_isq: bool,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
+    fn new(vb: ShardedVarBuilder, args: MLlamaDecoderLayerLoad<'_>) -> Result<Self> {
+        let MLlamaDecoderLayerLoad {
+            cfg,
+            mapper,
+            layer_idx,
+            loading_isq,
+            comm,
+        } = args;
         let mlp = MLlamaTextMlp::new(
             cfg,
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
@@ -469,23 +679,41 @@ impl MLlamaCrossAttentionDecoderLayer {
         cross_attn_states: Option<&Tensor>,
         attention_mask: &AttentionMask,
         full_text_row_masked_out_mask: Option<&Tensor>,
+        packed_query_lens: Option<&[usize]>,
     ) -> Result<Tensor> {
         let residual = hidden_states;
 
         let mut hidden_states = self.input_layernorm.forward(hidden_states)?;
 
-        hidden_states = self
-            .attn
-            .forward(&hidden_states, cross_attn_states, attention_mask)?;
+        hidden_states = if let Some(query_lens) = packed_query_lens {
+            self.attn.forward_packed(
+                &hidden_states,
+                cross_attn_states.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Mllama packed cross-attention is missing encoder states",
+                    )
+                })?,
+                attention_mask,
+                query_lens,
+            )?
+        } else {
+            self.attn
+                .forward(&hidden_states, cross_attn_states, attention_mask)?
+        };
         hidden_states = (residual + hidden_states.broadcast_mul(&self.attn_gate.tanh()?)?)?;
 
         let residual = &hidden_states;
         let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
         hidden_states = self.mlp.forward(&hidden_states)?;
         if let Some(full_text_row_masked_out_mask) = full_text_row_masked_out_mask {
+            let full_text_row_masked_out_mask = match packed_query_lens {
+                Some(query_lens) => {
+                    pack_full_text_row_mask(full_text_row_masked_out_mask, query_lens)?
+                }
+                None => full_text_row_masked_out_mask.i((.., 0))?,
+            };
             hidden_states = full_text_row_masked_out_mask
                 .to_dtype(hidden_states.dtype())?
-                .i((.., 0))?
                 .broadcast_mul(&hidden_states)?;
         }
 
@@ -525,9 +753,6 @@ impl MLlamaTextModel {
                 quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
-        }
-        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
         let dtype = vb.dtype();
@@ -587,30 +812,41 @@ impl MLlamaTextModel {
             if cfg.cross_attention_layers.contains(&i) {
                 layers.push(MLlamaDecoderLayer::CrossAttn(
                     MLlamaCrossAttentionDecoderLayer::new(
-                        cfg,
                         vb.pp(format!("layers.{i}")),
-                        &*mapper,
-                        i,
-                        false,
-                        &comm,
+                        MLlamaDecoderLayerLoad {
+                            cfg,
+                            mapper: &*mapper,
+                            layer_idx: i,
+                            loading_isq: false,
+                            comm: &comm,
+                        },
                     )?,
                 ))
             } else {
                 let device = mapper
                     .device_for(i, false)
                     .unwrap_or(&normal_loading_metadata.real_device);
+                let paged_attn = match &attention_mechanism {
+                    AttentionImplementation::Eager => None,
+                    AttentionImplementation::PagedAttention => {
+                        Some(PagedAttention::new(cfg.head_dim(), device, None)?)
+                    }
+                };
                 layers.push(MLlamaDecoderLayer::SelfAttn(
                     MLlamaSelfAttentionDecoderLayer::new(
-                        cfg,
                         vb.pp(format!("layers.{i}")),
                         ropes
                             .get(&device.location())
                             .expect("No RoPE for device location!")
                             .clone(),
-                        &*mapper,
-                        i,
-                        normal_loading_metadata.loading_isq,
-                        &comm,
+                        paged_attn,
+                        MLlamaDecoderLayerLoad {
+                            cfg,
+                            mapper: &*mapper,
+                            layer_idx: i,
+                            loading_isq: normal_loading_metadata.loading_isq,
+                            comm: &comm,
+                        },
                     )?,
                 ))
             }
@@ -644,7 +880,6 @@ impl MLlamaTextModel {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn forward(
         &self,
         input_ids: &Tensor,
@@ -654,6 +889,24 @@ impl MLlamaTextModel {
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut hidden_states = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let packed_query_lens = if ctx.flash_params().packed {
+            let (physical_batch, physical_tokens) = input_ids.dims2()?;
+            if physical_batch != 1 {
+                candle_core::bail!("packed Mllama forward requires physical batch size 1");
+            }
+            let query_lens = ctx
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed Mllama forward is missing logical query lengths",
+                    )
+                })?;
+            validate_packed_query_lens(query_lens, query_lens.len(), physical_tokens)?;
+            Some(query_lens.to_vec())
+        } else {
+            None
+        };
 
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
@@ -683,6 +936,7 @@ impl MLlamaTextModel {
                         &self_mask.get(hidden_states.device()),
                         ctx,
                         &mut cache[i],
+                        i,
                     )?;
                 }
                 MLlamaDecoderLayer::CrossAttn(attn) => {
@@ -694,14 +948,15 @@ impl MLlamaTextModel {
                     }
                     let cross_mask = cross_attention_mask.get(hidden_states.device());
                     let ftrmom = full_text_row_masked_out_mask_mapped.get(hidden_states.device());
+                    let cross_attn_states = cross_attn_states
+                        .map(|states| states.to_device(hidden_states.device()))
+                        .transpose()?;
                     hidden_states = attn.forward(
                         &hidden_states,
-                        cross_attn_states
-                            .as_ref()
-                            .map(|x| x.to_device(hidden_states.device()).unwrap())
-                            .as_ref(),
+                        cross_attn_states.as_ref(),
                         &cross_mask,
                         ftrmom.as_option_tensor(),
+                        packed_query_lens.as_deref(),
                     )?;
                 }
             }
@@ -762,5 +1017,74 @@ impl IsqModel for MLlamaTextModel {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        pack_full_text_row_mask, packed_cross_attention_ranges, validate_packed_query_lens,
+        PackedCrossAttentionShape,
+    };
+    use candle_core::{Device, Tensor};
+
+    #[test]
+    fn packed_query_lengths_require_an_exact_partition() {
+        validate_packed_query_lens(&[2, 3], 2, 5).unwrap();
+        assert!(validate_packed_query_lens(&[2, 3], 1, 5).is_err());
+        assert!(validate_packed_query_lens(&[2, 0], 2, 2).is_err());
+        assert!(validate_packed_query_lens(&[2, 2], 2, 5).is_err());
+        assert!(validate_packed_query_lens(&[usize::MAX, 1], 2, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn packed_cross_attention_maps_unequal_queries_to_encoder_rows() {
+        let ranges = packed_cross_attention_ranges(
+            PackedCrossAttentionShape {
+                physical_batch: 1,
+                total_tokens: 5,
+                state_batch: 2,
+                state_tokens: 8,
+                mask_shape: Some((2, 3, 8)),
+            },
+            &[2, 3],
+        )
+        .unwrap();
+
+        assert_eq!(ranges, vec![0..2, 2..5]);
+    }
+
+    #[test]
+    fn packed_cross_attention_rejects_state_and_mask_cardinality_mismatches() {
+        let shape = PackedCrossAttentionShape {
+            physical_batch: 1,
+            total_tokens: 5,
+            state_batch: 2,
+            state_tokens: 8,
+            mask_shape: Some((2, 3, 8)),
+        };
+        let mut wrong_state_batch = shape;
+        wrong_state_batch.state_batch = 1;
+        assert!(packed_cross_attention_ranges(wrong_state_batch, &[2, 3]).is_err());
+
+        let mut wrong_mask_batch = shape;
+        wrong_mask_batch.mask_shape = Some((1, 3, 8));
+        assert!(packed_cross_attention_ranges(wrong_mask_batch, &[2, 3]).is_err());
+
+        let mut wrong_mask_tokens = shape;
+        wrong_mask_tokens.mask_shape = Some((2, 3, 7));
+        assert!(packed_cross_attention_ranges(wrong_mask_tokens, &[2, 3]).is_err());
+    }
+
+    #[test]
+    fn full_row_mask_packs_only_live_query_rows() {
+        let mask = Tensor::from_vec(vec![1u32, 1, 0, 0, 1, 1], (2, 1, 3, 1), &Device::Cpu).unwrap();
+        let packed = pack_full_text_row_mask(&mask, &[2, 3]).unwrap();
+
+        assert_eq!(packed.dims(), &[1, 5, 1]);
+        assert_eq!(
+            packed.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            vec![1, 1, 0, 1, 1]
+        );
     }
 }

@@ -1,5 +1,7 @@
 //! MLA forward pass functions for decode and cache operations.
 
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
+use candle_core::D;
 use candle_core::{Device, Result, Tensor};
 
 use crate::{
@@ -15,7 +17,7 @@ fn supports_cached_mla_weights(kv_b_proj: &dyn mistralrs_quant::QuantMethod) -> 
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-use candle_core::{DType, D};
+use candle_core::DType;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::layers::Sdpa;
@@ -26,6 +28,36 @@ use crate::ops::SplitOp;
 /// Environment variable to disable MLA optimization.
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 const MISTRALRS_NO_MLA: &str = "MISTRALRS_NO_MLA";
+
+#[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
+fn pad_mla_value_for_flash(value: &Tensor, target_head_dim: usize) -> Result<(Tensor, usize)> {
+    let value_head_dim = value.dim(D::Minus1)?;
+    if value_head_dim > target_head_dim {
+        candle_core::bail!(
+            "MLA value head dim {value_head_dim} exceeds attention head dim {target_head_dim}"
+        );
+    }
+    let value = if value_head_dim < target_head_dim {
+        value.pad_with_zeros(D::Minus1, 0, target_head_dim - value_head_dim)?
+    } else {
+        value.clone()
+    };
+    Ok((value, value_head_dim))
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn mla_direct_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    attention_mask: &AttentionMask,
+    flash_params: &FlashParams,
+    sdpa_params: &SdpaParams,
+) -> Result<Tensor> {
+    let (v, value_head_dim) = pad_mla_value_for_flash(v, q.dim(D::Minus1)?)?;
+    Sdpa.run_attention(q, k, &v, attention_mask, Some(flash_params), sdpa_params)?
+        .narrow(D::Minus1, 0, value_head_dim)
+}
 
 /// Check if MLA is disabled via environment variable.
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -353,18 +385,18 @@ pub fn mla_cache_forward(
     let prefix_lens = seqlen_offsets;
     let needs_prefix = prefix_lens.iter().any(|&len| len > 0);
     if !needs_prefix && !matches!(attention_mask, AttentionMask::None) {
-        Sdpa.run_attention(q, k, v, attention_mask, Some(flash_params), sdpa_params)
+        mla_direct_attention(q, k, v, attention_mask, flash_params, sdpa_params)
     } else {
         let ((key_cache, value_cache), input_metadata) =
             match (key_cache, value_cache, input_metadata) {
                 (Some(k), Some(v), Some(m)) => ((k, v), m),
                 _ => {
-                    return Sdpa.run_attention(
+                    return mla_direct_attention(
                         q,
                         k,
                         v,
                         attention_mask,
-                        Some(flash_params),
+                        flash_params,
                         sdpa_params,
                     );
                 }
@@ -601,7 +633,7 @@ pub fn mla_cache_forward(
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
-    use candle_core::{DType, Device, Tensor};
+    use candle_core::{DType, Device, Tensor, D};
     use candle_nn::Linear;
     use mistralrs_quant::{
         maybe_wrap_dynamic_lora, with_lora_execution, LoraExecution, LoraLayerRegistry,
@@ -609,7 +641,25 @@ mod tests {
         UnquantLinear,
     };
 
-    use super::supports_cached_mla_weights;
+    use super::{pad_mla_value_for_flash, supports_cached_mla_weights};
+
+    #[test]
+    fn flash_attention_value_padding_preserves_the_output_width() -> candle_core::Result<()> {
+        let value = Tensor::ones((1, 2, 3, 4), DType::F32, &Device::Cpu)?;
+        let (padded, output_head_dim) = pad_mla_value_for_flash(&value, 6)?;
+
+        assert_eq!(padded.dims(), &[1, 2, 3, 6]);
+        assert_eq!(output_head_dim, 4);
+        assert_eq!(
+            padded
+                .narrow(D::Minus1, 0, output_head_dim)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            value.flatten_all()?.to_vec1::<f32>()?
+        );
+        assert!(pad_mla_value_for_flash(&value, 2).is_err());
+        Ok(())
+    }
 
     #[test]
     fn cached_mla_weights_are_disabled_for_a_mixed_dynamic_lora_batch() -> candle_core::Result<()> {

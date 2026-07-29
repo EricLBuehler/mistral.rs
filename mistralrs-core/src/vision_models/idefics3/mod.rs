@@ -20,6 +20,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     models::llama::Llama,
     paged_attention::{
+        block_hash::MultimodalKind,
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
@@ -28,12 +29,17 @@ use crate::{
         NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 
 pub(crate) struct Idefics3SpecificArgs {
     pub pixel_attention_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
+    pub subimage_counts: Vec<usize>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
 }
 
 pub struct Idefics3Model {
@@ -43,6 +49,15 @@ pub struct Idefics3Model {
     config: Idefics3Config,
     dtype: DType,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+}
+
+struct Idefics3ForwardInput<'a> {
+    input_ids: &'a Tensor,
+    pixel_values: Option<Tensor>,
+    pixel_attention_mask: Option<Tensor>,
+    image_hashes: &'a [u64],
+    subimage_counts: &'a [usize],
+    packed_layout: Option<&'a PackedMultimodalLayout>,
 }
 
 impl Idefics3Model {
@@ -100,12 +115,17 @@ impl Idefics3Model {
 
     fn forward_inner(
         &self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        pixel_attention_mask: Option<Tensor>,
-        image_hashes: &[u64],
+        input: Idefics3ForwardInput<'_>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let Idefics3ForwardInput {
+            input_ids,
+            pixel_values,
+            pixel_attention_mask,
+            image_hashes,
+            subimage_counts,
+            packed_layout,
+        } = input;
         let input_embeds = if let Some(pixel_values) = pixel_values {
             let input_embeds = self.text_model.get_input_embeddings(input_ids)?;
             let special_image_mask = input_ids
@@ -119,11 +139,6 @@ impl Idefics3Model {
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
             // == START VISUAL INPUTS INTEGRATION ==
-            let (batch_size, num_images, _, _, _) = pixel_values.dims5()?;
-            let mut s = vec![batch_size * num_images];
-            s.extend(pixel_values.dims()[2..].to_vec());
-            let pixel_values = pixel_values.reshape(s)?;
-
             // Remove padding images which are full of 0s
             let nb_values_per_image = pixel_values.dims()[1..].iter().product::<usize>();
             let real_images_inds = pixel_values
@@ -149,11 +164,6 @@ impl Idefics3Model {
 
             // Vision attention mask
             let pixel_attention_mask = if let Some(pixel_attention_mask) = pixel_attention_mask {
-                let pixel_attention_mask = pixel_attention_mask.reshape((
-                    batch_size * num_images,
-                    pixel_attention_mask.dims()[2],
-                    pixel_attention_mask.dims()[3],
-                ))?;
                 let mut batches = Vec::new();
                 for (batch, use_it) in pixel_attention_mask
                     .chunk(pixel_attention_mask.dim(0)?, 0)?
@@ -190,59 +200,112 @@ impl Idefics3Model {
             let pixel_values = pixel_values.to_dtype(self.dtype)?;
 
             // Get seq from vision encoder + connector, with per-image caching
-            let image_hidden_states = if !image_hashes.is_empty() {
-                let n = pixel_values.dim(0)?;
-                let mut per_image: Vec<Option<Tensor>> = vec![None; n];
-                let mut miss_indices: Vec<usize> = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (image_hidden_states, encoder_outputs) =
+                if !image_hashes.is_empty() && image_hashes.len() == subimage_counts.len() {
+                    let mut offsets = Vec::with_capacity(subimage_counts.len() + 1);
+                    offsets.push(0usize);
+                    for count in subimage_counts {
+                        offsets.push(
+                            offsets
+                                .last()
+                                .copied()
+                                .unwrap()
+                                .checked_add(*count)
+                                .ok_or_else(|| {
+                                    candle_core::Error::msg("Idefics3 subimage count overflow")
+                                })?,
+                        );
+                    }
+                    if offsets.last().copied().unwrap_or_default() != pixel_values.dim(0)? {
+                        candle_core::bail!(
+                            "Idefics3 has {} encoder images but subimage counts total {}",
+                            pixel_values.dim(0)?,
+                            offsets.last().copied().unwrap_or_default()
+                        );
+                    }
+                    let mut per_image = vec![None; image_hashes.len()];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
+                                if cached.len() == subimage_counts[i] {
+                                    per_image[i] = Some(cached.to_vec());
+                                } else {
+                                    miss_indices.push(i);
+                                }
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
                     for &i in &miss_indices {
-                        let pv = pixel_values.get(i)?.unsqueeze(0)?;
-                        let mask = patch_attention_mask.get(i)?.unsqueeze(0)?;
+                        let count = subimage_counts[i];
+                        let pv = pixel_values.narrow(0, offsets[i], count)?;
+                        let mask = patch_attention_mask.narrow(0, offsets[i], count)?;
                         let hidden = self
                             .vision
                             .forward(&pv, &AttentionMask::Custom(mask.clone()))?;
                         let hidden = self.connector.forward(&hidden)?;
-                        let result = hidden.squeeze(0)?;
+                        let outputs = (0..count)
+                            .map(|index| hidden.get(index))
+                            .collect::<Result<Vec<_>>>()?;
                         {
                             let mut guard = self
                                 .encoder_cache
                                 .lock()
                                 .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[i],
-                                vec![result.clone()],
-                            );
+                            guard.insert(CacheModality::Image, image_hashes[i], outputs.clone());
                         }
-                        per_image[i] = Some(result);
+                        per_image[i] = Some(outputs);
                     }
-                }
-                let slices: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
-                Tensor::stack(&slices, 0)?
-            } else {
-                // No caching: original path
-                let image_hidden_states = self.vision.forward(
-                    &pixel_values,
-                    &AttentionMask::Custom(patch_attention_mask.clone()),
-                )?;
-                self.connector.forward(&image_hidden_states)?
-            };
+                    let per_image = per_image
+                        .into_iter()
+                        .map(|outputs| outputs.expect("all Idefics3 images should be resolved"))
+                        .collect::<Vec<_>>();
+                    let flat = per_image
+                        .iter()
+                        .flat_map(|outputs| outputs.iter().cloned())
+                        .collect::<Vec<_>>();
+                    let encoder_outputs = image_hashes
+                        .iter()
+                        .copied()
+                        .zip(per_image)
+                        .map(|(hash, outputs)| {
+                            (
+                                MultimodalEncoderKey {
+                                    kind: MultimodalKind::Image,
+                                    hash,
+                                },
+                                outputs,
+                            )
+                        })
+                        .collect::<MultimodalEncoderOutputs>();
+                    (Tensor::stack(&flat, 0)?, Some(encoder_outputs))
+                } else {
+                    let image_hidden_states = self.vision.forward(
+                        &pixel_values,
+                        &AttentionMask::Custom(patch_attention_mask.clone()),
+                    )?;
+                    (self.connector.forward(&image_hidden_states)?, None)
+                };
 
-            self.inputs_merger(&indices, &input_embeds, &image_hidden_states)?
-                .to_dtype(self.dtype)?
+            if let Some(layout) = packed_layout {
+                let encoder_outputs = encoder_outputs.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed Idefics3 input requires per-image encoder outputs",
+                    )
+                })?;
+                layout
+                    .splice_embeddings(&input_embeds, &encoder_outputs)?
+                    .to_dtype(self.dtype)?
+            } else {
+                self.inputs_merger(&indices, &input_embeds, &image_hidden_states)?
+                    .to_dtype(self.dtype)?
+            }
         } else {
             self.text_model.get_input_embeddings(input_ids)?
         };
@@ -306,6 +369,14 @@ impl crate::speculative::SpeculativeTargetMixin for Idefics3Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Idefics3Model {}
 
 impl MultimodalModel for Idefics3Model {
+    fn supports_packed_prefill(&self) -> bool {
+        self.text_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -316,14 +387,20 @@ impl MultimodalModel for Idefics3Model {
         let Idefics3SpecificArgs {
             pixel_attention_mask,
             image_hashes,
+            subimage_counts,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Idefics3SpecificArgs`");
         self.forward_inner(
-            input_ids,
-            pixel_values,
-            pixel_attention_mask,
-            &image_hashes,
+            Idefics3ForwardInput {
+                input_ids,
+                pixel_values,
+                pixel_attention_mask,
+                image_hashes: &image_hashes,
+                subimage_counts: &subimage_counts,
+                packed_layout: packed_layout.as_ref(),
+            },
             ctx,
         )
     }
@@ -343,6 +420,8 @@ impl MultimodalModel for Idefics3Model {
         Box::new(Idefics3SpecificArgs {
             pixel_attention_mask: None,
             image_hashes: vec![],
+            subimage_counts: vec![],
+            packed_layout: None,
         })
     }
     fn encoder_cache_counters(

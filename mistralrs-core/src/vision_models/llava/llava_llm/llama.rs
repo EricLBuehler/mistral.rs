@@ -31,7 +31,7 @@ use crate::{
     AnyMoeConfig, AnyMoeExpertType,
 };
 
-use super::{LLaVALLM, OrdinaryRoPE};
+use super::{rope_positions, LLaVALLM, OrdinaryRoPE};
 
 struct CausalSelfAttention {
     q_proj: Arc<dyn QuantMethod>,
@@ -51,7 +51,7 @@ impl CausalSelfAttention {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &ModelForwardContext<'_>,
+        ctx: &mut ModelForwardContext<'_>,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
         rope_parameter: (&Tensor, &Tensor),
@@ -68,14 +68,7 @@ impl CausalSelfAttention {
             .reshape((b_sz, seq_len, self.num_key_value_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let positions = ctx
-            .seqlen_offsets()
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        let positions = Tensor::from_vec(positions, ctx.seqlen_offsets().len(), q.device())?;
+        let positions = rope_positions(ctx, q.device(), seq_len)?;
         q = OrdinaryRoPE::forward(&q, &positions, rope_parameter.0, rope_parameter.1)?;
         k = OrdinaryRoPE::forward(&k, &positions, rope_parameter.0, rope_parameter.1)?;
         let v = v
@@ -322,7 +315,7 @@ impl Block {
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &ModelForwardContext<'_>,
+        ctx: &mut ModelForwardContext<'_>,
         block_idx: usize,
         kv_cache: &mut crate::pipeline::LayerCaches,
     ) -> Result<Tensor> {

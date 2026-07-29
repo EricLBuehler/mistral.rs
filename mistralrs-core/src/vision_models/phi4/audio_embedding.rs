@@ -1,5 +1,8 @@
 use crate::attention::AttentionMask;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::Module;
@@ -7,6 +10,7 @@ use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
 
 use crate::{
     layers::{self, Activation},
+    paged_attention::encoder_cache::{CacheModality, EncoderCacheManager},
     vision_models::{
         conformer::encoder::ConformerEncoder,
         phi4::{
@@ -106,17 +110,31 @@ impl AudioEmbedding {
         audio_attention_mask: &AttentionMask,
         input_mode: &InputMode,
     ) -> Result<Tensor> {
-        // Get audio features from encoder
-        let (audio_features, _masks) = self
+        let audio_features = self.encode_audio_features(input_embeds, audio_attention_mask)?;
+        self.project_audio_features(&audio_features, input_mode)
+    }
+
+    fn encode_audio_features(
+        &self,
+        input_embeds: &Tensor,
+        audio_attention_mask: &AttentionMask,
+    ) -> Result<Tensor> {
+        let (audio_features, _) = self
             .encoder
             .forward(input_embeds, audio_attention_mask.as_option_tensor())?;
+        Ok(audio_features)
+    }
 
-        // Apply projection based on mode
+    fn project_audio_features(
+        &self,
+        audio_features: &Tensor,
+        input_mode: &InputMode,
+    ) -> Result<Tensor> {
         let projection_layers = self.proj.get(input_mode).ok_or_else(|| {
             candle_core::Error::Msg(format!("Projection mode {input_mode:?} not found"))
         })?;
 
-        let mut audio_set_tensor = audio_features;
+        let mut audio_set_tensor = audio_features.clone();
         for layer in projection_layers {
             audio_set_tensor = layer.forward(&audio_set_tensor)?;
         }
@@ -124,11 +142,75 @@ impl AudioEmbedding {
         Ok(audio_set_tensor)
     }
 
+    pub(super) fn encode(
+        &self,
+        input_embeds: &Tensor,
+        feature_lens: &[usize],
+        embed_sizes: &[usize],
+        hashes: &[u64],
+        encoder_cache: &Mutex<EncoderCacheManager>,
+    ) -> Result<Vec<Vec<Tensor>>> {
+        let batch = input_embeds.dim(0)?;
+        if feature_lens.len() != batch || embed_sizes.len() != batch || hashes.len() != batch {
+            candle_core::bail!("Phi4MM packed audio metadata length mismatch");
+        }
+
+        let (target_device, target_dtype) = &self.target_device_dtype;
+        let mut outputs = Vec::with_capacity(batch);
+        for item in 0..batch {
+            let cached = encoder_cache
+                .lock()
+                .expect("encoder cache lock poisoned")
+                .get(CacheModality::Audio, hashes[item]);
+            if let Some(cached) = cached {
+                if cached.len() != 2 {
+                    candle_core::bail!(
+                        "Phi4MM cached audio output must contain speech and vision projections"
+                    );
+                }
+                outputs.push(cached);
+                continue;
+            }
+
+            let feature_len = feature_lens[item];
+            if feature_len == 0 || feature_len > input_embeds.dim(1)? {
+                candle_core::bail!("Phi4MM packed audio feature length is invalid");
+            }
+            let input = input_embeds
+                .i((item, ..feature_len, ..))?
+                .unsqueeze(0)?
+                .to_device(target_device)?
+                .to_dtype(*target_dtype)?;
+            let (features, _) = self.encoder.forward(&input, None)?;
+            let embed_size = embed_sizes[item];
+            if embed_size == 0 || embed_size > features.dim(1)? {
+                candle_core::bail!(
+                    "Phi4MM audio embedding size {embed_size} exceeds {} encoder rows",
+                    features.dim(1)?
+                );
+            }
+            let speech = self
+                .project_audio_features(&features, &InputMode::Speech)?
+                .narrow(1, 0, embed_size)?;
+            let vision = self
+                .project_audio_features(&features, &InputMode::Vision)?
+                .narrow(1, 0, embed_size)?;
+            let item_outputs = vec![speech, vision];
+            encoder_cache
+                .lock()
+                .expect("encoder cache lock poisoned")
+                .insert(CacheModality::Audio, hashes[item], item_outputs.clone());
+            outputs.push(item_outputs);
+        }
+        Ok(outputs)
+    }
+
     pub fn forward(
         &self,
         input_ids: &Tensor,
         input_embeds: &Tensor,
         audio_embed_sizes: Vec<usize>,
+        audio_vision_modes: Option<&[bool]>,
         audio_attention_mask: &AttentionMask,
         input_mode: &InputMode,
     ) -> Result<Tensor> {
@@ -150,7 +232,7 @@ impl AudioEmbedding {
 
         let audio_set_tensor = if positions.dim(0)? > 0 {
             // Convert to target device/dtype if needed
-            let input_embeds = if input_embeds.device().same_device(&target_device)
+            let input_embeds = if !input_embeds.device().same_device(&target_device)
                 || input_embeds.dtype() != target_dtype
             {
                 input_embeds
@@ -160,7 +242,43 @@ impl AudioEmbedding {
                 input_embeds.clone()
             };
 
-            self.get_audio_features(&input_embeds, audio_attention_mask, input_mode)?
+            if let Some(vision_modes) = audio_vision_modes {
+                if vision_modes.len() != input_embeds.dim(0)? {
+                    candle_core::bail!("Phi4MM audio projection mode count mismatch");
+                }
+                if vision_modes.iter().all(|&mode| mode) {
+                    self.get_audio_features(
+                        &input_embeds,
+                        audio_attention_mask,
+                        &InputMode::Vision,
+                    )?
+                } else if vision_modes.iter().all(|&mode| !mode) {
+                    self.get_audio_features(
+                        &input_embeds,
+                        audio_attention_mask,
+                        &InputMode::Speech,
+                    )?
+                } else {
+                    let features =
+                        self.encode_audio_features(&input_embeds, audio_attention_mask)?;
+                    let speech = self.project_audio_features(&features, &InputMode::Speech)?;
+                    let vision = self.project_audio_features(&features, &InputMode::Vision)?;
+                    let selected = vision_modes
+                        .iter()
+                        .enumerate()
+                        .map(|(item, &vision_mode)| {
+                            if vision_mode {
+                                vision.get(item)
+                            } else {
+                                speech.get(item)
+                            }
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    Tensor::stack(&selected, 0)?
+                }
+            } else {
+                self.get_audio_features(&input_embeds, audio_attention_mask, input_mode)?
+            }
         } else {
             // Return early if no audio tokens and not training
             return self.wte.embedding_forward(&input_ids, self.dtype);
@@ -186,7 +304,7 @@ impl AudioEmbedding {
         let merged_audio_set_tensor = Tensor::cat(&audio_sets, 0)?;
 
         let original_shape = hidden_states.shape().clone();
-        let (hs_b, hs_l, hs_d) = hidden_states.dims3()?;
+        let (_, hs_l, hs_d) = hidden_states.dims3()?;
         let mut hidden_states_flat = hidden_states.reshape(((), hs_d))?;
 
         // Get the equiv 0th and 1th rows of the positions_tuple
@@ -194,8 +312,7 @@ impl AudioEmbedding {
         let positions_transposed_0 = positions_transposed.i((.., 0))?;
         let positions_transposed_1 = positions_transposed.i((.., 1))?;
 
-        let mut linear_index =
-            ((positions_transposed_0 * (hs_l * hs_b) as f64)? + positions_transposed_1)?;
+        let mut linear_index = ((positions_transposed_0 * hs_l as f64)? + positions_transposed_1)?;
         linear_index = linear_index.to_dtype(DType::U32)?;
         linear_index = linear_index.unsqueeze(1)?.repeat((1, hs_d))?;
 

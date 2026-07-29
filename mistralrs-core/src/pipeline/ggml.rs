@@ -531,6 +531,14 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        true
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,

@@ -406,7 +406,7 @@ impl Attention {
                             // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                             let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                             // Sanity check.
-                            assert!(attention_mask.is_custom());
+                            assert!(!attention_mask.is_none());
                             let v = v
                                 .pad_with_zeros(
                                     D::Minus1,
@@ -445,7 +445,7 @@ impl Attention {
             }
         };
 
-        attn_out = if attention_mask.is_custom() {
+        attn_out = if !matches!(attention_mask, AttentionMask::None) {
             attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
         } else {
             attn_out.reshape((bs, seq_len, ()))?
@@ -1127,6 +1127,9 @@ impl NormalModel for DeepSeekV3 {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
 }
 

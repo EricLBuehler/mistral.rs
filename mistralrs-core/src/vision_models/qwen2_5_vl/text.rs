@@ -11,13 +11,29 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, F32RmsNorm, Qwen2_5VLRotaryEmbedding, Sdpa},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, NormalCache, NormalLoadingMetadata,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
+        NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
+
+fn cache_types(
+    layer_sliding_windows: &[Option<usize>],
+    max_position_embeddings: usize,
+) -> Vec<NormalCacheType> {
+    layer_sliding_windows
+        .iter()
+        .map(|sliding_window| match sliding_window {
+            Some(window) => NormalCacheType::SlidingWindow { window: *window },
+            None => NormalCacheType::Normal {
+                max_seq_len: max_position_embeddings,
+            },
+        })
+        .collect()
+}
 
 struct Mlp {
     gate_proj: Arc<dyn QuantMethod>,
@@ -82,14 +98,25 @@ struct Attention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+}
+
+struct AttentionForward<'a> {
+    attention_mask: &'a AttentionMask,
+    sliding_attention_mask: &'a AttentionMask,
+    cos_sin: &'a (Tensor, Tensor),
+    metadata: Option<((Tensor, Tensor), &'a PagedAttentionInputMetadata)>,
+    flash_params: &'a FlashParams,
 }
 
 impl Attention {
     fn new(
         rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
         cfg: &Config,
+        sliding_window: Option<usize>,
         vb: ShardedVarBuilder,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -144,6 +171,7 @@ impl Attention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
+            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
@@ -152,21 +180,25 @@ impl Attention {
                 )?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
+                sliding_window,
                 sinks: None,
             },
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: &AttentionMask,
-        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
-        flash_params: &FlashParams,
+        args: AttentionForward<'_>,
     ) -> Result<Tensor> {
+        let AttentionForward {
+            attention_mask,
+            sliding_attention_mask,
+            cos_sin,
+            metadata,
+            flash_params,
+        } = args;
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let (q, k, v) =
@@ -189,30 +221,67 @@ impl Attention {
             (q, k, v)
         };
 
-        // we share cos_sin amount all layers, but when some layers are in different device from layers[0],
-        // need to move cos_sin to corresponding device
         let cos_sin_relocated = &(
             cos_sin.0.to_device(q.device())?,
             cos_sin.1.to_device(q.device())?,
         );
         self.rotary_emb.forward(cos_sin_relocated, &mut q, &mut k)?;
+        let attention_mask = if self.sdpa_params.sliding_window.is_some() {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
 
-        let mut attn_output = {
-            let (k, v) = kv_cache.append(&k, &v)?;
-
-            let f32_mask = match attention_mask {
-                AttentionMask::Custom(mask) => AttentionMask::Custom(mask.to_dtype(DType::F32)?),
-                other => other.clone(),
-            };
-            Sdpa.run_attention(
-                &q.contiguous()?.to_dtype(DType::F32)?,
-                &k.contiguous()?.to_dtype(DType::F32)?,
-                &v.contiguous()?.to_dtype(DType::F32)?,
-                &f32_mask,
-                Some(flash_params),
-                &self.sdpa_params,
-            )?
-            .to_dtype(q.dtype())?
+        let q = q.contiguous()?;
+        let k = k.contiguous()?;
+        let v = v.contiguous()?;
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => match metadata {
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    &k,
+                    &v,
+                    attention_mask,
+                    Some(key_cache),
+                    Some(value_cache),
+                    input_metadata,
+                    &self.sdpa_params,
+                    Some(flash_params),
+                )?,
+                None => {
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    assert!(!matches!(attention_mask, AttentionMask::None));
+                    paged_attn.forward(
+                        &q,
+                        &k,
+                        &v,
+                        attention_mask,
+                        None,
+                        None,
+                        &input_metadata,
+                        &self.sdpa_params,
+                        Some(flash_params),
+                    )?
+                }
+            },
+            None => {
+                let (k, v) = kv_cache.append(&k, &v)?;
+                let f32_mask = match attention_mask {
+                    AttentionMask::Custom(mask) => {
+                        AttentionMask::Custom(mask.to_dtype(DType::F32)?)
+                    }
+                    other => other.clone(),
+                };
+                Sdpa.run_attention(
+                    &q.to_dtype(DType::F32)?,
+                    &k.contiguous()?.to_dtype(DType::F32)?,
+                    &v.contiguous()?.to_dtype(DType::F32)?,
+                    &f32_mask,
+                    Some(flash_params),
+                    &self.sdpa_params,
+                )?
+                .to_dtype(q.dtype())?
+            }
         };
 
         attn_output = if !matches!(attention_mask, AttentionMask::None) {
@@ -232,20 +301,37 @@ pub struct DecoderLayer {
     post_attention_layernorm: F32RmsNorm,
 }
 
+struct DecoderLayerLoad<'a> {
+    cfg: &'a Config,
+    mapper: &'a dyn DeviceMapper,
+    layer_idx: usize,
+    loading_isq: bool,
+    paged_attn: Option<PagedAttention>,
+    sliding_window: Option<usize>,
+    comm: &'a Arc<mistralrs_quant::Comm>,
+}
+
 impl DecoderLayer {
     fn new(
         rotary_emb: Arc<Qwen2_5VLRotaryEmbedding>,
-        cfg: &Config,
         vb: ShardedVarBuilder,
-        mapper: &dyn DeviceMapper,
-        layer_idx: usize,
-        loading_isq: bool,
-        comm: &Arc<mistralrs_quant::Comm>,
+        args: DecoderLayerLoad<'_>,
     ) -> Result<Self> {
+        let DecoderLayerLoad {
+            cfg,
+            mapper,
+            layer_idx,
+            loading_isq,
+            paged_attn,
+            sliding_window,
+            comm,
+        } = args;
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
+            sliding_window,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
             comm,
         )?;
         let mlp = Mlp::new(
@@ -271,20 +357,15 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
-        attention_mask: &AttentionMask,
-        cos_sin: &(Tensor, Tensor),
         kv_cache: &mut KvCache,
-        flash_params: &FlashParams,
+        args: AttentionForward<'_>,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self
-            .self_attn
-            .forward(&xs, attention_mask, cos_sin, kv_cache, flash_params)?;
+        let xs = self.self_attn.forward(&xs, kv_cache, args)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -305,6 +386,7 @@ pub struct Qwen2_5VLTextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
+    pub(super) sliding_window: Option<usize>,
 }
 
 impl Qwen2_5VLTextModel {
@@ -315,9 +397,6 @@ impl Qwen2_5VLTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
-        }
         let mapper = normal_loading_metadata.mapper;
         // Support both HuggingFace naming (model.*) and MLX naming (language_model.model.*)
         let vb_m =
@@ -354,6 +433,7 @@ impl Qwen2_5VLTextModel {
             );
         }
         let vb_l = vb_m.pp("layers");
+        let layer_sliding_windows = cfg.layer_sliding_windows()?;
         let layers = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
@@ -367,15 +447,25 @@ impl Qwen2_5VLTextModel {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(head_dim, device, None)?)
+                }
+            };
             let comm = mapper.get_comm_for(layer_idx)?;
             DecoderLayer::new(
                 rotary_emb.clone(),
-                cfg,
                 vb_l.pp(layer_idx),
-                &*mapper,
-                layer_idx,
-                normal_loading_metadata.loading_isq,
-                &comm,
+                DecoderLayerLoad {
+                    cfg,
+                    mapper: &*mapper,
+                    layer_idx,
+                    loading_isq: normal_loading_metadata.loading_isq,
+                    paged_attn,
+                    sliding_window: layer_sliding_windows[layer_idx],
+                    comm: &comm,
+                },
             )
         })?;
         let norm = F32RmsNorm::new(
@@ -394,15 +484,16 @@ impl Qwen2_5VLTextModel {
         } else {
             embed_tokens.clone()
         };
+        let sliding_window = layer_sliding_windows.iter().flatten().next().copied();
         Ok(Self {
             embed_tokens,
             norm,
             layers,
             lm_head,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types(
+                &layer_sliding_windows,
                 cfg.max_position_embeddings,
-            )),
+            ))),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
@@ -411,7 +502,7 @@ impl Qwen2_5VLTextModel {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: cfg.sliding_window,
+                sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
@@ -419,6 +510,7 @@ impl Qwen2_5VLTextModel {
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
             mapper,
+            sliding_window,
         })
     }
 
@@ -430,6 +522,7 @@ impl Qwen2_5VLTextModel {
         &self,
         mut xs: Tensor,
         attention_mask: &AttentionMask,
+        sliding_attention_mask: &AttentionMask,
         position_ids: &Tensor,
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
@@ -440,14 +533,20 @@ impl Qwen2_5VLTextModel {
             .compute_cos_sin(position_ids, xs.dtype())?;
 
         let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
+        let sliding_attention_mask =
+            DeviceMappedMask::new(sliding_attention_mask.clone(), &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
-                &attention_mask.get(xs.device()),
-                &cos_sin,
                 &mut cache[i],
-                ctx.flash_params(),
+                AttentionForward {
+                    attention_mask: &attention_mask.get(xs.device()),
+                    sliding_attention_mask: &sliding_attention_mask.get(xs.device()),
+                    cos_sin: &cos_sin,
+                    metadata: ctx.paged_layer(i),
+                    flash_params: ctx.flash_params(),
+                },
             )?
         }
         let xs = xs.to_device(&self.device)?;
@@ -474,5 +573,28 @@ impl IsqModel for Qwen2_5VLTextModel {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eager_cache_layout_matches_layer_windows() {
+        let types = cache_types(&[Some(256), None, Some(256)], 8192);
+
+        assert!(matches!(
+            &types[0],
+            NormalCacheType::SlidingWindow { window: 256 }
+        ));
+        assert!(matches!(
+            &types[1],
+            NormalCacheType::Normal { max_seq_len: 8192 }
+        ));
+        assert!(matches!(
+            &types[2],
+            NormalCacheType::SlidingWindow { window: 256 }
+        ));
     }
 }

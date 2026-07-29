@@ -146,6 +146,22 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve().ok()?.get_qtensor()
     }
 
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        self.resolve()?
+            .prepare_gguf_affine_raw(flat_batch, dtype, device)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        self.resolve()?.try_gguf_affine_forward_raw(a)
+    }
+
     fn afq_inner(&self) -> Option<crate::AfqInner> {
         self.resolve().ok()?.afq_inner()
     }

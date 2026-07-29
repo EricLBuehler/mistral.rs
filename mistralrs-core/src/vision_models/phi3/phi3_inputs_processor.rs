@@ -1,6 +1,6 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
-use crate::paged_attention::block_hash::MultimodalKind;
+use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalKind};
 use std::{any::Any, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -24,6 +24,10 @@ use crate::{
 
 use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
+    multimodal_layout::{
+        MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout, PackedMultimodalLayout,
+        RequestMultimodalLayout,
+    },
     phi3::Phi3VisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,
     processor_config::ProcessorConfig,
@@ -37,6 +41,133 @@ pub struct Phi3InputsProcessor {
 // Processor
 pub struct Phi3Processor {
     inputs_processor: Arc<Phi3InputsProcessor>,
+}
+
+type Phi3PromptTokens = (Vec<i64>, Vec<(usize, usize)>);
+
+fn phi3_image_token_count(image: &DynamicImage, config: &PreProcessorConfig) -> usize {
+    let image =
+        Phi3InputsProcessor::hd_transform(image, config.num_crops.expect("Need `num_crops`"));
+    let h = image.height() as usize / 336;
+    let w = image.width() as usize / 336;
+    (h * w + 1) * 144 + (h + 1) * 12 + 1
+}
+
+fn phi3_prompt_tokens(
+    tokenizer: &Tokenizer,
+    image_tag_splitter: &Regex,
+    detokenized: &str,
+    image_token_counts: &[usize],
+) -> anyhow::Result<Phi3PromptTokens> {
+    let image_ids = image_tag_splitter
+        .find_iter(detokenized)
+        .map(|image_tag| {
+            detokenized[image_tag.range()]
+                .split('|')
+                .nth(1)
+                .and_then(|tag| tag.split('_').nth(1))
+                .ok_or_else(|| anyhow::Error::msg("Phi3 image tag is malformed"))?
+                .parse::<usize>()
+                .map_err(|_| anyhow::Error::msg("Phi3 image id is not an integer"))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    if image_ids.len() != image_token_counts.len() {
+        anyhow::bail!(
+            "Phi3 prompt has {} image tags but {} images",
+            image_ids.len(),
+            image_token_counts.len()
+        );
+    }
+    if image_ids.iter().copied().ne(1..=image_token_counts.len()) {
+        anyhow::bail!("Phi3 image ids must appear once in ascending order starting at 1");
+    }
+
+    let splits = image_tag_splitter
+        .split(detokenized)
+        .map(|span| &detokenized[span.range()])
+        .collect::<Vec<_>>();
+    if splits.len() != image_ids.len() + 1 {
+        anyhow::bail!("Phi3 prompt image split count is inconsistent");
+    }
+    let prompt_chunks = tokenizer
+        .encode_batch(splits, true)
+        .map_err(|error| anyhow::Error::msg(error.to_string()))?
+        .into_iter()
+        .map(|encoding| {
+            encoding
+                .get_ids()
+                .iter()
+                .map(|token| i64::from(*token))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let image_pads = image_ids
+        .iter()
+        .zip(image_token_counts)
+        .map(|(&image_id, &token_count)| vec![-(image_id as i64); token_count])
+        .collect::<Vec<_>>();
+
+    let mut ranges = Vec::with_capacity(image_pads.len());
+    let mut offset = 0usize;
+    for (chunk, pad) in prompt_chunks.iter().zip(&image_pads) {
+        offset += chunk.len();
+        ranges.push((offset, pad.len()));
+        offset += pad.len();
+    }
+    let mut tokens = Vec::new();
+    for part in prompt_chunks.into_iter().interleave(image_pads) {
+        tokens.extend(part);
+    }
+    Ok((tokens, ranges))
+}
+
+fn phi3_layout_items(features: &[MultiModalFeature]) -> Result<Vec<MultimodalItemLayout>> {
+    features
+        .iter()
+        .filter(|feature| feature.kind == MultimodalKind::Image)
+        .map(|feature| {
+            if feature.item_range.len() != 1 || feature.hashes.len() != 1 {
+                candle_core::bail!("Phi3 image feature must describe exactly one image");
+            }
+            let placeholder = feature.offset..feature.end();
+            MultimodalItemLayout::new(
+                MultimodalEncoderKey {
+                    kind: MultimodalKind::Image,
+                    hash: feature.hashes[0],
+                },
+                feature.item_range.start,
+                placeholder.clone(),
+                feature.attention_policy,
+                vec![MultimodalEmbeddingMap::contiguous(placeholder, 0, 0)?],
+            )
+        })
+        .collect()
+}
+
+fn phi3_packed_layout(
+    input_seqs: &[&mut Sequence],
+    query_lens: &[usize],
+) -> Result<PackedMultimodalLayout> {
+    if input_seqs.len() != query_lens.len() {
+        candle_core::bail!("Phi3 packed multimodal metadata length mismatch");
+    }
+    let requests = input_seqs
+        .iter()
+        .zip(query_lens)
+        .map(|(seq, &query_len)| {
+            if query_len != seq.get_toks().len() {
+                candle_core::bail!(
+                    "Phi3 packed multimodal prefill requires the complete uncached prompt"
+                );
+            }
+            Ok(RequestMultimodalLayout {
+                sequence_id: *seq.id(),
+                query: 0..query_len,
+                items: phi3_layout_items(seq.mm_features())?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    PackedMultimodalLayout::new(&requests)
 }
 
 impl ProcessorCreator for Phi3Processor {
@@ -69,6 +200,72 @@ impl InputsProcessor for Phi3InputsProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let tokenizer = tokenizer
+            .ok_or_else(|| anyhow::Error::msg("Phi3InputProcessor requires a tokenizer"))?;
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+
+        for seq in input_seqs {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let Some(images) = seq.images() else {
+                continue;
+            };
+            if images.is_empty() {
+                continue;
+            }
+            let image_token_counts = images
+                .iter()
+                .map(|image| phi3_image_token_count(image, config))
+                .collect::<Vec<_>>();
+            let detokenized = tokenizer
+                .decode(seq.get_toks(), false)
+                .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+            let (tokens, ranges) = phi3_prompt_tokens(
+                &tokenizer,
+                &self.image_tag_splitter,
+                &detokenized,
+                &image_token_counts,
+            )?;
+            let hashes = seq.image_hashes().unwrap_or_default().to_vec();
+            if hashes.len() != ranges.len() {
+                anyhow::bail!(
+                    "Phi3 has {} image hashes but {} image placeholders",
+                    hashes.len(),
+                    ranges.len()
+                );
+            }
+            if seq.mm_features().is_empty() {
+                seq.set_mm_features(build_mm_features_from_ranges(
+                    &ranges,
+                    &hashes,
+                    MultimodalKind::Image,
+                ));
+            }
+            let new_ids = tokens
+                .iter()
+                .map(|token| *token as i32 as u32)
+                .collect::<Vec<_>>();
+            let prompt = tokenizer
+                .decode(&new_ids, false)
+                .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+            seq.set_initial_prompt(prompt);
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -103,56 +300,8 @@ impl InputsProcessor for Phi3InputsProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
-
-        let (pixel_values, image_sizes, num_img_tokens, n_images) = if has_images {
-            let mut pixel_values_accum = Vec::new();
-            let mut image_sizes_accum = Vec::new();
-            let mut num_img_tokens_accum = Vec::new();
-            let mut n_images = Vec::new();
-            for seq in input_seqs.iter_mut() {
-                let imgs = seq
-                    .take_images()
-                    .expect("Need to have images by this point.");
-                let imgs_len = imgs.len();
-                n_images.push(imgs_len);
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes,
-                    num_img_tokens,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all: _,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        imgs,
-                        vec![],
-                        config,
-                        device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
-                    )
-                    .expect("Preprocessor failed");
-                let image_sizes = image_sizes.unwrap();
-                pixel_values_accum.push(pixel_values);
-                image_sizes_accum.push(image_sizes);
-                num_img_tokens_accum.push(num_img_tokens.unwrap());
-            }
-            (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                Some(image_sizes_accum),
-                Some(num_img_tokens_accum),
-                n_images,
-            )
-        } else {
+        let has_images = input_seqs.iter().any(|seq| seq.has_images());
+        if !has_images {
             return text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
                     Some(tokenizer),
@@ -199,6 +348,7 @@ impl InputsProcessor for Phi3InputsProcessor {
                         model_specific_args: Box::new(Phi3VisionSpecificArgs {
                             image_sizes: None,
                             image_hashes: vec![],
+                            packed_layout: None,
                         }),
                         paged_attn_meta,
                         flash_meta,
@@ -210,7 +360,49 @@ impl InputsProcessor for Phi3InputsProcessor {
                         seq_indices,
                     }
                 });
+        }
+
+        let mut pixel_values_accum = Vec::new();
+        let mut image_sizes = Vec::new();
+        let mut image_token_counts = vec![Vec::new(); input_seqs.len()];
+        for (seq_idx, seq) in input_seqs.iter_mut().enumerate() {
+            if !seq.has_images() {
+                continue;
+            }
+            let cached = seq.count_prefix_cached_mm_items();
+            let images = seq
+                .take_images()
+                .expect("Need to have images by this point.");
+            for image in images.into_iter().skip(cached) {
+                let PreprocessedImages {
+                    pixel_values,
+                    image_sizes: Some(image_size),
+                    num_img_tokens: Some(num_img_tokens),
+                    ..
+                } = self.preprocess(
+                    vec![image],
+                    vec![],
+                    config,
+                    device,
+                    (usize::MAX, usize::MAX),
+                )?
+                else {
+                    anyhow::bail!("Phi3 preprocessing omitted required image metadata");
+                };
+                if pixel_values.dim(0)? != 1 || num_img_tokens.len() != 1 {
+                    anyhow::bail!("Phi3 preprocessing must return one output per image");
+                }
+                pixel_values_accum.push(pixel_values);
+                image_sizes.push(image_size);
+                image_token_counts[seq_idx].push(num_img_tokens[0]);
+            }
+        }
+        let pixel_values = if pixel_values_accum.is_empty() {
+            None
+        } else {
+            Some(Tensor::cat(&pixel_values_accum, 0)?)
         };
+        let image_sizes = (!image_sizes.is_empty()).then_some(image_sizes);
 
         let mut toks = Vec::new();
         let detokenized = tokenizer
@@ -221,119 +413,49 @@ impl InputsProcessor for Phi3InputsProcessor {
                     .collect::<Vec<_>>(),
                 false,
             )
-            .expect("Decode failed");
+            .map_err(|error| anyhow::Error::msg(error.to_string()))?;
 
-        for (detokenized, (seq, (num_img_tokens, n_images))) in detokenized.into_iter().zip(
-            input_seqs
-                .iter_mut()
-                .zip(num_img_tokens.unwrap().into_iter().zip(n_images)),
-        ) {
-            if !seq.multimodal.has_changed_prompt {
-                let splits = self
-                    .image_tag_splitter
-                    .split(&detokenized)
-                    .map(|span| &detokenized[span.range()])
-                    .collect::<Vec<_>>();
-                let prompt_chunks = tokenizer
-                    .encode_batch(splits, true)
-                    .expect("Encode failed")
-                    .into_iter()
-                    .map(|enc| enc.get_ids().to_vec())
-                    .collect::<Vec<_>>();
-
-                let image_tags = self.image_tag_splitter.find_iter(&detokenized);
-                let image_ids = image_tags
-                    .into_iter()
-                    .map(|s| {
-                        let s = &detokenized[s.range()];
-                        s.split('|')
-                            .nth(1)
-                            .unwrap()
-                            .split('_')
-                            .nth(1)
-                            .unwrap()
-                            .parse::<u32>()
-                            .expect("Failed to parse image id to u32")
-                    })
-                    .collect::<Vec<_>>();
-                let unique_image_ids = image_ids
-                    .iter()
-                    .copied()
-                    .unique()
-                    .sorted()
-                    .collect::<Vec<_>>();
-                // `image_ids` must start from 1, and must be continuous int, e.g. [1, 2, 3], cannot be [1, 4, 5]
-                if unique_image_ids != (1u32..unique_image_ids.len() as u32 + 1).collect::<Vec<_>>()
-                {
-                    return Err(anyhow::Error::msg(
-                    "`image_ids` must start from 1, and must be continuous, e.g. [1, 2, 3], cannot be [1, 4, 5].",
-                ));
-                }
-                // Total images must be the same as the number of image tags
-                if unique_image_ids.len() != n_images {
-                    return Err(anyhow::Error::msg(
-                        "Total images must be the same as the number of image tags.",
-                    ));
-                }
-
-                // Use the TryInto + unwrap_or to handle case when id==0
-                let image_ids_pad = image_ids
-                    .iter()
-                    .map(|id| {
-                        [-(*id as i64)].repeat(
-                            num_img_tokens[TryInto::<usize>::try_into(*id as isize - 1)
-                                .unwrap_or(num_img_tokens.len() - 1)],
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                // Compute image placeholder ranges from interleave structure
-                let mut img_ranges = Vec::new();
-                {
-                    let mut offset = 0;
-                    for (chunk, pad) in prompt_chunks.iter().zip(image_ids_pad.iter()) {
-                        offset += chunk.len();
-                        img_ranges.push((offset, pad.len()));
-                        offset += pad.len();
-                    }
-                }
-
-                let mut input_ids: Vec<i64> = Vec::new();
-                for item in prompt_chunks
-                    .iter()
-                    .map(|x| x.iter().map(|x| *x as i64).collect::<Vec<_>>())
-                    .interleave(image_ids_pad)
-                {
-                    input_ids.extend(item);
-                }
-
-                // SAFETY: transmuting the i64 to a u32 here, but keep the signed bit pattern
-                let new_ids = input_ids
-                    .iter()
-                    .map(|x| *x as i32 as u32)
-                    .collect::<Vec<_>>();
-                let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
-                seq.set_initial_prompt(new_prompt);
-
-                // Build mm_features for position-aware prefix cache hashing
-                if seq.mm_features().is_empty() {
-                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        seq.set_mm_features(build_mm_features_from_ranges(
-                            &img_ranges,
-                            &hashes,
-                            MultimodalKind::Image,
-                        ));
-                    }
-                }
-
-                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-                seq.multimodal.has_changed_prompt = true;
-
-                toks.push(input_ids);
-            } else {
+        for ((detokenized, seq), image_token_counts) in detokenized
+            .into_iter()
+            .zip(input_seqs.iter_mut())
+            .zip(image_token_counts)
+        {
+            if seq.multimodal.has_changed_prompt || image_token_counts.is_empty() {
                 toks.push(seq.get_toks().iter().map(|x| *x as i32 as i64).collect());
+                continue;
             }
+            let (input_ids, image_ranges) = phi3_prompt_tokens(
+                &tokenizer,
+                &self.image_tag_splitter,
+                &detokenized,
+                &image_token_counts,
+            )?;
+            let hashes = seq.image_hashes().unwrap_or_default().to_vec();
+            if hashes.len() != image_ranges.len() {
+                anyhow::bail!(
+                    "Phi3 has {} image hashes but {} image placeholders",
+                    hashes.len(),
+                    image_ranges.len()
+                );
+            }
+            let new_ids = input_ids
+                .iter()
+                .map(|token| *token as i32 as u32)
+                .collect::<Vec<_>>();
+            let new_prompt = tokenizer
+                .decode(&new_ids, false)
+                .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+            seq.set_initial_prompt(new_prompt);
+            if seq.mm_features().is_empty() {
+                seq.set_mm_features(build_mm_features_from_ranges(
+                    &image_ranges,
+                    &hashes,
+                    MultimodalKind::Image,
+                ));
+            }
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+            seq.multimodal.has_changed_prompt = true;
+            toks.push(input_ids);
         }
 
         let metadata = if is_prompt {
@@ -361,43 +483,62 @@ impl InputsProcessor for Phi3InputsProcessor {
             )
         };
 
-        metadata.map(|metadata| {
-            let text_models_inputs_processor::InnerInputProcessorOutput {
-                inputs:
-                    text_models_inputs_processor::InputMetadata {
-                        input,
-                        positions,
-                        context_lens,
-                        position_ids,
-                        paged_attn_meta,
-                        flash_meta,
-                    },
-                seq_indices,
-            } = metadata;
-            let image_hashes: Vec<u64> = input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect();
-            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = metadata?;
+        let image_hashes = input_seqs
+            .iter()
+            .flat_map(|seq| {
+                let cached = seq.count_prefix_cached_mm_items();
+                seq.image_hashes()
+                    .unwrap_or_default()
+                    .iter()
+                    .copied()
+                    .skip(cached)
+            })
+            .collect::<Vec<_>>();
+        if image_hashes.len() != image_sizes.as_ref().map_or(0, Vec::len) {
+            anyhow::bail!("Phi3 image metadata does not match the selected media");
+        }
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    anyhow::Error::msg("packed Phi3 prefill requires logical query lengths")
+                })?;
+            let layout = phi3_packed_layout(input_seqs, query_lens)?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "Phi3 packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
+        } else {
+            None
+        };
+        Ok(InputProcessorOutput {
+            inputs: Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
                 context_lens,
                 position_ids,
-                pixel_values: pixel_values.clone(),
+                pixel_values,
                 model_specific_args: Box::new(Phi3VisionSpecificArgs {
-                    image_sizes: image_sizes.clone(),
+                    image_sizes,
                     image_hashes,
+                    packed_layout,
                 }),
                 paged_attn_meta,
                 flash_meta,
@@ -407,11 +548,8 @@ impl InputsProcessor for Phi3InputsProcessor {
                     crate::pipeline::RecurrentBatchKind::Decode
                 },
                 adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
-            });
-            InputProcessorOutput {
-                inputs,
-                seq_indices,
-            }
+            }),
+            seq_indices,
         })
     }
 }
@@ -617,5 +755,104 @@ impl ImagePreProcessor for Phi3InputsProcessor {
             image_sizes_all: None,
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, ops::Range};
+
+    use candle_core::{Device, Tensor};
+
+    use super::*;
+    use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
+    use crate::vision_models::multimodal_layout::{
+        MultimodalEncoderOutputs, RequestMultimodalLayout,
+    };
+
+    fn feature(item_range: Range<usize>) -> MultiModalFeature {
+        MultiModalFeature {
+            kind: MultimodalKind::Image,
+            item_range,
+            hashes: vec![17],
+            offset: 1,
+            length: 2,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }
+    }
+
+    #[test]
+    fn packed_layout_splices_media_and_preserves_text_request() {
+        let layout = PackedMultimodalLayout::new(&[
+            RequestMultimodalLayout {
+                sequence_id: 1,
+                query: 0..4,
+                items: phi3_layout_items(&[feature(0..1)]).unwrap(),
+            },
+            RequestMultimodalLayout {
+                sequence_id: 2,
+                query: 0..2,
+                items: vec![],
+            },
+        ])
+        .unwrap();
+        let text = Tensor::from_vec(
+            vec![0f32, 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11.],
+            (1, 6, 2),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let outputs: MultimodalEncoderOutputs = HashMap::from([(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 17,
+            },
+            vec![Tensor::from_vec(vec![20f32, 21., 30., 31.], (2, 2), &Device::Cpu).unwrap()],
+        )]);
+
+        assert_eq!(
+            layout
+                .splice_embeddings(&text, &outputs)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            vec![0., 1., 20., 21., 30., 31., 6., 7., 8., 9., 10., 11.]
+        );
+    }
+
+    #[test]
+    fn packed_layout_rejects_grouped_image_feature() {
+        assert!(phi3_layout_items(&[feature(0..2)]).is_err());
+    }
+
+    #[test]
+    fn planning_token_count_matches_preprocessor() {
+        let processor = Phi3InputsProcessor {
+            image_tag_splitter: Regex::new(r"<\|image_\d+\|>").unwrap(),
+        };
+        let config = PreProcessorConfig {
+            num_crops: Some(4),
+            ..Default::default()
+        };
+
+        for image in [
+            DynamicImage::new_rgb8(640, 320),
+            DynamicImage::new_rgb8(320, 640),
+        ] {
+            let expected = phi3_image_token_count(&image, &config);
+            let preprocessed = processor
+                .preprocess(
+                    vec![image],
+                    vec![],
+                    &config,
+                    &Device::Cpu,
+                    (usize::MAX, usize::MAX),
+                )
+                .unwrap();
+            assert_eq!(preprocessed.num_img_tokens.unwrap(), vec![expected]);
+        }
     }
 }

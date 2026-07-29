@@ -41,6 +41,10 @@ impl AttentionMask {
     pub fn is_custom(&self) -> bool {
         matches!(self, Self::Custom(_))
     }
+
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 mod backends;
@@ -49,11 +53,54 @@ mod backends;
 pub(crate) use backends::cpu::fast_exp;
 #[cfg(feature = "cuda")]
 use backends::naive::maybe_synchronize;
-pub(crate) use backends::{flash_attn, naive_sdpa, sinks_attn};
+pub(crate) use backends::{
+    flash_attn, flash_backend_supports, flash_backend_supports_sdpa, naive_sdpa, sinks_attn,
+    sinks_backend_is_available, sinks_backend_supports,
+};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
+
+#[cfg(any(
+    feature = "flash-attn",
+    feature = "flash-attn-v3",
+    all(feature = "cuda", target_family = "unix")
+))]
+pub(crate) fn sliding_window_left(sliding_window: Option<usize>) -> Option<usize> {
+    sliding_window.map(|window| window.saturating_sub(1))
+}
+
+fn eager_attention_mask(
+    query_len: usize,
+    key_len: usize,
+    causal: bool,
+    sliding_window: Option<usize>,
+    dtype: DType,
+    device: &Device,
+) -> Result<Option<Tensor>> {
+    if !causal && sliding_window.is_none() {
+        return Ok(None);
+    }
+    let prefix_len = key_len.saturating_sub(query_len);
+    let mut mask = Vec::with_capacity(query_len * key_len);
+    for query_idx in 0..query_len {
+        let query_pos = prefix_len + query_idx;
+        for key_idx in 0..key_len {
+            let future = causal && key_idx > query_pos;
+            let too_old = sliding_window
+                .is_some_and(|window| query_pos >= window && key_idx <= query_pos - window);
+            mask.push(if future || too_old {
+                f32::NEG_INFINITY
+            } else {
+                0.0
+            });
+        }
+    }
+    Tensor::from_vec(mask, (query_len, key_len), device)
+        .and_then(|mask| mask.to_dtype(dtype))
+        .map(Some)
+}
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -165,6 +212,21 @@ fn run_flash_attn_cpu_for_dtype(
     }
 }
 
+fn packed_attention_backend_is_available(q: &Tensor, sdpa_params: &SdpaParams) -> Result<bool> {
+    let head_dim = q.dim(3)?;
+    if sdpa_params.sinks.is_some() {
+        return Ok(q.dim(0)? > 1 && sinks_backend_is_available(q, head_dim));
+    }
+    Ok(q.device().is_cuda()
+        && crate::using_flash_attn()
+        && matches!(q.dtype(), DType::F16 | DType::BF16)
+        && flash_backend_supports_sdpa(
+            head_dim,
+            sdpa_params.softcap.is_some(),
+            sdpa_params.sliding_window.is_some(),
+        ))
+}
+
 pub struct SdpaParams {
     pub n_kv_groups: usize,
     pub softcap: Option<f32>,
@@ -198,6 +260,14 @@ impl Sdpa {
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        if flash_params.is_some_and(|params| params.packed)
+            && (!matches!(mask, AttentionMask::CausalFlash)
+                || !flash_params.is_some_and(|params| params.causal)
+                || !packed_attention_backend_is_available(q, sdpa_params)?)
+        {
+            candle_core::bail!("packed prefill requires causal varlen attention support");
+        }
+
         // If sinks are present, dispatch to the sinks backend
         if let Some(sinks) = &sdpa_params.sinks {
             let mask_tensor = match mask {
@@ -251,6 +321,41 @@ impl Sdpa {
                 None => (k, v, sdpa_params),
             };
 
+            let head_dim = q.dim(3)?;
+            if q.device().is_cuda()
+                && !flash_backend_supports_sdpa(
+                    head_dim,
+                    sdpa_params.softcap.is_some(),
+                    sdpa_params.sliding_window.is_some(),
+                )
+            {
+                if flash_params.is_some_and(|params| params.packed) {
+                    candle_core::bail!(
+                        "packed prefill requires FlashAttention support for head_dim={head_dim} \
+                         with softcap={}, sliding_window={}",
+                        sdpa_params.softcap.is_some(),
+                        sdpa_params.sliding_window.is_some()
+                    );
+                }
+                let causal = matches!(mask, AttentionMask::CausalFlash) || do_causal;
+                let fallback_mask = eager_attention_mask(
+                    q.dim(2)?,
+                    k.dim(2)?,
+                    causal,
+                    sdpa_params.sliding_window,
+                    q.dtype(),
+                    q.device(),
+                )?;
+                return self.run_attention_noflash(
+                    q,
+                    k,
+                    v,
+                    fallback_mask.as_ref(),
+                    sdpa_params,
+                    causal,
+                );
+            }
+
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -259,19 +364,6 @@ impl Sdpa {
             if q.device().is_cpu() {
                 return run_flash_attn_cpu_for_dtype(&q, &k, &v, None, sdpa_params);
             } else {
-                // hd512 flash kernels drop softcap/sliding-window at compile time; fail loud, not silent.
-                let (_, _, _, head_dim) = q.dims4()?;
-                if head_dim == 512
-                    && (sdpa_params.softcap.is_some_and(|s| s != 1.0)
-                        || sdpa_params.sliding_window.is_some())
-                {
-                    return Err(candle_core::Error::Msg(
-                        "flash-attn head_dim 512 kernels are compiled without softcap/sliding-window; \
-                         remove the FLASHATTENTION_DISABLE_* defines in \
-                         mistralrs-flash-attn/kernels/*hdim512*.cu to re-enable (slow compile)"
-                            .to_string(),
-                    ));
-                }
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
@@ -533,6 +625,14 @@ mod tests {
     }
 
     #[test]
+    fn causal_flash_has_attention_intent_without_a_custom_tensor() {
+        let mask = AttentionMask::CausalFlash;
+
+        assert!(!mask.is_none());
+        assert!(!mask.is_custom());
+    }
+
+    #[test]
     fn test_custom_cpu_mask_uses_attention_dispatch() -> CandleResult<()> {
         let (b, h, q_len, kv_len, d) = (1, 2, 3, 3, 4);
         let q = Tensor::from_vec(
@@ -592,5 +692,45 @@ mod tests {
 
         assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
         assert_close(&out, &expected)
+    }
+
+    #[cfg(any(
+        feature = "flash-attn",
+        feature = "flash-attn-v3",
+        all(feature = "cuda", target_family = "unix")
+    ))]
+    #[test]
+    fn sliding_window_capacity_converts_to_left_distance() {
+        assert_eq!(sliding_window_left(None), None);
+        assert_eq!(sliding_window_left(Some(1)), Some(0));
+        assert_eq!(sliding_window_left(Some(4096)), Some(4095));
+    }
+
+    #[test]
+    fn eager_mask_combines_suffix_causality_and_sliding_capacity() -> CandleResult<()> {
+        let mask = eager_attention_mask(3, 8, true, Some(4), DType::F32, &Device::Cpu)?
+            .expect("causal sliding mask");
+        let mask = mask.to_vec2::<f32>()?;
+
+        for (row, values) in mask.iter().enumerate() {
+            let query_pos = row + 5;
+            for (key_pos, &value) in values.iter().enumerate() {
+                let visible = key_pos <= query_pos && key_pos + 4 > query_pos;
+                assert_eq!(value == 0.0, visible);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eager_mask_unit_window_keeps_only_current_token() -> CandleResult<()> {
+        let mask = eager_attention_mask(1, 3, true, Some(1), DType::F32, &Device::Cpu)?
+            .expect("unit sliding mask");
+
+        assert_eq!(
+            mask.flatten_all()?.to_vec1::<f32>()?,
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0]
+        );
+        Ok(())
     }
 }

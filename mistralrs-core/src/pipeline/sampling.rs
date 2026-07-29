@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
-use candle_core::{DType, Result, Tensor};
+use candle_core::{DType, IndexOp, Result, Tensor};
+#[cfg(feature = "cuda")]
+use rand::distr::{Distribution, Uniform};
 use rand_isaac::Isaac64Rng;
 
+#[cfg(feature = "cuda")]
+use crate::sampler::CudaBatchSamplingKind;
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
@@ -549,24 +553,30 @@ pub async fn sample_and_add_toks(
         Some(metadata.eos_tok.clone())
     };
 
-    let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
-        .map(|(logits_per_seq, seq)| {
-            let return_logprobs = seq.return_logprobs();
-            sample_sequence(
-                logits_per_seq,
-                seq,
-                return_logprobs,
-                eos_toks.as_deref(),
-                llg_factory.clone(),
-                max_model_len,
-                rng.clone(),
-                use_async_pool,
-                false,
-                use_async_pool,
-            )
-        })
-        .collect();
-    let sampled_vec = futures::future::join_all(sampling_futures).await;
+    let sampled_vec = match try_sample_batch_cuda(&logits_seq, seqs, &rng)? {
+        Some(sampled) => sampled,
+        None => {
+            let logits_seq = coalesce_batch_logits_to_cpu(logits_seq)?;
+            let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
+                .map(|(logits_per_seq, seq)| {
+                    let return_logprobs = seq.return_logprobs();
+                    sample_sequence(
+                        logits_per_seq,
+                        seq,
+                        return_logprobs,
+                        eos_toks.as_deref(),
+                        llg_factory.clone(),
+                        max_model_len,
+                        rng.clone(),
+                        use_async_pool,
+                        false,
+                        use_async_pool,
+                    )
+                })
+                .collect();
+            futures::future::join_all(sampling_futures).await
+        }
+    };
 
     for (sampled, seq) in std::iter::zip(sampled_vec, seqs.iter_mut()) {
         let next_token = crate::handle_seq_error_stateaware_ok!(sampled, seq);
@@ -582,6 +592,177 @@ pub async fn sample_and_add_toks(
     }
 
     Ok(())
+}
+
+pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        let mut categorical = None;
+        for seq in seqs {
+            if !matches!(&seq.recognizer, SequenceRecognizer::None) || seq.tool_call_state.is_some()
+            {
+                return false;
+            }
+            let Some(plan) = seq
+                .sampler()
+                .cuda_batch_sampling_plan(seq.return_logprobs())
+            else {
+                return false;
+            };
+            let plan_is_categorical = matches!(plan.kind, CudaBatchSamplingKind::Categorical);
+            if categorical.is_some_and(|expected| expected != plan_is_categorical) {
+                return false;
+            }
+            categorical = Some(plan_is_categorical);
+        }
+        categorical.is_some()
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = seqs;
+        false
+    }
+}
+
+fn final_logits_row(logits: &Tensor) -> Result<Tensor> {
+    logits.squeeze(0)?.squeeze(0)
+}
+
+fn stack_final_logits(logits: &[Tensor]) -> Result<Tensor> {
+    if let [logits] = logits {
+        return final_logits_row(logits)?.unsqueeze(0)?.to_dtype(DType::F32);
+    }
+    let rows = logits
+        .iter()
+        .map(final_logits_row)
+        .collect::<Result<Vec<_>>>()?;
+    Tensor::stack(&rows.iter().collect::<Vec<_>>(), 0)?
+        .contiguous()?
+        .to_dtype(DType::F32)
+}
+
+fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
+    if logits.len() <= 1 || logits.iter().all(|logits| logits.device().is_cpu()) {
+        return Ok(logits);
+    }
+    let batch = stack_final_logits(&logits)?.to_device(&candle_core::Device::Cpu)?;
+    (0..logits.len())
+        .map(|idx| batch.i(idx)?.unsqueeze(0)?.unsqueeze(0))
+        .collect()
+}
+
+#[cfg(feature = "cuda")]
+fn try_sample_batch_cuda(
+    logits: &[Tensor],
+    seqs: &[&mut Sequence],
+    rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<Option<Vec<Result<Logprobs>>>> {
+    if logits.is_empty()
+        || logits.len() != seqs.len()
+        || logits.iter().any(|logits| !logits.device().is_cuda())
+    {
+        return Ok(None);
+    }
+
+    let mut samplers_and_plans = Vec::with_capacity(seqs.len());
+    let mut sampling_logprob_required = false;
+    for seq in seqs {
+        if !matches!(&seq.recognizer, SequenceRecognizer::None) || seq.tool_call_state.is_some() {
+            return Ok(None);
+        }
+        let sampler = seq.sampler();
+        let Some(plan) = sampler.cuda_batch_sampling_plan(seq.return_logprobs()) else {
+            return Ok(None);
+        };
+        sampling_logprob_required |= seq.sampling_logprob_required();
+        samplers_and_plans.push((sampler, plan));
+    }
+
+    let categorical = matches!(
+        samplers_and_plans[0].1.kind,
+        CudaBatchSamplingKind::Categorical
+    );
+    if samplers_and_plans
+        .iter()
+        .any(|(_, plan)| matches!(plan.kind, CudaBatchSamplingKind::Categorical) != categorical)
+        || logits.len() == 1 && !categorical
+    {
+        return Ok(None);
+    }
+
+    let logits = stack_final_logits(logits)?;
+    let all_argmax = samplers_and_plans
+        .iter()
+        .all(|(_, plan)| plan.kind.is_argmax());
+    if all_argmax && !sampling_logprob_required {
+        let output = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        let sampled = std::iter::zip(packed, samplers_and_plans)
+            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(&row))
+            .collect();
+        return Ok(Some(sampled));
+    }
+
+    let inverse_temperatures = samplers_and_plans
+        .iter()
+        .map(|(_, plan)| plan.inverse_temperature)
+        .collect::<Vec<_>>();
+    let inverse_temperatures = Tensor::from_vec(
+        inverse_temperatures,
+        samplers_and_plans.len(),
+        logits.device(),
+    )?;
+
+    if categorical {
+        let uniform = Uniform::new(0.0f32, 1.0f32).expect("valid unit uniform distribution");
+        let uniforms = {
+            let mut rng = rng.lock().expect("could not lock rng mutex");
+            (0..samplers_and_plans.len())
+                .map(|_| uniform.sample(&mut *rng))
+                .collect::<Vec<_>>()
+        };
+        let uniforms = Tensor::from_vec(uniforms, samplers_and_plans.len(), logits.device())?;
+        let output = crate::ops::cuda_categorical_logits_f32_packed_batched(
+            &logits,
+            &inverse_temperatures,
+            &uniforms,
+        )?;
+        let packed = output.packed.to_vec2::<f32>()?;
+        let sampled = std::iter::zip(packed, samplers_and_plans)
+            .map(|(row, (sampler, _))| sampler.sample_cuda_categorical_row(&row))
+            .collect();
+        return Ok(Some(sampled));
+    }
+
+    let common_k = samplers_and_plans
+        .iter()
+        .map(|(_, plan)| match plan.kind {
+            CudaBatchSamplingKind::Greedy => 1,
+            CudaBatchSamplingKind::TopK { k } => k,
+            CudaBatchSamplingKind::Categorical => unreachable!(),
+        })
+        .max()
+        .expect("batch is non-empty");
+    let output =
+        crate::ops::cuda_topk_logits_f32_packed_batched(&logits, common_k, &inverse_temperatures)?;
+    let packed = output.packed.to_vec2::<f32>()?;
+    let mut rng = rng.lock().expect("could not lock rng mutex");
+    Ok(Some(
+        std::iter::zip(packed, samplers_and_plans)
+            .map(|(row, (sampler, plan))| {
+                sampler.sample_cuda_topk_packed_row(&row, output.k, plan, &mut rng)
+            })
+            .collect(),
+    ))
+}
+
+#[cfg(not(feature = "cuda"))]
+fn try_sample_batch_cuda(
+    _logits: &[Tensor],
+    _seqs: &[&mut Sequence],
+    _rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<Option<Vec<Result<Logprobs>>>> {
+    Ok(None)
 }
 
 /// Async sample optionally adding to trie.
@@ -794,5 +975,23 @@ mod tests {
         assert_eq!(content, None);
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].function.name, "get_weather");
+    }
+
+    #[test]
+    fn stack_final_logits_honors_view_offsets_and_order() {
+        let backing = Tensor::from_vec(
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+            (3, 1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+        let rows = vec![backing.i(2).unwrap(), backing.i(0).unwrap()];
+
+        let packed = stack_final_logits(&rows).unwrap().to_vec2::<f32>().unwrap();
+
+        assert_eq!(
+            packed,
+            vec![vec![8.0, 9.0, 10.0, 11.0], vec![0.0, 1.0, 2.0, 3.0]]
+        );
     }
 }

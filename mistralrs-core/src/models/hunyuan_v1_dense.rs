@@ -636,6 +636,9 @@ impl NormalModel for Model {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
         true

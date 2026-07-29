@@ -307,7 +307,7 @@ impl Attention {
                     // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                     // Sanity check.
-                    assert!(mask.is_custom());
+                    assert!(!mask.is_none());
                     paged_attn.forward(
                         &q,
                         &k,
@@ -335,7 +335,7 @@ impl Attention {
             }
         };
 
-        attn_output = if mask.is_custom() {
+        attn_output = if !matches!(mask, AttentionMask::None) {
             attn_output
                 .transpose(1, 2)?
                 .reshape((b_size, seq_len, ()))?
@@ -623,6 +623,9 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {

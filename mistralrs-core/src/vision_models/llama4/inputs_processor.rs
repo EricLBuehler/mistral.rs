@@ -1,9 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::paged_attention::block_hash::MultimodalKind;
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
+    ops::Range,
     sync::Arc,
 };
 
@@ -19,6 +19,7 @@ use tokenizers::Tokenizer;
 
 use crate::{
     device_map::DeviceMapper,
+    paged_attention::block_hash::{MultiModalFeature, MultimodalKind},
     pipeline::{
         text_models_inputs_processor::{
             self, get_completion_input, get_prompt_input, PagedAttentionMeta,
@@ -28,6 +29,10 @@ use crate::{
     sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
+        multimodal_layout::{
+            MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout,
+            PackedMultimodalLayout, RequestMultimodalLayout,
+        },
         preprocessor_config::PreProcessorConfig,
         processor_config::ProcessorConfig,
         ModelInputs,
@@ -121,10 +126,268 @@ impl Llama4ImageProcessor {
     }
 }
 
+fn llama4_mm_features(
+    tokens: &[u32],
+    image_start_id: u32,
+    image_end_id: u32,
+    image_hashes: &[u64],
+) -> Result<Vec<MultiModalFeature>> {
+    let ranges = find_image_delimited_ranges(tokens, image_start_id, image_end_id);
+    if ranges.len() != image_hashes.len() {
+        candle_core::bail!(
+            "Llama4 has {} image spans but {} image inputs",
+            ranges.len(),
+            image_hashes.len()
+        );
+    }
+    Ok(build_mm_features_from_ranges(
+        &ranges,
+        image_hashes,
+        MultimodalKind::Image,
+    ))
+}
+
+fn llama4_tile_counts(aspect_ratios: &Tensor) -> Result<Vec<usize>> {
+    let ratios = aspect_ratios.to_vec2::<u32>()?;
+    ratios
+        .into_iter()
+        .map(|ratio| {
+            if ratio.len() != 2 || ratio[0] == 0 || ratio[1] == 0 {
+                candle_core::bail!("Llama4 image has an invalid aspect ratio");
+            }
+            let local_tiles = (ratio[0] as usize)
+                .checked_mul(ratio[1] as usize)
+                .ok_or_else(|| candle_core::Error::msg("Llama4 tile count overflow"))?;
+            Ok(if local_tiles > 1 { local_tiles + 1 } else { 1 })
+        })
+        .collect()
+}
+
+fn llama4_tile_range(tile_counts: &[usize], item_range: Range<usize>) -> Result<Range<usize>> {
+    if item_range.start > item_range.end || item_range.end > tile_counts.len() {
+        candle_core::bail!("Llama4 image selection is outside the preprocessed images");
+    }
+    let start = tile_counts[..item_range.start]
+        .iter()
+        .try_fold(0usize, |sum, count| sum.checked_add(*count))
+        .ok_or_else(|| candle_core::Error::msg("Llama4 tile offset overflow"))?;
+    let len = tile_counts[item_range]
+        .iter()
+        .try_fold(0usize, |sum, count| sum.checked_add(*count))
+        .ok_or_else(|| candle_core::Error::msg("Llama4 tile count overflow"))?;
+    Ok(start..start + len)
+}
+
+fn llama4_item_selection(
+    is_chunked: bool,
+    active_item_range: Option<Range<usize>>,
+    active_local_range: Option<Range<usize>>,
+    cached_items: usize,
+    encoded_items: usize,
+    total_items: usize,
+) -> Result<Option<(Range<usize>, Range<usize>)>> {
+    if encoded_items > total_items || cached_items > total_items {
+        candle_core::bail!("Llama4 image selection metadata is inconsistent");
+    }
+    let selection = if is_chunked {
+        active_item_range.and_then(|original| {
+            if encoded_items == total_items {
+                Some((original.clone(), original))
+            } else {
+                active_local_range.map(|local| (local, original))
+            }
+        })
+    } else {
+        let retained_start = total_items - encoded_items;
+        let original_start = cached_items.max(retained_start);
+        (original_start < total_items).then_some((
+            original_start - retained_start..encoded_items,
+            original_start..total_items,
+        ))
+    };
+    if let Some((encoded, original)) = &selection {
+        if encoded.start > encoded.end
+            || encoded.end > encoded_items
+            || original.start > original.end
+            || original.end > total_items
+            || encoded.len() != original.len()
+        {
+            candle_core::bail!("Llama4 active image range is outside the retained images");
+        }
+    }
+    Ok(selection)
+}
+
+fn llama4_layout_items(
+    tokens: &[u32],
+    features: &[MultiModalFeature],
+    patch_token_id: u32,
+) -> Result<Vec<MultimodalItemLayout>> {
+    features
+        .iter()
+        .filter(|feature| feature.kind == MultimodalKind::Image)
+        .map(|feature| {
+            if feature.item_range.len() != 1 || feature.hashes.len() != 1 {
+                candle_core::bail!("Llama4 image feature must describe exactly one image");
+            }
+            let placeholder = feature.offset..feature.end();
+            let item_tokens = tokens.get(placeholder.clone()).ok_or_else(|| {
+                candle_core::Error::msg("Llama4 image feature is outside the prompt")
+            })?;
+            let destination_positions = item_tokens
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, &token)| {
+                    (token == patch_token_id).then_some(placeholder.start + offset)
+                })
+                .collect::<Vec<_>>();
+            if destination_positions.is_empty() {
+                candle_core::bail!("Llama4 image feature has no patch placeholders");
+            }
+            let source_positions = (0..destination_positions.len()).collect();
+            MultimodalItemLayout::new(
+                MultimodalEncoderKey {
+                    kind: MultimodalKind::Image,
+                    hash: feature.hashes[0],
+                },
+                feature.item_range.start,
+                placeholder,
+                feature.attention_policy,
+                vec![MultimodalEmbeddingMap::new(
+                    destination_positions,
+                    source_positions,
+                    0,
+                )?],
+            )
+        })
+        .collect()
+}
+
+fn llama4_image_metadata(
+    tokens: &[u32],
+    features: &[MultiModalFeature],
+    patch_token_id: u32,
+    item_range: Range<usize>,
+) -> Result<(Vec<u64>, Vec<usize>)> {
+    let mut hashes = Vec::with_capacity(item_range.len());
+    let mut token_counts = Vec::with_capacity(item_range.len());
+    for item_index in item_range {
+        let mut matching = features.iter().filter(|feature| {
+            feature.kind == MultimodalKind::Image
+                && feature.item_range == (item_index..item_index + 1)
+        });
+        let feature = matching
+            .next()
+            .ok_or_else(|| candle_core::Error::msg("Llama4 image feature is missing"))?;
+        if matching.next().is_some() || feature.hashes.len() != 1 {
+            candle_core::bail!("Llama4 image feature metadata is ambiguous");
+        }
+        let placeholder = feature.offset..feature.end();
+        let item_tokens = tokens
+            .get(placeholder)
+            .ok_or_else(|| candle_core::Error::msg("Llama4 image feature is outside the prompt"))?;
+        let token_count = item_tokens
+            .iter()
+            .filter(|&&token| token == patch_token_id)
+            .count();
+        if token_count == 0 {
+            candle_core::bail!("Llama4 image feature has no patch placeholders");
+        }
+        hashes.push(feature.hashes[0]);
+        token_counts.push(token_count);
+    }
+    Ok((hashes, token_counts))
+}
+
+fn llama4_prompt_query(seq: &Sequence, query_len: usize) -> Result<Range<usize>> {
+    if let Some(query) = seq.active_prompt_query_range() {
+        if query.len() != query_len {
+            candle_core::bail!(
+                "Llama4 active prompt has {} tokens but packed metadata has {query_len}",
+                query.len()
+            );
+        }
+        return Ok(query);
+    }
+    let token_count = seq.prompt_position_source_toks().len();
+    let start = token_count
+        .checked_sub(query_len)
+        .ok_or_else(|| candle_core::Error::msg("Llama4 packed query is longer than the prompt"))?;
+    Ok(start..token_count)
+}
+
+fn validate_llama4_image_spans(query: &Range<usize>, items: &[MultimodalItemLayout]) -> Result<()> {
+    for item in items {
+        let overlaps_query =
+            item.placeholder.start < query.end && query.start < item.placeholder.end;
+        if overlaps_query
+            && (query.start > item.placeholder.start || query.end < item.placeholder.end)
+        {
+            candle_core::bail!(
+                "Llama4 image item {} must be scheduled as a complete span",
+                item.item_index
+            );
+        }
+    }
+    Ok(())
+}
+
+fn llama4_packed_layout(
+    input_seqs: &[&mut Sequence],
+    query_lens: &[usize],
+    patch_token_id: u32,
+) -> Result<PackedMultimodalLayout> {
+    if input_seqs.len() != query_lens.len() {
+        candle_core::bail!("Llama4 packed multimodal metadata length mismatch");
+    }
+    let requests = input_seqs
+        .iter()
+        .zip(query_lens)
+        .map(|(seq, &query_len)| {
+            let tokens = seq.prompt_position_source_toks();
+            let query = llama4_prompt_query(seq, query_len)?;
+            let items = llama4_layout_items(tokens, seq.mm_features(), patch_token_id)?;
+            validate_llama4_image_spans(&query, &items)?;
+            Ok(RequestMultimodalLayout {
+                sequence_id: *seq.id(),
+                query,
+                items,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    PackedMultimodalLayout::new(&requests)
+}
+
 impl InputsProcessor for Llama4ImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let tokenizer = tokenizer.ok_or_else(|| {
+            anyhow::Error::msg("Llama4InputProcessor requires a specified tokenizer.")
+        })?;
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        for seq in input_seqs.iter_mut() {
+            self.prepare_sequence(
+                &tokenizer,
+                seq,
+                config,
+                device,
+                paged_attn_metadata.as_deref_mut(),
+            )?;
+        }
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -157,156 +420,17 @@ impl InputsProcessor for Llama4ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
-
-        let pixel_values = if has_images {
-            let mut pixel_values_accum = Vec::new();
-            let mut aspect_ratios_accum = Vec::new();
-
-            let bs = input_seqs.len();
-            let detokenized = tokenizer
-                .decode_batch(
-                    &input_seqs
-                        .iter()
-                        .map(|seq| seq.get_toks())
-                        .collect::<Vec<_>>(),
-                    false,
-                )
-                .expect("Detokenization failed!");
-            let n_images_in_text = detokenized
-                .iter()
-                .map(|text| text.matches(IMAGE_TOKEN).count())
-                .collect::<Vec<_>>();
-            let n_images_in_images = input_seqs
-                .iter()
-                .map(|seq| seq.images().map(|imgs| imgs.len()).unwrap_or(0))
-                .collect::<Vec<_>>();
-
-            if n_images_in_text != n_images_in_images {
-                return Err(anyhow::Error::msg(format!(
-                    "The number of images in each batch {n_images_in_text:?} should be the same as the number of images {n_images_in_images:?}. The model cannot support a different number of images per patch. Perhaps you forgot a `<|image|>` tag?"
-                )));
-            }
-
-            let max_num_images = *n_images_in_images
-                .iter()
-                .max()
-                .expect("No max images per batch!");
-
+        if is_prompt {
             for seq in input_seqs.iter_mut() {
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens: _,
-                    aspect_ratio_ids,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all: _,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        seq.take_images()
-                            .expect("Need to have images by this point."),
-                        vec![],
-                        config,
-                        device,
-                        (bs, max_num_images), // Don't use it here...
-                    )
-                    .expect("Preprocessing failed");
-                // Intentionally don't unsqueeze here as the BS is already included. Just stack now.
-                // Trim cached images per-sequence before pushing.
-                let cached = seq.count_prefix_cached_mm_items();
-                let n_images = pixel_values.dim(0).unwrap_or(0);
-                if cached < n_images {
-                    if cached > 0 {
-                        pixel_values_accum
-                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
-                    } else {
-                        pixel_values_accum.push(pixel_values);
-                    }
-                }
-                aspect_ratios_accum.push(aspect_ratio_ids.unwrap());
+                self.prepare_sequence(
+                    &tokenizer,
+                    seq,
+                    config,
+                    device,
+                    paged_attn_metadata.as_mut(),
+                )?;
             }
-
-            let aspect_ratios = Tensor::cat(&aspect_ratios_accum, 0).unwrap();
-
-            let (image_h, image_w) = (
-                pixel_values_accum[0].dim(D::Minus2).unwrap(),
-                pixel_values_accum[0].dim(D::Minus1).unwrap(),
-            );
-            let num_patches_per_chunk =
-                (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
-
-            let placeholder_counts = input_seqs
-                .iter()
-                .map(|seq| seq.get_initial_prompt().match_indices(IMAGE_TOKEN).count())
-                .collect::<Vec<_>>();
-
-            let mut image_index = 0;
-            for (seq, placeholder_count) in input_seqs.iter_mut().zip(placeholder_counts) {
-                if placeholder_count == 0 {
-                    continue;
-                }
-                let prompt_splits: std::str::Split<'_, &str> =
-                    seq.get_initial_prompt().split(IMAGE_TOKEN);
-                let mut new_prompt = Vec::new();
-                for (local_image_index, split_part) in prompt_splits.enumerate() {
-                    new_prompt.push(split_part.to_string());
-                    if local_image_index < placeholder_count {
-                        let tokens_for_this_image = self.prompt_split_image(
-                            &aspect_ratios.i(image_index).unwrap(),
-                            num_patches_per_chunk,
-                        );
-                        image_index += 1;
-                        new_prompt.push(tokens_for_this_image);
-                    }
-                }
-                let prompt = new_prompt.join("");
-
-                if !seq.multimodal.has_changed_prompt {
-                    seq.set_initial_prompt(prompt.clone());
-                    let toks = tokenizer
-                        .encode_fast(prompt, false)
-                        .expect("Detokenization failed!");
-
-                    let ids = toks.get_ids().to_vec();
-
-                    // Build mm_features for position-aware prefix cache hashing
-                    if seq.mm_features().is_empty() {
-                        if let (Some(hashes), Some(start_id), Some(end_id)) = (
-                            seq.image_hashes().map(|h| h.to_vec()),
-                            tokenizer.token_to_id(IMAGE_START),
-                            tokenizer.token_to_id(IMAGE_END),
-                        ) {
-                            let ranges = find_image_delimited_ranges(&ids, start_id, end_id);
-                            seq.set_mm_features(build_mm_features_from_ranges(
-                                &ranges,
-                                &hashes,
-                                MultimodalKind::Image,
-                            ));
-                        }
-                    }
-
-                    seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_mut());
-                    seq.multimodal.has_changed_prompt = true;
-                }
-            }
-
-            if !pixel_values_accum.is_empty() {
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
 
         let text_models_inputs_processor::InnerInputProcessorOutput {
             inputs:
@@ -332,8 +456,7 @@ impl InputsProcessor for Llama4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         } else {
             get_completion_input(
                 input_seqs
@@ -348,31 +471,117 @@ impl InputsProcessor for Llama4ImageProcessor {
                 paged_attn_metadata.as_mut(),
                 mapper,
                 sliding_window,
-            )
-            .unwrap()
+            )?
         };
 
-        let pixel_values = if is_prompt { pixel_values } else { None };
-
-        let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
+        let patch_token_id = tokenizer
+            .token_to_id(PATCH)
+            .ok_or_else(|| anyhow::Error::msg("Llama4 tokenizer is missing the patch token"))?;
+        let mut pixel_values_accum = Vec::new();
+        let mut image_hashes = Vec::new();
+        let mut tile_counts = Vec::new();
+        let mut image_token_counts = Vec::new();
+        if is_prompt {
+            for seq in input_seqs.iter() {
+                let Some(pixel_values) = &seq.multimodal.cached_pixel_values else {
+                    continue;
+                };
+                let sequence_tile_counts =
+                    seq.multimodal.cached_num_crops.as_deref().ok_or_else(|| {
+                        anyhow::Error::msg("Llama4 cached pixels are missing tile counts")
+                    })?;
+                let total_items = seq
+                    .mm_features()
+                    .iter()
+                    .filter(|feature| feature.kind == MultimodalKind::Image)
+                    .map(|feature| feature.item_range.end)
+                    .max()
+                    .unwrap_or(sequence_tile_counts.len());
+                let active_item_range = seq.active_multimodal_item_range(MultimodalKind::Image);
+                let available_items = seq.images().map_or(0, <[_]>::len);
+                let active_local_range =
+                    seq.active_local_multimodal_item_range(MultimodalKind::Image, available_items);
+                let selection = llama4_item_selection(
+                    seq.is_chunked_prefill_view(),
+                    active_item_range,
+                    active_local_range,
+                    seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Image),
+                    sequence_tile_counts.len(),
+                    total_items,
+                )?;
+                let Some((encoded_item_range, original_item_range)) = selection else {
+                    continue;
+                };
+                let tile_range =
+                    llama4_tile_range(sequence_tile_counts, encoded_item_range.clone())?;
+                if tile_range.end > pixel_values.dim(0)? {
+                    anyhow::bail!("Llama4 selected tiles are outside the cached pixels");
+                }
+                let selected_tile_counts = sequence_tile_counts[encoded_item_range].to_vec();
+                let (selected_hashes, selected_token_counts) = llama4_image_metadata(
+                    seq.prompt_position_source_toks(),
+                    seq.mm_features(),
+                    patch_token_id,
+                    original_item_range,
+                )?;
+                if selected_hashes.len() != selected_tile_counts.len() {
+                    anyhow::bail!(
+                        "Llama4 selected {} images but has {} tile counts",
+                        selected_hashes.len(),
+                        selected_tile_counts.len()
+                    );
+                }
+                let patches_per_tile = (pixel_values.dim(D::Minus2)? / self.patch_size)
+                    * (pixel_values.dim(D::Minus1)? / self.patch_size)
+                    / self.downsample_ratio;
+                for (&hash, (&tiles, &tokens)) in selected_hashes
+                    .iter()
+                    .zip(selected_tile_counts.iter().zip(&selected_token_counts))
+                {
+                    let expected_tokens = tiles
+                        .checked_mul(patches_per_tile)
+                        .ok_or_else(|| anyhow::Error::msg("Llama4 image token count overflow"))?;
+                    if tokens != expected_tokens {
+                        anyhow::bail!(
+                            "Llama4 image {hash} has {tokens} placeholders but {expected_tokens} encoder rows"
+                        );
+                    }
+                }
+                pixel_values_accum.push(pixel_values.narrow(
+                    0,
+                    tile_range.start,
+                    tile_range.len(),
+                )?);
+                image_hashes.extend(selected_hashes);
+                tile_counts.extend(selected_tile_counts);
+                image_token_counts.extend(selected_token_counts);
+            }
+        }
+        let pixel_values = if pixel_values_accum.is_empty() {
+            None
         } else {
-            vec![]
+            Some(Tensor::cat(&pixel_values_accum, 0)?)
         };
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    anyhow::Error::msg("packed Llama4 prefill requires logical query lengths")
+                })?;
+            let layout = llama4_packed_layout(input_seqs, query_lens, patch_token_id)?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "Llama4 packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
+        } else {
+            None
+        };
+        let packed_prefill = flash_meta.packed;
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -380,7 +589,13 @@ impl InputsProcessor for Llama4ImageProcessor {
             context_lens,
             position_ids,
             pixel_values,
-            model_specific_args: Box::new(Llama4ModelSpecificArgs { image_hashes }),
+            model_specific_args: Box::new(Llama4ModelSpecificArgs {
+                image_hashes,
+                tile_counts,
+                image_token_counts,
+                packed_layout,
+                packed_prefill,
+            }),
             paged_attn_meta,
             flash_meta,
             recurrent_batch_kind: if is_prompt {
@@ -398,6 +613,137 @@ impl InputsProcessor for Llama4ImageProcessor {
 }
 
 impl Llama4ImageProcessor {
+    fn prepare_sequence(
+        &self,
+        tokenizer: &Tokenizer,
+        seq: &mut Sequence,
+        config: &PreProcessorConfig,
+        device: &Device,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let image_count = seq.images().map_or(0, <[_]>::len);
+        if image_count == 0 {
+            return Ok(());
+        }
+
+        let cached = match (
+            &seq.multimodal.cached_pixel_values,
+            &seq.multimodal.cached_spatial_shapes,
+            &seq.multimodal.cached_num_crops,
+        ) {
+            (Some(pixel_values), Some(aspect_ratios), Some(tile_counts)) => Some((
+                pixel_values.clone(),
+                aspect_ratios.clone(),
+                tile_counts.clone(),
+            )),
+            _ => None,
+        };
+        let (pixel_values, aspect_ratios, tile_counts) = if let Some(cached) = cached {
+            cached
+        } else {
+            let PreprocessedImages {
+                pixel_values,
+                pixel_attention_mask: _,
+                image_sizes: _,
+                num_img_tokens: _,
+                aspect_ratio_ids,
+                aspect_ratio_mask: _,
+                num_tiles: _,
+                image_grid_thw: _,
+                video_grid_thw: _,
+                rows: _,
+                cols: _,
+                pixel_values_list: _,
+                tgt_sizes: _,
+                image_sizes_all: _,
+                num_crops: _,
+            } = self.preprocess(
+                seq.clone_images()
+                    .expect("Need to have images by this point."),
+                vec![],
+                config,
+                device,
+                (1, image_count),
+            )?;
+            let aspect_ratios = aspect_ratio_ids
+                .ok_or_else(|| anyhow::Error::msg("Llama4 preprocessing omitted aspect ratios"))?;
+            let tile_counts = llama4_tile_counts(&aspect_ratios)?;
+            seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
+            seq.multimodal.cached_spatial_shapes = Some(aspect_ratios.clone());
+            seq.multimodal.cached_num_crops = Some(tile_counts.clone());
+            (pixel_values, aspect_ratios, tile_counts)
+        };
+
+        let total_tiles = tile_counts
+            .iter()
+            .try_fold(0usize, |sum, count| sum.checked_add(*count))
+            .ok_or_else(|| anyhow::Error::msg("Llama4 tile count overflow"))?;
+        if total_tiles != pixel_values.dim(0)? || aspect_ratios.dim(0)? != tile_counts.len() {
+            anyhow::bail!("Llama4 preprocessed image metadata is inconsistent");
+        }
+        if seq.multimodal.has_changed_prompt {
+            if seq.mm_features().is_empty() {
+                anyhow::bail!("Llama4 expanded prompt is missing its image features");
+            }
+            return Ok(());
+        }
+        if tile_counts.len() != image_count {
+            anyhow::bail!(
+                "Llama4 preprocessing produced {} image groups for {image_count} images",
+                tile_counts.len()
+            );
+        }
+
+        let placeholder_count = seq.get_initial_prompt().matches(IMAGE_TOKEN).count();
+        if placeholder_count != image_count {
+            anyhow::bail!(
+                "Llama4 prompt has {placeholder_count} image placeholders but {image_count} images"
+            );
+        }
+        let image_h = pixel_values.dim(D::Minus2)?;
+        let image_w = pixel_values.dim(D::Minus1)?;
+        let patches_per_tile =
+            (image_h / self.patch_size) * (image_w / self.patch_size) / self.downsample_ratio;
+        if patches_per_tile == 0 {
+            anyhow::bail!("Llama4 image produces no patch embeddings");
+        }
+        let mut prompt_parts = seq.get_initial_prompt().split(IMAGE_TOKEN);
+        let mut prompt = prompt_parts.next().unwrap_or_default().to_string();
+        for image_index in 0..image_count {
+            prompt.push_str(
+                &self.prompt_split_image(&aspect_ratios.i(image_index)?, patches_per_tile),
+            );
+            prompt.push_str(prompt_parts.next().ok_or_else(|| {
+                anyhow::Error::msg("Llama4 image placeholder expansion is incomplete")
+            })?);
+        }
+        if prompt_parts.next().is_some() {
+            anyhow::bail!("Llama4 prompt has unmatched image placeholders");
+        }
+
+        let ids = tokenizer
+            .encode_fast(prompt.clone(), false)
+            .map_err(anyhow::Error::msg)?
+            .get_ids()
+            .to_vec();
+        let hashes = seq
+            .image_hashes()
+            .ok_or_else(|| anyhow::Error::msg("Llama4 images are missing content hashes"))?
+            .to_vec();
+        let image_start_id = tokenizer.token_to_id(IMAGE_START).ok_or_else(|| {
+            anyhow::Error::msg("Llama4 tokenizer is missing the image start token")
+        })?;
+        let image_end_id = tokenizer
+            .token_to_id(IMAGE_END)
+            .ok_or_else(|| anyhow::Error::msg("Llama4 tokenizer is missing the image end token"))?;
+        let features = llama4_mm_features(&ids, image_start_id, image_end_id, &hashes)?;
+        seq.set_initial_prompt(prompt);
+        seq.set_mm_features(features);
+        seq.set_toks_and_reallocate(ids, paged_attn_metadata);
+        seq.multimodal.has_changed_prompt = true;
+        Ok(())
+    }
+
     fn get_factors(dividend: u32) -> HashSet<u32> {
         let mut factors_set = HashSet::new();
 
@@ -772,5 +1118,95 @@ impl ImagePreProcessor for Llama4ImageProcessor {
             image_sizes_all: None,
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vision_models::multimodal_layout::MultimodalEncoderOutputs;
+
+    #[test]
+    fn packed_layout_handles_unequal_media_and_text_rows() {
+        let tokens = [1, 3, 9, 3, 2];
+        let features = llama4_mm_features(&tokens, 1, 2, &[17]).unwrap();
+        let layout = PackedMultimodalLayout::new(&[
+            RequestMultimodalLayout {
+                sequence_id: 1,
+                query: 0..tokens.len(),
+                items: llama4_layout_items(&tokens, &features, 3).unwrap(),
+            },
+            RequestMultimodalLayout {
+                sequence_id: 2,
+                query: 0..2,
+                items: vec![],
+            },
+        ])
+        .unwrap();
+        let text = Tensor::zeros((1, 7, 2), candle_core::DType::F32, &Device::Cpu).unwrap();
+        let image = Tensor::from_vec(vec![1f32, 2., 3., 4.], (2, 2), &Device::Cpu).unwrap();
+        let outputs: MultimodalEncoderOutputs = HashMap::from([(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 17,
+            },
+            vec![image],
+        )]);
+
+        let result = layout
+            .splice_embeddings(&text, &outputs)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_eq!(
+            result,
+            vec![0., 0., 1., 2., 0., 0., 3., 4., 0., 0., 0., 0., 0., 0.]
+        );
+    }
+
+    #[test]
+    fn tile_selection_handles_cached_prefix_and_active_chunk_items() {
+        assert_eq!(llama4_tile_range(&[1, 5, 3], 1..3).unwrap(), 1..9);
+        assert_eq!(llama4_tile_range(&[1, 5, 3], 2..3).unwrap(), 6..9);
+        assert!(llama4_tile_range(&[1, 5], 1..3).is_err());
+        assert_eq!(
+            llama4_item_selection(false, None, None, 1, 2, 3).unwrap(),
+            Some((0..2, 1..3))
+        );
+        assert_eq!(
+            llama4_item_selection(true, Some(2..3), Some(0..1), 0, 1, 3).unwrap(),
+            Some((0..1, 2..3))
+        );
+    }
+
+    #[test]
+    fn image_metadata_selects_the_requested_original_items() {
+        let tokens = [1, 3, 2, 8, 1, 3, 3, 2];
+        let features = llama4_mm_features(&tokens, 1, 2, &[11, 13]).unwrap();
+
+        assert_eq!(
+            llama4_image_metadata(&tokens, &features, 3, 1..2).unwrap(),
+            (vec![13], vec![2])
+        );
+    }
+
+    #[test]
+    fn malformed_image_cardinality_is_rejected() {
+        assert!(llama4_mm_features(&[1, 3, 2], 1, 2, &[11, 13]).is_err());
+        let features = llama4_mm_features(&[1, 9, 2], 1, 2, &[11]).unwrap();
+        assert!(llama4_layout_items(&[1, 9, 2], &features, 3).is_err());
+    }
+
+    #[test]
+    fn image_spans_cannot_be_partially_packed() {
+        let tokens = [1, 3, 9, 3, 2, 8];
+        let features = llama4_mm_features(&tokens, 1, 2, &[11]).unwrap();
+        let items = llama4_layout_items(&tokens, &features, 3).unwrap();
+
+        assert!(validate_llama4_image_spans(&(0..4), &items).is_err());
+        assert!(validate_llama4_image_spans(&(0..5), &items).is_ok());
+        assert!(validate_llama4_image_spans(&(5..6), &items).is_ok());
     }
 }

@@ -873,23 +873,22 @@ fn causal_conv1d_full(
         return output.transpose(1, 2);
     }
 
-    let pad_width = dims.conv_kernel_size.saturating_sub(seq_len);
-    cache.conv_state = if pad_width > 0 {
-        let zeros = Tensor::zeros((batch_size, conv_dim, pad_width), x_t.dtype(), x_t.device())?;
-        Tensor::cat(&[zeros, x_t.clone()], 2)?
-    } else {
-        x_t.narrow(2, seq_len - dims.conv_kernel_size, dims.conv_kernel_size)?
-    };
-
+    let state_len = cache.conv_state.dim(2)?;
+    if state_len != dims.conv_kernel_size {
+        candle_core::bail!(
+            "GDN convolution state width is {state_len}, expected {}",
+            dims.conv_kernel_size
+        );
+    }
+    let prior_state = cache.conv_state.clone();
+    let state_and_input = Tensor::cat(&[prior_state.clone(), x_t.clone()], 2)?;
+    cache.conv_state = state_and_input.narrow(
+        2,
+        state_and_input.dim(2)? - dims.conv_kernel_size,
+        dims.conv_kernel_size,
+    )?;
     let padded_t = Tensor::cat(
-        &[
-            Tensor::zeros(
-                (batch_size, conv_dim, dims.conv_kernel_size - 1),
-                x_t.dtype(),
-                x_t.device(),
-            )?,
-            x_t,
-        ],
+        &[prior_state.narrow(2, 1, dims.conv_kernel_size - 1)?, x_t],
         2,
     )?;
 
@@ -1183,6 +1182,66 @@ mod tests {
 
         assert_close(&fast, &reference)?;
         assert_close(&fast_cache.conv_state, &reference_cache.conv_state)
+    }
+
+    #[test]
+    fn causal_conv1d_prefill_continues_from_existing_state() -> CandleResult<()> {
+        let dev = Device::Cpu;
+        let dims = dims(2, 4, 5, 3);
+        let batch_size = 2;
+        let seq_len = 7;
+        let split = 3;
+        let x = Tensor::from_vec(
+            patterned(batch_size * seq_len * dims.conv_dim, 10, 0.08, 0.01),
+            (batch_size, seq_len, dims.conv_dim),
+            &dev,
+        )?;
+        let weight = Tensor::from_vec(
+            patterned(dims.conv_dim * dims.conv_kernel_size, 11, 0.05, -0.01),
+            (dims.conv_dim, 1, dims.conv_kernel_size),
+            &dev,
+        )?;
+        let conv_state = Tensor::from_vec(
+            patterned(
+                batch_size * dims.conv_dim * dims.conv_kernel_size,
+                12,
+                0.03,
+                0.0,
+            ),
+            (batch_size, dims.conv_dim, dims.conv_kernel_size),
+            &dev,
+        )?;
+        let recurrent_state = Tensor::zeros(
+            (
+                batch_size,
+                dims.num_v_heads,
+                dims.head_k_dim,
+                dims.head_v_dim,
+            ),
+            DType::F32,
+            &dev,
+        )?;
+        let mut one_shot_cache = GdnLayerCache {
+            conv_state: conv_state.clone(),
+            recurrent_state: recurrent_state.clone(),
+        };
+        let mut chunked_cache = GdnLayerCache {
+            conv_state,
+            recurrent_state,
+        };
+
+        let one_shot = causal_conv1d_full(&x, &weight, &dims, &mut one_shot_cache)?;
+        let first =
+            causal_conv1d_full(&x.narrow(1, 0, split)?, &weight, &dims, &mut chunked_cache)?;
+        let second = causal_conv1d_full(
+            &x.narrow(1, split, seq_len - split)?,
+            &weight,
+            &dims,
+            &mut chunked_cache,
+        )?;
+
+        assert_close(&one_shot, &Tensor::cat(&[first, second], 1)?)?;
+        assert_close(&one_shot_cache.conv_state, &chunked_cache.conv_state)
     }
 
     #[test]

@@ -698,6 +698,9 @@ impl NormalModel for Model {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {}

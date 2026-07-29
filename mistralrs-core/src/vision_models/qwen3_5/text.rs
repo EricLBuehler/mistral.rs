@@ -11,7 +11,10 @@ use mistralrs_quant::{
     ShardedVarBuilder,
 };
 
-use super::config::{LayerType, TextConfig};
+use super::{
+    config::{LayerType, TextConfig},
+    packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
+};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
@@ -369,6 +372,7 @@ impl DecoderLayer {
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
+        packed_query_lens: Option<&[usize]>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -376,7 +380,11 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
+        let gdn_out = if let Some(query_lens) = packed_query_lens {
+            forward_packed_gdn(gdn, &x, cache, batch_kind, query_lens)?
+        } else {
+            gdn.forward(&x, cache, batch_kind)?
+        };
         let x = (gdn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -574,14 +582,17 @@ impl Qwen3_5TextModel {
                 recurrent_dtype: Some(DType::F32),
             },
         };
+        let layer_devices = (0..hybrid_cache_config.layer_types.len())
+            .map(|layer_idx| {
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| {
+            HybridCache::new(hybrid_cache_config, vb_m.dtype(), &layer_devices).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
@@ -629,16 +640,20 @@ impl Qwen3_5TextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
-        if self
+        let has_linear_attention = self
             .layer_types
             .iter()
-            .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && recurrent_metadata.is_none()
-        {
+            .any(|lt| matches!(lt, LayerType::LinearAttention));
+        if has_linear_attention && recurrent_metadata.is_none() {
             candle_core::bail!(
                 "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
+        let packed_query_lens = if has_linear_attention {
+            packed_gdn_query_lens(&xs, ctx)?
+        } else {
+            None
+        };
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
         let cos_sin = {
@@ -700,14 +715,17 @@ impl Qwen3_5TextModel {
                     }
                 }
                 LayerType::LinearAttention => {
+                    let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                        "checked above: linear-attention layers require recurrent metadata",
+                    );
+                    let indices = hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "Hybrid cache layer {i} is missing recurrent state indices"
+                        ))
+                    })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent metadata",
-                        );
-                        let indices = recurrent_metadata.state_indices();
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        let conv_state = pool.gather_conv_state(&indices)?;
+                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
 
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
@@ -718,15 +736,16 @@ impl Qwen3_5TextModel {
                             &xs,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
+                            packed_query_lens.as_deref(),
                         )?;
 
                         pool.scatter_conv_state_with_host_indices(
-                            indices,
+                            &indices,
                             recurrent_metadata.state_indices_host(),
                             &gdn_cache.conv_state,
                         )?;
                         pool.scatter_recurrent_state_with_host_indices(
-                            indices,
+                            &indices,
                             recurrent_metadata.state_indices_host(),
                             &gdn_cache.recurrent_state,
                         )?;

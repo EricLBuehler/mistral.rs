@@ -382,6 +382,85 @@ impl ImageEmbedding {
         }
     }
 
+    pub(super) fn encode(
+        &self,
+        input_embeds: &Tensor,
+        image_attention_mask: &Tensor,
+        image_sizes: &[(u32, u32)],
+        image_hashes: &[u64],
+        encoder_cache: &Mutex<EncoderCacheManager>,
+    ) -> Result<Vec<Tensor>> {
+        let batch = input_embeds.dim(0)?;
+        if image_attention_mask.dim(0)? != batch
+            || image_sizes.len() != batch
+            || image_hashes.len() != batch
+        {
+            candle_core::bail!("Phi4MM packed image metadata length mismatch");
+        }
+
+        let mut token_counts = Vec::with_capacity(batch);
+        for (item, &(height, width)) in image_sizes.iter().enumerate() {
+            let crop_rows = height as usize / self.crop_size;
+            let crop_cols = width as usize / self.crop_size;
+            let crop_count = crop_rows
+                .checked_mul(crop_cols)
+                .ok_or_else(|| candle_core::Error::msg("Phi4MM image crop count overflow"))?;
+            if crop_count + 1 > image_attention_mask.dim(1)? {
+                candle_core::bail!("Phi4MM image size exceeds its preprocessed crop tensor");
+            }
+            let sub_mask = image_attention_mask.i((item, 1..crop_count + 1, .., ..))?;
+            let h_indices = Tensor::arange_step(0, sub_mask.dim(1)? as u32, 2, sub_mask.device())?;
+            let w_indices = Tensor::arange_step(0, sub_mask.dim(2)? as u32, 2, sub_mask.device())?;
+            let downsampled = sub_mask
+                .index_select(&h_indices, 1)?
+                .index_select(&w_indices, 2)?;
+            let visible = downsampled.sum_all()?.to_scalar::<u32>()? as usize;
+            let combined_mask = downsampled
+                .reshape((
+                    1,
+                    crop_rows,
+                    crop_cols,
+                    downsampled.dim(1)?,
+                    downsampled.dim(2)?,
+                ))?
+                .permute((0, 1, 3, 2, 4))?
+                .reshape((
+                    crop_rows * downsampled.dim(1)?,
+                    crop_cols * downsampled.dim(2)?,
+                ))?;
+            let rows = combined_mask.i((.., 0))?.sum_all()?.to_scalar::<u32>()? as usize;
+            token_counts.push(
+                self.num_img_tokens
+                    .checked_add(17 + visible + rows)
+                    .ok_or_else(|| candle_core::Error::msg("Phi4MM image token count overflow"))?,
+            );
+        }
+
+        let total_tokens = token_counts.iter().sum::<usize>();
+        let dummy_ids = Tensor::full(
+            IMAGE_SPECIAL_TOKEN_ID as u32,
+            (1, total_tokens),
+            input_embeds.device(),
+        )?;
+        let encoded = self.forward(
+            &dummy_ids,
+            input_embeds,
+            &AttentionMask::Custom(image_attention_mask.clone()),
+            Some(image_sizes.to_vec()),
+            image_hashes,
+            encoder_cache,
+        )?;
+        let mut offset = 0usize;
+        token_counts
+            .into_iter()
+            .map(|count| {
+                let item = encoded.narrow(1, offset, count)?;
+                offset += count;
+                Ok(item)
+            })
+            .collect()
+    }
+
     #[allow(non_snake_case)]
     pub fn forward(
         &self,
@@ -714,7 +793,7 @@ impl ImageEmbedding {
                     let merged_img_set_tensor = Tensor::cat(&image_set_tensors, 1)?.squeeze(0)?;
 
                     let original_shape = hidden_states.shape().clone();
-                    let (hs_b, hs_l, hs_d) = hidden_states.dims3()?;
+                    let (_, hs_l, hs_d) = hidden_states.dims3()?;
                     let mut hidden_states_flat = hidden_states.reshape(((), hs_d))?;
 
                     // Get the equiv 0th and 1th rows of the positions_tuple
@@ -722,8 +801,8 @@ impl ImageEmbedding {
                     let positions_transposed_0 = positions_transposed.i((.., 0))?;
                     let positions_transposed_1 = positions_transposed.i((.., 1))?;
 
-                    let mut linear_index = ((positions_transposed_0 * (hs_l * hs_b) as f64)?
-                        + positions_transposed_1)?;
+                    let mut linear_index =
+                        ((positions_transposed_0 * hs_l as f64)? + positions_transposed_1)?;
                     linear_index = linear_index.to_dtype(DType::U32)?;
                     linear_index = linear_index.unsqueeze(1)?.repeat((1, hs_d))?;
 

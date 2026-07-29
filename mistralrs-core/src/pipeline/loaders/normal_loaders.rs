@@ -64,6 +64,10 @@ pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin 
     fn cache(&self) -> &EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
+    /// True only when the full forward handles packed prompts and never treats physical rows as logical requests.
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
         false

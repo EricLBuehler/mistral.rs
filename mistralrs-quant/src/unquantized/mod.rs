@@ -36,6 +36,22 @@ fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
 }
 
 impl UnquantLinear {
+    fn forward_cuda_gemm(&self, input: &Tensor) -> Result<Tensor> {
+        let input_dim = input.dim(D::Minus1)?;
+        let output_dim = self.w.dim(0)?;
+        let rows: usize = input.dims()[..input.rank() - 1].iter().product();
+        let mut output_shape = input.dims().to_vec();
+        *output_shape.last_mut().unwrap() = output_dim;
+
+        let input = input.contiguous()?.reshape((rows, input_dim))?;
+        let output = input.matmul(&self.w.t()?)?;
+        let output = match self.b.as_ref() {
+            Some(bias) => output.broadcast_add(bias)?,
+            None => output,
+        };
+        output.reshape(output_shape)
+    }
+
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format"];
         if layer.exact_weight_suffixes(WEIGHT_SUFFIXES) && layer.scalar("weight.format", Dtype::U8)
@@ -101,13 +117,17 @@ impl QuantMethod for UnquantLinear {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
 
+        self.stats.process(a)?;
+
+        if a.device().is_cuda() && a.rank() > 2 {
+            return self.forward_cuda_gemm(a);
+        }
+
         let w = match *a.dims() {
             [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
             [bsize, _, _] => self.w.broadcast_left(bsize)?,
             _ => self.w.clone(),
         };
-
-        self.stats.process(a)?;
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -695,22 +715,91 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    fn forward_cuda_accepts_non_contiguous_3d_input() -> Result<()> {
+    fn forward_cuda_flattens_large_non_contiguous_batch() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let input = Tensor::randn(0., 1., (1, 4, 3), &device)?
+        let input = Tensor::randn(0., 1., (9, 4, 3), &device)?
             .to_dtype(DType::F32)?
             .transpose(1, 2)?;
         let weight = Tensor::randn(0., 1., (5, 4), &device)?.to_dtype(DType::F32)?;
+        let bias = Tensor::randn(0., 1., 5, &device)?.to_dtype(DType::F32)?;
         let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-            Linear::new(weight.clone(), None),
+            Linear::new(weight.clone(), Some(bias.clone())),
         ))?;
 
         assert!(!has_cublaslt_batch_layout(&input));
         let output = layer.forward(&input)?;
-        let expected = input.matmul(&weight.broadcast_left(1)?.t()?)?;
+        assert_eq!(output.dims(), &[9, 3, 5]);
+        let expected = input
+            .matmul(&weight.broadcast_left(9)?.t()?)?
+            .broadcast_add(&bias)?;
         let max_diff = (output - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
 
         assert!(max_diff <= 1e-5, "max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn forward_cuda_bf16_preserves_batched_shapes() -> Result<()> {
+        const TOLERANCE: f32 = 0.05;
+
+        let device = Device::new_cuda(0)?;
+        let weight = Tensor::from_vec(
+            (0..20)
+                .map(|index| ((index % 7) as f32 - 3.0) / 4.0)
+                .collect::<Vec<_>>(),
+            (5, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let bias = Tensor::from_vec(vec![-0.2f32, -0.1, 0.0, 0.1, 0.2], 5, &device)?
+            .to_dtype(DType::BF16)?;
+        let input3 = Tensor::from_vec(
+            (0..108)
+                .map(|index| ((index % 11) as f32 - 5.0) / 8.0)
+                .collect::<Vec<_>>(),
+            (9, 3, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), Some(bias.clone())),
+        ))?;
+
+        let output3 = layer.forward(&input3)?;
+        assert_eq!(output3.dims(), &[9, 3, 5]);
+        let expected3 = input3
+            .to_dtype(DType::F32)?
+            .matmul(&weight.to_dtype(DType::F32)?.broadcast_left(9)?.t()?)?
+            .broadcast_add(&bias.to_dtype(DType::F32)?)?;
+        let max_diff3 = (output3.to_dtype(DType::F32)? - expected3)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(max_diff3 <= TOLERANCE, "max_diff={max_diff3}");
+
+        let input4 = Tensor::from_vec(
+            (0..120)
+                .map(|index| ((index % 13) as f32 - 6.0) / 8.0)
+                .collect::<Vec<_>>(),
+            (2, 5, 3, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), None),
+        ))?;
+
+        let output4 = layer.forward(&input4)?;
+        assert_eq!(output4.dims(), &[2, 5, 3, 5]);
+        let expected4 = input4
+            .to_dtype(DType::F32)?
+            .matmul(&weight.to_dtype(DType::F32)?.broadcast_left((2, 5))?.t()?)?;
+        let max_diff4 = (output4.to_dtype(DType::F32)? - expected4)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(max_diff4 <= TOLERANCE, "max_diff={max_diff4}");
         Ok(())
     }
 

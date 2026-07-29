@@ -1,7 +1,13 @@
 #![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
 
-use crate::paged_attention::block_hash::MultimodalKind;
-use std::{any::Any, collections::HashSet, sync::Arc};
+use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalKind};
+use std::{
+    any::Any,
+    collections::{hash_map::DefaultHasher, HashSet},
+    hash::{Hash, Hasher},
+    ops::Range,
+    sync::Arc,
+};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImage, GenericImageView, Rgba};
@@ -9,11 +15,13 @@ use mistralrs_vision::{ApplyTransforms, Normalize, ToTensor, Transforms};
 use regex::Regex;
 use tokenizers::Tokenizer;
 
-use apodize::hanning_iter;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
-use rustfft::{num_complex::Complex32, FftPlanner};
+use rustfft::{
+    num_complex::{Complex32, Complex64},
+    FftPlanner,
+};
 
 use crate::{
     device_map::DeviceMapper,
@@ -24,11 +32,15 @@ use crate::{
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
         ProcessorCreator,
     },
-    sequence::{build_mm_features_from_ranges, find_image_placeholder_ranges, Sequence},
+    sequence::{build_mm_features_from_ranges, Sequence},
 };
 
 use crate::vision_models::{
     image_processor::{ImagePreProcessor, PreprocessedImages},
+    multimodal_layout::{
+        MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout, PackedMultimodalLayout,
+        RequestMultimodalLayout,
+    },
     phi4::Phi4MMVisionSpecificArgs,
     preprocessor_config::PreProcessorConfig,
     processor_config::ProcessorConfig,
@@ -45,8 +57,194 @@ const AUDIO_SPECIAL_TOKEN: &str = "<|endoftext11|>";
 pub(crate) const DYHD_BASE_RESOLUTION: usize = 448;
 
 const AUDIO_FEATURE_SIZE: usize = 80; // mel bins
+const AUDIO_MEL_SAMPLE_RATE: usize = 16000;
+const AUDIO_MEL_N_FFT: usize = 512;
+const AUDIO_MEL_FMAX_HZ: f32 = 7690.;
+const AUDIO_PREEMPHASIS: f32 = 0.97;
+const AUDIO_SAMPLE_SCALE: f32 = 32768.;
+const HAMMING_ALPHA: f64 = 0.54;
+const HAMMING_BETA: f64 = 0.46;
 
-type AudioProcessingResult = Result<(Option<Tensor>, Option<Vec<usize>>, Option<Tensor>)>;
+struct Phi4PromptPlan {
+    tokens: Vec<u32>,
+    image_ranges: Vec<(usize, usize)>,
+    audio_ranges: Vec<(usize, usize)>,
+}
+
+struct Phi4ImageBatch {
+    pixel_values: Tensor,
+    attention_mask: Tensor,
+    image_sizes: Vec<(u32, u32)>,
+    hashes: Vec<u64>,
+}
+
+struct Phi4AudioBatch {
+    input_embeds: Tensor,
+    embed_sizes: Vec<usize>,
+    feature_lens: Vec<usize>,
+    vision_modes: Vec<bool>,
+    attention_mask: Option<Tensor>,
+    hashes: Vec<u64>,
+}
+
+fn expand_phi4_placeholders(
+    input_ids: &[u32],
+    image_token_counts: &[usize],
+    audio_token_counts: &[usize],
+) -> Result<Phi4PromptPlan> {
+    let mut tokens = Vec::new();
+    let mut image_ranges = Vec::with_capacity(image_token_counts.len());
+    let mut audio_ranges = Vec::with_capacity(audio_token_counts.len());
+    let mut image_index = 0usize;
+    let mut audio_index = 0usize;
+
+    for &token in input_ids {
+        if token == IMAGE_SPECIAL_TOKEN_ID as u32 {
+            let count = *image_token_counts.get(image_index).ok_or_else(|| {
+                candle_core::Error::msg("Phi4MM has more image placeholders than image inputs")
+            })?;
+            if count == 0 {
+                candle_core::bail!("Phi4MM image placeholder cannot be empty");
+            }
+            let start = tokens.len();
+            tokens.extend(std::iter::repeat_n(token, count));
+            image_ranges.push((start, count));
+            image_index += 1;
+        } else if token == AUDIO_SPECIAL_TOKEN_ID as u32 {
+            let count = *audio_token_counts.get(audio_index).ok_or_else(|| {
+                candle_core::Error::msg("Phi4MM has more audio placeholders than audio inputs")
+            })?;
+            if count == 0 {
+                candle_core::bail!("Phi4MM audio placeholder cannot be empty");
+            }
+            let start = tokens.len();
+            tokens.extend(std::iter::repeat_n(token, count));
+            audio_ranges.push((start, count));
+            audio_index += 1;
+        } else {
+            tokens.push(token);
+        }
+    }
+
+    if image_index != image_token_counts.len() {
+        candle_core::bail!(
+            "Phi4MM has {image_index} image placeholders but {} image inputs",
+            image_token_counts.len()
+        );
+    }
+    if audio_index != audio_token_counts.len() {
+        candle_core::bail!(
+            "Phi4MM has {audio_index} audio placeholders but {} audio inputs",
+            audio_token_counts.len()
+        );
+    }
+
+    Ok(Phi4PromptPlan {
+        tokens,
+        image_ranges,
+        audio_ranges,
+    })
+}
+
+fn phi4_request_layout(
+    sequence_id: usize,
+    tokens: &[u32],
+    query: Range<usize>,
+    features: &[MultiModalFeature],
+) -> Result<RequestMultimodalLayout> {
+    if query.start > query.end || query.end > tokens.len() {
+        candle_core::bail!(
+            "Phi4MM packed query {query:?} exceeds {} tokens",
+            tokens.len()
+        );
+    }
+    let has_image = features
+        .iter()
+        .any(|feature| feature.kind == MultimodalKind::Image);
+    let mut items = Vec::with_capacity(features.len());
+
+    for feature in features {
+        if feature.hashes.len() != 1 || feature.item_range.len() != 1 {
+            candle_core::bail!(
+                "Phi4MM packed layout requires one media item and hash per placeholder span"
+            );
+        }
+        let end = feature
+            .offset
+            .checked_add(feature.length)
+            .ok_or_else(|| candle_core::Error::msg("Phi4MM placeholder range overflow"))?;
+        if end > tokens.len() {
+            candle_core::bail!(
+                "Phi4MM {:?} placeholder {}..{end} exceeds {} tokens",
+                feature.kind,
+                feature.offset,
+                tokens.len()
+            );
+        }
+        let expected_token = match feature.kind {
+            MultimodalKind::Image => IMAGE_SPECIAL_TOKEN_ID as u32,
+            MultimodalKind::Audio => AUDIO_SPECIAL_TOKEN_ID as u32,
+            MultimodalKind::Video => {
+                candle_core::bail!("Phi4MM does not support video layout items")
+            }
+        };
+        if tokens[feature.offset..end]
+            .iter()
+            .any(|&token| token != expected_token)
+        {
+            candle_core::bail!(
+                "Phi4MM {:?} placeholder contains a non-placeholder token",
+                feature.kind
+            );
+        }
+        let source_output = match feature.kind {
+            MultimodalKind::Audio if has_image => 1,
+            MultimodalKind::Image | MultimodalKind::Audio => 0,
+            MultimodalKind::Video => unreachable!(),
+        };
+        let placeholder = feature.offset..end;
+        items.push(MultimodalItemLayout::new(
+            MultimodalEncoderKey {
+                kind: feature.kind,
+                hash: feature.hashes[0],
+            },
+            feature.item_range.start,
+            placeholder.clone(),
+            feature.attention_policy,
+            vec![MultimodalEmbeddingMap::contiguous(
+                placeholder,
+                0,
+                source_output,
+            )?],
+        )?);
+    }
+
+    Ok(RequestMultimodalLayout {
+        sequence_id,
+        query,
+        items,
+    })
+}
+
+fn phi4_packed_layout(
+    input_seqs: &[&mut Sequence],
+    query_lens: &[usize],
+) -> Result<PackedMultimodalLayout> {
+    if input_seqs.len() != query_lens.len() {
+        candle_core::bail!("Phi4MM packed multimodal metadata length mismatch");
+    }
+    let requests = input_seqs
+        .iter()
+        .zip(query_lens)
+        .map(|(seq, &query_len)| {
+            if query_len != seq.get_toks().len() {
+                candle_core::bail!("Phi4MM packed prefill requires the complete uncached prompt");
+            }
+            phi4_request_layout(*seq.id(), seq.get_toks(), 0..query_len, seq.mm_features())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    PackedMultimodalLayout::new(&requests)
+}
 
 // Input processor
 pub struct Phi4MMInputsProcessor {
@@ -99,6 +297,24 @@ impl InputsProcessor for Phi4MMInputsProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let tokenizer = tokenizer.ok_or_else(|| {
+            anyhow::Error::msg("Phi4MMInputProcessor requires a specified tokenizer.")
+        })?;
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        self.prepare_prompt_plans(&tokenizer, input_seqs, device, config, paged_attn_metadata)
+            .map_err(anyhow::Error::new)
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -115,100 +331,38 @@ impl InputsProcessor for Phi4MMInputsProcessor {
         mapper: Option<&dyn DeviceMapper>,
     ) -> anyhow::Result<InputProcessorOutput> {
         if is_xlora {
-            return Err(anyhow::Error::msg(
-                "Cannot make inputs for X-LoRA vision model.",
-            ));
+            anyhow::bail!("Cannot make inputs for X-LoRA vision model.");
         }
         if no_kv_cache {
-            return Err(anyhow::Error::msg("Vision model must have kv cache."));
+            anyhow::bail!("Vision model must have kv cache.");
         }
-        let Some(tokenizer) = tokenizer else {
-            return Err(anyhow::Error::msg(
-                "Phi4MMInputProcessor requires a specified tokenizer.",
-            ));
-        };
-
-        let config = other_config
+        let tokenizer = tokenizer.ok_or_else(|| {
+            anyhow::Error::msg("Phi4MMInputProcessor requires a specified tokenizer.")
+        })?;
+        let config_any = other_config
             .clone()
             .expect("Need a PreProcessorConfig config.");
-        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        let config: &PreProcessorConfig = config_any.downcast_ref().expect("Downcast failed.");
 
-        let has_audios = input_seqs.iter().all(|seq| seq.has_audios());
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        if is_prompt {
+            self.prepare_prompt_plans(
+                &tokenizer,
+                input_seqs,
+                device,
+                config,
+                paged_attn_metadata.as_mut(),
+            )
+            .map_err(anyhow::Error::new)?;
+        }
 
-        let (pixel_values, pixel_attention_mask, image_sizes, num_img_tokens) = if has_images {
-            let mut pixel_values_accum = Vec::new();
-            let mut pixel_attention_masks_accum = Vec::new();
-            let mut image_sizes_accum = Vec::new();
-            let mut num_img_tokens_accum = Vec::new();
-            for seq in input_seqs.iter_mut() {
-                let cached = seq.count_prefix_cached_mm_items();
-                let imgs = seq
-                    .take_images()
-                    .expect("Need to have images by this point.");
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask,
-                    image_sizes: _,
-                    num_img_tokens,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        imgs,
-                        vec![],
-                        config,
-                        device,
-                        (usize::MAX, usize::MAX), // Don't use it here...
-                    )
-                    .expect("Preprocessor failed");
-                let image_sizes = image_sizes_all.unwrap();
-                let pixel_attention_mask = pixel_attention_mask.unwrap();
-                // Trim cached images per-sequence before pushing.
-                let n_images = pixel_values.dim(0).unwrap_or(0);
-                if cached < n_images {
-                    if cached > 0 {
-                        pixel_values_accum
-                            .push(pixel_values.narrow(0, cached, n_images - cached).unwrap());
-                        pixel_attention_masks_accum.push(
-                            pixel_attention_mask
-                                .narrow(0, cached, n_images - cached)
-                                .unwrap(),
-                        );
-                    } else {
-                        pixel_values_accum.push(pixel_values);
-                        pixel_attention_masks_accum.push(pixel_attention_mask);
-                    }
-                    // Using extend on purpose
-                    image_sizes_accum.extend(image_sizes[cached..].to_vec());
-                }
-                num_img_tokens_accum.push(num_img_tokens.unwrap());
-            }
-            if !pixel_values_accum.is_empty() {
-                (
-                    Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                    Some(Tensor::cat(&pixel_attention_masks_accum, 0).unwrap()),
-                    Some(image_sizes_accum),
-                    Some(num_img_tokens_accum),
-                )
-            } else {
-                (None, None, None, Some(num_img_tokens_accum))
-            }
-        } else if has_audios {
-            (None, None, None, Some(vec![vec![]; input_seqs.len()]))
-        } else {
+        let has_media = is_prompt
+            && input_seqs
+                .iter()
+                .any(|seq| seq.has_images() || seq.has_audios());
+        if !has_media {
             return text_models_inputs_processor::TextInputsProcessor
                 .process_inputs(
-                    Some(tokenizer),
+                    Some(tokenizer.clone()),
                     input_seqs,
                     is_prompt,
                     is_xlora,
@@ -255,8 +409,12 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                             image_sizes: None,
                             input_audio_embeds: None,
                             audio_embed_sizes: None,
+                            audio_feature_lens: None,
+                            audio_vision_modes: None,
                             audio_attention_mask: None,
                             image_hashes: vec![],
+                            audio_hashes: vec![],
+                            packed_layout: None,
                         }),
                         paged_attn_meta,
                         flash_meta,
@@ -268,134 +426,18 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                         seq_indices,
                     }
                 });
-        };
-
-        let detokenized = tokenizer
-            .decode_batch(
-                &input_seqs
-                    .iter()
-                    .map(|seq| seq.get_toks())
-                    .collect::<Vec<_>>(),
-                false,
-            )
-            .expect("Decode failed");
-
-        let img_token_pattern = Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).unwrap();
-        let audio_token_pattern = Regex::new(COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN).unwrap();
-
-        for (mut detokenized, seq) in detokenized.into_iter().zip(input_seqs.iter_mut()) {
-            detokenized = img_token_pattern
-                .replace_all(&detokenized, IMAGE_SPECIAL_TOKEN)
-                .to_string();
-            detokenized = audio_token_pattern
-                .replace_all(&detokenized, AUDIO_SPECIAL_TOKEN)
-                .to_string();
-
-            let has_changed_prompt = seq.multimodal.has_changed_prompt;
-            if !has_changed_prompt {
-                seq.set_toks_and_reallocate(
-                    tokenizer
-                        .encode_fast(detokenized.clone(), false)
-                        .expect("Encode failed")
-                        .get_ids()
-                        .to_vec(),
-                    paged_attn_metadata.as_mut(),
-                );
-
-                seq.set_initial_prompt(detokenized);
-            }
         }
 
-        let (input_audio_embeds, audio_embed_sizes, audio_attention_mask) =
-            match self.process_audio_for_sequences(input_seqs, device) {
-                Ok(result) => result,
-                Err(e) => return Err(anyhow::Error::new(e)),
-            };
-
-        let mut toks = Vec::new();
-
-        for (seq, num_img_tokens) in input_seqs.iter_mut().zip(num_img_tokens.unwrap()) {
-            let has_changed_prompt = seq.multimodal.has_changed_prompt;
-
-            let mut i = 0;
-            let mut image_token_count_iter = num_img_tokens.iter();
-            let audio_sizes_tmp = audio_embed_sizes.clone().unwrap_or(vec![]);
-            let mut audio_embed_sizes = audio_sizes_tmp.iter();
-            while i < seq.get_toks().len() {
-                let token_id = seq.get_toks()[i];
-                let token_count = if token_id == IMAGE_SPECIAL_TOKEN_ID as u32 {
-                    image_token_count_iter.next().unwrap()
-                } else if token_id == AUDIO_SPECIAL_TOKEN_ID as u32 {
-                    audio_embed_sizes.next().unwrap()
-                } else {
-                    i += 1;
-                    continue;
-                };
-
-                let mut new_ids = seq.get_toks()[..i].to_vec();
-                new_ids.extend(vec![token_id; *token_count]);
-                new_ids.extend(seq.get_toks()[i + 1..].to_vec());
-                if !has_changed_prompt {
-                    seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-                }
-                i += token_count;
-            }
-            if !has_changed_prompt {
-                // Build mm_features for position-aware prefix cache hashing
-                if seq.mm_features().is_empty() {
-                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        let ranges = find_image_placeholder_ranges(
-                            seq.get_toks(),
-                            IMAGE_SPECIAL_TOKEN_ID as u32,
-                        );
-                        seq.set_mm_features(build_mm_features_from_ranges(
-                            &ranges,
-                            &hashes,
-                            MultimodalKind::Image,
-                        ));
-                    }
-                }
-                // Also include audio features in mm_features for prefix cache hashing
-                if let Some(audio_hashes) = seq.audio_hashes().map(|h| h.to_vec()) {
-                    if !audio_hashes.is_empty() {
-                        let audio_ranges = find_image_placeholder_ranges(
-                            seq.get_toks(),
-                            AUDIO_SPECIAL_TOKEN_ID as u32,
-                        );
-                        let audio_features = build_mm_features_from_ranges(
-                            &audio_ranges,
-                            &audio_hashes,
-                            MultimodalKind::Audio,
-                        );
-                        let mut features = seq.mm_features().to_vec();
-                        features.extend(audio_features);
-                        seq.set_mm_features(features);
-                    }
-                }
-                seq.multimodal.has_changed_prompt = true;
-            }
-            toks.push(seq.get_toks().to_vec());
-        }
-
-        let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        let image_batch = self
+            .process_image_batch(input_seqs, config, device)
+            .map_err(anyhow::Error::new)?;
+        let audio_batch = self
+            .process_audio_batch(input_seqs, device)
+            .map_err(anyhow::Error::new)?;
+        let toks = input_seqs
+            .iter()
+            .map(|seq| seq.get_toks().to_vec())
+            .collect::<Vec<_>>();
 
         let result = if is_prompt {
             get_prompt_input(
@@ -422,11 +464,7 @@ impl InputsProcessor for Phi4MMInputsProcessor {
             )
         };
 
-        result.map(move |metadata| {
-            let pixel_values = pixel_values.clone();
-            let pixel_attention_mask = pixel_attention_mask.clone();
-            let image_sizes = image_sizes.clone();
-
+        result.and_then(|metadata| {
             let text_models_inputs_processor::InnerInputProcessorOutput {
                 inputs:
                     text_models_inputs_processor::InputMetadata {
@@ -439,6 +477,55 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                     },
                 seq_indices,
             } = metadata;
+            let packed_layout = if is_prompt && flash_meta.packed {
+                let query_lens = paged_attn_meta
+                    .as_ref()
+                    .and_then(|metadata| metadata.query_lens.as_deref())
+                    .ok_or_else(|| {
+                        anyhow::Error::msg("packed Phi4MM prefill requires logical query lengths")
+                    })?;
+                let layout =
+                    phi4_packed_layout(input_seqs, query_lens).map_err(anyhow::Error::new)?;
+                if layout.token_count() != input.dim(1)? {
+                    anyhow::bail!(
+                        "Phi4MM packed layout has {} tokens but input has {}",
+                        layout.token_count(),
+                        input.dim(1)?
+                    );
+                }
+                Some(layout)
+            } else {
+                None
+            };
+            let (input_image_embeds, image_attention_mask, image_sizes, image_hashes) =
+                match image_batch {
+                    Some(batch) => (
+                        Some(batch.pixel_values),
+                        Some(batch.attention_mask),
+                        Some(batch.image_sizes),
+                        batch.hashes,
+                    ),
+                    None => (None, None, None, Vec::new()),
+                };
+            let (
+                input_audio_embeds,
+                audio_embed_sizes,
+                audio_feature_lens,
+                audio_vision_modes,
+                audio_attention_mask,
+                audio_hashes,
+            ) = match audio_batch {
+                Some(batch) => (
+                    Some(batch.input_embeds),
+                    Some(batch.embed_sizes),
+                    Some(batch.feature_lens),
+                    Some(batch.vision_modes),
+                    batch.attention_mask,
+                    batch.hashes,
+                ),
+                None => (None, None, None, None, None, Vec::new()),
+            };
+            let pixel_values = input_image_embeds.clone();
             let inputs: Box<dyn Any> = Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
@@ -446,13 +533,17 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 position_ids,
                 pixel_values: pixel_values.clone(),
                 model_specific_args: Box::new(Phi4MMVisionSpecificArgs {
-                    input_image_embeds: pixel_values,
-                    image_attention_mask: pixel_attention_mask,
+                    input_image_embeds,
+                    image_attention_mask,
                     image_sizes,
-                    input_audio_embeds: input_audio_embeds.clone(),
-                    audio_embed_sizes: audio_embed_sizes.clone(),
-                    audio_attention_mask: audio_attention_mask.clone(),
+                    input_audio_embeds,
+                    audio_embed_sizes,
+                    audio_feature_lens,
+                    audio_vision_modes,
+                    audio_attention_mask,
                     image_hashes,
+                    audio_hashes,
+                    packed_layout,
                 }),
                 paged_attn_meta,
                 flash_meta,
@@ -463,15 +554,481 @@ impl InputsProcessor for Phi4MMInputsProcessor {
                 },
                 adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
             });
-            InputProcessorOutput {
+            Ok(InputProcessorOutput {
                 inputs,
                 seq_indices,
-            }
+            })
         })
     }
 }
 
 impl Phi4MMInputsProcessor {
+    fn prepare_prompt_plans(
+        &self,
+        tokenizer: &Tokenizer,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+        config: &PreProcessorConfig,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> Result<()> {
+        let image_pattern =
+            Regex::new(COMPATIBLE_IMAGE_SPECIAL_TOKEN_PATTERN).map_err(candle_core::Error::wrap)?;
+        let audio_pattern =
+            Regex::new(COMPATIBLE_AUDIO_SPECIAL_TOKEN_PATTERN).map_err(candle_core::Error::wrap)?;
+
+        for seq in input_seqs {
+            if seq.multimodal.has_changed_prompt && !seq.mm_features().is_empty() {
+                continue;
+            }
+            let images = seq.clone_images().unwrap_or_default();
+            let audios = seq.clone_audios().unwrap_or_default();
+            if images.is_empty() && audios.is_empty() {
+                continue;
+            }
+
+            let raw_image_hashes = suffix_hashes(
+                seq.multimodal.image_hashes().unwrap_or_default(),
+                images.len(),
+                "image",
+            )?
+            .to_vec();
+            let image_hashes = images
+                .iter()
+                .zip(&raw_image_hashes)
+                .map(|(image, &hash)| phi4_image_hash(hash, image))
+                .collect::<Vec<_>>();
+            let raw_audio_hashes = suffix_hashes(
+                seq.multimodal.audio_hashes().unwrap_or_default(),
+                audios.len(),
+                "audio",
+            )?
+            .to_vec();
+            let audio_hashes = audios
+                .iter()
+                .zip(&raw_audio_hashes)
+                .map(|(audio, &hash)| phi4_audio_hash(hash, audio))
+                .collect::<Vec<_>>();
+
+            let image_token_counts = if images.is_empty() {
+                Vec::new()
+            } else {
+                let PreprocessedImages {
+                    pixel_values,
+                    pixel_attention_mask,
+                    image_sizes: _,
+                    num_img_tokens,
+                    aspect_ratio_ids: _,
+                    aspect_ratio_mask: _,
+                    num_tiles: _,
+                    image_grid_thw: _,
+                    video_grid_thw: _,
+                    rows: _,
+                    cols: _,
+                    pixel_values_list: _,
+                    tgt_sizes: _,
+                    image_sizes_all,
+                    num_crops: _,
+                } = self.preprocess(images, vec![], config, device, (usize::MAX, usize::MAX))?;
+                let attention_mask = pixel_attention_mask.ok_or_else(|| {
+                    candle_core::Error::msg("Phi4MM image preprocessing omitted its attention mask")
+                })?;
+                let image_sizes = image_sizes_all.ok_or_else(|| {
+                    candle_core::Error::msg("Phi4MM image preprocessing omitted image sizes")
+                })?;
+                let token_counts = num_img_tokens.ok_or_else(|| {
+                    candle_core::Error::msg("Phi4MM image preprocessing omitted token counts")
+                })?;
+                if pixel_values.dim(0)? != image_hashes.len()
+                    || attention_mask.dim(0)? != image_hashes.len()
+                    || image_sizes.len() != image_hashes.len()
+                    || token_counts.len() != image_hashes.len()
+                {
+                    candle_core::bail!("Phi4MM image preprocessing metadata length mismatch");
+                }
+                let flattened_sizes = image_sizes
+                    .iter()
+                    .flat_map(|&(height, width)| [height, width])
+                    .collect::<Vec<_>>();
+                seq.multimodal.cached_pixel_values = Some(pixel_values);
+                seq.multimodal.cached_pixel_attention_mask = Some(attention_mask);
+                seq.multimodal.cached_spatial_shapes = Some(Tensor::from_vec(
+                    flattened_sizes,
+                    (image_sizes.len(), 2),
+                    device,
+                )?);
+                token_counts
+            };
+
+            let audio_token_counts = audios
+                .iter()
+                .map(|audio| self.audio_token_count(audio))
+                .collect::<Result<Vec<_>>>()?;
+
+            let mut prompt = tokenizer
+                .decode(seq.get_toks(), false)
+                .map_err(candle_core::Error::wrap)?;
+            prompt = image_pattern
+                .replace_all(&prompt, IMAGE_SPECIAL_TOKEN)
+                .into_owned();
+            prompt = audio_pattern
+                .replace_all(&prompt, AUDIO_SPECIAL_TOKEN)
+                .into_owned();
+            let singleton_tokens = tokenizer
+                .encode_fast(prompt, false)
+                .map_err(candle_core::Error::wrap)?
+                .get_ids()
+                .to_vec();
+            let plan = expand_phi4_placeholders(
+                &singleton_tokens,
+                &image_token_counts,
+                &audio_token_counts,
+            )?;
+
+            let mut features = build_mm_features_from_ranges(
+                &plan.image_ranges,
+                &image_hashes,
+                MultimodalKind::Image,
+            );
+            features.extend(build_mm_features_from_ranges(
+                &plan.audio_ranges,
+                &audio_hashes,
+                MultimodalKind::Audio,
+            ));
+            features.sort_by_key(|feature| feature.offset);
+            if features.len() != image_hashes.len() + audio_hashes.len() {
+                candle_core::bail!("Phi4MM multimodal item metadata length mismatch");
+            }
+
+            let expanded_prompt = tokenizer
+                .decode(&plan.tokens, false)
+                .map_err(candle_core::Error::wrap)?;
+            seq.set_initial_prompt(expanded_prompt);
+            seq.set_toks_and_reallocate(plan.tokens, paged_attn_metadata.as_deref_mut());
+            seq.set_mm_features(features);
+            seq.multimodal.has_changed_prompt = true;
+        }
+        Ok(())
+    }
+
+    fn audio_token_count(&self, audio: &crate::AudioInput) -> Result<usize> {
+        let samples = audio.to_mono();
+        let (samples, sample_rate) =
+            self.resample_audio_with_rubato(&samples, audio.sample_rate)?;
+        let (window, hop) = match sample_rate {
+            8000 => (200, 80),
+            16000 => (400, 160),
+            _ => candle_core::bail!("Unsupported sample rate: {sample_rate}"),
+        };
+        if samples.len() < window {
+            candle_core::bail!(
+                "Phi4MM audio has {} samples but needs at least {window}",
+                samples.len()
+            );
+        }
+        let feature_len = (samples.len() - window) / hop + 1;
+        Ok(self.compute_audio_embed_size(
+            feature_len * self.audio_feat_stride,
+            self.audio_compression_rate,
+            self.audio_downsample_rate,
+        ))
+    }
+
+    fn process_image_batch(
+        &self,
+        input_seqs: &mut [&mut Sequence],
+        config: &PreProcessorConfig,
+        device: &Device,
+    ) -> Result<Option<Phi4ImageBatch>> {
+        let mut images = Vec::new();
+        let mut masks = Vec::new();
+        let mut image_sizes = Vec::new();
+        let mut hashes = Vec::new();
+
+        for seq in input_seqs {
+            if !seq.has_images() {
+                continue;
+            }
+
+            let cached = match (
+                &seq.multimodal.cached_pixel_values,
+                &seq.multimodal.cached_pixel_attention_mask,
+                &seq.multimodal.cached_spatial_shapes,
+            ) {
+                (Some(pixel_values), Some(attention_mask), Some(image_sizes)) => Some((
+                    pixel_values.clone(),
+                    attention_mask.clone(),
+                    tensor_image_sizes(image_sizes)?,
+                )),
+                (None, None, None) => None,
+                _ => candle_core::bail!("Phi4MM image preprocessing cache is incomplete"),
+            };
+
+            let (pixel_values, attention_mask, sizes, selected_hashes) =
+                if let Some((pixel_values, attention_mask, sizes)) = cached {
+                    let available = pixel_values.dim(0)?;
+                    if attention_mask.dim(0)? != available || sizes.len() != available {
+                        candle_core::bail!("Phi4MM cached image metadata length mismatch");
+                    }
+                    let range = if seq.is_chunked_prefill_view() {
+                        seq.active_local_multimodal_item_range(MultimodalKind::Image, available)
+                            .ok_or_else(|| {
+                                candle_core::Error::msg(
+                                    "Phi4MM image chunk has no active image item range",
+                                )
+                            })?
+                    } else {
+                        local_uncached_item_start(seq, MultimodalKind::Image, available)..available
+                    };
+                    let active_hashes: Vec<u64> = if seq.is_chunked_prefill_view() {
+                        let active_images = seq.take_images().ok_or_else(|| {
+                            candle_core::Error::msg("Phi4MM active image inputs are unavailable")
+                        })?;
+                        let raw_hashes = seq.image_hashes().unwrap_or_default();
+                        if active_images.len() != raw_hashes.len() {
+                            candle_core::bail!("Phi4MM active image hash count mismatch");
+                        }
+                        active_images
+                            .iter()
+                            .zip(raw_hashes)
+                            .map(|(image, &hash)| phi4_image_hash(hash, image))
+                            .collect()
+                    } else {
+                        let retained_images = seq.images().unwrap_or_default();
+                        if retained_images.len() != available {
+                            candle_core::bail!(
+                                "Phi4MM cached image count does not match retained images"
+                            );
+                        }
+                        let raw_hashes = suffix_hashes(
+                            seq.multimodal.image_hashes().unwrap_or_default(),
+                            available,
+                            "image",
+                        )?;
+                        retained_images[range.clone()]
+                            .iter()
+                            .zip(&raw_hashes[range.clone()])
+                            .map(|(image, &hash)| phi4_image_hash(hash, image))
+                            .collect()
+                    };
+                    if active_hashes.len() != range.len() {
+                        candle_core::bail!("Phi4MM active image hash count mismatch");
+                    }
+                    (
+                        pixel_values.narrow(0, range.start, range.len())?,
+                        attention_mask.narrow(0, range.start, range.len())?,
+                        sizes[range].to_vec(),
+                        active_hashes,
+                    )
+                } else {
+                    let active_images = seq.take_images().ok_or_else(|| {
+                        candle_core::Error::msg("Phi4MM image inputs are unavailable")
+                    })?;
+                    let raw_hashes = if seq.is_chunked_prefill_view() {
+                        seq.image_hashes().unwrap_or_default()
+                    } else {
+                        suffix_hashes(
+                            seq.multimodal.image_hashes().unwrap_or_default(),
+                            active_images.len(),
+                            "image",
+                        )?
+                    };
+                    if active_images.len() != raw_hashes.len() {
+                        candle_core::bail!("Phi4MM active image hash count mismatch");
+                    }
+                    let active_hashes = active_images
+                        .iter()
+                        .zip(raw_hashes)
+                        .map(|(image, &hash)| phi4_image_hash(hash, image))
+                        .collect();
+                    let PreprocessedImages {
+                        pixel_values,
+                        pixel_attention_mask,
+                        image_sizes: _,
+                        num_img_tokens: _,
+                        aspect_ratio_ids: _,
+                        aspect_ratio_mask: _,
+                        num_tiles: _,
+                        image_grid_thw: _,
+                        video_grid_thw: _,
+                        rows: _,
+                        cols: _,
+                        pixel_values_list: _,
+                        tgt_sizes: _,
+                        image_sizes_all,
+                        num_crops: _,
+                    } = self.preprocess(
+                        active_images,
+                        vec![],
+                        config,
+                        device,
+                        (usize::MAX, usize::MAX),
+                    )?;
+                    (
+                        pixel_values,
+                        pixel_attention_mask.ok_or_else(|| {
+                            candle_core::Error::msg(
+                                "Phi4MM image preprocessing omitted its attention mask",
+                            )
+                        })?,
+                        image_sizes_all.ok_or_else(|| {
+                            candle_core::Error::msg(
+                                "Phi4MM image preprocessing omitted image sizes",
+                            )
+                        })?,
+                        active_hashes,
+                    )
+                };
+
+            let item_count = pixel_values.dim(0)?;
+            if attention_mask.dim(0)? != item_count
+                || sizes.len() != item_count
+                || selected_hashes.len() != item_count
+            {
+                candle_core::bail!("Phi4MM active image metadata length mismatch");
+            }
+            for item in 0..item_count {
+                let image = pixel_values.get(item)?;
+                let mask = attention_mask.get(item)?;
+                if image.dim(0)? != mask.dim(0)? {
+                    candle_core::bail!("Phi4MM image crop and mask counts differ");
+                }
+                images.push(image);
+                masks.push(mask);
+            }
+            image_sizes.extend(sizes);
+            hashes.extend(selected_hashes);
+        }
+
+        if images.is_empty() {
+            return Ok(None);
+        }
+        let max_crops = images
+            .iter()
+            .map(|image| image.dim(0))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .unwrap();
+        let images = images
+            .into_iter()
+            .map(|image| {
+                let crops = image.dim(0)?;
+                image.pad_with_zeros(0, 0, max_crops - crops)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let masks = masks
+            .into_iter()
+            .map(|mask| pad_phi4_image_mask(mask, max_crops))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(Some(Phi4ImageBatch {
+            pixel_values: Tensor::stack(&images, 0)?,
+            attention_mask: Tensor::stack(&masks, 0)?,
+            image_sizes,
+            hashes,
+        }))
+    }
+
+    fn process_audio_batch(
+        &self,
+        input_seqs: &mut [&mut Sequence],
+        device: &Device,
+    ) -> Result<Option<Phi4AudioBatch>> {
+        let mut feature_tensors = Vec::new();
+        let mut embed_sizes = Vec::new();
+        let mut feature_lens = Vec::new();
+        let mut vision_modes = Vec::new();
+        let mut audio_frames = Vec::new();
+        let mut hashes = Vec::new();
+
+        for seq in input_seqs {
+            if !seq.has_audios() {
+                continue;
+            }
+            let audios = seq
+                .take_audios()
+                .ok_or_else(|| candle_core::Error::msg("Phi4MM audio inputs are unavailable"))?;
+            let available = audios.len();
+            let retained_hashes = if seq.is_chunked_prefill_view() {
+                seq.audio_hashes().unwrap_or_default()
+            } else {
+                suffix_hashes(
+                    seq.multimodal.audio_hashes().unwrap_or_default(),
+                    available,
+                    "audio",
+                )?
+            };
+            let start = if seq.is_chunked_prefill_view() {
+                0
+            } else {
+                local_uncached_item_start(seq, MultimodalKind::Audio, available)
+            };
+            let audios = &audios[start..];
+            let raw_hashes = &retained_hashes[start..];
+            let vision_mode = seq
+                .mm_features()
+                .iter()
+                .any(|feature| feature.kind == MultimodalKind::Image);
+            if raw_hashes.len() != audios.len() {
+                candle_core::bail!("Phi4MM active audio hash count mismatch");
+            }
+
+            for (audio, &raw_hash) in audios.iter().zip(raw_hashes) {
+                let features = self.extract_audio_features(&audio.to_mono(), audio.sample_rate)?;
+                if features.is_empty() {
+                    candle_core::bail!("Phi4MM audio preprocessing produced no frames");
+                }
+                if features
+                    .iter()
+                    .any(|feature| feature.len() != AUDIO_FEATURE_SIZE)
+                {
+                    candle_core::bail!("Phi4MM audio preprocessing produced invalid feature width");
+                }
+                let feature_len = features.len();
+                let frames = feature_len * self.audio_feat_stride;
+                let embed_size = self.compute_audio_embed_size(
+                    frames,
+                    self.audio_compression_rate,
+                    self.audio_downsample_rate,
+                );
+                let flattened = features.into_iter().flatten().collect::<Vec<_>>();
+                feature_tensors.push(Tensor::from_vec(
+                    flattened,
+                    (feature_len, AUDIO_FEATURE_SIZE),
+                    device,
+                )?);
+                feature_lens.push(feature_len);
+                vision_modes.push(vision_mode);
+                audio_frames.push(frames);
+                embed_sizes.push(embed_size);
+                hashes.push(phi4_audio_hash(raw_hash, audio));
+            }
+        }
+
+        if feature_tensors.is_empty() {
+            return Ok(None);
+        }
+        let max_features = feature_lens.iter().copied().max().unwrap();
+        let feature_tensors = feature_tensors
+            .into_iter()
+            .map(|features| {
+                let len = features.dim(0)?;
+                features.pad_with_zeros(0, 0, max_features - len)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let attention_mask = (feature_tensors.len() > 1)
+            .then(|| self.create_audio_attention_mask(&audio_frames, device))
+            .transpose()?;
+        Ok(Some(Phi4AudioBatch {
+            input_embeds: Tensor::stack(&feature_tensors, 0)?,
+            embed_sizes,
+            feature_lens,
+            vision_modes,
+            attention_mask,
+            hashes,
+        }))
+    }
+
     fn extract_audio_features(
         &self,
         audio_data: &[f32],
@@ -562,104 +1119,80 @@ impl Phi4MMInputsProcessor {
     }
 
     fn extract_mel_spectrogram_rustfft(&self, wav: &[f32], fs: u32) -> Result<Vec<Vec<f32>>> {
-        // Set parameters based on sample rate
-        let (n_fft, win_length, hop_length) = if fs == 8000 {
-            (256, 200, 80)
-        } else if fs == 16000 {
-            (512, 400, 160)
-        } else {
-            return Err(candle_core::Error::Msg(format!(
-                "Unsupported sample rate: {fs}"
-            )));
+        let (n_fft, win_length, hop_length) = match fs {
+            8000 => (256, 200, 80),
+            16000 => (512, 400, 160),
+            _ => candle_core::bail!("Unsupported sample rate: {fs}"),
         };
+        if wav.len() < win_length {
+            candle_core::bail!(
+                "Phi4MM audio has {} samples but needs at least {win_length}",
+                wav.len()
+            );
+        }
 
-        // Apply preemphasis first
-        let preemphasized = self.apply_preemphasis(wav, 0.97);
-
-        // Create FFT planner
-        let mut planner = FftPlanner::<f32>::new();
+        let mut planner = FftPlanner::<f64>::new();
         let fft = planner.plan_fft_forward(n_fft);
+        let window = (0..win_length)
+            .map(|index| {
+                HAMMING_ALPHA
+                    - HAMMING_BETA
+                        * (2. * std::f64::consts::PI * index as f64 / (win_length - 1) as f64).cos()
+            })
+            .collect::<Vec<_>>();
+        let mel_filters = self.create_mel_filterbank(
+            AUDIO_FEATURE_SIZE,
+            AUDIO_MEL_N_FFT,
+            AUDIO_MEL_SAMPLE_RATE as f32,
+            AUDIO_MEL_FMAX_HZ,
+        )?;
 
-        // Create Hanning window
-        let window: Vec<f64> = hanning_iter(win_length).collect();
-
-        // Create mel filterbank
-        let mel_filters = self.create_mel_filterbank(AUDIO_FEATURE_SIZE, n_fft, fs as f32)?;
-
-        // Extract frames and apply STFT
-        let n_batch = (preemphasized.len() - win_length) / hop_length + 1;
-        let mut mel_features = Vec::new();
-
-        for i in 0..n_batch {
-            let start = i * hop_length;
-            let end = start + win_length;
-            if end > preemphasized.len() {
-                break;
-            }
-
-            // Apply window and convert to complex
-            let mut windowed: Vec<Complex32> = preemphasized[start..end]
+        let n_batch = (wav.len() - win_length) / hop_length + 1;
+        let mut mel_features = Vec::with_capacity(n_batch);
+        for frame_index in 0..n_batch {
+            let start = frame_index * hop_length;
+            let frame = &wav[start..start + win_length];
+            let mut windowed = frame
                 .iter()
-                .zip(window.iter())
-                .map(|(s, w)| Complex32::new(s * *w as f32, 0.0))
-                .collect();
-
-            // Pad to n_fft length
-            windowed.resize(n_fft, Complex32::new(0.0, 0.0));
-
-            // Apply FFT
+                .enumerate()
+                .zip(&window)
+                .map(|((index, &sample), &window)| {
+                    let previous = if index == 0 { sample } else { frame[index - 1] };
+                    let sample = (sample - AUDIO_PREEMPHASIS * previous) * AUDIO_SAMPLE_SCALE;
+                    Complex64::new(sample as f64 * window, 0.)
+                })
+                .collect::<Vec<_>>();
+            windowed.resize(n_fft, Complex64::new(0., 0.));
             fft.process(&mut windowed);
 
-            // Take power spectrum of positive frequencies
-            let power_spectrum: Vec<f32> = windowed[0..n_fft / 2 + 1]
+            let mut spectrum = windowed[..n_fft / 2 + 1]
                 .iter()
-                .map(|c| c.norm_sqr())
-                .collect();
-
-            // Apply mel filterbank
-            let mut mel_frame = vec![0.0; AUDIO_FEATURE_SIZE];
-            for (mel_idx, filter) in mel_filters.iter().enumerate() {
-                let mut sum = 0.0;
-                for (freq_idx, &coeff) in filter.iter().enumerate() {
-                    if freq_idx < power_spectrum.len() {
-                        sum += power_spectrum[freq_idx] * coeff;
-                    }
-                }
-                mel_frame[mel_idx] = (sum.max(1.0)).ln(); // Apply log with clipping
+                .map(|value| Complex32::new(value.re as f32, value.im as f32))
+                .collect::<Vec<_>>();
+            if fs == 8000 {
+                let bins = spectrum.len();
+                spectrum.truncate(bins - 1);
+                spectrum.resize(spectrum.len() + bins, Complex32::new(0., 0.));
             }
-
+            if spectrum.len() != AUDIO_MEL_N_FFT / 2 + 1 {
+                candle_core::bail!("Phi4MM audio spectrum has an invalid width");
+            }
+            let power_spectrum = spectrum
+                .iter()
+                .map(|value| value.norm_sqr())
+                .collect::<Vec<_>>();
+            let mut mel_frame = vec![0.; AUDIO_FEATURE_SIZE];
+            for (mel_index, filter) in mel_filters.iter().enumerate() {
+                let power = power_spectrum
+                    .iter()
+                    .zip(filter)
+                    .map(|(&power, &coefficient)| power * coefficient)
+                    .sum::<f32>();
+                mel_frame[mel_index] = power.max(1.).ln();
+            }
             mel_features.push(mel_frame);
         }
-
-        // Handle 8kHz case with fillzero method
-        if fs == 8000 && self.eightk_method == "fillzero" {
-            for frame in &mut mel_features {
-                // Extend each frame with zeros to match 16kHz structure
-                let original_len = frame.len();
-                frame.extend(vec![0.0; original_len]);
-            }
-        }
-
         Ok(mel_features)
-    }
-
-    fn apply_preemphasis(&self, wav: &[f32], preemphasis: f32) -> Vec<f32> {
-        if wav.is_empty() {
-            return vec![];
-        }
-
-        let mut preemphasized = Vec::with_capacity(wav.len());
-
-        // First sample: y[0] = x[0] * 32768
-        preemphasized.push(wav[0] * 32768.0);
-
-        // Remaining samples: y[n] = (x[n] - preemphasis * x[n-1]) * 32768
-        for i in 1..wav.len() {
-            let filtered = (wav[i] - preemphasis * wav[i - 1]) * 32768.0;
-            preemphasized.push(filtered);
-        }
-
-        preemphasized
     }
 
     fn create_mel_filterbank(
@@ -667,67 +1200,43 @@ impl Phi4MMInputsProcessor {
         n_mels: usize,
         n_fft: usize,
         sample_rate: f32,
+        fmax: f32,
     ) -> Result<Vec<Vec<f32>>> {
         let bank_width = n_fft / 2 + 1;
-        let fmax = sample_rate / 2.0;
-        let fmin = 0.0;
-
-        // Mel scale conversion functions
-        let hz_to_mel = |f: f32| 1127.0 * (1.0 + f / 700.0).ln();
-        let mel_to_hz = |mel: f32| 700.0 * (mel / 1127.0).exp() - 700.0;
-
+        let sample_rate = sample_rate as f64;
+        let fmax = fmax as f64;
+        let fmin = 0_f64;
+        if !(fmin < fmax && fmax <= sample_rate / 2.) {
+            candle_core::bail!("Phi4MM mel filter frequency range is invalid");
+        }
+        let hz_to_mel = |frequency: f64| 1127. * (1. + frequency / 700.).ln();
+        let bin_to_mel =
+            |bin: usize| 1127. * (1. + bin as f64 * sample_rate / (n_fft as f64 * 700.)).ln();
+        let frequency_to_bin =
+            |frequency: f64| ((frequency * n_fft as f64 / sample_rate) + 0.5) as usize;
+        let first_bin = frequency_to_bin(fmin) + 1;
+        let last_bin = frequency_to_bin(fmax).max(first_bin);
         let mel_low = hz_to_mel(fmin);
         let mel_high = hz_to_mel(fmax);
+        let mel_centers = (0..=n_mels + 1)
+            .map(|index| mel_low + (mel_high - mel_low) * index as f64 / (n_mels + 1) as f64)
+            .collect::<Vec<_>>();
+        let mel_step = (mel_high - mel_low) / (n_mels + 1) as f64;
 
-        // Create mel centers
-        let mel_centers: Vec<f32> = (0..=n_mels + 1)
-            .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (n_mels + 1) as f32)
-            .collect();
-
-        let hz_centers: Vec<f32> = mel_centers.iter().map(|&mel| mel_to_hz(mel)).collect();
-
-        // Convert to bin numbers
-        let bin_centers: Vec<usize> = hz_centers
-            .iter()
-            .map(|&f| ((f * n_fft as f32 / sample_rate) + 0.5) as usize)
-            .collect();
-
-        // Create triangular filters
-        let mut filters = Vec::new();
-        for m in 0..n_mels {
-            let mut filter = vec![0.0; bank_width];
-
-            let left_bin = bin_centers[m];
-            let center_bin = bin_centers[m + 1];
-            let right_bin = bin_centers[m + 2];
-
-            // Left slope
-            for (bin, filter) in filter
-                .iter_mut()
-                .enumerate()
-                .take(center_bin)
-                .skip(left_bin)
-            {
-                if bin < bank_width {
-                    *filter = (bin - left_bin) as f32 / (center_bin - left_bin) as f32;
+        let mut filters = Vec::with_capacity(n_mels);
+        for mel_index in 0..n_mels {
+            let mut filter = vec![0.; bank_width];
+            let left = mel_centers[mel_index];
+            let center = mel_centers[mel_index + 1];
+            let right = mel_centers[mel_index + 2];
+            for (bin, coefficient) in filter.iter_mut().enumerate().take(last_bin).skip(first_bin) {
+                let mel = bin_to_mel(bin);
+                if left < mel && mel < right {
+                    *coefficient = (1. - (center - mel).abs() / mel_step) as f32;
                 }
             }
-
-            // Right slope
-            for (bin, filter) in filter
-                .iter_mut()
-                .enumerate()
-                .take(right_bin)
-                .skip(center_bin)
-            {
-                if bin < bank_width {
-                    *filter = (right_bin - bin) as f32 / (right_bin - center_bin) as f32;
-                }
-            }
-
             filters.push(filter);
         }
-
         Ok(filters)
     }
 
@@ -769,104 +1278,69 @@ impl Phi4MMInputsProcessor {
 
         Tensor::from_slice(&mask_data, (batch_size, max_frames), device)?.to_dtype(DType::F32)
     }
+}
 
-    fn process_audio_for_sequences(
-        &self,
-        input_seqs: &mut [&mut Sequence],
-        device: &Device,
-    ) -> AudioProcessingResult {
-        // Check if any sequence has audio tokens
-        let has_audio_tokens = input_seqs
-            .iter()
-            .any(|seq| seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32)));
-
-        if !has_audio_tokens {
-            return Ok((None, None, None));
-        }
-
-        let mut audio_features_list = Vec::new();
-        let mut audio_embed_sizes_list = Vec::new();
-        let mut audio_frames_list = Vec::new();
-
-        // Process audio for each sequence that needs it
-        for seq in input_seqs.iter_mut() {
-            let has_audio = seq.get_toks().contains(&(AUDIO_SPECIAL_TOKEN_ID as u32));
-
-            if has_audio {
-                if let Some(audios) = seq.take_audios() {
-                    for audio in audios.into_iter() {
-                        // Convert multi-channel audio to mono by averaging channels
-                        let samples = audio.to_mono();
-
-                        // Extract features
-                        let features = self.extract_audio_features(&samples, audio.sample_rate)?;
-                        let audio_frames = features.len() * self.audio_feat_stride;
-
-                        let embed_size = self.compute_audio_embed_size(
-                            audio_frames,
-                            self.audio_compression_rate,
-                            self.audio_downsample_rate,
-                        );
-
-                        // Convert to tensor
-                        let features_len = features.len();
-                        let features_flat: Vec<f32> = features.into_iter().flatten().collect();
-                        let features_tensor = Tensor::from_slice(
-                            &features_flat,
-                            (features_len, AUDIO_FEATURE_SIZE),
-                            device,
-                        )?;
-
-                        audio_features_list.push(features_tensor);
-                        audio_embed_sizes_list.push(embed_size);
-                        audio_frames_list.push(audio_frames);
-                    }
-                } else {
-                    candle_core::bail!("No audios in `process_audio_for_sequences`");
-                };
-            }
-        }
-
-        if audio_features_list.is_empty() {
-            return Ok((None, None, None));
-        }
-
-        // Pad sequences to same length
-        let max_len = audio_features_list
-            .iter()
-            .map(|t| t.dim(0).unwrap_or(0))
-            .max()
-            .unwrap_or(0);
-
-        let mut padded_features = Vec::new();
-        for features in audio_features_list {
-            let seq_len = features.dim(0)?;
-            if seq_len < max_len {
-                let padding =
-                    Tensor::zeros((max_len - seq_len, AUDIO_FEATURE_SIZE), DType::F32, device)?;
-                let padded = Tensor::cat(&[features, padding], 0)?;
-                padded_features.push(padded);
-            } else {
-                padded_features.push(features);
-            }
-        }
-
-        // Stack into batch tensor
-        let input_audio_embeds = Tensor::stack(&padded_features, 0)?;
-
-        // Create attention mask if multiple sequences
-        let audio_attention_mask = if audio_frames_list.len() > 1 {
-            Some(self.create_audio_attention_mask(&audio_frames_list, device)?)
-        } else {
-            None
-        };
-
-        Ok((
-            Some(input_audio_embeds),
-            Some(audio_embed_sizes_list),
-            audio_attention_mask,
-        ))
+fn suffix_hashes<'a>(hashes: &'a [u64], count: usize, kind: &str) -> Result<&'a [u64]> {
+    if hashes.len() < count {
+        candle_core::bail!(
+            "Phi4MM has {} {kind} hashes but {count} retained {kind} inputs",
+            hashes.len()
+        );
     }
+    Ok(&hashes[hashes.len() - count..])
+}
+
+fn phi4_image_hash(raw_hash: u64, image: &DynamicImage) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    raw_hash.hash(&mut hasher);
+    image.width().hash(&mut hasher);
+    image.height().hash(&mut hasher);
+    std::mem::discriminant(&image.color()).hash(&mut hasher);
+    hasher.finish()
+}
+
+fn phi4_audio_hash(raw_hash: u64, audio: &crate::AudioInput) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    raw_hash.hash(&mut hasher);
+    audio.channels.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn local_uncached_item_start(seq: &Sequence, kind: MultimodalKind, available: usize) -> usize {
+    let total_items = seq
+        .mm_features()
+        .iter()
+        .filter(|feature| feature.kind == kind)
+        .map(|feature| feature.item_range.end)
+        .max()
+        .unwrap_or(available);
+    let retained_start = total_items.saturating_sub(available);
+    seq.count_prefix_cached_mm_items_by_kind(kind)
+        .saturating_sub(retained_start)
+        .min(available)
+}
+
+fn tensor_image_sizes(image_sizes: &Tensor) -> Result<Vec<(u32, u32)>> {
+    let rows = image_sizes.to_vec2::<u32>()?;
+    rows.into_iter()
+        .map(|row| match row.as_slice() {
+            [height, width] => Ok((*height, *width)),
+            _ => candle_core::bail!("Phi4MM cached image size must have two dimensions"),
+        })
+        .collect()
+}
+
+fn pad_phi4_image_mask(mask: Tensor, max_crops: usize) -> Result<Tensor> {
+    let crops = mask.dim(0)?;
+    if crops == max_crops {
+        return Ok(mask);
+    }
+    let padding = Tensor::ones(
+        (max_crops - crops, mask.dim(1)?, mask.dim(2)?),
+        mask.dtype(),
+        mask.device(),
+    )?;
+    Tensor::cat(&[mask, padding], 0)
 }
 
 impl Phi4MMInputsProcessor {
@@ -1068,7 +1542,7 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
 
     fn preprocess(
         &self,
-        mut images: Vec<DynamicImage>,
+        images: Vec<DynamicImage>,
         videos: Vec<Vec<DynamicImage>>,
         config: &PreProcessorConfig,
         device: &Device,
@@ -1077,22 +1551,6 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
         // If no images, will not call this.
         assert!(!images.is_empty());
         assert!(videos.is_empty());
-
-        // If >1 images, resize them all to the largest, potentially destroying aspect ratio
-        let mut max_size = None;
-        for image in images.iter() {
-            if max_size.is_none() {
-                max_size = Some((image.dimensions().0 as usize, image.dimensions().1 as usize))
-            } else if max_size.is_some_and(|(x, _)| image.dimensions().0 as usize > x) {
-                max_size = Some((image.dimensions().0 as usize, max_size.unwrap().1));
-            } else if max_size.is_some_and(|(_, y)| image.dimensions().1 as usize > y) {
-                max_size = Some((max_size.unwrap().0, image.dimensions().1 as usize));
-            }
-        }
-        let (max_w, max_h) = max_size.unwrap();
-        for image in images.iter_mut() {
-            *image = image.resize_exact(max_w as u32, max_h as u32, FilterType::Nearest);
-        }
 
         let mut image_sizes = Vec::new();
         let mut padded_images = Vec::new();
@@ -1199,6 +1657,24 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
             padded_masks.push(hd_mask_reshape);
             num_img_tokens.push(img_tokens);
         }
+        let max_crops = padded_images
+            .iter()
+            .map(|image| image.dim(0))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .unwrap();
+        padded_images = padded_images
+            .into_iter()
+            .map(|image| {
+                let crops = image.dim(0)?;
+                image.pad_with_zeros(0, 0, max_crops - crops)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        padded_masks = padded_masks
+            .into_iter()
+            .map(|mask| pad_phi4_image_mask(mask, max_crops))
+            .collect::<Result<Vec<_>>>()?;
         Ok(PreprocessedImages {
             pixel_values: Tensor::stack(&padded_images, 0)?,
             pixel_attention_mask: Some(Tensor::stack(&padded_masks, 0)?),
@@ -1216,5 +1692,315 @@ impl ImagePreProcessor for Phi4MMInputsProcessor {
             image_sizes_all: Some(image_sizes),
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use candle_core::{Device, Tensor};
+
+    use crate::{
+        paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind},
+        vision_models::multimodal_layout::{
+            MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+        },
+    };
+
+    use super::{
+        expand_phi4_placeholders, pad_phi4_image_mask, phi4_audio_hash, phi4_image_hash,
+        phi4_request_layout, MultiModalFeature, Phi4MMInputsProcessor, AUDIO_SPECIAL_TOKEN_ID,
+        IMAGE_SPECIAL_TOKEN_ID,
+    };
+
+    fn feature(
+        kind: MultimodalKind,
+        hash: u64,
+        item_index: usize,
+        offset: usize,
+        length: usize,
+    ) -> MultiModalFeature {
+        MultiModalFeature {
+            kind,
+            item_range: item_index..item_index + 1,
+            hashes: vec![hash],
+            offset,
+            length,
+            attention_policy: MultimodalAttentionPolicy::Causal,
+            splittable: false,
+        }
+    }
+
+    fn output(values: &[f32]) -> Tensor {
+        Tensor::from_slice(values, (1, values.len(), 1), &Device::Cpu).unwrap()
+    }
+
+    fn splice(
+        requests: &[crate::vision_models::multimodal_layout::RequestMultimodalLayout],
+        outputs: MultimodalEncoderOutputs,
+    ) -> Vec<f32> {
+        let layout = PackedMultimodalLayout::new(requests).unwrap();
+        let text = Tensor::zeros(
+            (1, layout.token_count(), 1),
+            candle_core::DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap();
+        layout
+            .splice_embeddings(&text, &outputs)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1()
+            .unwrap()
+    }
+
+    #[test]
+    fn expands_adjacent_media_as_distinct_items() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        let audio = AUDIO_SPECIAL_TOKEN_ID as u32;
+        let plan = expand_phi4_placeholders(&[1, image, image, audio, audio, 2], &[2, 3], &[1, 2])
+            .unwrap();
+        assert_eq!(plan.image_ranges, vec![(1, 2), (3, 3)]);
+        assert_eq!(plan.audio_ranges, vec![(6, 1), (7, 2)]);
+        assert_eq!(
+            plan.tokens,
+            vec![1, image, image, image, image, image, audio, audio, audio, 2]
+        );
+    }
+
+    #[test]
+    fn rejects_placeholder_and_media_count_mismatches() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        assert!(expand_phi4_placeholders(&[image], &[], &[]).is_err());
+        assert!(expand_phi4_placeholders(&[1], &[2], &[]).is_err());
+        assert!(expand_phi4_placeholders(&[image], &[0], &[]).is_err());
+    }
+
+    #[test]
+    fn eight_khz_fillzero_features_match_hf_oracle() {
+        let processor = Phi4MMInputsProcessor {
+            audio_compression_rate: 8,
+            audio_downsample_rate: 1,
+            audio_feat_stride: 1,
+            eightk_method: "fillzero".to_string(),
+        };
+        let wav = (0..280)
+            .map(|index| ((index % 17) - 8) as f32 / 16.)
+            .collect::<Vec<_>>();
+        let features = processor
+            .extract_mel_spectrogram_rustfft(&wav, 8000)
+            .unwrap();
+
+        assert_eq!(features.len(), 2);
+        assert!(features.iter().all(|frame| frame.len() == 80));
+        let expected = [
+            (0, 0, 13.901323),
+            (0, 5, 14.708267),
+            (0, 20, 15.498803),
+            (0, 40, 16.623417),
+            (0, 60, 24.281_36),
+            (0, 65, 0.),
+            (0, 79, 0.),
+            (1, 0, 12.2515),
+            (1, 5, 13.123133),
+            (1, 20, 14.566305),
+            (1, 40, 17.087433),
+            (1, 60, 24.282797),
+            (1, 65, 0.),
+            (1, 79, 0.),
+        ];
+        for (frame, bin, expected) in expected {
+            let actual = features[frame][bin];
+            assert!(
+                (actual - expected).abs() < 0.001,
+                "frame {frame}, bin {bin}: expected {expected}, got {actual}"
+            );
+        }
+        let sum = features.iter().flatten().sum::<f32>();
+        assert!((sum - 2261.8604).abs() < 0.01, "feature sum: {sum}");
+    }
+
+    #[test]
+    fn padded_crop_masks_remain_visible() {
+        let mask = Tensor::zeros((1, 2, 2), candle_core::DType::U32, &Device::Cpu).unwrap();
+        let padded = pad_phi4_image_mask(mask, 3)
+            .unwrap()
+            .to_vec3::<u32>()
+            .unwrap();
+        assert_eq!(padded[0], vec![vec![0, 0], vec![0, 0]]);
+        assert_eq!(padded[1], vec![vec![1, 1], vec![1, 1]]);
+        assert_eq!(padded[2], vec![vec![1, 1], vec![1, 1]]);
+    }
+
+    #[test]
+    fn encoder_hashes_include_preprocessing_shape_context() {
+        let wide = image::DynamicImage::new_rgb8(4, 1);
+        let tall = image::DynamicImage::new_rgb8(1, 4);
+        assert_ne!(phi4_image_hash(1, &wide), phi4_image_hash(1, &tall));
+        let mono = crate::AudioInput {
+            samples: vec![0.; 4],
+            sample_rate: 16000,
+            channels: 1,
+        };
+        let stereo = crate::AudioInput {
+            channels: 2,
+            ..mono.clone()
+        };
+        assert_ne!(phi4_audio_hash(2, &mono), phi4_audio_hash(2, &stereo));
+    }
+
+    #[test]
+    fn splices_unequal_text_image_audio_and_mixed_requests() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        let audio = AUDIO_SPECIAL_TOKEN_ID as u32;
+        let text = phi4_request_layout(1, &[1, 2, 3], 0..3, &[]).unwrap();
+        let image_request = phi4_request_layout(
+            2,
+            &[4, image, image, 5],
+            0..4,
+            &[feature(MultimodalKind::Image, 10, 0, 1, 2)],
+        )
+        .unwrap();
+        let audio_request = phi4_request_layout(
+            3,
+            &[audio, audio, audio],
+            0..3,
+            &[feature(MultimodalKind::Audio, 20, 0, 0, 3)],
+        )
+        .unwrap();
+        let mixed_request = phi4_request_layout(
+            4,
+            &[image, audio, audio],
+            0..3,
+            &[
+                feature(MultimodalKind::Image, 30, 0, 0, 1),
+                feature(MultimodalKind::Audio, 40, 0, 1, 2),
+            ],
+        )
+        .unwrap();
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 10,
+            },
+            vec![output(&[10., 11.])],
+        );
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Audio,
+                hash: 20,
+            },
+            vec![output(&[20., 21., 22.]), output(&[120., 121., 122.])],
+        );
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 30,
+            },
+            vec![output(&[30.])],
+        );
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Audio,
+                hash: 40,
+            },
+            vec![output(&[40., 41.]), output(&[140., 141.])],
+        );
+
+        assert_eq!(
+            splice(
+                &[text, image_request, audio_request, mixed_request],
+                outputs
+            ),
+            vec![0., 0., 0., 0., 10., 11., 0., 20., 21., 22., 30., 140., 141.]
+        );
+    }
+
+    #[test]
+    fn same_audio_hash_selects_mode_per_request() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        let audio = AUDIO_SPECIAL_TOKEN_ID as u32;
+        let speech = phi4_request_layout(
+            1,
+            &[audio, audio],
+            0..2,
+            &[feature(MultimodalKind::Audio, 77, 0, 0, 2)],
+        )
+        .unwrap();
+        let vision = phi4_request_layout(
+            2,
+            &[image, audio, audio],
+            0..3,
+            &[
+                feature(MultimodalKind::Image, 88, 0, 0, 1),
+                feature(MultimodalKind::Audio, 77, 0, 1, 2),
+            ],
+        )
+        .unwrap();
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Audio,
+                hash: 77,
+            },
+            vec![output(&[7., 8.]), output(&[70., 80.])],
+        );
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 88,
+            },
+            vec![output(&[9.])],
+        );
+
+        assert_eq!(
+            splice(&[speech, vision], outputs),
+            vec![7., 8., 9., 70., 80.]
+        );
+    }
+
+    #[test]
+    fn causal_item_supports_before_partial_and_after_queries() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        let tokens = [1, image, image, image, 2];
+        let media = [feature(MultimodalKind::Image, 5, 0, 1, 3)];
+        let before = phi4_request_layout(1, &tokens, 0..1, &media).unwrap();
+        let partial = phi4_request_layout(2, &tokens, 2..4, &media).unwrap();
+        let after = phi4_request_layout(3, &tokens, 4..5, &media).unwrap();
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            MultimodalEncoderKey {
+                kind: MultimodalKind::Image,
+                hash: 5,
+            },
+            vec![output(&[5., 6., 7.])],
+        );
+        assert_eq!(
+            splice(&[before, partial, after], outputs),
+            vec![0., 6., 7., 0.]
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_layout_metadata() {
+        let image = IMAGE_SPECIAL_TOKEN_ID as u32;
+        let mut missing_hash = feature(MultimodalKind::Image, 1, 0, 0, 1);
+        missing_hash.hashes.clear();
+        assert!(phi4_request_layout(1, &[image], 0..1, &[missing_hash]).is_err());
+        assert!(
+            phi4_request_layout(1, &[1], 0..1, &[feature(MultimodalKind::Image, 1, 0, 0, 1)])
+                .is_err()
+        );
+        assert!(phi4_request_layout(
+            1,
+            &[image],
+            0..1,
+            &[feature(MultimodalKind::Image, 1, 0, 0, 2)]
+        )
+        .is_err());
+        assert!(phi4_request_layout(1, &[image], 0..2, &[]).is_err());
     }
 }

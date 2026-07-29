@@ -7,15 +7,20 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_placeholder_delimited_ranges, Sequence},
+    sequence::{find_placeholder_delimited_ranges, Sequence},
     vision_models::{
         image_processor::{ImagePreProcessor, PreprocessedImages},
         preprocessor_config::{PreProcessorConfig, ToFilter},
+        qwen2vl::{
+            expand_media_placeholders, media_data_cached_offset, packed_layout, prompt_mrope,
+            select_media_batch, select_media_view, shift_media_spans, split_media_pixels,
+            validated_mm_features, video_hashes, PromptMropeConfig,
+        },
         ModelInputs,
     },
 };
 use anyhow::Result;
-use candle_core::{Context, Device, IndexOp, Tensor};
+use candle_core::{Context, Device, Tensor};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use mistralrs_vision::{
     ApplyTensorTransforms, ApplyTransforms, Normalize, TensorTransforms, ToTensor, Transforms,
@@ -62,16 +67,6 @@ impl Processor for Qwen2_5VLProcessor {
     }
 }
 
-fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
-    if let Some(pos) = text.find(to_replace) {
-        let mut result = text.to_string();
-        result.replace_range(pos..pos + to_replace.len(), replacement);
-        result
-    } else {
-        text.to_string()
-    }
-}
-
 fn find_sequences(nums: &[u32], needle: u32) -> Vec<(usize, usize)> {
     let mut sequences = Vec::new();
     let mut start = None;
@@ -92,20 +87,6 @@ fn find_sequences(nums: &[u32], needle: u32) -> Vec<(usize, usize)> {
     }
 
     sequences
-}
-
-// index + needle length
-fn find_substring_indices(haystack: &str, needle: &str) -> Vec<usize> {
-    let mut indices = Vec::new();
-    let mut start = 0;
-
-    while let Some(pos) = haystack[start..].find(needle) {
-        let index = start + pos;
-        indices.push(index + needle.len());
-        start = index + needle.len(); // Move past the last found occurrence
-    }
-
-    indices
 }
 
 impl InputsProcessor for Qwen2_5VLImageProcessor {
@@ -129,7 +110,10 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        if !input_seqs.iter().all(|seq| seq.has_images()) {
+        if !input_seqs
+            .iter()
+            .any(|seq| seq.has_images() || seq.has_videos())
+        {
             return Ok(());
         }
 
@@ -145,6 +129,11 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let mut image_grid_thw_accum = Vec::new();
         let mut video_grid_thw_accum = Vec::new();
         for seq in input_seqs.iter_mut() {
+            if !seq.has_images() && !seq.has_videos() {
+                image_grid_thw_accum.push(None);
+                video_grid_thw_accum.push(None);
+                continue;
+            }
             let (_, image_grid_thw, video_grid_thw) =
                 if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
                     (
@@ -153,32 +142,48 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                         seq.multimodal.cached_vid_thw.clone(),
                     )
                 } else {
-                    let PreprocessedImages {
-                        pixel_values,
-                        pixel_attention_mask: _,
-                        image_sizes: _,
-                        num_img_tokens: _,
-                        aspect_ratio_ids: _,
-                        aspect_ratio_mask: _,
-                        num_tiles: _,
-                        image_grid_thw,
-                        video_grid_thw,
-                        rows: _,
-                        cols: _,
-                        pixel_values_list: _,
-                        tgt_sizes: _,
-                        image_sizes_all: _,
-                        num_crops: _,
-                    } = self
-                        .preprocess(
-                            seq.clone_images()
-                                .expect("Need to have images by this point."),
+                    let image = if seq.has_images() {
+                        Some(self.preprocess(
+                            seq.clone_images().unwrap_or_default(),
                             vec![],
                             config,
                             device,
                             (usize::MAX, usize::MAX),
+                        )?)
+                    } else {
+                        None
+                    };
+                    let video = if seq.has_videos() {
+                        Some(
+                            self.preprocess(
+                                vec![],
+                                seq.clone_videos()
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|video| video.frames)
+                                    .collect(),
+                                config,
+                                device,
+                                (usize::MAX, usize::MAX),
+                            )?,
                         )
-                        .expect("Preprocessing failed");
+                    } else {
+                        None
+                    };
+                    let image_grid_thw = image
+                        .as_ref()
+                        .and_then(|processed| processed.image_grid_thw.clone());
+                    let video_grid_thw = video
+                        .as_ref()
+                        .and_then(|processed| processed.video_grid_thw.clone());
+                    let mut pixels = Vec::new();
+                    if let Some(image) = image {
+                        pixels.push(image.pixel_values);
+                    }
+                    if let Some(video) = video {
+                        pixels.push(video.pixel_values);
+                    }
+                    let pixel_values = Tensor::cat(&pixels, 0)?;
                     seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
                     seq.multimodal.cached_img_thw = image_grid_thw.clone();
                     seq.multimodal.cached_vid_thw = video_grid_thw.clone();
@@ -197,74 +202,50 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             }
         }
 
-        if let Some(image_grid_thw_accum) = image_grid_thw_accum
-            .iter()
-            .cloned()
-            .collect::<Option<Vec<_>>>()
+        let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+        for (((text, seq), image_grid), video_grid) in detok_seqs
+            .iter_mut()
+            .zip(input_seqs.iter())
+            .zip(&image_grid_thw_accum)
+            .zip(&video_grid_thw_accum)
         {
-            let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
-            for ((batch, text), seq) in detok_seqs.iter_mut().enumerate().zip(input_seqs.iter()) {
-                if seq.multimodal.has_changed_prompt {
-                    continue;
-                }
-                let mut index = 0;
-                while text.contains(Qwen2_5VLProcessor::IMAGE_PAD) {
-                    *text = replace_first_occurrence(
-                        text,
-                        Qwen2_5VLProcessor::IMAGE_PAD,
-                        &Qwen2_5VLProcessor::PLACEHOLDER.repeat(
-                            image_grid_thw_accum[batch]
-                                .i(index)
-                                .unwrap()
-                                .to_vec1::<u32>()
-                                .unwrap()
-                                .iter()
-                                .product::<u32>() as usize
-                                / merge_length,
-                        ),
-                    );
-                    index += 1;
-                }
-                *text = text.replace(
-                    Qwen2_5VLProcessor::PLACEHOLDER,
-                    Qwen2_5VLProcessor::IMAGE_PAD,
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let image_rows = seq.clone_images().unwrap_or_default().len();
+            let image_hashes = seq.image_hashes().unwrap_or_default();
+            if image_hashes.len() != image_rows {
+                anyhow::bail!(
+                    "Qwen has {image_rows} image rows but {} image hashes",
+                    image_hashes.len()
                 );
             }
-        }
-
-        if let Some(video_grid_thw_accum) = video_grid_thw_accum
-            .iter()
-            .cloned()
-            .collect::<Option<Vec<_>>>()
-        {
-            let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
-            for ((batch, text), seq) in detok_seqs.iter_mut().enumerate().zip(input_seqs.iter()) {
-                if seq.multimodal.has_changed_prompt {
-                    continue;
-                }
-                let mut index = 0;
-                while text.contains(Qwen2_5VLProcessor::VIDEO_PAD) {
-                    *text = replace_first_occurrence(
-                        text,
-                        Qwen2_5VLProcessor::VIDEO_PAD,
-                        &Qwen2_5VLProcessor::PLACEHOLDER.repeat(
-                            video_grid_thw_accum[batch]
-                                .i(index)
-                                .unwrap()
-                                .to_vec1::<u32>()
-                                .unwrap()
-                                .iter()
-                                .product::<u32>() as usize
-                                / merge_length,
-                        ),
-                    );
-                    index += 1;
-                }
-                *text = text.replace(
-                    Qwen2_5VLProcessor::PLACEHOLDER,
-                    Qwen2_5VLProcessor::VIDEO_PAD,
+            let video_rows = seq.clone_videos().unwrap_or_default().len();
+            let video_hashes = video_hashes(seq);
+            if video_hashes.len() != video_rows {
+                anyhow::bail!(
+                    "Qwen has {video_rows} video rows but {} video hashes",
+                    video_hashes.len()
                 );
             }
+            expand_media_placeholders(
+                text,
+                Qwen2_5VLProcessor::IMAGE_PAD,
+                Qwen2_5VLProcessor::PLACEHOLDER,
+                image_grid.as_ref(),
+                image_rows,
+                merge_length,
+                MultimodalKind::Image,
+            )?;
+            expand_media_placeholders(
+                text,
+                Qwen2_5VLProcessor::VIDEO_PAD,
+                Qwen2_5VLProcessor::PLACEHOLDER,
+                video_grid.as_ref(),
+                video_rows,
+                merge_length,
+                MultimodalKind::Video,
+            )?;
         }
 
         for (detok, seq) in detok_seqs.into_iter().zip(input_seqs.iter_mut()) {
@@ -279,34 +260,33 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
             if seq.mm_features().is_empty() {
                 let mut features = Vec::new();
-                if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
-                    seq.image_hashes().map(|h| h.to_vec()),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::IMAGE_PAD),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_START),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_END),
-                ) {
-                    let ranges =
-                        find_placeholder_delimited_ranges(&ids, img_pad_id, start_id, end_id);
-                    features.extend(build_mm_features_from_ranges(
-                        &ranges,
-                        &hashes,
-                        MultimodalKind::Image,
-                    ));
-                }
-                if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
-                    seq.video_hashes().map(|h| h.to_vec()),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::VIDEO_PAD),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_START),
-                    tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_END),
-                ) {
-                    let ranges =
-                        find_placeholder_delimited_ranges(&ids, vid_pad_id, start_id, end_id);
-                    features.extend(build_mm_features_from_ranges(
-                        &ranges,
-                        &hashes,
-                        MultimodalKind::Video,
-                    ));
-                }
+                let start_id = tokenizer
+                    .token_to_id(Qwen2_5VLProcessor::VISION_START)
+                    .context("Qwen tokenizer is missing vision start token")?;
+                let end_id = tokenizer
+                    .token_to_id(Qwen2_5VLProcessor::VISION_END)
+                    .context("Qwen tokenizer is missing vision end token")?;
+                let img_pad_id = tokenizer
+                    .token_to_id(Qwen2_5VLProcessor::IMAGE_PAD)
+                    .context("Qwen tokenizer is missing image pad token")?;
+                let image_ranges =
+                    find_placeholder_delimited_ranges(&ids, img_pad_id, start_id, end_id);
+                features.extend(validated_mm_features(
+                    &image_ranges,
+                    seq.image_hashes().unwrap_or_default(),
+                    MultimodalKind::Image,
+                )?);
+                let vid_pad_id = tokenizer
+                    .token_to_id(Qwen2_5VLProcessor::VIDEO_PAD)
+                    .context("Qwen tokenizer is missing video pad token")?;
+                let video_ranges =
+                    find_placeholder_delimited_ranges(&ids, vid_pad_id, start_id, end_id);
+                let hashes = video_hashes(seq);
+                features.extend(validated_mm_features(
+                    &video_ranges,
+                    &hashes,
+                    MultimodalKind::Video,
+                )?);
                 if !features.is_empty() {
                     seq.set_mm_features(features);
                 }
@@ -351,20 +331,23 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_media = input_seqs
+            .iter()
+            .any(|seq| seq.has_images() || seq.has_videos());
+        let mut image_item_counts = vec![0usize; input_seqs.len()];
+        let mut video_item_counts = vec![0usize; input_seqs.len()];
 
         let (
             new_input,
             pixel_values,
+            pixel_values_videos,
             mut image_grid_thw,
             mut video_grid_thw,
             mut continuous_img_pad,
             mut continuous_vid_pad,
-            input_ids_searching,
-            image_nums,
-            video_nums,
-        ) = if has_images {
-            let mut pixel_values_accum = Vec::new();
+        ) = if has_media {
+            let mut image_pixel_values_accum = Vec::new();
+            let mut video_pixel_values_accum = Vec::new();
             let mut image_grid_thw_accum = Vec::new();
             let mut video_grid_thw_accum = Vec::new();
 
@@ -378,7 +361,12 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 )
                 .expect("Detokenization failed!");
 
-            for seq in input_seqs.iter_mut() {
+            for (seq_idx, seq) in input_seqs.iter_mut().enumerate() {
+                if !seq.has_images() && !seq.has_videos() {
+                    image_grid_thw_accum.push(None);
+                    video_grid_thw_accum.push(None);
+                    continue;
+                }
                 let (pixel_values, image_grid_thw, video_grid_thw) =
                     if let Some(cached_pixel_values) = &seq.multimodal.cached_pixel_values {
                         (
@@ -387,146 +375,126 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                             seq.multimodal.cached_vid_thw.clone(),
                         )
                     } else {
-                        let PreprocessedImages {
-                            pixel_values,
-                            pixel_attention_mask: _,
-                            image_sizes: _,
-                            num_img_tokens: _,
-                            aspect_ratio_ids: _,
-                            aspect_ratio_mask: _,
-                            num_tiles: _,
-                            image_grid_thw,
-                            video_grid_thw,
-                            rows: _,
-                            cols: _,
-                            pixel_values_list: _,
-                            tgt_sizes: _,
-                            image_sizes_all: _,
-                            num_crops: _,
-                        } = self
-                            .preprocess(
-                                seq.clone_images()
-                                    .expect("Need to have images by this point."),
+                        let image = if seq.has_images() {
+                            Some(self.preprocess(
+                                seq.clone_images().unwrap_or_default(),
                                 vec![],
                                 config,
                                 device,
-                                (usize::MAX, usize::MAX), // Don't use it here...
+                                (usize::MAX, usize::MAX),
+                            )?)
+                        } else {
+                            None
+                        };
+                        let video = if seq.has_videos() {
+                            Some(
+                                self.preprocess(
+                                    vec![],
+                                    seq.clone_videos()
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .map(|video| video.frames)
+                                        .collect(),
+                                    config,
+                                    device,
+                                    (usize::MAX, usize::MAX),
+                                )?,
                             )
-                            .expect("Preprocessing failed");
-
+                        } else {
+                            None
+                        };
+                        let image_grid_thw = image
+                            .as_ref()
+                            .and_then(|processed| processed.image_grid_thw.clone());
+                        let video_grid_thw = video
+                            .as_ref()
+                            .and_then(|processed| processed.video_grid_thw.clone());
+                        let mut pixels = Vec::new();
+                        if let Some(image) = image {
+                            pixels.push(image.pixel_values);
+                        }
+                        if let Some(video) = video {
+                            pixels.push(video.pixel_values);
+                        }
+                        let pixel_values = Tensor::cat(&pixels, 0)?;
                         seq.multimodal.cached_pixel_values = Some(pixel_values.clone());
                         seq.multimodal.cached_img_thw = image_grid_thw.clone();
                         seq.multimodal.cached_vid_thw = video_grid_thw.clone();
                         (pixel_values, image_grid_thw, video_grid_thw)
                     };
 
-                pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
+                if seq.multimodal.rope_img_grid_thw.is_none() {
+                    seq.multimodal.rope_img_grid_thw = image_grid_thw.clone();
+                }
+                if seq.multimodal.rope_vid_grid_thw.is_none() {
+                    seq.multimodal.rope_vid_grid_thw = video_grid_thw.clone();
+                }
+                let (image_pixels, video_pixels) = split_media_pixels(
+                    &pixel_values,
+                    image_grid_thw.as_ref(),
+                    video_grid_thw.as_ref(),
+                )?;
+                let (image_pixels, image_grid_thw, image_count) =
+                    select_media_view(seq, MultimodalKind::Image, image_pixels, image_grid_thw)?;
+                let (video_pixels, video_grid_thw, video_count) =
+                    select_media_view(seq, MultimodalKind::Video, video_pixels, video_grid_thw)?;
+                image_item_counts[seq_idx] = image_count;
+                video_item_counts[seq_idx] = video_count;
+                if let Some(image_pixels) = image_pixels {
+                    image_pixel_values_accum.push(image_pixels);
+                }
+                if let Some(video_pixels) = video_pixels {
+                    video_pixel_values_accum.push(video_pixels);
+                }
                 image_grid_thw_accum.push(image_grid_thw);
                 video_grid_thw_accum.push(video_grid_thw);
             }
 
-            // Cache the complete grid_thw for MRoPE position computation.
-            // Set once during the first inputs processor call when ALL images are present.
-            // Unlike cached_img_thw, this is never cleared by keep_num_images, so it
-            // remains valid even after prefix caching trims the image set.
-            for (idx, seq) in input_seqs.iter_mut().enumerate() {
-                if seq.multimodal.rope_img_grid_thw.is_none() {
-                    seq.multimodal.rope_img_grid_thw = image_grid_thw_accum[idx].clone();
-                }
-                if seq.multimodal.rope_vid_grid_thw.is_none() {
-                    seq.multimodal.rope_vid_grid_thw = video_grid_thw_accum[idx].clone();
-                }
-            }
-
-            let image_grid_thw_accum = if image_grid_thw_accum.iter().any(|img| img.is_none()) {
-                None
-            } else {
-                Some(
-                    image_grid_thw_accum
-                        .into_iter()
-                        .map(|img| img.unwrap())
-                        .collect::<Vec<_>>(),
-                )
-            };
-
-            let video_grid_thw_accum = if video_grid_thw_accum.iter().any(|img| img.is_none()) {
-                None
-            } else {
-                Some(
-                    video_grid_thw_accum
-                        .into_iter()
-                        .map(|img| img.unwrap())
-                        .collect::<Vec<_>>(),
-                )
-            };
-
             if is_prompt {
-                if let Some(ref image_grid_thw_accum) = image_grid_thw_accum {
-                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
-                    for ((batch, text), seq) in
-                        detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
-                    {
-                        if seq.multimodal.has_changed_prompt {
-                            continue;
-                        }
-                        let mut index = 0;
-                        while text.contains(Qwen2_5VLProcessor::IMAGE_PAD) {
-                            *text = replace_first_occurrence(
-                                text,
-                                Qwen2_5VLProcessor::IMAGE_PAD,
-                                &Qwen2_5VLProcessor::PLACEHOLDER.repeat(
-                                    image_grid_thw_accum[batch]
-                                        .i(index)
-                                        .unwrap()
-                                        .to_vec1::<u32>()
-                                        .unwrap()
-                                        .iter()
-                                        .product::<u32>()
-                                        as usize
-                                        / merge_length,
-                                ),
-                            );
-                            index += 1;
-                        }
-                        *text = text.replace(
-                            Qwen2_5VLProcessor::PLACEHOLDER,
-                            Qwen2_5VLProcessor::IMAGE_PAD,
+                let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
+                for (seq_idx, (((text, seq), image_grid), video_grid)) in detok_seqs
+                    .iter_mut()
+                    .zip(input_seqs.iter_mut())
+                    .zip(&image_grid_thw_accum)
+                    .zip(&video_grid_thw_accum)
+                    .enumerate()
+                {
+                    if seq.multimodal.has_changed_prompt {
+                        continue;
+                    }
+                    let image_rows = image_item_counts[seq_idx];
+                    if seq.image_hashes().unwrap_or_default().len() != image_rows {
+                        anyhow::bail!(
+                            "Qwen has {image_rows} selected image rows but {} image hashes",
+                            seq.image_hashes().unwrap_or_default().len()
                         );
                     }
-                }
-
-                if let Some(ref video_grid_thw_accum) = video_grid_thw_accum {
-                    let merge_length = config.merge_size.expect("Require `merge_size").pow(2);
-                    let mut index = 0;
-                    for ((batch, text), seq) in
-                        detok_seqs.iter_mut().enumerate().zip(input_seqs.iter_mut())
-                    {
-                        if seq.multimodal.has_changed_prompt {
-                            continue;
-                        }
-                        while text.contains(Qwen2_5VLProcessor::VIDEO_PAD) {
-                            *text = replace_first_occurrence(
-                                text,
-                                Qwen2_5VLProcessor::VIDEO_PAD,
-                                &Qwen2_5VLProcessor::PLACEHOLDER.repeat(
-                                    video_grid_thw_accum[batch]
-                                        .i(index)
-                                        .unwrap()
-                                        .to_vec1::<u32>()
-                                        .unwrap()
-                                        .iter()
-                                        .product::<u32>()
-                                        as usize
-                                        / merge_length,
-                                ),
-                            );
-                            index += 1;
-                        }
-                        *text = text.replace(
-                            Qwen2_5VLProcessor::PLACEHOLDER,
-                            Qwen2_5VLProcessor::VIDEO_PAD,
+                    let video_rows = video_item_counts[seq_idx];
+                    let hashes = video_hashes(seq);
+                    if hashes.len() != video_rows {
+                        anyhow::bail!(
+                            "Qwen has {video_rows} selected video rows but {} video hashes",
+                            hashes.len()
                         );
                     }
+                    expand_media_placeholders(
+                        text,
+                        Qwen2_5VLProcessor::IMAGE_PAD,
+                        Qwen2_5VLProcessor::PLACEHOLDER,
+                        image_grid.as_ref(),
+                        image_rows,
+                        merge_length,
+                        MultimodalKind::Image,
+                    )?;
+                    expand_media_placeholders(
+                        text,
+                        Qwen2_5VLProcessor::VIDEO_PAD,
+                        Qwen2_5VLProcessor::PLACEHOLDER,
+                        video_grid.as_ref(),
+                        video_rows,
+                        merge_length,
+                        MultimodalKind::Video,
+                    )?;
                 }
             }
 
@@ -544,36 +512,33 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
                     let mut features = Vec::new();
                     if seq.mm_features().is_empty() {
-                        if let (Some(hashes), Some(img_pad_id), Some(start_id), Some(end_id)) = (
-                            seq.image_hashes().map(|h| h.to_vec()),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::IMAGE_PAD),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_START),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_END),
-                        ) {
-                            let ranges = find_placeholder_delimited_ranges(
-                                &ids, img_pad_id, start_id, end_id,
-                            );
-                            features.extend(build_mm_features_from_ranges(
-                                &ranges,
-                                &hashes,
-                                MultimodalKind::Image,
-                            ));
-                        }
-                        if let (Some(hashes), Some(vid_pad_id), Some(start_id), Some(end_id)) = (
-                            seq.video_hashes().map(|h| h.to_vec()),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::VIDEO_PAD),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_START),
-                            tokenizer.token_to_id(Qwen2_5VLProcessor::VISION_END),
-                        ) {
-                            let ranges = find_placeholder_delimited_ranges(
-                                &ids, vid_pad_id, start_id, end_id,
-                            );
-                            features.extend(build_mm_features_from_ranges(
-                                &ranges,
-                                &hashes,
-                                MultimodalKind::Video,
-                            ));
-                        }
+                        let start_id = tokenizer
+                            .token_to_id(Qwen2_5VLProcessor::VISION_START)
+                            .context("Qwen tokenizer is missing vision start token")?;
+                        let end_id = tokenizer
+                            .token_to_id(Qwen2_5VLProcessor::VISION_END)
+                            .context("Qwen tokenizer is missing vision end token")?;
+                        let img_pad_id = tokenizer
+                            .token_to_id(Qwen2_5VLProcessor::IMAGE_PAD)
+                            .context("Qwen tokenizer is missing image pad token")?;
+                        let image_ranges =
+                            find_placeholder_delimited_ranges(&ids, img_pad_id, start_id, end_id);
+                        features.extend(validated_mm_features(
+                            &image_ranges,
+                            seq.image_hashes().unwrap_or_default(),
+                            MultimodalKind::Image,
+                        )?);
+                        let vid_pad_id = tokenizer
+                            .token_to_id(Qwen2_5VLProcessor::VIDEO_PAD)
+                            .context("Qwen tokenizer is missing video pad token")?;
+                        let video_ranges =
+                            find_placeholder_delimited_ranges(&ids, vid_pad_id, start_id, end_id);
+                        let hashes = video_hashes(seq);
+                        features.extend(validated_mm_features(
+                            &video_ranges,
+                            &hashes,
+                            MultimodalKind::Video,
+                        )?);
                         if !features.is_empty() {
                             seq.set_mm_features(features);
                         }
@@ -585,49 +550,16 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 all_ids.push(ids.clone());
 
                 let img_pad = tokenizer
-                    .encode_fast(Qwen2_5VLProcessor::IMAGE_PAD, false)
-                    .expect("Detokenization failed!")
-                    .get_ids()
-                    .to_vec();
-                let continuous_img_pad = find_sequences(&ids, img_pad[0]);
+                    .token_to_id(Qwen2_5VLProcessor::IMAGE_PAD)
+                    .context("Qwen tokenizer is missing image pad token")?;
+                let continuous_img_pad = find_sequences(&ids, img_pad);
                 all_continuous_img_pad.push(continuous_img_pad);
 
                 let vid_pad = tokenizer
-                    .encode_fast(Qwen2_5VLProcessor::VIDEO_PAD, false)
-                    .expect("Detokenization failed!")
-                    .get_ids()
-                    .to_vec();
-                let continuous_vid_pad = find_sequences(&ids, vid_pad[0]);
+                    .token_to_id(Qwen2_5VLProcessor::VIDEO_PAD)
+                    .context("Qwen tokenizer is missing video pad token")?;
+                let continuous_vid_pad = find_sequences(&ids, vid_pad);
                 all_continuous_vid_pad.push(continuous_vid_pad);
-            }
-
-            let mut input_ids_searching = Vec::new();
-            let mut image_nums = Vec::new();
-            let mut video_nums = Vec::new();
-            for (seq, ids) in input_seqs.iter().zip(&all_ids) {
-                let prompt = seq.get_initial_prompt();
-                let match_indices =
-                    find_substring_indices(prompt, Qwen2_5VLProcessor::VISION_START);
-                image_nums.push(
-                    match_indices
-                        .iter()
-                        .filter(|&&idx| {
-                            prompt[idx..idx + Qwen2_5VLProcessor::IMAGE_PAD.len()]
-                                == *Qwen2_5VLProcessor::IMAGE_PAD
-                        })
-                        .count(),
-                );
-                video_nums.push(
-                    match_indices
-                        .iter()
-                        .filter(|&&idx| {
-                            prompt[idx..idx + Qwen2_5VLProcessor::VIDEO_PAD.len()]
-                                == *Qwen2_5VLProcessor::VIDEO_PAD
-                        })
-                        .count(),
-                );
-
-                input_ids_searching.push(ids.to_vec());
             }
 
             let mut all_ids_new = Vec::new();
@@ -639,14 +571,32 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
 
             (
                 Some(Tensor::stack(&all_ids_new, 0).unwrap()),
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
-                image_grid_thw_accum.map(|img| Tensor::cat(&img, 0).unwrap()),
-                video_grid_thw_accum.map(|vid| Tensor::cat(&vid, 0).unwrap()),
+                (!image_pixel_values_accum.is_empty())
+                    .then(|| Tensor::cat(&image_pixel_values_accum, 0))
+                    .transpose()?,
+                (!video_pixel_values_accum.is_empty())
+                    .then(|| Tensor::cat(&video_pixel_values_accum, 0))
+                    .transpose()?,
+                {
+                    let grids = image_grid_thw_accum
+                        .iter()
+                        .filter_map(Clone::clone)
+                        .collect::<Vec<_>>();
+                    (!grids.is_empty())
+                        .then(|| Tensor::cat(&grids, 0))
+                        .transpose()?
+                },
+                {
+                    let grids = video_grid_thw_accum
+                        .iter()
+                        .filter_map(Clone::clone)
+                        .collect::<Vec<_>>();
+                    (!grids.is_empty())
+                        .then(|| Tensor::cat(&grids, 0))
+                        .transpose()?
+                },
                 all_continuous_img_pad,
                 all_continuous_vid_pad,
-                input_ids_searching,
-                image_nums,
-                video_nums,
             )
         } else {
             (
@@ -654,11 +604,9 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 None,
                 None,
                 None,
-                vec![],
-                vec![],
+                None,
                 vec![vec![]; input_seqs.len()],
-                vec![0; input_seqs.len()],
-                vec![0; input_seqs.len()],
+                vec![vec![]; input_seqs.len()],
             )
         };
 
@@ -706,21 +654,41 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             .unwrap()
         };
 
+        let full_input_from_seq = if is_prompt && flash_meta.packed {
+            let max_len = input_seqs
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .max()
+                .unwrap_or(0);
+            let rows = input_seqs
+                .iter()
+                .map(|seq| {
+                    let mut ids = seq.get_toks().to_vec();
+                    ids.resize(max_len, 0);
+                    Tensor::new(ids, device)
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+            Some(Tensor::stack(&rows, 0)?)
+        } else {
+            None
+        };
         let (input, input_ids_full) = match (new_input, is_prompt) {
             (Some(new_input), true) => (input, new_input),
             (Some(new_input), false) => (input, new_input),
-            (None, _) => (input.clone(), input.clone()),
+            (None, _) => (
+                input.clone(),
+                full_input_from_seq.unwrap_or_else(|| input.clone()),
+            ),
         };
 
         let mut pixel_values = if is_prompt { pixel_values } else { None };
+        let mut pixel_values_videos = if is_prompt { pixel_values_videos } else { None };
 
-        // Adjust continuous pad ranges for prefix caching: drop cached ranges, shift new ones.
-        // Also trim pixel_values and grid_thw to exclude cached images/videos so the vision
-        // encoder only produces embeddings for the non-cached ones.
         let mut per_seq_cached_images: Vec<usize> = vec![0; input_seqs.len()];
+        let mut per_seq_current_images: Vec<usize> = vec![0; input_seqs.len()];
+        let mut per_seq_cached_videos: Vec<usize> = vec![0; input_seqs.len()];
+        let mut per_seq_current_videos: Vec<usize> = vec![0; input_seqs.len()];
         if is_prompt {
-            let mut total_cached_images = 0usize;
-            let mut total_cached_videos = 0usize;
             for (seq_idx, (seq, (img_pads, vid_pads))) in input_seqs
                 .iter()
                 .zip(
@@ -730,101 +698,34 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 )
                 .enumerate()
             {
-                let prefix_len = seq.prefix_cache_len();
-                if prefix_len > 0 {
-                    let img_before = img_pads.len();
-                    img_pads.retain(|(start, _)| *start >= prefix_len);
-                    let cached = img_before - img_pads.len();
-                    total_cached_images += cached;
-                    per_seq_cached_images[seq_idx] = cached;
-                    for (start, end) in img_pads.iter_mut() {
-                        *start -= prefix_len;
-                        *end -= prefix_len;
-                    }
-                    let vid_before = vid_pads.len();
-                    vid_pads.retain(|(start, _)| *start >= prefix_len);
-                    total_cached_videos += vid_before - vid_pads.len();
-                    for (start, end) in vid_pads.iter_mut() {
-                        *start -= prefix_len;
-                        *end -= prefix_len;
-                    }
-                }
+                let local_prefix = seq
+                    .active_prompt_local_query_range()
+                    .map_or(seq.prefix_cache_len(), |query| query.start);
+                let cached_images = shift_media_spans(img_pads, local_prefix)?;
+                let cached_videos = shift_media_spans(vid_pads, local_prefix)?;
+                per_seq_cached_images[seq_idx] = media_data_cached_offset(seq, cached_images);
+                per_seq_cached_videos[seq_idx] = media_data_cached_offset(seq, cached_videos);
+                per_seq_current_images[seq_idx] = img_pads.len();
+                per_seq_current_videos[seq_idx] = vid_pads.len();
             }
-            if total_cached_images > 0 {
-                let n_seqs = input_seqs.len().max(1);
-                let per_seq_cached = total_cached_images / n_seqs;
-                let cached_patch_count = if let Some(ref grid) = image_grid_thw {
-                    let grid_data = grid.to_vec2::<u32>().unwrap();
-                    let grid_per_seq = grid_data.len() / n_seqs;
-                    (0..n_seqs)
-                        .flat_map(|i| {
-                            grid_data[i * grid_per_seq..i * grid_per_seq + per_seq_cached]
-                                .iter()
-                                .map(|row| {
-                                    (row[0] as usize) * (row[1] as usize) * (row[2] as usize)
-                                })
-                        })
-                        .sum::<usize>()
-                } else {
-                    0
-                };
-                if let Some(ref grid) = image_grid_thw {
-                    let total_grid = grid.dim(0).unwrap();
-                    let grid_per_seq = total_grid / n_seqs;
-                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached);
-                    if remaining_per_seq > 0 {
-                        let trimmed: Vec<Tensor> = (0..n_seqs)
-                            .map(|i| {
-                                grid.narrow(0, i * grid_per_seq + per_seq_cached, remaining_per_seq)
-                                    .unwrap()
-                            })
-                            .collect();
-                        image_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
-                    } else {
-                        image_grid_thw = None;
-                    }
-                }
-                if let Some(ref pv) = pixel_values {
-                    let total = pv.dim(1).unwrap();
-                    let remaining = total.saturating_sub(cached_patch_count);
-                    if remaining > 0 {
-                        pixel_values = Some(pv.narrow(1, cached_patch_count, remaining).unwrap());
-                    } else {
-                        pixel_values = None;
-                    }
-                }
-            }
-            if total_cached_videos > 0 {
-                let n_seqs = input_seqs.len().max(1);
-                let per_seq_cached_vids = total_cached_videos / n_seqs;
-                if let Some(ref grid) = video_grid_thw {
-                    let total_grid = grid.dim(0).unwrap();
-                    let grid_per_seq = total_grid / n_seqs;
-                    let remaining_per_seq = grid_per_seq.saturating_sub(per_seq_cached_vids);
-                    if remaining_per_seq > 0 {
-                        let trimmed: Vec<Tensor> = (0..n_seqs)
-                            .map(|i| {
-                                grid.narrow(
-                                    0,
-                                    i * grid_per_seq + per_seq_cached_vids,
-                                    remaining_per_seq,
-                                )
-                                .unwrap()
-                            })
-                            .collect();
-                        video_grid_thw = Some(Tensor::cat(&trimmed, 0).unwrap());
-                    } else {
-                        video_grid_thw = None;
-                    }
-                }
-            }
+            (pixel_values, image_grid_thw) = select_media_batch(
+                pixel_values,
+                image_grid_thw,
+                &image_item_counts,
+                &per_seq_cached_images,
+                &per_seq_current_images,
+            )?;
+            (pixel_values_videos, video_grid_thw) = select_media_batch(
+                pixel_values_videos,
+                video_grid_thw,
+                &video_item_counts,
+                &per_seq_cached_videos,
+                &per_seq_current_videos,
+            )?;
         }
 
         let seqlens = input_seqs.iter().map(|seq| seq.len()).collect::<Vec<_>>();
 
-        // Collect the complete rope grids from per-sequence cached values.
-        // These cover ALL images/videos in the full sequence (including prefix-cached ones)
-        // and are used for MRoPE position computation in get_rope_index.
         let rope_img_grid_thw = {
             let grids: Vec<_> = input_seqs
                 .iter()
@@ -848,25 +749,82 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             }
         };
 
-        let image_hashes: Vec<u64> = if is_prompt {
-            input_seqs
-                .iter()
-                .enumerate()
-                .flat_map(|(seq_idx, seq)| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = per_seq_cached_images[seq_idx];
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect()
+        let mut image_hashes = Vec::new();
+        let mut selected_video_hashes = Vec::new();
+        if is_prompt {
+            for (seq_idx, seq) in input_seqs.iter().enumerate() {
+                let hashes = seq.image_hashes().unwrap_or_default();
+                let cached = per_seq_cached_images[seq_idx];
+                let current = per_seq_current_images[seq_idx];
+                let selected = hashes.get(cached..cached + current).ok_or_else(|| {
+                    anyhow::Error::msg("Qwen image hashes do not cover the selected media window")
+                })?;
+                image_hashes.extend_from_slice(selected);
+
+                let hashes = video_hashes(seq);
+                let cached = per_seq_cached_videos[seq_idx];
+                let current = per_seq_current_videos[seq_idx];
+                let selected = hashes.get(cached..cached + current).ok_or_else(|| {
+                    anyhow::Error::msg("Qwen video hashes do not cover the selected media window")
+                })?;
+                selected_video_hashes.extend_from_slice(selected);
+            }
+        }
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| anyhow::Error::msg("packed Qwen prefill requires query lengths"))?;
+            let layout = packed_layout(
+                input_seqs,
+                query_lens,
+                &continuous_img_pad,
+                &continuous_vid_pad,
+            )?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "Qwen packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
         } else {
-            vec![]
+            None
+        };
+        let needs_prompt_mrope = is_prompt
+            && input_seqs.iter().any(|seq| {
+                seq.multimodal.rope_img_grid_thw.is_some()
+                    || seq.multimodal.rope_vid_grid_thw.is_some()
+            });
+        let prompt_position_ids = if needs_prompt_mrope {
+            let image_token_id = tokenizer
+                .token_to_id(Qwen2_5VLProcessor::IMAGE_PAD)
+                .ok_or_else(|| anyhow::Error::msg("Qwen tokenizer is missing image pad token"))?;
+            let video_token_id = tokenizer
+                .token_to_id(Qwen2_5VLProcessor::VIDEO_PAD)
+                .ok_or_else(|| anyhow::Error::msg("Qwen tokenizer is missing video pad token"))?;
+            let query_ranges = input_seqs
+                .iter()
+                .map(|seq| {
+                    seq.active_prompt_query_range()
+                        .unwrap_or(0..seq.prompt_position_source_toks().len())
+                })
+                .collect::<Vec<_>>();
+            Some(prompt_mrope(
+                input_seqs,
+                &query_ranges,
+                PromptMropeConfig::new(
+                    flash_meta.packed,
+                    input.dim(1)?,
+                    config.merge_size.context("Qwen requires merge_size")?,
+                    image_token_id,
+                    video_token_id,
+                    device,
+                ),
+            )?)
+        } else {
+            None
         };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
@@ -877,6 +835,7 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             pixel_values,
             model_specific_args: Box::new(Qwen2_5VLVisionSpecificArgs {
                 input_ids_full,
+                pixel_values_videos,
                 image_grid_thw,
                 video_grid_thw,
                 rope_img_grid_thw,
@@ -884,10 +843,10 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
                 seqlens,
                 continuous_img_pad,
                 continuous_vid_pad,
-                input_ids_searching,
-                image_nums,
-                video_nums,
                 image_hashes,
+                video_hashes: selected_video_hashes,
+                packed_layout,
+                prompt_position_ids,
             }),
             paged_attn_meta,
             flash_meta,
@@ -1126,5 +1085,19 @@ impl ImagePreProcessor for Qwen2_5VLImageProcessor {
             });
         }
         unreachable!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_pixels_rejects_grid_mismatch() -> Result<()> {
+        let pixels = Tensor::zeros((4, 2), candle_core::DType::F32, &Device::Cpu)?;
+        let image_grid = Tensor::new(&[[1u32, 1, 3]], &Device::Cpu)?;
+
+        assert!(split_media_pixels(&pixels, Some(&image_grid), None).is_err());
+        Ok(())
     }
 }
