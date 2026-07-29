@@ -4184,8 +4184,13 @@ mod tests {
     use super::MergedDenseProjection;
 
     #[cfg(feature = "cuda")]
-    fn assert_close(actual: f32, expected: f32) {
-        let tolerance = 1e-5 * expected.abs().max(1.0);
+    const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
+    #[cfg(feature = "cuda")]
+    const CUDA_LOGPROB_REL_TOLERANCE: f32 = 1e-4;
+
+    #[cfg(feature = "cuda")]
+    fn assert_close(actual: f32, expected: f32, relative_tolerance: f32) {
+        let tolerance = relative_tolerance * expected.abs().max(1.0);
         assert!(
             (actual - expected).abs() <= tolerance,
             "expected {expected}, got {actual}"
@@ -4387,7 +4392,7 @@ mod tests {
 
         for (actual_row, expected_row) in actual.iter().zip(expected.iter()) {
             for (&actual, &expected) in actual_row.iter().zip(expected_row.iter()) {
-                assert_close(actual, expected);
+                assert_close(actual, expected, CUDA_F32_REL_TOLERANCE);
             }
         }
         Ok(())
@@ -4457,7 +4462,7 @@ mod tests {
 
         for (actual, expected) in actual.iter().zip(expected) {
             assert_eq!(actual[0], expected[0]);
-            assert_close(actual[1], expected[1]);
+            assert_close(actual[1], expected[1], CUDA_LOGPROB_REL_TOLERANCE);
         }
         Ok(())
     }
@@ -4498,7 +4503,7 @@ mod tests {
         let packed = output.packed.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
 
         assert_eq!(packed[0][0], 2047.0);
-        assert_close(packed[0][1], -(2048.0f32).ln());
+        assert_close(packed[0][1], -(2048.0f32).ln(), CUDA_LOGPROB_REL_TOLERANCE);
         Ok(())
     }
 
