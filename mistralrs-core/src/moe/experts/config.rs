@@ -93,6 +93,7 @@ pub(super) struct BackendChoice {
     pub dtype: DType,
     pub loading_isq: bool,
     pub quantized: bool,
+    #[allow(dead_code)]
     pub quantization_config: Option<QuantizedConfig>,
     pub immediate_isq: bool,
     #[cfg_attr(not(feature = "cutile"), allow(dead_code))]
@@ -318,6 +319,7 @@ mod tests {
             dtype,
             loading_isq: false,
             quantized: false,
+            quantization_config: None,
             immediate_isq: false,
             act,
         }

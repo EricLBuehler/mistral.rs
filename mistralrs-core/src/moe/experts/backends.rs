@@ -69,9 +69,9 @@ impl Wna16ExpertsWeights {
         if comm.world_size() != 1 {
             candle_core::bail!("WNA16 MoE experts do not support tensor parallelism");
         }
-        // Candle's CUDA copy2d path does not provide a kernel for every packed
-        // integer dtype. Assemble the routed tensors on CPU, then transfer the
-        // already-contiguous stacks to CUDA in one copy per projection.
+        // This Candle/CUDA deployment failed to resolve the copy2d_u32 symbol
+        // while stacking packed tensors on device. Assemble the routed tensors
+        // on CPU, then transfer the contiguous stacks to CUDA once per projection.
         let target_device = vb.device().clone();
         let read_vb = if target_device.is_cuda() {
             vb.clone().set_device(Device::Cpu)
