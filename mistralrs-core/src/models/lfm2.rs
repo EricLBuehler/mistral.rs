@@ -7,7 +7,7 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, Linear};
+use candle_nn::{Conv1d, Conv1dConfig, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -21,7 +21,10 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        self, embedding_with_legacy_tied_uqff, Activation, CausalMasker, RmsNorm, RotaryEmbedding,
+        Sdpa,
+    },
     layers_masker::{CausalMaskConfig, PastKvLenCache},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -951,11 +954,12 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     embedding_norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     cache: EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -1005,10 +1009,14 @@ impl Model {
         }
 
         let mapper = normal_loading_metadata.mapper;
-        let embed_tokens = embedding(
+        let dtype = vb_m.dtype();
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings().then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let embedding_norm = RmsNorm::new(
@@ -1017,16 +1025,7 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("embedding_norm"), false),
         )?;
         let lm_head = if cfg.tie_word_embeddings() {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         } else {
             ReplicatedLayer::new(
                 cfg.hidden_size,
@@ -1127,6 +1126,7 @@ impl Model {
             layer_types,
             embedding_norm,
             lm_head,
+            dtype,
             cache: EitherCache::Hybrid(cache),
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
@@ -1147,7 +1147,7 @@ impl Model {
     }
 
     pub fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {

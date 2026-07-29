@@ -8,7 +8,7 @@ use std::{collections::HashMap, sync::Arc};
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm};
+use candle_nn::LayerNorm;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -408,10 +408,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     cache: EitherCache,
     device: Device,
     max_seq_len: usize,
@@ -436,11 +437,12 @@ impl Model {
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let final_layernorm = layer_norm(
@@ -514,6 +516,7 @@ impl Model {
             layers,
             final_layernorm,
             lm_head,
+            dtype,
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
@@ -537,7 +540,7 @@ impl Model {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = input_ids.apply(&self.embed_tokens)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let mask = CausalMasker.make_causal_mask(

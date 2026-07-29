@@ -23,6 +23,7 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
+    max_model_len: Option<usize>,
 }
 
 impl LoaderBuilder {
@@ -32,6 +33,7 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             jinja_explicit: None,
+            max_model_len: None,
         }
     }
 
@@ -45,6 +47,10 @@ impl LoaderBuilder {
     }
     pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
         self.jinja_explicit = jinja_explicit;
+        self
+    }
+    pub fn with_max_model_len(mut self, max_model_len: Option<usize>) -> Self {
+        self.max_model_len = max_model_len;
         self
     }
 
@@ -336,6 +342,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                             .collect::<Vec<_>>()
                     }),
                     max_edge,
+                    max_model_len: args.max_model_len,
                     calibration_file: calibration_file.clone(),
                     imatrix: imatrix.clone(),
                     hf_cache_path: hf_cache_path.clone(),
@@ -399,6 +406,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
+                max_model_len: args.max_model_len,
                 calibration_file,
                 imatrix,
                 hf_cache_path,
@@ -534,6 +542,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         write_uqff: write_uqff.clone(),
                         from_uqff: from_uqff.clone(),
                         max_edge,
+                        max_model_len: args.max_model_len,
                         imatrix: imatrix.clone(),
                         calibration_file: calibration_file.clone(),
                         hf_cache_path: hf_cache_path.clone(),

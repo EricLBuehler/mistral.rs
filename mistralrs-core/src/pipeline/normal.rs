@@ -33,7 +33,7 @@ use crate::pipeline::isq::{
     WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::QuantizationConfigShim;
+use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
@@ -423,6 +423,7 @@ impl Loader for NormalLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
+                    let quantization = AutoDeviceMapQuantization::uqff(reader);
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -433,6 +434,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -443,6 +445,8 @@ impl Loader for NormalLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
+                    let quantization =
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -453,6 +457,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -465,6 +470,11 @@ impl Loader for NormalLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
+                    let quantization = self
+                        .config
+                        .topology
+                        .as_ref()
+                        .map(|topology| AutoDeviceMapQuantization::isq(None, Some(topology)));
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -475,6 +485,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        quantization.as_ref(),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -1004,7 +1015,12 @@ impl IsqPipelineMixin for NormalPipeline {
             self.tracked_modules.len()
         );
         self.cleanup_cuda_graphs();
-        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
+        super::isq_flow::requantize_and_swap(
+            &self.tracked_modules,
+            dtype,
+            |module| module.default_type(dtype),
+            &|_| None,
+        )
     }
 
     fn begin_calibration(&mut self) -> Result<()> {

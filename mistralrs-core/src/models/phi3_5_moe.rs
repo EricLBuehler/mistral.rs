@@ -14,7 +14,7 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, layer_norm, Activation, CausalMasker, PhiRopeConfig, PhiRopeScalingConfig,
+        self, embedding, layer_norm, Activation, CausalMasker, PhiRopeConfig, PhiRopeScalingConfig,
         PhiRotaryEmbedding, Sdpa,
     },
     layers_masker::masked_fill,
@@ -453,10 +453,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -482,11 +483,12 @@ impl Model {
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let mut ropes = HashMap::new();
@@ -553,6 +555,7 @@ impl Model {
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
@@ -578,7 +581,7 @@ impl Model {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(

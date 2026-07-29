@@ -167,7 +167,7 @@ impl CustomOp1 for Leftshift {
         crate::metal_kernels::call_bitwise_leftshift(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             s1.buffer(),
             l1.start_offset(),
@@ -614,7 +614,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -627,7 +627,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -640,7 +640,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -768,7 +768,7 @@ impl CustomOp1 for BitWiseUnary {
             BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 l1.start_offset() * s1.dtype().size_in_bytes(),
@@ -918,7 +918,7 @@ impl CustomOp1 for ArgSort {
         crate::metal_kernels::call_argsort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1025,7 +1025,7 @@ impl CustomOp1 for Sort {
         crate::metal_kernels::call_sort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1530,7 +1530,7 @@ impl CustomOp1 for CumSum {
         crate::metal_kernels::call_scan(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             ScanType::Sum,
             s1.buffer(),
@@ -2135,7 +2135,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         crate::metal_kernels::call_softmax_with_sinks(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             storage.buffer(),
             layout.start_offset() * dtype.size_in_bytes(),
@@ -2259,7 +2259,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2290,7 +2290,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2318,7 +2318,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2344,7 +2344,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
             crate::metal_kernels::call_flash_attn_sinks_prefill(
                 device.device(),
                 &encoder,
-                &kernels,
+                kernels,
                 dtype,
                 q_storage.buffer(),
                 q_offset,
@@ -2503,7 +2503,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks-varlen");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2512,7 +2512,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         crate::metal_kernels::call_flash_attn_sinks_varlen_prefill(
             device.device(),
             &encoder,
-            &kernels,
+            kernels,
             dtype,
             q_storage.buffer(),
             q_offset,
@@ -2848,7 +2848,7 @@ impl CustomOp2 for FusedGlu {
         crate::metal_kernels::call_fused_glu(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             s2.buffer(),
@@ -3100,7 +3100,7 @@ impl CustomOp1 for Softcap {
         crate::metal_kernels::call_softcap(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             l1.start_offset() * dtype.size_in_bytes(),
@@ -3540,6 +3540,77 @@ mod tests {
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
         let c = a.bitwise_xor(&b).unwrap().to_vec2::<i64>().unwrap();
         assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitwise_metal_unaligned_length() -> candle_core::Result<()> {
+        use super::{BitWiseOp, LeftshiftOp};
+        use candle_core::{Device, Tensor};
+
+        const TEST_LENGTH: usize = 2049;
+        const TEST_SHIFT: usize = 3;
+
+        let device = Device::new_metal(0)?;
+        let lhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let rhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(19).wrapping_add(7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let lhs_tensor = Tensor::from_vec(lhs.clone(), TEST_LENGTH, &device)?;
+        let rhs_tensor = Tensor::from_vec(rhs.clone(), TEST_LENGTH, &device)?;
+
+        let and = lhs_tensor
+            .bitwise_and(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let or = lhs_tensor
+            .bitwise_or(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let xor = lhs_tensor
+            .bitwise_xor(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let not = lhs_tensor
+            .bitwise_not()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let shifted = lhs_tensor
+            .leftshift(TEST_SHIFT)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+
+        assert_eq!(
+            and,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs & rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            or,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs | rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            xor,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs ^ rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(not, lhs.iter().map(|value| !value).collect::<Vec<_>>());
+        assert_eq!(
+            shifted,
+            lhs.iter()
+                .map(|value| value.wrapping_shl(TEST_SHIFT as u32))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
     }
 
     #[test]

@@ -22,7 +22,6 @@ pub enum AfqBits {
     Four = 4,
     Six = 6,
     Eight = 8,
-    Mxfp4 = 40,
 }
 
 impl TryFrom<usize> for AfqBits {
@@ -34,7 +33,6 @@ impl TryFrom<usize> for AfqBits {
             4 => Ok(Self::Four),
             6 => Ok(Self::Six),
             8 => Ok(Self::Eight),
-            40 => Ok(Self::Mxfp4),
             x => candle_core::bail!("Invalid AFQ bits {x}."),
         }
     }
@@ -245,6 +243,17 @@ impl QuantMethod for AfqLayer {
         )
     }
 
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        ops::afq_embedding_op(
+            ids,
+            &self.w_q,
+            &self.scales,
+            &self.biases,
+            self.group_size,
+            self.bits,
+        )
+    }
+
     fn quantized_act_type(&self) -> Option<DType> {
         None
     }
@@ -344,10 +353,6 @@ impl AfqLayer {
         let group_size =
             AfqGroupSize::try_from(reader.load_u8_scalar(&format!("{key}.weight.group_size"))?)?;
         let group = group_size as usize;
-        // AFQ-MXFP4 packs differently; it loads full-only.
-        if matches!(bits, AfqBits::Mxfp4) && !matches!(shard, Shard::Simple { world_size: 1, .. }) {
-            candle_core::bail!("AFQ-MXFP4 UQFF artifacts do not support sharded loading.");
-        }
         let pack = (32 / bits as usize).max(1);
 
         // Logical dims: w_q packs `pack` input elements per u32 along the last dim.
@@ -483,7 +488,6 @@ impl QuantizedSerde for AfqLayer {
             AfqBits::Four => IsqType::AFQ4,
             AfqBits::Six => IsqType::AFQ6,
             AfqBits::Eight => IsqType::AFQ8,
-            AfqBits::Mxfp4 => IsqType::MXFP4,
         };
         if ty != actual_ty {
             candle_core::bail!("Cannot serialize AFQ layer as {ty}; actual type is {actual_ty}.");
@@ -524,7 +528,6 @@ impl QuantizedSerde for AfqLayer {
             AfqBits::Four => Ok(IsqType::AFQ4),
             AfqBits::Six => Ok(IsqType::AFQ6),
             AfqBits::Eight => Ok(IsqType::AFQ8),
-            AfqBits::Mxfp4 => Ok(IsqType::MXFP4),
         }
     }
 }

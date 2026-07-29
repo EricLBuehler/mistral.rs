@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::Module;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -377,7 +377,7 @@ impl DecoderLayer {
 }
 
 pub struct Qwen2VLTextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: F32RmsNorm,
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -400,16 +400,20 @@ impl Qwen2VLTextModel {
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         // Support both HuggingFace naming (model.*) and MLX naming (language_model.model.*)
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
-        } else {
-            vb.pp("model")
-        };
+        let vb_m =
+            if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+                vb.pp("language_model").pp("model")
+            } else {
+                vb.pp("model")
+            };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -480,16 +484,7 @@ impl Qwen2VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         let sliding_window = layer_sliding_windows.iter().flatten().next().copied();
         Ok(Self {
@@ -522,7 +517,7 @@ impl Qwen2VLTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward_embeds(

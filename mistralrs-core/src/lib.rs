@@ -52,6 +52,7 @@ mod device_map;
 mod engine;
 mod lora;
 mod metal;
+pub use metal::warmup_metal_kernels;
 mod model_loader;
 mod moe;
 mod ops;
@@ -328,6 +329,8 @@ pub struct ModelLoaderConfig {
     pub chat_template: Option<String>,
     /// Explicit Jinja template path
     pub jinja_explicit: Option<String>,
+    /// Optional runtime context cap applied by loaders that support it.
+    pub max_model_len: Option<usize>,
     /// Optional speculative decoding attachment to recreate after reload.
     pub mtp_config: Option<MtpConfig>,
 }
@@ -2672,6 +2675,7 @@ impl MistralRs {
         let loader = LoaderBuilder::new(loader_config.model_selected.clone())
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
+            .with_max_model_len(loader_config.max_model_len)
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 

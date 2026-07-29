@@ -4,7 +4,6 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Embedding;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -15,7 +14,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{apply_rotary_q, embedding, Activation, CausalMasker, Mlp, RmsNorm, Sdpa},
+    layers::{
+        apply_rotary_q, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
+        Sdpa,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     ops::TopKLastDimOp,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -688,7 +690,8 @@ impl DecoderLayer {
 
 pub struct Glm4Moe {
     lm_head: Arc<dyn QuantMethod>,
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    dtype: DType,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     cache: EitherCache,
@@ -709,11 +712,15 @@ impl Glm4Moe {
         let vb_m = vb.pp("model");
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
@@ -725,16 +732,7 @@ impl Glm4Moe {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -799,6 +797,7 @@ impl Glm4Moe {
         Ok(Self {
             lm_head,
             embed_tokens,
+            dtype,
             norm,
             layers,
             cache: EitherCache::Normal(NormalCache::new(
@@ -825,7 +824,7 @@ impl Glm4Moe {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(

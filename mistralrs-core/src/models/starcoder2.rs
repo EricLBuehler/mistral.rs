@@ -2,10 +2,9 @@
 
 use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor};
-use candle_nn::{LayerNorm, Linear};
+use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig, RowParallelLayer,
-    ShardedVarBuilder, UnquantLinear,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -382,10 +381,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: LayerNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
@@ -411,11 +411,12 @@ impl Model {
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let vb_l = vb_m.pp("layers");
@@ -478,17 +479,13 @@ impl Model {
             cfg.norm_epsilon,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = mapper.cast_nm_device(
-            embed_tokens.embeddings(),
-            normal_loading_metadata.loading_isq,
-        )?;
+        let lm_head = embed_tokens.clone();
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(lm_head, None),
-            ))?),
+            lm_head,
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
@@ -518,7 +515,7 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
 
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);

@@ -89,8 +89,12 @@ impl Gemma4MtpRuntime {
                 config_path.display()
             ))
         })?;
-        let assistant_cfg: Gemma4AssistantConfig =
+        let mut assistant_cfg: Gemma4AssistantConfig =
             serde_json::from_str(&raw_config).map_err(candle_core::Error::msg)?;
+        assistant_cfg.text_config.max_position_embeddings = assistant_cfg
+            .text_config
+            .max_position_embeddings
+            .min(target_cfg.max_position_embeddings);
 
         if assistant_cfg.model_type != "gemma4_assistant" {
             candle_core::bail!(

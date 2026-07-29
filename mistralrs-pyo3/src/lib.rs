@@ -745,6 +745,7 @@ fn parse_which(
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
+                max_model_len: None,
                 calibration_file,
                 imatrix,
                 hf_cache_path,
