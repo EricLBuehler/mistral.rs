@@ -92,6 +92,11 @@ Usage:
 
 ### `Which.GGUF`
 
+Select a GGUF model.
+
+Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
+With `mmproj_filename`, adapters apply to the language model.
+
 | Field | Type | Default |
 | --- | --- | --- |
 | `quantized_model_id` | `str` | required |
@@ -104,6 +109,10 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
+| `adapters` | `list[LoraAdapter] \| None` | `None` |
+| `max_adapters` | `int` | `16` |
+| `max_rank` | `int` | `256` |
+| `max_bytes` | `int` | `8589934592` |
 
 ### `Which.XLoraGGUF`
 
@@ -120,6 +129,10 @@ Usage:
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGUF`
+
+Select legacy static LoRA for a compatible Llama, Mistral3, or Phi3 GGUF configuration.
+
+For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 
 | Field | Type | Default |
 | --- | --- | --- |

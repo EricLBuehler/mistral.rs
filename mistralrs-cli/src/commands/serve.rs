@@ -20,6 +20,8 @@ use mistralrs_server_core::{
     types::SharedMistralRsState,
 };
 
+#[cfg(test)]
+use crate::args::MultimodalAdapterOptions;
 use crate::args::{
     AdapterOptions, AgentCliOptions, CodeExecPermissionArg, DeviceOptions, FormatOptions,
     GlobalOptions, MatformerSelection, ModelFormat, ModelSourceOptions, ModelType,
@@ -404,16 +406,9 @@ pub(crate) fn convert_to_model_selected(
         } => {
             validate_mmproj_format(format)?;
             adapter.validate().map_err(anyhow::Error::msg)?;
-            if adapter.dynamic_lora_enabled() {
-                anyhow::bail!(
-                    "Dynamic LoRA for Qwen3.5/3.6 MoE is available through the auto model type; vision-tower adapters and other multimodal architectures are not supported"
-                );
-            }
-            if adapter.legacy_lora.is_some() || adapter.xlora.is_some() {
-                anyhow::bail!(
-                    "Legacy LoRA and X-LoRA adapters are currently supported only for text models"
-                );
-            }
+            let adapter = adapter.as_adapter_options();
+            let mut model = model.clone();
+            model.arch = None;
             match format.format.unwrap_or(ModelFormat::Plain) {
                 ModelFormat::Gguf => {
                     if format.mmproj.is_none() {
@@ -423,9 +418,9 @@ pub(crate) fn convert_to_model_selected(
                         );
                     }
                     convert_text_model(
-                        model,
+                        &model,
                         format,
-                        adapter,
+                        &adapter,
                         quantization,
                         device,
                         matformer,
@@ -438,6 +433,15 @@ pub(crate) fn convert_to_model_selected(
                          `--mmproj`, or use plain safetensors"
                     )
                 }
+                ModelFormat::Plain if adapter.dynamic_lora_enabled() => convert_text_model(
+                    &model,
+                    format,
+                    &adapter,
+                    quantization,
+                    device,
+                    matformer,
+                    Some(multimodal),
+                ),
                 ModelFormat::Plain => Ok(ModelSelected::MultimodalPlain {
                     model_id: model.model_id.clone(),
                     tokenizer_json: model
@@ -536,8 +540,8 @@ fn convert_text_model(
     let has_lora = adapter.dynamic_lora_enabled();
     let has_legacy_lora = adapter.legacy_lora.is_some();
     let has_xlora = adapter.xlora.is_some();
-    if format_opts.mmproj.is_some() && (has_lora || has_legacy_lora || has_xlora) {
-        anyhow::bail!("Multimodal GGUF does not currently support LoRA or X-LoRA adapters");
+    if format_opts.mmproj.is_some() && (has_legacy_lora || has_xlora) {
+        anyhow::bail!("Multimodal GGUF does not support legacy LoRA or X-LoRA adapters");
     }
 
     match (format_type, has_lora, has_legacy_lora, has_xlora) {
@@ -622,7 +626,7 @@ fn convert_text_model(
         }),
 
         // GGUF format - quantized_filename is required String
-        (ModelFormat::Gguf, false, false, false) => Ok(ModelSelected::GGUF {
+        (ModelFormat::Gguf, dynamic_lora, false, false) => Ok(ModelSelected::GGUF {
             tok_model_id: format_opts.tok_model_id.clone(),
             quantized_model_id: model.model_id.clone(),
             quantized_filename: format_opts
@@ -634,6 +638,8 @@ fn convert_text_model(
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_string()),
             mmproj_filename: format_opts.mmproj.clone(),
+            lora_adapters: adapter.lora.clone(),
+            lora_runtime_config: dynamic_lora.then(|| adapter.lora_runtime_config()),
             dtype: model.dtype,
             topology: device
                 .topology
@@ -784,9 +790,10 @@ fn convert_text_model(
         (ModelFormat::Plain, false, true, false) => {
             anyhow::bail!("--legacy-lora is only supported with raw GGUF or GGML models")
         }
-        (ModelFormat::Gguf | ModelFormat::Ggml, true, false, false) => {
+        (ModelFormat::Ggml, true, false, false) => {
             anyhow::bail!(
-                "dynamic --lora adapters are not supported with raw GGUF or GGML models; use --legacy-lora"
+                "dynamic --lora adapters are not supported with raw GGML models; use \
+                 --legacy-lora with --legacy-lora-order"
             )
         }
         _ => anyhow::bail!("dynamic LoRA, legacy LoRA, and X-LoRA are mutually exclusive"),
@@ -917,6 +924,7 @@ pub(crate) async fn apply_quant_resolution(
         (format.format, format.quantized_file.clone())
     });
     let is_explicit_gguf = matches!(explicit_format, Some(ModelFormat::Gguf));
+    let is_explicit_multimodal = matches!(model_type, ModelType::Multimodal { .. });
     if raw.is_some() && exact_file.is_some() {
         anyhow::bail!("`--quant` and `--quantized-file` are mutually exclusive");
     }
@@ -965,7 +973,10 @@ pub(crate) async fn apply_quant_resolution(
         let dtype = model_dtype(model_type);
         let format = model_format_mut(model_type)
             .context("GGUF artifacts are not supported for this model type")?;
-        if format.mmproj.is_none() && is_confident_gguf_repo && !format.direct_file_only {
+        if format.mmproj.is_none()
+            && (is_confident_gguf_repo || is_explicit_multimodal)
+            && !format.direct_file_only
+        {
             if let Some(projector) = crate::commands::quant::resolve_gguf_projector(files, dtype)? {
                 info!(
                     "GGUF: selected {} projector `{}`",
@@ -1428,7 +1439,9 @@ fn log_agent_runtime_details(runtime: &RuntimeOptions) {
 #[cfg(test)]
 mod tests {
     use axum::serve::Listener;
-    use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, ModelDType};
+    use mistralrs_core::{
+        AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, ModelDType, NormalLoaderType,
+    };
     use mistralrs_sandbox::NetworkMode;
     use std::{fs, path::PathBuf};
 
@@ -1494,6 +1507,49 @@ mod tests {
         assert_eq!(format.mmproj.as_deref(), Some("mmproj-F16.gguf"));
         assert!(quantization.quant.is_none());
         assert!(quantization.in_situ_quant.is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dynamic_lora_keeps_automatic_projector_selection() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("mmproj-BF16.gguf"), []).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions::default(),
+            adapter: AdapterOptions {
+                enable_lora: true,
+                ..AdapterOptions::default()
+            },
+            quantization: QuantizationOptions {
+                quant: Some("4".to_string()),
+                ..QuantizationOptions::default()
+            },
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert_eq!(format.quantized_file.as_deref(), Some("model-Q4_K_M.gguf"));
+        assert_eq!(format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1621,6 +1677,98 @@ mod tests {
         };
         assert_eq!(format.format, Some(ModelFormat::Gguf));
         assert!(format.mmproj.is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_multimodal_discovers_a_projector_in_a_source_repository() {
+        let root = std::env::temp_dir().join(format!("mistralrs-source-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for file in ["model.gguf", "mmproj-BF16.gguf", "model.safetensors"] {
+            fs::write(root.join(file), []).unwrap();
+        }
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Multimodal {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: MultimodalAdapterOptions {
+                enable_lora: true,
+                ..MultimodalAdapterOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Multimodal {
+            format, adapter, ..
+        } = model_type
+        else {
+            unreachable!()
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert_eq!(format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
+        assert!(adapter.dynamic_lora_enabled());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_multimodal_projector_override_wins_in_a_source_repository() {
+        let root = std::env::temp_dir().join(format!("mistralrs-source-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for file in [
+            "model.gguf",
+            "mmproj-BF16.gguf",
+            "chosen-mmproj-F16.gguf",
+            "model.safetensors",
+        ] {
+            fs::write(root.join(file), []).unwrap();
+        }
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Multimodal {
+            model,
+            format: FormatOptions {
+                quantized_file: Some("model.gguf".to_string()),
+                mmproj: Some("chosen-mmproj-F16.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: MultimodalAdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Multimodal { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(format.mmproj.as_deref(), Some("chosen-mmproj-F16.gguf"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1764,7 +1912,7 @@ mod tests {
         ModelType::Multimodal {
             model: test_model(),
             format,
-            adapter: AdapterOptions::default(),
+            adapter: MultimodalAdapterOptions::default(),
             quantization: QuantizationOptions::default(),
             device: DeviceOptions::default(),
             cache: crate::args::CacheOptions::default(),
@@ -1915,14 +2063,172 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_lora_is_rejected_for_raw_formats() {
+    fn explicit_multimodal_lora_preserves_multimodal_device_mapping() {
+        let mut model = test_model();
+        model.arch = Some(NormalLoaderType::Qwen3);
+        let model_type = ModelType::Multimodal {
+            model,
+            format: FormatOptions::default(),
+            adapter: MultimodalAdapterOptions {
+                enable_lora: true,
+                ..MultimodalAdapterOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions {
+                max_seq_len: 8192,
+                max_batch_size: 3,
+                ..DeviceOptions::default()
+            },
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions {
+                max_edge: Some(1280),
+                max_num_images: Some(4),
+                max_image_length: Some(1024),
+            },
+        };
+        let selected =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap();
+
+        let ModelSelected::Lora { arch, .. } = &selected else {
+            panic!("expected dynamic LoRA model")
+        };
+        assert!(arch.is_none());
+        match mistralrs_core::get_auto_device_map_params(&selected).unwrap() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 8192);
+                assert_eq!(max_batch_size, 3);
+                assert_eq!(max_image_shape, (1024, 1024));
+                assert_eq!(max_num_images, 4);
+            }
+            _ => panic!("expected multimodal device-map parameters"),
+        }
+    }
+
+    #[test]
+    fn dynamic_lora_routes_native_text_gguf() {
+        let preload = LoraAdapterSpec::new("code", "org/code-lora");
         let adapter = AdapterOptions {
-            lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+            lora: vec![preload.clone()],
             ..AdapterOptions::default()
         };
         let format = FormatOptions {
             format: Some(ModelFormat::Gguf),
             quantized_file: Some("model.gguf".to_string()),
+            ..FormatOptions::default()
+        };
+        let selected = convert_text_model(
+            &test_model(),
+            &format,
+            &adapter,
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        match selected {
+            ModelSelected::GGUF {
+                lora_adapters,
+                lora_runtime_config,
+                mmproj_filename,
+                ..
+            } => {
+                assert_eq!(lora_adapters, vec![preload]);
+                assert_eq!(lora_runtime_config, Some(adapter.lora_runtime_config()));
+                assert!(mmproj_filename.is_none());
+            }
+            _ => panic!("expected GGUF model"),
+        }
+    }
+
+    #[test]
+    fn dynamic_lora_routes_native_multimodal_gguf() {
+        let preload = LoraAdapterSpec::new("vision-chat", "org/language-lora");
+        let adapter = AdapterOptions {
+            lora: vec![preload.clone()],
+            ..AdapterOptions::default()
+        };
+        let format = FormatOptions {
+            format: Some(ModelFormat::Gguf),
+            quantized_file: Some("model.gguf".to_string()),
+            mmproj: Some("mmproj-BF16.gguf".to_string()),
+            ..FormatOptions::default()
+        };
+        let selected = convert_text_model(
+            &test_model(),
+            &format,
+            &adapter,
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            Some(&MultimodalOptions::default()),
+        )
+        .unwrap();
+
+        match selected {
+            ModelSelected::GGUF {
+                lora_adapters,
+                lora_runtime_config,
+                mmproj_filename,
+                ..
+            } => {
+                assert_eq!(lora_adapters, vec![preload]);
+                assert_eq!(lora_runtime_config, Some(adapter.lora_runtime_config()));
+                assert_eq!(mmproj_filename.as_deref(), Some("mmproj-BF16.gguf"));
+            }
+            _ => panic!("expected GGUF model"),
+        }
+    }
+
+    #[test]
+    fn enable_lora_routes_empty_native_text_gguf_runtime() {
+        let adapter = AdapterOptions {
+            enable_lora: true,
+            ..AdapterOptions::default()
+        };
+        let selected = convert_text_model(
+            &test_model(),
+            &FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            &adapter,
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        match selected {
+            ModelSelected::GGUF {
+                lora_adapters,
+                lora_runtime_config,
+                ..
+            } => {
+                assert!(lora_adapters.is_empty());
+                assert_eq!(lora_runtime_config, Some(adapter.lora_runtime_config()));
+            }
+            _ => panic!("expected GGUF model"),
+        }
+    }
+
+    #[test]
+    fn dynamic_lora_is_rejected_for_ggml() {
+        let adapter = AdapterOptions {
+            lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+            ..AdapterOptions::default()
+        };
+        let format = FormatOptions {
+            format: Some(ModelFormat::Ggml),
+            quantized_file: Some("model.ggml".to_string()),
             ..FormatOptions::default()
         };
         let error = convert_text_model(
@@ -1935,7 +2241,55 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("--legacy-lora"));
+        assert!(error.to_string().contains("raw GGML"));
+    }
+
+    #[test]
+    fn legacy_lora_keeps_legacy_gguf_selection() {
+        let selected = convert_text_model(
+            &test_model(),
+            &FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            &AdapterOptions {
+                legacy_lora: Some("org/legacy-lora".to_string()),
+                legacy_lora_order: Some(PathBuf::from("order.json")),
+                ..AdapterOptions::default()
+            },
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(selected, ModelSelected::LoraGGUF { .. }));
+    }
+
+    #[test]
+    fn xlora_keeps_legacy_gguf_selection() {
+        let selected = convert_text_model(
+            &test_model(),
+            &FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            &AdapterOptions {
+                xlora: Some("org/xlora".to_string()),
+                xlora_order: Some(PathBuf::from("order.json")),
+                ..AdapterOptions::default()
+            },
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(selected, ModelSelected::XLoraGGUF { .. }));
     }
 
     #[test]
@@ -2005,8 +2359,9 @@ mod tests {
     }
 
     #[test]
-    fn multimodal_gguf_rejects_adapters() {
-        let error = convert_text_model(
+    fn multimodal_gguf_preserves_dynamic_lora() {
+        let adapter = LoraAdapterSpec::new("code", "org/code-lora");
+        let selected = convert_text_model(
             &test_model(),
             &FormatOptions {
                 format: Some(ModelFormat::Gguf),
@@ -2015,7 +2370,7 @@ mod tests {
                 ..FormatOptions::default()
             },
             &AdapterOptions {
-                lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+                lora: vec![adapter.clone()],
                 ..AdapterOptions::default()
             },
             &QuantizationOptions::default(),
@@ -2023,9 +2378,21 @@ mod tests {
             &MatformerSelection::default(),
             Some(&MultimodalOptions::default()),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.to_string().contains("Multimodal GGUF"));
+        match selected {
+            ModelSelected::GGUF {
+                mmproj_filename,
+                lora_adapters,
+                lora_runtime_config,
+                ..
+            } => {
+                assert_eq!(mmproj_filename.as_deref(), Some("mmproj.gguf"));
+                assert_eq!(lora_adapters, vec![adapter]);
+                assert!(lora_runtime_config.is_some());
+            }
+            _ => panic!("expected GGUF model"),
+        }
     }
 
     #[test]

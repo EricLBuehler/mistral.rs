@@ -543,6 +543,12 @@ class Which(Enum):
 
     @dataclass
     class GGUF:
+        """Select a GGUF model.
+
+        Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
+        With `mmproj_filename`, adapters apply to the language model.
+        """
+
         quantized_model_id: str
         quantized_filename: str | list[str]
         tok_model_id: str | None = None
@@ -553,6 +559,10 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
         multimodal_auto_map_params: MultimodalAutoMapParams | None = None
+        adapters: list[LoraAdapter] | None = None
+        max_adapters: int = 16
+        max_rank: int = 256
+        max_bytes: int = 8589934592
 
     @dataclass
     class XLoraGGUF:
@@ -568,6 +578,11 @@ class Which(Enum):
 
     @dataclass
     class LoraGGUF:
+        """Select legacy static LoRA for a compatible Llama, Mistral3, or Phi3 GGUF configuration.
+
+        For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
+        """
+
         quantized_model_id: str
         quantized_filename: str | list[str]
         adapters_model_id: str

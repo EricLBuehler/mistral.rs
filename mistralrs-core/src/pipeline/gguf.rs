@@ -47,7 +47,8 @@ use crate::xlora_models::NonGranularState;
 use crate::xlora_models::{XLoraQLlama, XLoraQPhi3};
 use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
-    MultimodalLoaderType, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    LoraAdapterSpec, LoraRuntimeConfig, MultimodalLoaderType, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType,
 };
 use anyhow::{bail, Context, Result};
 use candle_core::{Device, Tensor};
@@ -118,6 +119,7 @@ pub struct GGUFLoader {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
+    dynamic_lora: Option<DynamicLoraConfig>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
@@ -141,6 +143,12 @@ struct NativeMultimodalLoadArgs<'a> {
     paged_attn_config: Option<PagedAttentionConfig>,
 }
 
+#[derive(Clone)]
+struct DynamicLoraConfig {
+    adapters: Vec<LoraAdapterSpec>,
+    runtime: LoraRuntimeConfig,
+}
+
 #[derive(Default)]
 /// A builder for a GGUF loader.
 pub struct GGUFLoaderBuilder {
@@ -154,6 +162,7 @@ pub struct GGUFLoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     tokenizer_json: Option<String>,
+    dynamic_lora: Option<DynamicLoraConfig>,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
@@ -206,6 +215,7 @@ impl GGUFLoaderBuilder {
         no_kv_cache: bool,
         tgt_non_granular_index: Option<usize>,
     ) -> Self {
+        self.dynamic_lora = None;
         self.xlora_model_id = Some(xlora_model_id);
         self.xlora_order = Some(xlora_order);
         self.no_kv_cache = no_kv_cache;
@@ -219,6 +229,19 @@ impl GGUFLoaderBuilder {
             );
             Some(self.xlora_order.as_ref().unwrap().base_model_id.clone())
         };
+        self
+    }
+
+    pub fn with_dynamic_lora(
+        mut self,
+        adapters: Vec<LoraAdapterSpec>,
+        runtime: LoraRuntimeConfig,
+    ) -> Self {
+        self.kind = (AdapterKind::Lora, QuantizationKind::Gguf).into();
+        self.dynamic_lora = Some(DynamicLoraConfig { adapters, runtime });
+        self.xlora_model_id = None;
+        self.xlora_order = None;
+        self.tgt_non_granular_index = None;
         self
     }
 
@@ -254,6 +277,7 @@ impl GGUFLoaderBuilder {
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
             tokenizer_json: self.tokenizer_json,
+            dynamic_lora: self.dynamic_lora,
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filenames: self.quantized_filenames,
             mmproj_filenames: self.mmproj_filenames,
@@ -300,11 +324,18 @@ impl GGUFLoader {
             no_kv_cache,
             chat_template,
             tokenizer_json: None,
+            dynamic_lora: None,
             kind,
             tgt_non_granular_index,
             config,
             jinja_explicit,
         }
+    }
+
+    fn dynamic_lora_adapters(&self) -> Option<&[LoraAdapterSpec]> {
+        self.dynamic_lora
+            .as_ref()
+            .map(|config| config.adapters.as_slice())
     }
 
     fn load_native_normal(
@@ -425,7 +456,7 @@ impl GGUFLoader {
             rope_pairing: crate::gguf::normal_registry::schema_for(descriptor.architecture)
                 .rope_pairing,
         };
-        let loader = NormalLoaderBuilder::new(
+        let mut loader = NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 topology: self.config.topology.clone(),
                 ..Default::default()
@@ -435,8 +466,11 @@ impl GGUFLoader {
             Some(self.quantized_model_id.clone()),
             self.no_kv_cache,
             self.jinja_explicit.clone(),
-        )
-        .build_with_source(loader_type, source, self.kind.clone())?;
+        );
+        if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
+            loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
+        }
+        let loader = loader.build_with_source(loader_type, source, self.kind.clone())?;
         loader.load_model_from_path(
             paths,
             dtype,
@@ -461,7 +495,7 @@ impl GGUFLoader {
             mapper,
             paged_attn_config,
         } = args;
-        if !matches!(self.kind, ModelKind::GgufQuantized { .. }) {
+        if !matches!(self.kind, ModelKind::GgufQuantized { .. }) && self.dynamic_lora.is_none() {
             bail!("multimodal GGUF does not support legacy GGUF adapters");
         }
         let mut archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
@@ -561,7 +595,7 @@ impl GGUFLoader {
             source_weight_files,
             rope_pairing,
         };
-        let loader = MultimodalLoaderBuilder::new(
+        let mut loader = MultimodalLoaderBuilder::new(
             MultimodalSpecificConfig {
                 topology: self.config.topology.clone(),
                 max_edge: self.config.max_edge,
@@ -571,8 +605,11 @@ impl GGUFLoader {
             None,
             Some(self.quantized_model_id.clone()),
             self.jinja_explicit.clone(),
-        )
-        .build_with_source(loader_type, source, self.kind.clone());
+        );
+        if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
+            loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
+        }
+        let loader = loader.build_with_source(loader_type, source, self.kind.clone());
         loader.load_model_from_path(
             paths,
             dtype,
@@ -734,6 +771,10 @@ impl Loader for GGUFLoader {
         }) {
             bail!("multimodal GGUF requires at least one nonempty projector filename");
         }
+        if self.mmproj_filenames.is_some() && self.kind.is_adapted() && self.dynamic_lora.is_none()
+        {
+            bail!("multimodal GGUF does not support legacy LoRA or X-LoRA adapters");
+        }
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
             &token_source,
@@ -741,7 +782,8 @@ impl Loader for GGUFLoader {
             self,
             self.quantized_model_id.clone(),
             self.quantized_filenames.clone(),
-            silent
+            silent,
+            true
         );
         let paths = paths?;
         if let Some(mmproj_filenames) = self.mmproj_filenames.as_ref() {
@@ -755,7 +797,8 @@ impl Loader for GGUFLoader {
                 self,
                 self.quantized_model_id.clone(),
                 mmproj_filenames.clone(),
-                silent
+                silent,
+                false
             );
             let mmproj_paths = mmproj_paths?;
             let inferred_paths = self.infer_multimodal_asset_paths(
@@ -807,7 +850,7 @@ impl Loader for GGUFLoader {
                 "You are trying to in-situ quantize a GGUF model. This will not do anything."
             );
         }
-        if matches!(self.kind, ModelKind::GgufQuantized { .. }) {
+        if matches!(self.kind, ModelKind::GgufQuantized { .. }) || self.dynamic_lora.is_some() {
             return self.load_native_normal(
                 paths,
                 dtype,

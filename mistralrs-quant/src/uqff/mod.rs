@@ -564,6 +564,22 @@ mod tests {
     }
 
     #[test]
+    fn lora_registry_can_be_removed_from_one_builder_subtree() {
+        let backend: HashMap<String, Tensor> = HashMap::new();
+        let registry = Arc::new(crate::LoraLayerRegistry::new());
+        let vb = ShardedSafeTensors::wrap(backend, DType::F32, Device::Cpu)
+            .with_lora_registry(registry.clone());
+        let language = vb.pp("language_model");
+        let vision = vb.pp("vision_model").without_lora_registry();
+
+        assert!(language
+            .lora_registry()
+            .is_some_and(|candidate| Arc::ptr_eq(candidate, &registry)));
+        assert!(vision.lora_registry().is_none());
+        assert!(vb.lora_registry().is_some());
+    }
+
+    #[test]
     fn shard_range_resolves() -> Result<()> {
         let dims = [8, 64];
         assert!(shard_range(Shard::default(), &dims)?.is_none());

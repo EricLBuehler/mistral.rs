@@ -288,14 +288,34 @@ impl MultimodalLoader {
             self.lora_runtime_config,
         )?;
         if self.lora_adapters.is_some()
-            && self.loader_type.as_ref() != Some(&MultimodalLoaderType::Qwen3_5Moe)
+            && !self
+                .loader_type
+                .as_ref()
+                .is_some_and(supports_dynamic_lora_loader)
         {
-            anyhow::bail!(
-                "dynamic LoRA for multimodal pipelines is supported only for the Qwen3.5/3.6 MoE text submodel; vision-tower adapters and other multimodal architectures are not supported"
-            );
+            anyhow::bail!("dynamic LoRA is not supported for this multimodal architecture");
         }
         Ok(())
     }
+}
+
+pub(super) fn supports_dynamic_lora_loader(loader: &MultimodalLoaderType) -> bool {
+    matches!(
+        loader,
+        MultimodalLoaderType::Qwen2VL
+            | MultimodalLoaderType::Qwen2_5VL
+            | MultimodalLoaderType::Qwen3VL
+            | MultimodalLoaderType::Qwen3VLMoE
+            | MultimodalLoaderType::Qwen3_5
+            | MultimodalLoaderType::Qwen3_5Moe
+            | MultimodalLoaderType::Gemma3
+            | MultimodalLoaderType::Gemma3n
+            | MultimodalLoaderType::Idefics3
+            | MultimodalLoaderType::Mistral3
+            | MultimodalLoaderType::Llama4
+            | MultimodalLoaderType::Lfm2Vl
+            | MultimodalLoaderType::Gemma4
+    )
 }
 
 impl Loader for MultimodalLoader {
@@ -776,27 +796,60 @@ impl Loader for MultimodalLoader {
                 }
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
-                } => lora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    runtime_config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                    self.lora_runtime_config
-                        .expect("LoRA loaders have a runtime config"),
-                    false,
-                ),
+                }
+                | ModelKind::GgufAdapter {
+                    adapter: AdapterKind::Lora,
+                    ..
+                } => {
+                    if let Some(source) = self.prepared_source.as_ref() {
+                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
+                        let tracker = sharded_vb.tracker().clone();
+                        let model = self.inner.load(
+                            &runtime_config,
+                            sharded_vb,
+                            crate::pipeline::NormalLoadingMetadata {
+                                mapper,
+                                loading_isq,
+                                real_device: device.clone(),
+                                multi_progress: multi_progress.clone(),
+                                matformer_slicing_config: matformer_slicing_config.clone(),
+                                rope_pairing: Some(source.rope_pairing),
+                            },
+                            attention_mechanism,
+                        )?;
+                        let dynamic_lora = super::finish_dynamic_lora_runtime(
+                            paths,
+                            layers,
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            false,
+                        )?;
+                        (model, tracker, Some(dynamic_lora))
+                    } else {
+                        lora_model_loader!(
+                            paths,
+                            Some(dtype),
+                            &load_device,
+                            layer_devices.clone(),
+                            runtime_config,
+                            self.inner,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            self.config.from_uqff.is_some(),
+                            device.clone(),
+                            attention_mechanism,
+                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                            multi_progress.clone(),
+                            matformer_slicing_config.clone(),
+                            uqff_reader.clone(),
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            false,
+                        )
+                    }
+                }
                 _ => unreachable!(),
             }
         } else {
@@ -847,27 +900,65 @@ impl Loader for MultimodalLoader {
                 }
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
-                } => lora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    runtime_config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    multi_progress,
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                    self.lora_runtime_config
-                        .expect("LoRA loaders have a runtime config"),
-                    true,
-                ),
+                }
+                | ModelKind::GgufAdapter {
+                    adapter: AdapterKind::Lora,
+                    ..
+                } => {
+                    if let Some(source) = self.prepared_source.as_ref() {
+                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let vb = source
+                            .weights
+                            .clone()
+                            .set_dtype(dtype)
+                            .set_device(load_device.clone())
+                            .with_lora_registry(layers.clone());
+                        let tracker = vb.tracker().clone();
+                        let model = self.inner.load(
+                            &runtime_config,
+                            vb,
+                            crate::pipeline::NormalLoadingMetadata {
+                                mapper,
+                                loading_isq,
+                                real_device: device.clone(),
+                                multi_progress: multi_progress.clone(),
+                                matformer_slicing_config: matformer_slicing_config.clone(),
+                                rope_pairing: Some(source.rope_pairing),
+                            },
+                            attention_mechanism,
+                        )?;
+                        let dynamic_lora = super::finish_dynamic_lora_runtime(
+                            paths,
+                            layers,
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            true,
+                        )?;
+                        (model, tracker, Some(dynamic_lora))
+                    } else {
+                        lora_model_loader!(
+                            paths,
+                            Some(dtype),
+                            &load_device,
+                            layer_devices.clone(),
+                            runtime_config,
+                            self.inner,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            self.config.from_uqff.is_some(),
+                            device.clone(),
+                            attention_mechanism,
+                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                            multi_progress,
+                            matformer_slicing_config.clone(),
+                            uqff_reader.clone(),
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            true,
+                        )
+                    }
+                }
                 _ => unreachable!(),
             }
         };

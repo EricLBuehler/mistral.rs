@@ -398,6 +398,10 @@ pub enum Which {
         dtype = ModelDType::Auto,
         auto_map_params = None,
         multimodal_auto_map_params = None,
+        adapters = None,
+        max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
+        max_rank = DEFAULT_LORA_MAX_RANK,
+        max_bytes = DEFAULT_LORA_MAX_BYTES,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
@@ -411,6 +415,10 @@ pub enum Which {
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
         multimodal_auto_map_params: Option<MultimodalAutoMapParams>,
+        adapters: Option<Vec<LoraAdapter>>,
+        max_adapters: usize,
+        max_rank: usize,
+        max_bytes: u64,
     },
 
     #[pyo3(constructor = (

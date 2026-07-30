@@ -156,6 +156,29 @@ tokenizer, and processor assets. It is also the fallback for a GGUF whose origin
 identified automatically. The corresponding explicit SDK options are
 `tok_model_id="<hf-id>"` in Python and `.with_tok_model_id("<hf-id>")` in Rust.
 
+### GGUF with dynamic LoRA
+
+Dynamic LoRA works with supported GGUF models. Select the GGUF as usual, then preload one
+or more compatible adapters:
+
+```bash
+mistralrs serve \
+  -m Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --quant 4 \
+  --lora philosophy=closestfriend/brie-qwen2.5-0.5b
+```
+
+The base model and adapter aliases can serve requests concurrently. `--enable-lora` starts an empty
+runtime for later hot-loading, while `run` and `bench` accept `--adapter <alias>` to select a
+preloaded adapter.
+
+Multimodal GGUF keeps its automatically selected projector while applying compatible adapters to the
+language model. Use `--mmproj` to override the projector. Vision, audio, and projector adapters are
+not supported. Legacy LoRA and X-LoRA remain unavailable with multimodal GGUF. GGML uses the static
+legacy adapter flags, which also remain available for Llama, Mistral3, and Phi3 GGUF configurations.
+See [LoRA and X-LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for request routing,
+runtime lifecycle endpoints, Python and Rust configuration, and the legacy mode.
+
 ### Multimodal GGUF
 
 On the CLI, supported multimodal GGUF models use the same commands. With `-m`, the CLI selects the

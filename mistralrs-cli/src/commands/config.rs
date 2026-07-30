@@ -428,4 +428,45 @@ mmproj = "mmproj-BF16.gguf"
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[tokio::test]
+    async fn from_config_accepts_dynamic_lora_for_text_gguf() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+
+[models.adapter]
+lora = [
+  {{ alias = "code", source = "org/code-lora" }},
+]
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+        assert!(config.models[0].adapter.dynamic_lora_enabled());
+
+        let (models, cpu) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert!(!cpu);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

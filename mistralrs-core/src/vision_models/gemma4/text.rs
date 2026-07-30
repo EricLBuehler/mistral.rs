@@ -197,6 +197,7 @@ struct Gemma4Router {
     norm: RmsNorm,
     scale: Tensor,
     proj: candle_nn::Linear,
+    proj_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     top_k: usize,
 }
 
@@ -209,8 +210,13 @@ impl Gemma4Router {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
-        let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
+        let proj_vb = vb.pp("proj");
+        let proj_w = proj_vb.get((num_experts, hidden_size), "weight")?;
         let proj = candle_nn::Linear::new(proj_w.to_dtype(vb.dtype())?, None);
+        let proj_lora = mistralrs_quant::register_dynamic_lora_site(
+            &proj_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(hidden_size, num_experts),
+        )?;
         // Pre-combine: weight = scale * hidden_size^(-0.5)
         let root_size = (hidden_size as f64).powf(-0.5);
         let combined_weight = (&scale * root_size)?;
@@ -219,6 +225,7 @@ impl Gemma4Router {
             norm,
             scale,
             proj,
+            proj_lora,
             top_k,
         })
     }
@@ -226,9 +233,12 @@ impl Gemma4Router {
     fn forward(&self, xs: &Tensor, per_expert_scale: &Tensor) -> Result<(Tensor, Tensor)> {
         let normed = xs.apply(&self.norm)?;
 
-        let logits = normed
-            .to_dtype(self.proj.weight().dtype())?
-            .apply(&self.proj)?;
+        let router_input = normed.to_dtype(self.proj.weight().dtype())?;
+        let logits = router_input.apply(&self.proj)?;
+        let logits = match &self.proj_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &router_input, logits)?,
+            None => logits,
+        };
 
         let topk = crate::ops::moe_router_topk(
             &logits,
@@ -1949,6 +1959,7 @@ impl TextModel {
         if requires_full_prefill_queries
             || has_bidirectional
             || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context)
+            || mistralrs_quant::has_active_lora_execution()
         {
             return Ok(None);
         }
@@ -2621,11 +2632,13 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{Device, Tensor};
+    use std::{collections::HashMap, sync::Arc};
 
     use super::{
-        is_paged_decode_forward, select_paged_mm_prefix_path, sliding_decode_kv_window, TextModel,
+        is_paged_decode_forward, select_paged_mm_prefix_path, sliding_decode_kv_window,
+        Gemma4Router, TextModel,
     };
+    use candle_core::{DType, Device, Tensor};
 
     #[test]
     fn paged_decode_phase_does_not_depend_on_query_width() {
@@ -2655,6 +2668,49 @@ mod tests {
         assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
         assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
         assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+    }
+
+    #[test]
+    fn gemma4_router_registers_its_projection_for_dynamic_lora() -> candle_core::Result<()> {
+        let prefix = "model.language_model.layers.0.router";
+        let registry = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap_with_dummy_regexes(
+            HashMap::from([
+                (
+                    format!("{prefix}.scale"),
+                    Tensor::ones(4, DType::F32, &Device::Cpu)?,
+                ),
+                (
+                    format!("{prefix}.proj.weight"),
+                    Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?,
+                ),
+            ]),
+            DType::F32,
+            Device::Cpu,
+            None,
+        )
+        .with_lora_registry(registry.clone());
+
+        let _router = Gemma4Router::new(
+            4,
+            3,
+            2,
+            1e-6,
+            vb.pp("model")
+                .pp("language_model")
+                .pp("layers")
+                .pp(0)
+                .pp("router"),
+        )?;
+        let sites = registry.sites();
+        assert_eq!(sites.len(), 1);
+        assert_eq!(
+            sites[0].key().path(),
+            "model.language_model.layers.0.router.proj"
+        );
+        assert_eq!(sites[0].spec().in_features(), 4);
+        assert_eq!(sites[0].spec().out_features(), 3);
+        Ok(())
     }
 
     #[test]

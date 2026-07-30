@@ -91,6 +91,42 @@ pub(crate) fn get_device_layers_for_loader(
         paged_attn_config,
     )
 }
+
+fn finish_dynamic_lora_runtime(
+    paths: &dyn ModelPaths,
+    layers: Arc<mistralrs_quant::LoraLayerRegistry>,
+    runtime_config: crate::LoraRuntimeConfig,
+    live_updates: bool,
+) -> Result<Arc<crate::DynamicLoraRuntime>> {
+    let AdapterPaths::Lora(adapter_paths) = paths.get_adapter_paths() else {
+        unreachable!("LoRA loaders require resolved LoRA adapter paths")
+    };
+
+    layers.finalize()?;
+    let runtime = Arc::new(crate::DynamicLoraRuntime::new(
+        layers,
+        runtime_config,
+        live_updates,
+    )?);
+    for adapter in adapter_paths {
+        let info = runtime.load_from_safetensors(
+            adapter.alias.clone(),
+            adapter.source.clone(),
+            adapter.revision.clone(),
+            &adapter.config_path,
+            &adapter.weights_path,
+        )?;
+        tracing::info!(
+            alias = %info.alias,
+            generation = %info.generation,
+            rank = info.rank,
+            bytes = info.bytes,
+            "LoRA adapter preloaded"
+        );
+    }
+    Ok(runtime)
+}
+
 use mistralrs_quant::IsqType;
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};

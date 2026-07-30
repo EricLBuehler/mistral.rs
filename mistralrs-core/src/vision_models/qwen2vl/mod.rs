@@ -82,7 +82,8 @@ impl Qwen2VLModel {
             vb.pp("vision_tower")
         } else {
             vb.pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen2VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),

@@ -384,6 +384,16 @@ pub enum ModelSelected {
         #[arg(long)]
         mmproj_filename: Option<String>,
 
+        /// Dynamic LoRA adapters to preload.
+        #[arg(skip)]
+        #[serde(default)]
+        lora_adapters: Vec<LoraAdapterSpec>,
+
+        /// Dynamic LoRA runtime limits. `None` disables dynamic LoRA.
+        #[arg(skip)]
+        #[serde(default)]
+        lora_runtime_config: Option<LoraRuntimeConfig>,
+
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
         dtype: ModelDType,

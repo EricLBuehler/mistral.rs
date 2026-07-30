@@ -843,6 +843,9 @@ pub async fn build_gguf_pipeline(
     if let Some(tokenizer_json) = builder.tokenizer_json.clone() {
         loader_builder = loader_builder.with_tokenizer_json(tokenizer_json);
     }
+    if let Some(adapters) = builder.lora_adapters.clone() {
+        loader_builder = loader_builder.with_dynamic_lora(adapters, builder.lora_runtime_config);
+    }
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
@@ -924,6 +927,11 @@ pub async fn build_gguf_pipeline(
                 .mmproj_files
                 .as_ref()
                 .map(|files| files.join(GGUF_MULTI_FILE_DELIMITER)),
+            lora_adapters: builder.lora_adapters.clone().unwrap_or_default(),
+            lora_runtime_config: builder
+                .lora_adapters
+                .as_ref()
+                .map(|_| builder.lora_runtime_config),
             dtype: ModelDType::Auto,
             topology: builder.topology_path.clone(),
             max_edge: builder.max_edge,

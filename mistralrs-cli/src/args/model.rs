@@ -262,15 +262,15 @@ fn split_quantized_filenames(value: &str) -> anyhow::Result<Vec<&str>> {
 /// Adapter options (LoRA/X-LoRA)
 #[derive(Args, Clone, Deserialize)]
 pub struct AdapterOptions {
-    /// Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE
-    /// requires automatic model selection; vision-tower adapters are unsupported.
+    /// Enable dynamic LoRA without preloading an adapter. Supports compatible text and multimodal
+    /// language models, including GGUF. Vision, audio, and projector adapters are unsupported.
     #[arg(long, conflicts_with = "xlora")]
     #[serde(default)]
     pub enable_lora: bool,
 
-    /// Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May
-    /// be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection;
-    /// vision-tower adapters are unsupported.
+    /// Preload a language-model LoRA adapter as ALIAS=SOURCE. Supports compatible text and
+    /// multimodal language models, including GGUF. Remote adapters use revision main. May be
+    /// repeated. Vision, audio, and projector adapters are unsupported.
     #[arg(
         long,
         visible_alias = "lora-modules",
@@ -313,7 +313,7 @@ pub struct AdapterOptions {
     #[serde(default = "default_lora_max_bytes")]
     pub lora_max_bytes: u64,
 
-    /// Legacy LoRA adapter source for a raw GGUF or GGML model
+    /// Static LoRA adapter source for GGML or a compatible Llama, Mistral3, or Phi3 GGUF model
     #[arg(
         long,
         value_name = "SOURCE",
@@ -414,6 +414,90 @@ impl Default for AdapterOptions {
             xlora: None,
             xlora_order: None,
             tgt_non_granular_index: None,
+        }
+    }
+}
+
+#[derive(Args, Clone)]
+pub struct MultimodalAdapterOptions {
+    /// Enable dynamic LoRA for the language model without preloading an adapter. Vision, audio, and
+    /// projector adapters are unsupported.
+    #[arg(long)]
+    pub enable_lora: bool,
+
+    /// Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main.
+    /// May be repeated. Vision, audio, and projector adapters are unsupported.
+    #[arg(
+        long,
+        visible_alias = "lora-modules",
+        value_name = "ALIAS=SOURCE|JSON",
+        value_parser = parse_lora_adapter,
+        num_args = 1..,
+        action = clap::ArgAction::Append
+    )]
+    pub lora: Vec<LoraAdapterSpec>,
+
+    /// Maximum loaded LoRA aliases and, independently, resident adapter generations
+    #[arg(long, default_value_t = DEFAULT_LORA_MAX_ADAPTERS)]
+    pub lora_max_adapters: usize,
+
+    /// Maximum rank accepted for a LoRA adapter
+    #[arg(
+        long,
+        visible_alias = "max-lora-rank",
+        default_value_t = DEFAULT_LORA_MAX_RANK
+    )]
+    pub lora_max_rank: usize,
+
+    /// Maximum memory used by loaded adapters
+    #[arg(
+        long,
+        value_parser = parse_lora_bytes,
+        value_name = "BYTES",
+        default_value_t = DEFAULT_LORA_MAX_BYTES
+    )]
+    pub lora_max_bytes: u64,
+}
+
+impl MultimodalAdapterOptions {
+    pub fn dynamic_lora_enabled(&self) -> bool {
+        self.enable_lora || !self.lora.is_empty()
+    }
+
+    pub fn as_adapter_options(&self) -> AdapterOptions {
+        AdapterOptions {
+            enable_lora: self.enable_lora,
+            lora: self.lora.clone(),
+            lora_max_adapters: self.lora_max_adapters,
+            lora_max_rank: self.lora_max_rank,
+            lora_max_bytes: self.lora_max_bytes,
+            ..AdapterOptions::default()
+        }
+    }
+
+    pub fn from_adapter_options(options: &AdapterOptions) -> Self {
+        Self {
+            enable_lora: options.enable_lora,
+            lora: options.lora.clone(),
+            lora_max_adapters: options.lora_max_adapters,
+            lora_max_rank: options.lora_max_rank,
+            lora_max_bytes: options.lora_max_bytes,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.as_adapter_options().validate()
+    }
+}
+
+impl Default for MultimodalAdapterOptions {
+    fn default() -> Self {
+        Self {
+            enable_lora: false,
+            lora: Vec::new(),
+            lora_max_adapters: DEFAULT_LORA_MAX_ADAPTERS,
+            lora_max_rank: DEFAULT_LORA_MAX_RANK,
+            lora_max_bytes: DEFAULT_LORA_MAX_BYTES,
         }
     }
 }

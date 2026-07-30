@@ -30,8 +30,17 @@ impl GgufLoraModelBuilder {
 
     /// Load the GGUF LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        if self.gguf_model.lora_adapters.is_some() {
+            anyhow::bail!(
+                "`GgufLoraModelBuilder` cannot combine legacy static LoRA with dynamic LoRA; use \
+                 `GgufModelBuilder` directly for dynamic adapters"
+            );
+        }
         if self.gguf_model.mmproj_files.is_some() {
-            anyhow::bail!("Multimodal GGUF does not currently support LoRA adapters");
+            anyhow::bail!(
+                "`GgufLoraModelBuilder` provides legacy static LoRA, which is not supported for \
+                 multimodal GGUF; use `GgufModelBuilder::with_lora_adapter`"
+            );
         }
         let gguf_model = self.gguf_model.clone();
         let config = GGUFSpecificConfig {
@@ -60,5 +69,28 @@ impl GgufLoraModelBuilder {
             build_pipeline_from_gguf_loader(gguf_model, loader).await?;
 
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn legacy_lora_rejects_a_dynamic_gguf_builder() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"]).with_lora();
+        let ordering = Ordering {
+            adapters: None,
+            layers: None,
+            base_model_id: "repo".to_string(),
+            preload_adapters: None,
+        };
+        let error = GgufLoraModelBuilder::from_gguf_model_builder(builder, "legacy", ordering)
+            .build()
+            .await
+            .err()
+            .expect("mixed adapter modes should fail");
+
+        assert!(error.to_string().contains("cannot combine"));
     }
 }

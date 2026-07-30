@@ -16,6 +16,12 @@ Start the server with a public adapter in one terminal:
 mistralrs serve --host 127.0.0.1 -m Qwen/Qwen2.5-0.5B-Instruct --lora philosophy=closestfriend/brie-qwen2.5-0.5b
 ~~~
 
+To run the same adapter against a supported GGUF of its base model:
+
+~~~bash
+mistralrs serve --host 127.0.0.1 -m Qwen/Qwen2.5-0.5B-Instruct-GGUF --quant 4 --lora philosophy=closestfriend/brie-qwen2.5-0.5b
+~~~
+
 Run the client in another terminal:
 
 ~~~bash
@@ -23,8 +29,8 @@ python examples/server/adapter_chat.py
 ~~~
 
 You can instead start the server with any compatible base model and aliases.
-For a supported text MoE model, the same example works with a routed expert
-adapter.
+For a supported MoE or multimodal model, the same example works with a compatible
+language-model adapter.
 The example discovers valid model IDs and keeps a separate conversation for each.
 """
 

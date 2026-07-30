@@ -4,7 +4,9 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    apply_dynamic_lora_delta, is_dynamic_lora_site_active, register_dynamic_lora_site, softcap,
+    ColumnParallelLayer, LoraLinearSpec, LoraSiteHandle, QuantMethod, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -587,21 +589,37 @@ impl Attention {
 struct TextAltUp {
     correct_output_scale: Tensor,
     correction_coefs: Linear,
+    correction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     prediction_coefs: Linear,
+    prediction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     modality_router: Linear,
+    modality_router_lora: Option<Arc<LoraSiteHandle>>,
     router_norm: RmsNorm,
     router_input_scale: f64,
     altup_active_idx: usize,
     altup_num_inputs: usize,
 }
 
+fn forward_raw_lora(
+    linear: &Linear,
+    site: Option<&LoraSiteHandle>,
+    input: &Tensor,
+) -> Result<Tensor> {
+    let output = linear.forward(input)?;
+    match site {
+        Some(site) => apply_dynamic_lora_delta(site, input, output),
+        None => Ok(output),
+    }
+}
+
 impl TextAltUp {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let correct_output_scale = vb.get(cfg.hidden_size, "correct_output_scale")?;
+        let correction_coefs_vb = vb.pp("correction_coefs");
         let mut correction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs,
-            vb.pp("correction_coefs"),
+            correction_coefs_vb.clone(),
         )?;
         if let Some(altup_coef_clip) = cfg.altup_coef_clip {
             correction_coefs = Linear::new(
@@ -611,15 +629,29 @@ impl TextAltUp {
                 None,
             );
         }
+        let correction_coefs_lora = register_dynamic_lora_site(
+            &correction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs),
+        )?;
+        let prediction_coefs_vb = vb.pp("prediction_coefs");
         let prediction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs.pow(2),
-            vb.pp("prediction_coefs"),
+            prediction_coefs_vb.clone(),
         )?;
+        let prediction_coefs_lora = register_dynamic_lora_site(
+            &prediction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs.pow(2)),
+        )?;
+        let modality_router_vb = vb.pp("modality_router");
         let modality_router = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.altup_num_inputs,
-            vb.pp("modality_router"),
+            modality_router_vb.clone(),
+        )?;
+        let modality_router_lora = register_dynamic_lora_site(
+            &modality_router_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.altup_num_inputs),
         )?;
         let router_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -631,8 +663,11 @@ impl TextAltUp {
         Ok(Self {
             correct_output_scale,
             correction_coefs,
+            correction_coefs_lora,
             prediction_coefs,
+            prediction_coefs_lora,
             modality_router,
+            modality_router_lora,
             router_norm,
             router_input_scale: 1. / (cfg.hidden_size as f64),
             altup_active_idx: cfg.altup_active_idx,
@@ -645,7 +680,11 @@ impl TextAltUp {
         let router_inputs_normed = self.router_norm.forward(xs)?;
         let router_inputs_f32 = router_inputs_normed.to_dtype(DType::F32)?;
         let router_inputs = (router_inputs_f32 * self.router_input_scale)?.to_dtype(xs.dtype())?;
-        let routed = self.modality_router.forward(&router_inputs)?;
+        let routed = forward_raw_lora(
+            &self.modality_router,
+            self.modality_router_lora.as_deref(),
+            &router_inputs,
+        )?;
         routed.to_dtype(DType::F32)?.tanh()?.to_dtype(xs.dtype())
     }
 
@@ -658,11 +697,13 @@ impl TextAltUp {
             vec![self.altup_num_inputs, self.altup_num_inputs],
         ]
         .concat();
-        let all_coefs = self
-            .prediction_coefs
-            .forward(&modalities)?
-            .reshape(shape)?
-            .permute((0, 1, 3, 2))?;
+        let all_coefs = forward_raw_lora(
+            &self.prediction_coefs,
+            self.prediction_coefs_lora.as_deref(),
+            &modalities,
+        )?
+        .reshape(shape)?
+        .permute((0, 1, 3, 2))?;
 
         // permute hidden_states to [batch_size, num_tokens, hidden_size, altup_num_inputs]
         let mut predictions = xs
@@ -689,7 +730,11 @@ impl TextAltUp {
                 .repeat((self.altup_num_inputs, 1, 1, 1))?;
 
         // Perform coefficient computation in float32
-        let coefs = self.correction_coefs.forward(&modalities)?;
+        let coefs = forward_raw_lora(
+            &self.correction_coefs,
+            self.correction_coefs_lora.as_deref(),
+            &modalities,
+        )?;
         let coefs_f32 = coefs.to_dtype(DType::F32)?;
         let all_coefs = (coefs_f32 + 1.)?
             .to_dtype(coefs.dtype())?
@@ -707,19 +752,42 @@ impl TextAltUp {
             .broadcast_mul(&self.correct_output_scale)?
             .to_dtype(xs.dtype())
     }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [
+            &self.correction_coefs_lora,
+            &self.prediction_coefs_lora,
+            &self.modality_router_lora,
+        ]
+        .into_iter()
+        .filter_map(|site| site.as_deref())
+        .any(is_dynamic_lora_site_active)
+    }
 }
 
 struct TextLaurelBlock {
     left: Linear,
+    left_lora: Option<Arc<LoraSiteHandle>>,
     right: Linear,
+    right_lora: Option<Arc<LoraSiteHandle>>,
     post_norm: RmsNorm,
 }
 
 impl TextLaurelBlock {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let left_vb = vb.pp("linear_left");
+        let right_vb = vb.pp("linear_right");
         Ok(Self {
-            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, vb.pp("linear_left"))?,
-            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, vb.pp("linear_right"))?,
+            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, left_vb.clone())?,
+            left_lora: register_dynamic_lora_site(
+                &left_vb,
+                LoraLinearSpec::replicated(cfg.hidden_size, cfg.laurel_rank),
+            )?,
+            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, right_vb.clone())?,
+            right_lora: register_dynamic_lora_site(
+                &right_vb,
+                LoraLinearSpec::replicated(cfg.laurel_rank, cfg.hidden_size),
+            )?,
             post_norm: RmsNorm::new_gemma_3n(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -730,13 +798,20 @@ impl TextLaurelBlock {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut laurel_xs = self.left.forward(xs)?;
-        laurel_xs = self.right.forward(&laurel_xs)?;
+        let mut laurel_xs = forward_raw_lora(&self.left, self.left_lora.as_deref(), xs)?;
+        laurel_xs = forward_raw_lora(&self.right, self.right_lora.as_deref(), &laurel_xs)?;
         laurel_xs = self.post_norm.forward(&laurel_xs)?;
         // Perform addition in float32 for precision
         let xs_f32 = xs.to_dtype(DType::F32)?;
         let laurel_xs_f32 = laurel_xs.to_dtype(DType::F32)?;
         (xs_f32 + laurel_xs_f32)?.to_dtype(xs.dtype())
+    }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [&self.left_lora, &self.right_lora]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
     }
 }
 
@@ -750,7 +825,9 @@ struct DecoderLayer {
     altup: TextAltUp,
     laurel: TextLaurelBlock,
     per_layer_input_gate: Linear,
+    per_layer_input_gate_lora: Option<Arc<LoraSiteHandle>>,
     per_layer_projection: Linear,
+    per_layer_projection_lora: Option<Arc<LoraSiteHandle>>,
     post_per_layer_input_norm: RmsNorm,
     altup_active_idx: usize,
     altup_correct_scale: bool,
@@ -814,15 +891,27 @@ impl DecoderLayer {
         let altup = TextAltUp::new(cfg, mapper.set_device(layer_idx, vb.pp("altup"), false))?;
         let laurel =
             TextLaurelBlock::new(cfg, mapper.set_device(layer_idx, vb.pp("laurel"), false))?;
+        let per_layer_input_gate_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false);
         let per_layer_input_gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.hidden_size_per_layer_input,
-            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false),
+            per_layer_input_gate_vb.clone(),
         )?;
+        let per_layer_input_gate_lora = register_dynamic_lora_site(
+            &per_layer_input_gate_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.hidden_size_per_layer_input),
+        )?;
+        let per_layer_projection_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false);
         let per_layer_projection = layers::linear_no_bias(
             cfg.hidden_size_per_layer_input,
             cfg.hidden_size,
-            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false),
+            per_layer_projection_vb.clone(),
+        )?;
+        let per_layer_projection_lora = register_dynamic_lora_site(
+            &per_layer_projection_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size_per_layer_input, cfg.hidden_size),
         )?;
         let post_per_layer_input_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -840,7 +929,9 @@ impl DecoderLayer {
             altup,
             laurel,
             per_layer_input_gate,
+            per_layer_input_gate_lora,
             per_layer_projection,
+            per_layer_projection_lora,
             post_per_layer_input_norm,
             altup_active_idx: cfg.altup_active_idx,
             altup_correct_scale: cfg.altup_correct_scale,
@@ -860,6 +951,15 @@ impl DecoderLayer {
         ]
         .into_iter()
         .any(|layer| layer.is_dynamic_lora_active())
+            || self.altup.has_active_dynamic_lora()
+            || self.laurel.has_active_dynamic_lora()
+            || [
+                &self.per_layer_input_gate_lora,
+                &self.per_layer_projection_lora,
+            ]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
     }
 
     fn forward(
@@ -901,7 +1001,11 @@ impl DecoderLayer {
         if self.altup_correct_scale {
             first_prediction = self.altup.scale_corrected_output(&first_prediction)?;
         }
-        first_prediction = self.per_layer_input_gate.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_input_gate,
+            self.per_layer_input_gate_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.act.forward(&first_prediction)?;
         // Perform multiplication in float32
         let first_pred_f32 = first_prediction.to_dtype(DType::F32)?;
@@ -909,7 +1013,11 @@ impl DecoderLayer {
         first_prediction =
             (first_pred_f32 * per_layer_input_f32)?.to_dtype(first_prediction.dtype())?;
 
-        first_prediction = self.per_layer_projection.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_projection,
+            self.per_layer_projection_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
 
         // Perform broadcast add in float32 for precision

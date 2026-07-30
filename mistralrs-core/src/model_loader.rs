@@ -598,10 +598,15 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             quantized_filename,
             tokenizer_json,
             mmproj_filename,
+            lora_adapters,
+            lora_runtime_config,
             topology,
             max_edge,
             ..
         } => {
+            if lora_runtime_config.is_none() && !lora_adapters.is_empty() {
+                anyhow::bail!("GGUF LoRA adapters require a dynamic LoRA runtime configuration");
+            }
             let mut builder = GGUFLoaderBuilder::new(
                 args.chat_template,
                 tok_model_id,
@@ -627,6 +632,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             }
             if let Some(tokenizer_json) = tokenizer_json {
                 builder = builder.with_tokenizer_json(tokenizer_json);
+            }
+            if let Some(runtime_config) = lora_runtime_config {
+                builder = builder.with_dynamic_lora(lora_adapters, runtime_config);
             }
             builder.build()
         }

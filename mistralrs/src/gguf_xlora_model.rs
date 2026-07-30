@@ -38,6 +38,12 @@ impl GgufXLoraModelBuilder {
 
     /// Load the GGUF X-LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        if self.gguf_model.lora_adapters.is_some() {
+            anyhow::bail!(
+                "`GgufXLoraModelBuilder` cannot combine X-LoRA with dynamic LoRA; use \
+                 `GgufModelBuilder` directly for dynamic adapters"
+            );
+        }
         if self.gguf_model.mmproj_files.is_some() {
             anyhow::bail!("Multimodal GGUF does not currently support X-LoRA adapters");
         }
@@ -73,5 +79,28 @@ impl GgufXLoraModelBuilder {
             build_pipeline_from_gguf_loader(gguf_model, loader).await?;
 
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn xlora_rejects_a_dynamic_gguf_builder() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"]).with_lora();
+        let ordering = Ordering {
+            adapters: None,
+            layers: None,
+            base_model_id: "repo".to_string(),
+            preload_adapters: None,
+        };
+        let error = GgufXLoraModelBuilder::from_gguf_model_builder(builder, "xlora", ordering)
+            .build()
+            .await
+            .err()
+            .expect("mixed adapter modes should fail");
+
+        assert!(error.to_string().contains("cannot combine"));
     }
 }

@@ -69,14 +69,17 @@ impl Idefics3Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb_m = vb.pp("model");
+        let non_text_vb = vb_m.clone().without_lora_registry();
         let connector = Idefics3Connector::new(
             cfg,
-            vb_m.pp("connector")
+            non_text_vb
+                .pp("connector")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let vision = Idefics3VisionTransformer::new(
             &cfg.vision_config,
-            vb_m.pp("vision_model")
+            non_text_vb
+                .pp("vision_model")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Llama::new_inner(

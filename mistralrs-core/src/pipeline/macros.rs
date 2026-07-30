@@ -401,7 +401,8 @@ macro_rules! get_paths_gguf {
         $this:expr,
         $quantized_model_id:expr,
         $quantized_filenames:expr,
-        $silent:expr
+        $silent:expr,
+        $resolve_adapters:expr
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
@@ -464,17 +465,21 @@ macro_rules! get_paths_gguf {
         )?;
 
         tracing::debug!("GGUF file(s) {:?}", filenames);
-        let adapter_paths = $crate::pipeline::get_adapter_paths(
-            this_model_id.clone(),
-            $crate::pipeline::AdapterPathOptions {
-                xlora_model_id: $this.xlora_model_id.as_ref(),
-                lora_adapters: None,
-                xlora_order: $this.xlora_order.as_ref(),
-                xlora_preload: $crate::pipeline::XLoraPreload::Load,
-            },
-            &$token_source,
-            revision.clone(),
-        )?;
+        let adapter_paths = if $resolve_adapters {
+            $crate::pipeline::get_adapter_paths(
+                this_model_id.clone(),
+                $crate::pipeline::AdapterPathOptions {
+                    xlora_model_id: $this.xlora_model_id.as_ref(),
+                    lora_adapters: $this.dynamic_lora_adapters(),
+                    xlora_order: $this.xlora_order.as_ref(),
+                    xlora_preload: $crate::pipeline::XLoraPreload::Load,
+                },
+                &$token_source,
+                revision.clone(),
+            )?
+        } else {
+            $crate::pipeline::AdapterPaths::None
+        };
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             tracing::trace!("Loading `generation_config.json` at `{}`", this_model_id);

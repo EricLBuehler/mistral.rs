@@ -163,6 +163,28 @@ lora_max_bytes = 8589934592
 
 `revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit loaded adapters.
 
+The CLI and server use the same dynamic adapter configuration for supported GGUF models:
+
+```toml
+command = "serve"
+
+[[models]]
+model_id = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+
+[models.quantization]
+quant = "4"
+
+[models.adapter]
+lora = [
+  { alias = "philosophy", source = "closestfriend/brie-qwen2.5-0.5b" },
+]
+```
+
+Multimodal GGUF supports dynamic language-model LoRA. Vision, audio, and projector adapters are not
+supported. Legacy LoRA and X-LoRA remain unavailable with multimodal GGUF. GGML uses `legacy_lora`
+together with `legacy_lora_order`; legacy static GGUF mode remains available for Llama, Mistral3,
+and Phi3.
+
 ## Multi-model example
 
 ```toml
@@ -232,8 +254,10 @@ Flag interactions that hold on the command line and as TOML keys:
 - `--calibration-file` conflicts with `--imatrix`.
 - Multimodal GGUF repositories select a projector automatically. Use `mmproj` (`--mmproj`) to
   override that choice and `tok_model_id` (`--tok-model-id`) to override the configuration,
-  tokenizer, and processor source. Multimodal GGUF cannot be combined with LoRA or X-LoRA.
-- Dynamic LoRA (`enable_lora` or `lora`), legacy raw GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. `tgt_non_granular_index` requires `xlora`.
+  tokenizer, and processor source. Dynamic language-model LoRA keeps the selected projector.
+  Vision, audio, and projector adapters are unsupported. Legacy LoRA and X-LoRA cannot be combined
+  with a multimodal projector.
+- Dynamic LoRA (`enable_lora` or `lora`), legacy GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. Supported GGUF uses dynamic LoRA; GGML uses legacy mode, and legacy static GGUF mode remains available for Llama, Mistral3, and Phi3. `tgt_non_granular_index` requires `xlora`.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
 - `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.

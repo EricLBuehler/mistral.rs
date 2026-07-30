@@ -16,9 +16,9 @@ mod reference;
 mod registry;
 
 pub use execution::{
-    with_lora_execution, with_lora_execution_repeated_row, with_lora_execution_row_range,
-    LoraAdapterWeights, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraSlotId,
-    LoraWeights,
+    has_active_lora_execution, with_lora_execution, with_lora_execution_repeated_row,
+    with_lora_execution_row_range, LoraAdapterWeights, LoraExecution, LoraExecutionArena,
+    LoraExecutionArenaStats, LoraSlotId, LoraWeights,
 };
 pub use expert::{
     add_expert_delta_reference, DynamicLoraWeights, LoraExpertDelta, LoraExpertExecution,
@@ -39,7 +39,7 @@ pub use moe_cuda::{
     RoutedLoraProjectionLayout, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
     ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
 };
-pub use raw::{apply_dynamic_lora_delta, register_dynamic_lora_site};
+pub use raw::{apply_dynamic_lora_delta, is_dynamic_lora_site_active, register_dynamic_lora_site};
 pub(crate) use registry::LoraParallelism;
 pub use registry::{
     LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice,

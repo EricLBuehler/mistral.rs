@@ -49,6 +49,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `HunYuanDenseV1ForCausalLM` | HunYuan | <details><summary><code>tencent/Hunyuan-7B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-7B-Instruct</code></details> |
 | `HunYuanMoEV1ForCausalLM` | HunYuan MoE | <details><summary><code>tencent/Hunyuan-A13B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-A13B-Instruct</code></details> |
 | `Qwen3NextForCausalLM` | Qwen3-Next, Qwen3-Coder-Next | <details><summary><code>Qwen/Qwen3-Next-80B-A3B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-Next-80B-A3B-Instruct</code></details> |
+| `Qwen3_5ForCausalLM` | Qwen3.5 | <details><summary><code>Qwen/Qwen3.5-4B</code></summary><code>mistralrs run -m Qwen/Qwen3.5-4B</code></details> |
 | `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
 | `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
 

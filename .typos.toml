@@ -45,11 +45,14 @@ extend-ignore-re = [
 ]
 
 [default.extend-words]
+"Ba" = "Ba"
+"hel" = "hel"
 shll = "shll"
 "ammount" = "ammount"
 "layrnorm" = "layrnorm"
 "ot" = "ot"
 "thr" = "thr"
+"worl" = "worl"
 
 [default.extend-identifiers]
 "AtomLayoutNdKV" = "AtomLayoutNdKV"

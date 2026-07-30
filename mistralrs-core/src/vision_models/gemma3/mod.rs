@@ -71,15 +71,18 @@ impl Gemma3Model {
                 mm_tokens_per_image: _,
             } => {
                 assert!(*image_token_index < text_config.vocab_size);
+                let non_text_vb = vb.clone().without_lora_registry();
                 Ok(Self {
                     multi_modal_projector: Some(Gemma3MultiModalProjector::new(
                         cfg,
-                        vb.pp("multi_modal_projector")
+                        non_text_vb
+                            .pp("multi_modal_projector")
                             .set_device(normal_loading_metadata.real_device.clone()),
                     )?),
                     vision_tower: Some(SiglipVisionTransformer::new(
                         vision_config,
-                        vb.pp("vision_tower")
+                        non_text_vb
+                            .pp("vision_tower")
                             .pp("vision_model")
                             .set_device(normal_loading_metadata.real_device.clone()),
                     )?),

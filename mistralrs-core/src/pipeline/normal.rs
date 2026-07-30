@@ -884,27 +884,56 @@ impl Loader for NormalLoader {
                 | ModelKind::GgufAdapter {
                     adapter: AdapterKind::Lora,
                     ..
-                } => lora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                    self.lora_runtime_config
-                        .expect("LoRA loaders have a runtime config"),
-                    false,
-                ),
+                } => {
+                    if let Some(source) = self.prepared_source.as_ref() {
+                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
+                        let tracker = sharded_vb.tracker().clone();
+                        let model = self.inner.load(
+                            &config,
+                            sharded_vb,
+                            crate::pipeline::NormalLoadingMetadata {
+                                mapper,
+                                loading_isq,
+                                real_device: device.clone(),
+                                multi_progress: multi_progress.clone(),
+                                matformer_slicing_config: matformer_slicing_config.clone(),
+                                rope_pairing: Some(source.rope_pairing),
+                            },
+                            attention_mechanism,
+                        )?;
+                        let dynamic_lora = super::finish_dynamic_lora_runtime(
+                            paths,
+                            layers,
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            false,
+                        )?;
+                        (model, tracker, Some(dynamic_lora))
+                    } else {
+                        lora_model_loader!(
+                            paths,
+                            Some(dtype),
+                            &load_device,
+                            layer_devices.clone(),
+                            config,
+                            self.inner,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            self.config.from_uqff.is_some(),
+                            device.clone(),
+                            attention_mechanism,
+                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                            multi_progress.clone(),
+                            matformer_slicing_config.clone(),
+                            uqff_reader.clone(),
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            false,
+                        )
+                    }
+                }
                 _ => unreachable!(),
             }
         } else {
@@ -983,27 +1012,61 @@ impl Loader for NormalLoader {
                 | ModelKind::GgufAdapter {
                     adapter: AdapterKind::Lora,
                     ..
-                } => lora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                    self.lora_runtime_config
-                        .expect("LoRA loaders have a runtime config"),
-                    true,
-                ),
+                } => {
+                    if let Some(source) = self.prepared_source.as_ref() {
+                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let vb = source
+                            .weights
+                            .clone()
+                            .set_dtype(dtype)
+                            .set_device(load_device.clone())
+                            .with_lora_registry(layers.clone());
+                        let tracker = vb.tracker().clone();
+                        let model = self.inner.load(
+                            &config,
+                            vb,
+                            crate::pipeline::NormalLoadingMetadata {
+                                mapper,
+                                loading_isq,
+                                real_device: device.clone(),
+                                multi_progress: multi_progress.clone(),
+                                matformer_slicing_config: matformer_slicing_config.clone(),
+                                rope_pairing: Some(source.rope_pairing),
+                            },
+                            attention_mechanism,
+                        )?;
+                        let dynamic_lora = super::finish_dynamic_lora_runtime(
+                            paths,
+                            layers,
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            true,
+                        )?;
+                        (model, tracker, Some(dynamic_lora))
+                    } else {
+                        lora_model_loader!(
+                            paths,
+                            Some(dtype),
+                            &load_device,
+                            layer_devices.clone(),
+                            config,
+                            self.inner,
+                            silent,
+                            mapper,
+                            loading_isq,
+                            self.config.from_uqff.is_some(),
+                            device.clone(),
+                            attention_mechanism,
+                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                            multi_progress.clone(),
+                            matformer_slicing_config.clone(),
+                            uqff_reader.clone(),
+                            self.lora_runtime_config
+                                .expect("LoRA loaders have a runtime config"),
+                            true,
+                        )
+                    }
+                }
                 _ => unreachable!(),
             }
         };
@@ -1866,6 +1929,26 @@ impl AnyMoePipelineMixin for NormalPipeline {
 #[cfg(test)]
 mod tests {
     use super::normal_model_requires_uniform_prompt_batch;
+    use crate::pipeline::finish_dynamic_lora_runtime;
+    use crate::pipeline::{AdapterPaths, LocalModelPaths};
+    use crate::LoraRuntimeConfig;
+    use candle_core::{DType, Device};
+    use mistralrs_quant::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey};
+    use std::{path::PathBuf, sync::Arc};
+
+    fn empty_lora_paths() -> LocalModelPaths<PathBuf> {
+        LocalModelPaths {
+            tokenizer_filename: PathBuf::new(),
+            config_filename: PathBuf::new(),
+            template_filename: None,
+            filenames: Vec::new(),
+            adapter_paths: AdapterPaths::Lora(Vec::new()),
+            gen_conf: None,
+            preprocessor_config: None,
+            processor_config: None,
+            chat_template_json_filename: None,
+        }
+    }
 
     #[test]
     fn hybrid_models_require_uniform_prompts_until_packed_prefill_is_proven() {
@@ -1888,5 +1971,31 @@ mod tests {
         assert!(normal_model_requires_uniform_prompt_batch(
             true, true, false, true
         ));
+    }
+
+    #[test]
+    fn prepared_lora_runtime_finalizes_sites_and_preserves_update_policy() {
+        let paths = empty_lora_paths();
+        for live_updates in [false, true] {
+            let layers = Arc::new(LoraLayerRegistry::new());
+            let runtime = finish_dynamic_lora_runtime(
+                &paths,
+                layers.clone(),
+                LoraRuntimeConfig::default(),
+                live_updates,
+            )
+            .unwrap();
+
+            assert_eq!(runtime.supports_live_updates(), live_updates);
+            let error = layers
+                .register(
+                    LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                    LoraLinearSpec::replicated(2, 2),
+                    DType::F32,
+                    Device::Cpu,
+                )
+                .unwrap_err();
+            assert!(error.to_string().contains("after registry finalization"));
+        }
     }
 }

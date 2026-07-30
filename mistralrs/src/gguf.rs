@@ -41,6 +41,8 @@ pub struct GgufModelBuilder {
     pub(crate) prefix_cache_n: Option<usize>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    pub(crate) lora_runtime_config: LoraRuntimeConfig,
 }
 
 impl GgufModelBuilder {
@@ -78,7 +80,56 @@ impl GgufModelBuilder {
             device: None,
             code_exec_config: None,
             shell_config: None,
+            lora_adapters: None,
+            lora_runtime_config: LoraRuntimeConfig::default(),
         }
+    }
+
+    /// Enable the dynamic LoRA runtime without preloading an adapter.
+    pub fn with_lora(mut self) -> Self {
+        self.lora_adapters.get_or_insert_default();
+        self
+    }
+
+    /// Preload a dynamic LoRA adapter under a request-facing alias.
+    pub fn with_lora_adapter(
+        mut self,
+        alias: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        self.lora_adapters
+            .get_or_insert_default()
+            .push(LoraAdapterSpec::new(alias, source));
+        self
+    }
+
+    /// Preload a dynamic LoRA adapter at a specific Hugging Face revision.
+    pub fn with_lora_adapter_revision(
+        mut self,
+        alias: impl Into<String>,
+        source: impl Into<String>,
+        revision: impl Into<String>,
+    ) -> Self {
+        self.lora_adapters
+            .get_or_insert_default()
+            .push(LoraAdapterSpec::new(alias, source).with_revision(revision));
+        self
+    }
+
+    /// Preload several dynamic LoRA adapters.
+    pub fn with_lora_adapters(
+        mut self,
+        adapters: impl IntoIterator<Item = LoraAdapterSpec>,
+    ) -> Self {
+        self.lora_adapters.get_or_insert_default().extend(adapters);
+        self
+    }
+
+    /// Set dynamic LoRA residency and rank limits.
+    pub fn with_lora_runtime_config(mut self, runtime_config: LoraRuntimeConfig) -> Self {
+        self.lora_adapters.get_or_insert_default();
+        self.lora_runtime_config = runtime_config;
+        self
     }
 
     /// Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
@@ -280,5 +331,52 @@ impl GgufModelBuilder {
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) = build_gguf_pipeline(self).await?;
         Ok(build_model_from_pipeline(pipeline, scheduler_config, add_model_config).await)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GgufModelBuilder;
+    use mistralrs_core::LoraRuntimeConfig;
+
+    #[test]
+    fn dynamic_lora_builder_distinguishes_disabled_and_empty_runtime() {
+        let disabled = GgufModelBuilder::new("repo", vec!["model.gguf"]);
+        assert!(disabled.lora_adapters.is_none());
+
+        let enabled = GgufModelBuilder::new("repo", vec!["model.gguf"]).with_lora();
+        assert_eq!(enabled.lora_adapters, Some(Vec::new()));
+    }
+
+    #[test]
+    fn dynamic_lora_builder_preserves_adapters_and_limits() {
+        let limits = LoraRuntimeConfig {
+            max_adapters: 3,
+            max_rank: 32,
+            max_bytes: 1_024,
+        };
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
+            .with_lora_adapter_revision("code", "org/code", "revision")
+            .with_lora_runtime_config(limits);
+        let adapters = builder.lora_adapters.unwrap();
+
+        assert_eq!(adapters.len(), 1);
+        assert_eq!(adapters[0].alias, "code");
+        assert_eq!(adapters[0].source, "org/code");
+        assert_eq!(adapters[0].revision.as_deref(), Some("revision"));
+        assert_eq!(builder.lora_runtime_config, limits);
+    }
+
+    #[test]
+    fn multimodal_dynamic_lora_builder_preserves_projector_and_adapter() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
+            .with_mmproj_files(vec!["mmproj.gguf"])
+            .with_lora_adapter("vision-chat", "org/language-lora");
+
+        assert_eq!(builder.mmproj_files, Some(vec!["mmproj.gguf".to_string()]));
+        let adapters = builder.lora_adapters.unwrap();
+        assert_eq!(adapters.len(), 1);
+        assert_eq!(adapters[0].alias, "vision-chat");
+        assert_eq!(adapters[0].source, "org/language-lora");
     }
 }

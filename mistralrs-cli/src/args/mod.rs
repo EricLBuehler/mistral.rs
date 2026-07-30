@@ -481,8 +481,8 @@ pub enum ModelType {
         #[command(flatten)]
         format: FormatOptions,
 
-        #[arg(skip)]
-        adapter: AdapterOptions,
+        #[command(flatten)]
+        adapter: MultimodalAdapterOptions,
 
         #[command(flatten)]
         quantization: QuantizationOptions,
@@ -1065,6 +1065,38 @@ mod tests {
     }
 
     #[test]
+    fn direct_text_gguf_accepts_dynamic_lora_options() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, []).unwrap();
+
+        let resolved = resolve_run(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--lora",
+            "code=org/code-lora",
+            "--lora-max-rank",
+            "64",
+        ])
+        .unwrap();
+        let ModelType::Auto {
+            format, adapter, ..
+        } = resolved
+        else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert!(format.mmproj.is_none());
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+        assert_eq!(adapter.lora_max_rank, 64);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn direct_gguf_shorthand_preserves_a_cross_directory_projector() {
         let root = PathBuf::from(format!(".mistralrs-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(root.join("weights")).unwrap();
@@ -1324,8 +1356,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_multimodal_does_not_advertise_lora_options() {
-        let result = Cli::try_parse_from([
+    fn explicit_multimodal_accepts_dynamic_lora_options() {
+        let cli = Cli::try_parse_from([
             "mistralrs",
             "serve",
             "multimodal",
@@ -1333,11 +1365,31 @@ mod tests {
             "org/vision-model",
             "--lora",
             "code=org/code-lora",
-        ]);
-        let error = match result {
-            Ok(_) => panic!("expected explicit multimodal LoRA options to be rejected"),
-            Err(error) => error,
+        ])
+        .unwrap();
+
+        let Command::Serve {
+            model_type: Some(ModelType::Multimodal { adapter, .. }),
+            ..
+        } = cli.command
+        else {
+            panic!("expected explicit multimodal model");
         };
-        assert!(error.to_string().contains("unexpected argument '--lora'"));
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+    }
+
+    #[test]
+    fn explicit_multimodal_help_lists_only_dynamic_adapter_options() {
+        let help = match Cli::try_parse_from(["mistralrs", "serve", "multimodal", "--help"]) {
+            Ok(_) => panic!("expected help output"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(help.contains("--lora"));
+        assert!(help.contains("--enable-lora"));
+        assert!(!help.contains("--legacy-lora"));
+        assert!(!help.contains("--xlora"));
     }
 }

@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::args::{
     AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, GlobalOptions, ModelSourceOptions,
-    ModelType, MultimodalOptions, PagedAttentionOptions, QuantizationOptions, RuntimeOptions,
-    SandboxOptions, ServerOptions,
+    ModelType, MultimodalAdapterOptions, MultimodalOptions, PagedAttentionOptions,
+    QuantizationOptions, RuntimeOptions, SandboxOptions, ServerOptions,
 };
 use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
 
@@ -180,6 +180,13 @@ fn validate_config(config: &CliConfig) -> Result<()> {
             .adapter
             .validate()
             .map_err(|error| anyhow::anyhow!("invalid adapter configuration: {error}"))?;
+        if matches!(model.kind, ModelKind::Multimodal)
+            && (model.adapter.legacy_lora.is_some() || model.adapter.xlora.is_some())
+        {
+            anyhow::bail!(
+                "multimodal models support dynamic language-model LoRA, but not legacy LoRA or X-LoRA"
+            );
+        }
         if let Some(cpu) = model.device.cpu {
             match cpu_setting {
                 None => cpu_setting = Some(cpu),
@@ -261,7 +268,7 @@ impl ModelEntry {
             ModelKind::Multimodal => ModelType::Multimodal {
                 model,
                 format: self.format.clone(),
-                adapter: self.adapter.clone(),
+                adapter: MultimodalAdapterOptions::from_adapter_options(&self.adapter),
                 quantization: self.quantization.clone(),
                 device,
                 cache,
@@ -387,6 +394,29 @@ lora = [
             .unwrap_err()
             .to_string()
             .contains("more than once"));
+    }
+
+    #[test]
+    fn multimodal_toml_rejects_legacy_adapter_modes() {
+        let config: CliConfig = toml::from_str(
+            r#"
+command = "serve"
+
+[[models]]
+kind = "multimodal"
+model_id = "org/vision"
+
+[models.adapter]
+legacy_lora = "org/legacy"
+legacy_lora_order = "order.json"
+"#,
+        )
+        .unwrap();
+
+        assert!(validate_config(&config)
+            .unwrap_err()
+            .to_string()
+            .contains("not legacy LoRA or X-LoRA"));
     }
 
     #[test]
