@@ -127,6 +127,58 @@ __global__ void afq_dequantize_6bit_kernel(const uint8_t *__restrict__ w_q,
   output[tid] = dequant_value<T>(q, scale, bias);
 }
 
+template <typename T, int bits, int group_size>
+__global__ void afq_embedding_kernel(const uint8_t *__restrict__ w_q,
+                                     const T *__restrict__ scales,
+                                     const T *__restrict__ biases,
+                                     const uint32_t *__restrict__ indices,
+                                     T *__restrict__ output, int num_indices,
+                                     int hidden) {
+  constexpr int packs_per_thread = bits == 3 ? 8 : bits == 6 ? 4 : 8 / bits;
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+  const int packs_per_row = hidden / packs_per_thread;
+  const int groups_per_row = hidden / group_size;
+
+  int64_t tid = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t total_packs = (int64_t)num_indices * packs_per_row;
+  if (tid >= total_packs)
+    return;
+
+  int out_row = tid / packs_per_row;
+  int pack = tid - (int64_t)out_row * packs_per_row;
+  int col = pack * packs_per_thread;
+  uint32_t source_row = indices[out_row];
+  int group_idx = col / group_size;
+
+  const uint8_t *row_w = w_q + (int64_t)source_row * packs_per_row * bytes_per_pack +
+                         (int64_t)pack * bytes_per_pack;
+  const T *row_scales = scales + (int64_t)source_row * groups_per_row;
+  const T *row_biases = biases + (int64_t)source_row * groups_per_row;
+  T scale = row_scales[group_idx];
+  T bias = row_biases[group_idx];
+  T *row_output = output + (int64_t)out_row * hidden + col;
+
+  if constexpr (bits == 3) {
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+      row_output[i] = dequant_value<T>(extract_3bit(row_w, i), scale, bias);
+    }
+  } else if constexpr (bits == 6) {
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      row_output[i] = dequant_value<T>(extract_6bit(row_w, i), scale, bias);
+    }
+  } else {
+    uint32_t packed = row_w[0];
+    constexpr uint32_t mask = (1u << bits) - 1;
+#pragma unroll
+    for (int i = 0; i < packs_per_thread; i++) {
+      uint32_t q = (packed >> (i * bits)) & mask;
+      row_output[i] = dequant_value<T>(q, scale, bias);
+    }
+  }
+}
+
 // ============================================================================
 // Quantization Kernels
 // ============================================================================
@@ -338,6 +390,74 @@ DEFINE_DEQUANT_6BIT_LAUNCHER(128, __nv_bfloat16, bf16)
 DEFINE_DEQUANT_LAUNCHER(8, 32, __nv_bfloat16, bf16)
 DEFINE_DEQUANT_LAUNCHER(8, 64, __nv_bfloat16, bf16)
 DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+
+// ============================================================================
+// Extern "C" Launch Functions - Embedding
+// ============================================================================
+
+#define DEFINE_EMBEDDING_LAUNCHER(bits, gs, dtype, dtype_name)                 \
+  extern "C" void afq_embedding_##bits##bit_gs##gs##_##dtype_name(             \
+      const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
+      const uint32_t *indices, dtype *output, int num_indices, int hidden) {   \
+    constexpr int packs_per_thread =                                           \
+        bits == 3 ? 8 : bits == 6 ? 4 : 8 / bits;                              \
+    uint64_t total = (uint64_t)num_indices * hidden / packs_per_thread;        \
+    if (total == 0)                                                            \
+      return;                                                                  \
+    unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
+    afq_embedding_kernel<dtype, bits, gs><<<blocks, AFQ_BLOCK_SIZE>>>(         \
+        w_q, scales, biases, indices, output, num_indices, hidden);            \
+  }
+
+DEFINE_EMBEDDING_LAUNCHER(2, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(3, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(4, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(6, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(8, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 
 // ============================================================================
 // Extern "C" Launch Functions - Quantize

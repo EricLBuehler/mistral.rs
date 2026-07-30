@@ -45,6 +45,7 @@ mimalloc = "0.1"
 anyhow = "1.0.100"
 serde = "1.0.228"
 serde_json = "1.0.149"
+sha2 = "0.10.9"
 indexmap = { version = "2.13.0", features = ["serde"] }
 either = { version = "1.15.0", features = ["serde"] }
 accelerate-src = { version = "0.3.2" }
@@ -90,6 +91,7 @@ walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
 regex = "1.12.2"
+fancy-regex = "0.14.0"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
 dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }

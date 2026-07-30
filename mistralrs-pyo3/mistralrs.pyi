@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from os import PathLike
 from typing import Any, Iterator, Mapping, Optional, Callable
 
 class CalibrationStatus:
@@ -113,6 +114,17 @@ class AgentToolApprovalDecision:
     @staticmethod
     def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
 
+@dataclass(frozen=True)
+class LoraAdapterGeneration:
+    """Select one exact immutable LoRA adapter generation by its 64-character ID."""
+
+    generation: str
+
+class LoraAdapterError(ValueError):
+    """A dynamic LoRA lifecycle operation failed."""
+
+    code: str
+
 @dataclass
 class ChatCompletionRequest:
     """
@@ -177,6 +189,7 @@ class ChatCompletionRequest:
     session_id: str | None = None
     files: list[RequestedFile] | None = None
     input_files: list[InputFile] | None = None
+    adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
 
 @dataclass
 class CompletionRequest:
@@ -210,6 +223,7 @@ class CompletionRequest:
     dry_allowed_length: int | None = None
     dry_sequence_breakers: list[str] | None = None
     truncate_sequence: bool = False
+    adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
 
 @dataclass
 class EmbeddingRequest:
@@ -452,6 +466,12 @@ class ShellSkillMount:
         source_path: str,
     ) -> None: ...
 
+@dataclass
+class LoraAdapter:
+    alias: str
+    source: str
+    revision: str | None = None
+
 class Which(Enum):
     """
     Which model to select. See the docs for the `Which` enum in API.md for more details.
@@ -507,9 +527,9 @@ class Which(Enum):
 
     @dataclass
     class Lora:
-        adapter_model_ids: list[str]
+        model_id: str
+        adapters: list[LoraAdapter] | None = None
         arch: Architecture | None = None
-        model_id: str | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
@@ -517,6 +537,9 @@ class Which(Enum):
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
+        max_adapters: int = 16
+        max_rank: int = 256
+        max_bytes: int = 8589934592
 
     @dataclass
     class GGUF:
@@ -622,6 +645,44 @@ class Which(Enum):
 class PagedCacheType(Enum):
     Auto: int = 0
     F8E4M3: int = 1
+
+@dataclass
+class LoraAdapterInfo:
+    """A loaded alias and the immutable generation it currently selects."""
+
+    alias: str
+    source: str
+    revision: str | None
+    generation: str
+    rank: int
+    bytes: int
+
+    def exact(self) -> LoraAdapterGeneration:
+        """Select this exact immutable generation in a request."""
+
+@dataclass
+class LoraResidentGenerationInfo:
+    """One device-resident generation, including retired generations still leased."""
+
+    generation: str
+    aliases: list[str]
+    rank: int
+    bytes: int
+    retired: bool
+    active_leases: int
+
+@dataclass
+class LoraRuntimeStatus:
+    """Loaded aliases, resident generations, active leases, and capacity limits."""
+
+    adapters: list[LoraAdapterInfo]
+    generations: list[LoraResidentGenerationInfo]
+    resident_generations: int
+    retired_generations: int
+    resident_bytes: int
+    max_adapters: int
+    max_rank: int
+    max_bytes: int
 
 class Runner:
     def __init__(
@@ -900,6 +961,52 @@ class Runner:
             model_id: The model ID to reload.
         """
 
+    def load_lora_adapter(
+        self,
+        alias: str,
+        adapter_dir: str | PathLike[str],
+        model_id: str | None = None,
+        load_inplace: bool = False,
+        expected_generation: str | None = None,
+    ) -> LoraAdapterInfo:
+        """Load a local LoRA adapter, optionally replacing with generation CAS.
+
+        Raises:
+            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+        """
+
+    def unload_lora_adapter(
+        self,
+        alias: str,
+        model_id: str | None = None,
+        expected_generation: str | None = None,
+    ) -> LoraAdapterInfo:
+        """Unregister a LoRA alias while in-flight requests retain their generation.
+
+        Raises:
+            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+        """
+
+    def list_lora_adapters(
+        self,
+        model_id: str | None = None,
+    ) -> list[LoraAdapterInfo]:
+        """List loaded LoRA adapters for a model.
+
+        Raises:
+            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+        """
+
+    def lora_adapter_status(
+        self,
+        model_id: str | None = None,
+    ) -> LoraRuntimeStatus:
+        """Return loaded aliases and complete resident-generation capacity usage.
+
+        Raises:
+            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+        """
+
     def list_models_with_status(self) -> list[tuple[str, str]]:
         """
         List all models with their current status.
@@ -1110,6 +1217,7 @@ class ChatCompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+    adapter_generation: str | None = None
     agentic_tool_calls: list[AgenticToolCallRecord] | None = None
     files: list[File] | None = None
     session_id: str | None = None
@@ -1137,6 +1245,7 @@ class ChatCompletionChunkResponse:
     system_fingerprint: str
     object: str
     usage: Usage | None = None
+    adapter_generation: str | None = None
     session_id: str | None = None
 
 @dataclass
@@ -1155,6 +1264,7 @@ class CompletionResponse:
     system_fingerprint: str
     object: str
     usage: Usage
+    adapter_generation: str | None = None
 
 @dataclass
 class ImageChoice:
@@ -1205,14 +1315,12 @@ class InputFile:
         data: bytes,
         mime_type: str | None = None,
     ) -> None: ...
-
     @staticmethod
     def from_text(
         name: str,
         text: str,
         mime_type: str = "text/plain",
     ) -> "InputFile": ...
-
     @staticmethod
     def from_path(
         path: str,

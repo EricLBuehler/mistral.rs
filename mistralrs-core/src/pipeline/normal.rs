@@ -1,8 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader,
-    TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqOrganization,
@@ -25,15 +24,16 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{calculate_eos_tokens, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
+    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
+    prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphState,
 };
 use crate::pipeline::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
     WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::QuantizationConfigShim;
+use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
@@ -55,10 +55,11 @@ use crate::xlora_models::NonGranularState;
 use crate::{
     api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
     normal_model_loader, normal_model_loader_sharded, xlora_model_loader, DeviceMapSetting,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 use hf_hub::Cache;
 use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
@@ -90,6 +91,16 @@ pub struct NormalPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     source_weight_files: Vec<std::path::PathBuf>,
+    dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
+}
+
+fn normal_model_requires_uniform_prompt_batch(
+    is_hybrid: bool,
+    packed_prefill_available: bool,
+    is_xlora: bool,
+    has_speculative_proposer: bool,
+) -> bool {
+    (is_hybrid && !packed_prefill_available) || is_xlora || has_speculative_proposer
 }
 
 /// A loader for a "normal" (non-quantized) model.
@@ -98,7 +109,8 @@ pub struct NormalLoader {
     model_id: String,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    lora_runtime_config: Option<LoraRuntimeConfig>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -118,7 +130,8 @@ pub struct NormalLoaderBuilder {
     model_id: Option<String>,
     config: NormalSpecificConfig,
     xlora_model_id: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    lora_runtime_config: Option<LoraRuntimeConfig>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
@@ -205,11 +218,16 @@ impl NormalLoaderBuilder {
         )
     }
 
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
+    pub fn with_lora(
+        mut self,
+        adapters: Vec<LoraAdapterSpec>,
+        runtime_config: LoraRuntimeConfig,
+    ) -> Self {
         self.kind = ModelKind::Adapter {
             adapter: AdapterKind::Lora,
         };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
+        self.lora_adapters = Some(adapters);
+        self.lora_runtime_config = Some(runtime_config);
         self
     }
 
@@ -221,6 +239,10 @@ impl NormalLoaderBuilder {
     /// If the loader type is not specified, loader type is automatically determined from the
     /// `architectures` array in the config.
     pub fn build(self, loader_tp: Option<NormalLoaderType>) -> anyhow::Result<Box<dyn Loader>> {
+        super::validate_lora_loader_config(
+            self.lora_adapters.as_deref(),
+            self.lora_runtime_config,
+        )?;
         let loader: Box<dyn NormalModelLoader> = match loader_tp {
             Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
             Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),
@@ -254,7 +276,8 @@ impl NormalLoaderBuilder {
             model_id: self.model_id.unwrap(),
             config: self.config,
             xlora_model_id: self.xlora_model_id,
-            lora_adapter_ids: self.lora_adapter_ids,
+            lora_adapters: self.lora_adapters,
+            lora_runtime_config: self.lora_runtime_config,
             kind: self.kind,
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
@@ -299,7 +322,13 @@ impl Loader for NormalLoader {
             None,
             None,
             silent,
-            self.config.from_uqff.is_some()
+            self.config.from_uqff.is_some(),
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: self.xlora_model_id.as_ref(),
+                lora_adapters: self.lora_adapters.as_deref(),
+                xlora_order: self.xlora_order.as_ref(),
+                xlora_preload: crate::pipeline::XLoraPreload::Skip,
+            }
         );
         *self
             .token_source
@@ -394,6 +423,7 @@ impl Loader for NormalLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
+                    let quantization = AutoDeviceMapQuantization::uqff(reader);
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -404,6 +434,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -414,6 +445,8 @@ impl Loader for NormalLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
+                    let quantization =
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -424,6 +457,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -436,6 +470,11 @@ impl Loader for NormalLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
+                    let quantization = self
+                        .config
+                        .topology
+                        .as_ref()
+                        .map(|topology| AutoDeviceMapQuantization::isq(None, Some(topology)));
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -446,6 +485,7 @@ impl Loader for NormalLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        quantization.as_ref(),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -585,7 +625,7 @@ impl Loader for NormalLoader {
             .message("model")
         );
 
-        let (model, tracker) = if use_distributed {
+        let (model, tracker, dynamic_lora) = if use_distributed {
             let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
                 dtype,
                 &device,
@@ -608,34 +648,40 @@ impl Loader for NormalLoader {
 
             // Special case for where things can be more optimially loaded.
             match self.kind {
-                ModelKind::Normal => normal_model_loader_sharded!(
-                    sharded_vb,
-                    config,
-                    self.inner,
-                    mapper,
-                    loading_isq,
-                    device.clone(),
-                    attention_mechanism,
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                ),
+                ModelKind::Normal => {
+                    let (model, tracker) = normal_model_loader_sharded!(
+                        sharded_vb,
+                        config,
+                        self.inner,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        attention_mechanism,
+                        multi_progress.clone(),
+                        matformer_slicing_config.clone(),
+                    );
+                    (model, tracker, None)
+                }
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
-                } => xlora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    device.clone(),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                ),
+                } => {
+                    let (model, tracker) = xlora_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        multi_progress.clone(),
+                        matformer_slicing_config.clone(),
+                        uqff_reader.clone(),
+                    );
+                    (model, tracker, None)
+                }
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
@@ -655,46 +701,55 @@ impl Loader for NormalLoader {
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
                     uqff_reader.clone(),
+                    self.lora_runtime_config
+                        .expect("LoRA loaders have a runtime config"),
+                    false,
                 ),
                 _ => unreachable!(),
             }
         } else {
             match self.kind {
-                ModelKind::Normal => normal_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                ),
+                ModelKind::Normal => {
+                    let (model, tracker) = normal_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        self.config.from_uqff.is_some(),
+                        device.clone(),
+                        attention_mechanism,
+                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
+                        multi_progress.clone(),
+                        matformer_slicing_config.clone(),
+                        uqff_reader.clone(),
+                    );
+                    (model, tracker, None)
+                }
                 ModelKind::Adapter {
                     adapter: AdapterKind::XLora,
-                } => xlora_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    device.clone(),
-                    multi_progress.clone(),
-                    matformer_slicing_config.clone(),
-                    uqff_reader.clone(),
-                ),
+                } => {
+                    let (model, tracker) = xlora_model_loader!(
+                        paths,
+                        Some(dtype),
+                        &load_device,
+                        layer_devices.clone(),
+                        config,
+                        self.inner,
+                        silent,
+                        mapper,
+                        loading_isq,
+                        device.clone(),
+                        multi_progress.clone(),
+                        matformer_slicing_config.clone(),
+                        uqff_reader.clone(),
+                    );
+                    (model, tracker, None)
+                }
                 ModelKind::Adapter {
                     adapter: AdapterKind::Lora,
                 } => lora_model_loader!(
@@ -714,6 +769,9 @@ impl Loader for NormalLoader {
                     multi_progress.clone(),
                     matformer_slicing_config.clone(),
                     uqff_reader.clone(),
+                    self.lora_runtime_config
+                        .expect("LoRA loaders have a runtime config"),
+                    true,
                 ),
                 _ => unreachable!(),
             }
@@ -823,6 +881,11 @@ impl Loader for NormalLoader {
             paged_attn_config
         };
 
+        if paged_attn_config.is_some() {
+            for module in tracker.get().clone() {
+                module.ct.resolve()?;
+            }
+        }
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
@@ -859,6 +922,9 @@ impl Loader for NormalLoader {
         } else {
             (None, None)
         };
+
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
         let llg_factory = build_llg_factory(tokenizer.clone())?;
@@ -917,6 +983,7 @@ impl Loader for NormalLoader {
             mapper: pipeline_mapper,
             tracked_modules,
             source_weight_files,
+            dynamic_lora,
         })))
     }
 
@@ -947,11 +1014,23 @@ impl IsqPipelineMixin for NormalPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
-        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
+        self.cleanup_cuda_graphs();
+        super::isq_flow::requantize_and_swap(
+            &self.tracked_modules,
+            dtype,
+            |module| module.default_type(dtype),
+            &|_| None,
+        )
     }
 
     fn begin_calibration(&mut self) -> Result<()> {
-        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+        super::isq_flow::begin_calibration(&self.tracked_modules)?;
+        #[cfg(feature = "cuda")]
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .suspend();
+        Ok(())
     }
 
     fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
@@ -962,11 +1041,21 @@ impl IsqPipelineMixin for NormalPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(
+        self.cleanup_cuda_graphs();
+        let result = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
             save_cimatrix.as_deref(),
-        )
+        );
+        #[cfg(feature = "cuda")]
+        if result.is_ok() || !super::isq_flow::calibration_status(&self.tracked_modules).collecting
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .resume();
+        }
+        result
     }
 }
 
@@ -1092,6 +1181,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
             flash_meta: input_meta.flash_meta,
             flash_meta_full: None,
             recurrent_batch_kind: RecurrentBatchKind::Decode,
+            adapter_leases: Arc::from([]),
         }))
     }
 }
@@ -1108,6 +1198,9 @@ impl NormalPipeline {
         flash_meta: &FlashParams,
     ) -> candle_core::Result<Option<Tensor>> {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
+            return Ok(None);
+        }
+        if !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref()) {
             return Ok(None);
         }
         if self.model.has_speculative_proposer() {
@@ -1131,7 +1224,17 @@ impl NormalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
-        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?;
+        let hybrid_state_key = if self.model.cache().is_hybrid() {
+            self.model
+                .cache()
+                .hybrid()
+                .state_indices_host()
+                .map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?
+            .with_state_key(hybrid_state_key);
 
         let mut state = self
             .cuda_decode_graph
@@ -1161,6 +1264,11 @@ impl NormalPipeline {
         .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
         let warmup_logits = self.model.forward(input_ids, &mut ctx)?;
         input_ids.device().synchronize()?;
+        let retained_tensors = if self.model.cache().is_hybrid() {
+            self.model.cache().hybrid().state_index_tensors()
+        } else {
+            Vec::new()
+        };
 
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
@@ -1172,7 +1280,7 @@ impl NormalPipeline {
                 metadata,
                 model_metadata: self.metadata.model_metadata.as_deref(),
                 warmup_logits: &warmup_logits,
-                retained_tensors: Vec::new(),
+                retained_tensors,
             },
             |graph_input_ids, graph_metadata| {
                 let mut ctx = ModelForwardContext::new(
@@ -1218,6 +1326,43 @@ impl NormalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for NormalPipeline {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        normal_model_requires_uniform_prompt_batch(
+            self.model.cache().is_hybrid(),
+            self.supports_packed_prefill(),
+            self.model.is_xlora(),
+            self.model.has_speculative_proposer(),
+        )
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        !self.model.has_speculative_proposer()
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        self.model.supports_packed_prefill()
+            && self.metadata.cache_engine.is_some()
+            && !self.model.is_xlora()
+            && !self.model.has_speculative_proposer()
+            && self.model.device().is_cuda()
+            && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
+            && crate::using_flash_attn()
+            && crate::attention::flash_backend_supports_sdpa(
+                self.model.config().k_head_dim,
+                false,
+                self.metadata.sliding_window.is_some(),
+            )
+            && matches!(self.metadata.activation_dtype, DType::F16 | DType::BF16)
+    }
+
+    fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
+        self.dynamic_lora.clone()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -1234,7 +1379,15 @@ impl Pipeline for NormalPipeline {
             flash_meta,
             flash_meta_full,
             recurrent_batch_kind,
+            adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
+        let lora_execution = super::resolve_lora_execution(
+            self.dynamic_lora.as_deref(),
+            &input_ids,
+            paged_attn_meta.as_ref(),
+            &flash_meta,
+            &adapter_leases,
+        )?;
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
             (Some(cache_engine), Some(meta)) => Some((cache_engine, meta)),
@@ -1255,7 +1408,7 @@ impl Pipeline for NormalPipeline {
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
 
                 #[cfg(feature = "cuda")]
-                if !return_raw_logits {
+                if lora_execution.is_none() && !return_raw_logits {
                     match self.try_cuda_decode_graph_forward(
                         &input_ids,
                         &seqlen_offsets,
@@ -1283,7 +1436,9 @@ impl Pipeline for NormalPipeline {
                 )
                 .with_recurrent_batch_kind(recurrent_batch_kind)
                 .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-                self.model.forward(&input_ids, &mut ctx)?
+                mistralrs_quant::with_lora_execution(lora_execution, || {
+                    self.model.forward(&input_ids, &mut ctx)
+                })?
             }
             true => self.model.xlora_forward(
                 &input_ids,
@@ -1308,6 +1463,9 @@ impl Pipeline for NormalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> candle_core::Result<()> {
+        if self.dynamic_lora.is_some() {
+            candle_core::bail!("dynamic LoRA does not support speculative decoding");
+        }
         if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
             && self.get_metadata().cache_engine.is_none()
         {
@@ -1514,5 +1672,33 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normal_model_requires_uniform_prompt_batch;
+
+    #[test]
+    fn hybrid_models_require_uniform_prompts_until_packed_prefill_is_proven() {
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, false, false, false
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
+            true, true, false, false
+        ));
+        assert!(!normal_model_requires_uniform_prompt_batch(
+            false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn xlora_and_speculative_models_remain_uniform() {
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, true, true, false
+        ));
+        assert!(normal_model_requires_uniform_prompt_batch(
+            true, true, false, true
+        ));
     }
 }

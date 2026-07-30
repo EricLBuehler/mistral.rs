@@ -85,7 +85,7 @@ impl CustomOp3 for Dequant8Bit {
         crate::metal_kernels::call_dequant_8bit(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s.dtype(),
             w.buffer(),
             s.buffer(),
@@ -196,7 +196,7 @@ impl CustomOp3 for Dequant4Bit {
         crate::metal_kernels::call_dequant_4bit(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s.dtype(),
             w.buffer(),
             s.buffer(),
@@ -309,7 +309,7 @@ impl CustomOp3 for Dequant2Bit {
         crate::metal_kernels::call_dequant_2bit(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s.dtype(),
             w.buffer(),
             s.buffer(),
@@ -426,7 +426,7 @@ impl CustomOp3 for Dequant1Bit {
         crate::metal_kernels::call_dequant_1bit(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s.dtype(),
             w.buffer(),
             s.buffer(),
@@ -545,7 +545,7 @@ impl CustomOp3 for Dequant3Bit {
         crate::metal_kernels::call_dequant_3bit(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s.dtype(),
             w.buffer(),
             s.buffer(),

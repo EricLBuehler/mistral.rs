@@ -44,7 +44,8 @@ The installer chooses the newest published lane that the installed NVIDIA driver
 |---|---|---|
 | CUDA 13.3+ on Hopper / `sm90` | `cuda133` | cuTile lane for Hopper |
 | CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132` | cuTile lane for Ampere and Ada |
-| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` | cuTile lane for Blackwell and GB10 |
+| CUDA 13.2+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda132` | cuTile lane for Blackwell and GB10 |
+| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131` | cuTile unavailable |
 | CUDA 13.0+ | `cuda130` | CUDA 13 baseline lane |
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129` | needed because CUDA 12.8 does not target `sm121` |
 | CUDA 12.8+ | `cuda128` | baseline lane for Ampere and newer |
@@ -59,11 +60,11 @@ The installer chooses the newest published lane that the installed NVIDIA driver
 | `cuda128` | CUDA 12.8.1 | 12.8 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100 | no |
 | `cuda129` | CUDA 12.9.1 | 12.9 | aarch64: 121 | no |
 | `cuda130` | CUDA 13.0.0 | 13.0 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | no |
-| `cuda131` | CUDA 13.1.2 | 13.1 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | sm100, sm120, sm121 |
-| `cuda132` | CUDA 13.2.0 | 13.2 | x86_64: 80, 86, 89 | sm80, sm86, sm89 |
+| `cuda131` | CUDA 13.1.2 | 13.1 | x86_64: 80, 86, 89, 90, 100, 120; aarch64: 90, 100, 121 | no |
+| `cuda132` | CUDA 13.2.0 | 13.2 | x86_64: 80, 86, 89, 100, 120; aarch64: 100, 121 | sm80, sm86, sm89, sm100, sm120, sm121 |
 | `cuda133` | CUDA 13.3.0 | 13.3 | x86_64: 90; aarch64: 90 | sm90 |
 
-Each artifact bundles the CUDA runtime libraries it needs, so no CUDA toolkit is required at runtime. The installed NVIDIA driver still has to be new enough for that artifact's toolkit lane.
+Each artifact bundles the CUDA runtime libraries it needs, so standard acceleration does not require a toolkit at runtime. The installed NVIDIA driver still has to be new enough for that artifact's toolkit lane. cuTile-capable archives do not redistribute NVIDIA's `tileiras` tool; install it separately by following [cuTile setup](/mistral.rs/developer/moe-backends/).
 
 The same compatibility lanes are used by the [Docker images](/mistral.rs/guides/deploy/docker/) and CUDA Python wheels. See [Python getting started](/mistral.rs/guides/python/getting-started/#installing) for wheel install commands.
 
@@ -74,7 +75,6 @@ The same compatibility lanes are used by the [Docker images](/mistral.rs/guides/
 | `flash-attn` (v2) | compute capability 8.0+ |
 | `flash-attn-v3` | Hopper (9.0) |
 | FP8 matmul | compute capability 8.9+ |
-| cuTile MoE backend | Ampere/Ada (8.x) with CUDA >= 13.2; Hopper (9.0) with CUDA >= 13.3; Blackwell+ (10.x/12.x) with CUDA >= 13.1 |
-| CUTLASS MoE backend | compute capability 8.0+ |
+| cuTile acceleration | Ampere/Ada (8.x) and Blackwell+ (10.x/12.x) with CUDA >= 13.2; Hopper (9.0) with CUDA >= 13.3 |
 
-See [cargo features](/mistral.rs/reference/cargo-features/) for the feature flags and [MoE expert backends](/mistral.rs/developer/moe-backends/) for backend selection.
+See [cargo features](/mistral.rs/reference/cargo-features/) for the feature flags and [cuTile setup](/mistral.rs/developer/moe-backends/) for installation.

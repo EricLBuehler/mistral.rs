@@ -4,6 +4,15 @@ description: "Request dataclasses passed to Runner methods."
 sidebar:
   order: 4
 ---
+## `LoraAdapterGeneration`
+
+Select one exact immutable LoRA adapter generation by its 64-character ID.
+
+| Field | Type |
+| --- | --- |
+| `generation` | `str` |
+
+
 ## `ChatCompletionRequest`
 
 A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -64,6 +73,7 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
 | `input_files` | `list[InputFile] \| None` | `None` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`
@@ -98,6 +108,7 @@ about input data, sampling, and how to return the response.
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `EmbeddingRequest`
