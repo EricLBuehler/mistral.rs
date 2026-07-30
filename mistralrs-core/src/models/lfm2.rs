@@ -2,11 +2,12 @@
 
 use std::{
     collections::HashMap,
+    ops::Range,
     sync::{Arc, Mutex},
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Conv1d, Conv1dConfig, Embedding, Linear};
+use candle_nn::{Conv1d, Conv1dConfig, Linear};
 use mistralrs_quant::{
     ColumnParallelLayer, Convolution, QuantMethod, QuantizedConfig, ReplicatedLayer,
     RowParallelLayer, ShardedVarBuilder,
@@ -20,7 +21,10 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        self, embedding_with_legacy_tied_uqff, Activation, CausalMasker, RmsNorm, RotaryEmbedding,
+        Sdpa,
+    },
     layers_masker::{CausalMaskConfig, PastKvLenCache},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
@@ -241,6 +245,7 @@ impl Mlp {
 
 struct MoeMlp {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     expert_bias: Option<Tensor>,
     num_experts_per_tok: usize,
@@ -261,10 +266,11 @@ impl MoeMlp {
             .device_for(layer_idx, false)
             .cloned()
             .unwrap_or_else(|| vb.device().clone());
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_experts),
         )?;
         let expert_bias = if cfg.use_expert_bias {
             Some(
@@ -281,6 +287,7 @@ impl MoeMlp {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::MIXTRAL,
         };
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -294,6 +301,7 @@ impl MoeMlp {
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             expert_bias,
             num_experts_per_tok: cfg.num_experts_per_tok,
@@ -306,6 +314,10 @@ impl MoeMlp {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -545,6 +557,82 @@ struct ShortConv {
     l_cache: usize,
 }
 
+#[derive(Clone, Copy)]
+struct PackedShortConvShape {
+    physical_batch: usize,
+    physical_tokens: usize,
+    hidden_size: usize,
+    state_batch: usize,
+    state_hidden_size: usize,
+    state_cache_len: usize,
+    expected_cache_len: usize,
+}
+
+fn packed_query_ranges(
+    physical_batch: usize,
+    physical_tokens: usize,
+    query_lens: &[usize],
+) -> Result<Vec<Range<usize>>> {
+    if physical_batch != 1 {
+        candle_core::bail!(
+            "LFM2 packed ShortConv requires physical batch size 1, got {}",
+            physical_batch
+        );
+    }
+    if query_lens.is_empty() {
+        candle_core::bail!("LFM2 packed ShortConv requires at least one logical sequence");
+    }
+    let mut offset = 0usize;
+    let mut ranges = Vec::with_capacity(query_lens.len());
+    for (sequence_index, &query_len) in query_lens.iter().enumerate() {
+        if query_len == 0 {
+            candle_core::bail!(
+                "LFM2 packed ShortConv logical sequence {sequence_index} has zero tokens"
+            );
+        }
+        let end = offset.checked_add(query_len).ok_or_else(|| {
+            candle_core::Error::msg("LFM2 packed ShortConv query length overflow")
+        })?;
+        ranges.push(offset..end);
+        offset = end;
+    }
+    if offset != physical_tokens {
+        candle_core::bail!(
+            "LFM2 packed ShortConv has {offset} logical tokens but {} physical tokens",
+            physical_tokens
+        );
+    }
+    Ok(ranges)
+}
+
+fn packed_short_conv_ranges(
+    shape: PackedShortConvShape,
+    query_lens: &[usize],
+) -> Result<Vec<Range<usize>>> {
+    if shape.state_batch != query_lens.len() {
+        candle_core::bail!(
+            "LFM2 packed ShortConv has {} recurrent state rows but {} logical sequences",
+            shape.state_batch,
+            query_lens.len()
+        );
+    }
+    if shape.state_hidden_size != shape.hidden_size {
+        candle_core::bail!(
+            "LFM2 packed ShortConv hidden size mismatch: tokens have {}, state has {}",
+            shape.hidden_size,
+            shape.state_hidden_size
+        );
+    }
+    if shape.state_cache_len != shape.expected_cache_len {
+        candle_core::bail!(
+            "LFM2 packed ShortConv state length mismatch: expected {}, got {}",
+            shape.expected_cache_len,
+            shape.state_cache_len
+        );
+    }
+    packed_query_ranges(shape.physical_batch, shape.physical_tokens, query_lens)
+}
+
 impl ShortConv {
     fn new(
         cfg: &Config,
@@ -677,6 +765,60 @@ impl ShortConv {
         let y = (c_proj * conv_out)?.transpose(1, 2)?.contiguous()?;
         self.out_proj.forward(&y)
     }
+
+    fn forward_packed_prefill(
+        &self,
+        x: &Tensor,
+        conv_state: &mut Tensor,
+        query_lens: &[usize],
+        use_existing_state: bool,
+    ) -> Result<Tensor> {
+        let (physical_batch, physical_tokens, hidden_size) = x.dims3()?;
+        let (state_batch, state_hidden_size, state_cache_len) = conv_state.dims3()?;
+        let ranges = packed_short_conv_ranges(
+            PackedShortConvShape {
+                physical_batch,
+                physical_tokens,
+                hidden_size,
+                state_batch,
+                state_hidden_size,
+                state_cache_len,
+                expected_cache_len: self.l_cache,
+            },
+            query_lens,
+        )?;
+        if x.dtype() != conv_state.dtype() {
+            candle_core::bail!(
+                "LFM2 packed ShortConv dtype mismatch: tokens are {:?}, state is {:?}",
+                x.dtype(),
+                conv_state.dtype()
+            );
+        }
+        if !x.device().same_device(conv_state.device()) {
+            candle_core::bail!("LFM2 packed ShortConv tokens and state are on different devices");
+        }
+
+        let mut outputs = Vec::with_capacity(ranges.len());
+        let mut next_states = Vec::with_capacity(ranges.len());
+        for (state_index, range) in ranges.into_iter().enumerate() {
+            let segment = x.narrow(1, range.start, range.len())?;
+            let mut segment_state = conv_state.narrow(0, state_index, 1)?;
+            outputs.push(mistralrs_quant::with_lora_execution_row_range(
+                range,
+                || {
+                    self.forward(
+                        &segment,
+                        &mut segment_state,
+                        RecurrentBatchKind::Prefill,
+                        use_existing_state,
+                    )
+                },
+            )?);
+            next_states.push(segment_state);
+        }
+        *conv_state = Tensor::cat(&next_states, 0)?;
+        Tensor::cat(&outputs, 1)
+    }
 }
 
 enum LayerImpl {
@@ -789,17 +931,21 @@ impl DecoderLayer {
         conv_state: &mut Tensor,
         batch_kind: RecurrentBatchKind,
         use_existing_state: bool,
+        packed_query_lens: Option<&[usize]>,
     ) -> Result<Tensor> {
         let LayerImpl::Conv(conv) = &self.layer_impl else {
             candle_core::bail!("expected conv layer")
         };
         let residual = x;
-        let conv_out = conv.forward(
-            &self.operator_norm.forward(x)?,
-            conv_state,
-            batch_kind,
-            use_existing_state,
-        )?;
+        let normalized = self.operator_norm.forward(x)?;
+        let conv_out = if let Some(query_lens) = packed_query_lens {
+            if batch_kind != RecurrentBatchKind::Prefill {
+                candle_core::bail!("LFM2 packed ShortConv cannot run a decode batch");
+            }
+            conv.forward_packed_prefill(&normalized, conv_state, query_lens, use_existing_state)?
+        } else {
+            conv.forward(&normalized, conv_state, batch_kind, use_existing_state)?
+        };
         let x = (conv_out + residual)?;
         let residual = &x;
         let ffn_out = self.feed_forward.forward(&self.ffn_norm.forward(&x)?)?;
@@ -808,11 +954,12 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
     embedding_norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     cache: EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -862,10 +1009,14 @@ impl Model {
         }
 
         let mapper = normal_loading_metadata.mapper;
-        let embed_tokens = embedding(
+        let dtype = vb_m.dtype();
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings().then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let embedding_norm = RmsNorm::new(
@@ -874,16 +1025,7 @@ impl Model {
             mapper.set_nm_device(vb_m.pp("embedding_norm"), false),
         )?;
         let lm_head = if cfg.tie_word_embeddings() {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         } else {
             ReplicatedLayer::new(
                 cfg.hidden_size,
@@ -954,7 +1096,15 @@ impl Model {
                 LayerType::Attention => HybridLayerType::Attention,
                 LayerType::Conv => HybridLayerType::Recurrent,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let layer_devices = (0..hybrid_layer_types.len())
+            .map(|layer_idx| {
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
         let cache = Arc::new(Mutex::new(HybridCache::new(
             HybridCacheConfig {
                 layer_types: hybrid_layer_types,
@@ -967,7 +1117,7 @@ impl Model {
                 },
             },
             vb_m.dtype(),
-            &normal_loading_metadata.real_device,
+            &layer_devices,
         )?));
 
         Ok(Self {
@@ -976,6 +1126,7 @@ impl Model {
             layer_types,
             embedding_norm,
             lm_head,
+            dtype,
             cache: EitherCache::Hybrid(cache),
             device: normal_loading_metadata.real_device,
             cfg: ModelConfigMetadata {
@@ -996,7 +1147,7 @@ impl Model {
     }
 
     pub fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
@@ -1010,16 +1161,56 @@ impl Model {
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut x = input_embeds;
-        let mut hybrid_cache = self.cache.hybrid();
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
-        if self
+        let has_conv_layers = self
             .layer_types
             .iter()
-            .any(|layer_type| matches!(layer_type, LayerType::Conv))
-            && recurrent_metadata.is_none()
-        {
+            .any(|layer_type| matches!(layer_type, LayerType::Conv));
+        let packed_query_lens = if ctx.flash_params().packed {
+            Some(
+                ctx.paged_input_metadata()
+                    .and_then(|metadata| metadata.query_lens.clone())
+                    .ok_or_else(|| {
+                        candle_core::Error::msg(
+                            "LFM2 packed ShortConv requires logical query lengths",
+                        )
+                    })?,
+            )
+        } else {
+            None
+        };
+        if has_conv_layers && recurrent_metadata.is_none() {
             candle_core::bail!("Hybrid recurrent metadata is required for LFM2 conv layers");
         }
+        if has_conv_layers {
+            if let Some(query_lens) = packed_query_lens.as_deref() {
+                let recurrent_metadata = recurrent_metadata
+                    .as_ref()
+                    .expect("checked above: LFM2 conv layers require recurrent metadata");
+                if recurrent_metadata.batch_kind() != RecurrentBatchKind::Prefill {
+                    candle_core::bail!("LFM2 packed ShortConv cannot run a decode batch");
+                }
+                let (physical_batch, physical_tokens, _) = x.dims3()?;
+                packed_query_ranges(physical_batch, physical_tokens, query_lens)?;
+                let index_count = recurrent_metadata.state_indices().dims1()?;
+                if index_count != query_lens.len() {
+                    candle_core::bail!(
+                        "LFM2 packed ShortConv has {index_count} recurrent state indices but {} logical sequences",
+                        query_lens.len()
+                    );
+                }
+                if let Some(host_indices) = recurrent_metadata.state_indices_host() {
+                    if host_indices.len() != query_lens.len() {
+                        candle_core::bail!(
+                            "LFM2 packed ShortConv has {} host state indices but {} logical sequences",
+                            host_indices.len(),
+                            query_lens.len()
+                        );
+                    }
+                }
+            }
+        }
+        let mut hybrid_cache = self.cache.hybrid();
 
         let mask = if ctx.is_paged() {
             CausalMasker.make_causal_mask(
@@ -1058,17 +1249,23 @@ impl Model {
                     )?;
                 }
                 LayerImpl::Conv(_) => {
+                    let recurrent_metadata = recurrent_metadata
+                        .as_ref()
+                        .expect("checked above: LFM2 conv layers require recurrent metadata");
+                    let indices = hybrid_cache
+                        .state_indices_for_layer(layer_idx)?
+                        .ok_or_else(|| {
+                            candle_core::Error::msg(format!(
+                                "Hybrid cache layer {layer_idx} is missing recurrent state indices"
+                            ))
+                        })?;
                     let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     else {
                         candle_core::bail!(
                             "Hybrid cache layer {layer_idx} is not recurrent for LFM2"
                         );
                     };
-                    let recurrent_metadata = recurrent_metadata
-                        .as_ref()
-                        .expect("checked above: LFM2 conv layers require recurrent metadata");
-                    let indices = recurrent_metadata.state_indices();
-                    let mut conv_state = pool.gather_conv_state(indices)?;
+                    let mut conv_state = pool.gather_conv_state(&indices)?;
                     let use_existing_state = recurrent_metadata.batch_kind()
                         == RecurrentBatchKind::Decode
                         || !ctx.is_first_prompt_chunk();
@@ -1077,9 +1274,10 @@ impl Model {
                         &mut conv_state,
                         recurrent_metadata.batch_kind(),
                         use_existing_state,
+                        packed_query_lens.as_deref(),
                     )?;
                     pool.scatter_conv_state_with_host_indices(
-                        indices,
+                        &indices,
                         recurrent_metadata.state_indices_host(),
                         &conv_state,
                     )?;
@@ -1224,6 +1422,62 @@ impl NormalModel for Model {
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
     }
+
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {}
+
+#[cfg(test)]
+mod tests {
+    use super::{packed_short_conv_ranges, PackedShortConvShape};
+
+    fn shape() -> PackedShortConvShape {
+        PackedShortConvShape {
+            physical_batch: 1,
+            physical_tokens: 7,
+            hidden_size: 4,
+            state_batch: 3,
+            state_hidden_size: 4,
+            state_cache_len: 3,
+            expected_cache_len: 3,
+        }
+    }
+
+    #[test]
+    fn packed_short_conv_maps_tokens_to_state_rows() {
+        assert_eq!(
+            packed_short_conv_ranges(shape(), &[2, 1, 4]).unwrap(),
+            vec![0..2, 2..3, 3..7]
+        );
+    }
+
+    #[test]
+    fn packed_short_conv_rejects_token_and_state_cardinality_mismatches() {
+        let mut wrong_state_batch = shape();
+        wrong_state_batch.state_batch = 2;
+        assert!(packed_short_conv_ranges(wrong_state_batch, &[2, 1, 4]).is_err());
+
+        let mut wrong_token_count = shape();
+        wrong_token_count.state_batch = 2;
+        assert!(packed_short_conv_ranges(wrong_token_count, &[2, 4]).is_err());
+        assert!(packed_short_conv_ranges(shape(), &[2, 0, 5]).is_err());
+    }
+
+    #[test]
+    fn packed_short_conv_rejects_incompatible_shapes() {
+        let mut non_packed_batch = shape();
+        non_packed_batch.physical_batch = 3;
+        assert!(packed_short_conv_ranges(non_packed_batch, &[2, 1, 4]).is_err());
+
+        let mut wrong_hidden_size = shape();
+        wrong_hidden_size.state_hidden_size = 5;
+        assert!(packed_short_conv_ranges(wrong_hidden_size, &[2, 1, 4]).is_err());
+
+        let mut wrong_cache_len = shape();
+        wrong_cache_len.state_cache_len = 2;
+        assert!(packed_short_conv_ranges(wrong_cache_len, &[2, 1, 4]).is_err());
+    }
+}

@@ -15,7 +15,14 @@ use std::sync::OnceLock;
 use std::time::Instant;
 use tracing::{debug, info};
 
-use crate::{mistralrs_server_router_builder::DEFAULT_MAX_BODY_LIMIT, types::SharedMistralRsState};
+use crate::{
+    lora_adapters::{
+        is_resolvable_lora_adapter_model, lifecycle_body_too_large_response,
+        list_lora_adapter_models,
+    },
+    mistralrs_server_router_builder::DEFAULT_MAX_BODY_LIMIT,
+    types::SharedMistralRsState,
+};
 
 static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 const REQUEST_ID_HEADER: &str = "x-request-id";
@@ -154,6 +161,16 @@ pub async fn metrics_disabled() -> impl IntoResponse {
     (StatusCode::SERVICE_UNAVAILABLE, "metrics disabled")
 }
 
+struct InFlightGuard {
+    labels: [(&'static str, String); 3],
+}
+
+impl Drop for InFlightGuard {
+    fn drop(&mut self) {
+        metrics::gauge!("http_requests_in_flight", &self.labels).decrement(1.0);
+    }
+}
+
 pub async fn observe_http(
     State(observability): State<ObservabilityState>,
     mut req: Request,
@@ -195,7 +212,7 @@ pub async fn observe_http(
         );
     }
 
-    if config.metrics && !housekeeping {
+    let in_flight = if config.metrics && !housekeeping {
         let labels = [
             ("method", method.clone()),
             ("path", route.clone()),
@@ -205,7 +222,10 @@ pub async fn observe_http(
         if let Some(bytes) = request_body_bytes {
             metrics::histogram!("http_request_body_bytes", &labels).record(bytes as f64);
         }
-    }
+        Some(InFlightGuard { labels })
+    } else {
+        None
+    };
 
     let mut response = match early_response {
         Some(response) => response,
@@ -226,12 +246,7 @@ pub async fn observe_http(
     }
 
     if config.metrics && !housekeeping {
-        let active_labels = [
-            ("method", method.clone()),
-            ("path", route.clone()),
-            ("model", model.clone()),
-        ];
-        metrics::gauge!("http_requests_in_flight", &active_labels).decrement(1.0);
+        drop(in_flight);
         let labels = [
             ("method", method.clone()),
             ("path", route.clone()),
@@ -240,6 +255,8 @@ pub async fn observe_http(
         ];
         metrics::counter!("http_requests_total", &labels).increment(1);
         metrics::histogram!("http_request_duration_seconds", &labels).record(latency);
+    } else {
+        drop(in_flight);
     }
 
     if log_access {
@@ -287,10 +304,19 @@ async fn extract_model(
         return Ok((req, NO_MODEL.to_string(), None));
     };
 
+    if matches!(field, ModelLabelField::LoraModelQuery) {
+        let model = query_model(req.uri().query());
+        return Ok((
+            req,
+            resolve_normalized_model_label(model.as_deref(), observability),
+            None,
+        ));
+    }
+
     let (parts, body) = req.into_parts();
     let bytes = to_bytes(body, observability.max_body_bytes)
         .await
-        .map_err(|_| (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response())?;
+        .map_err(|_| body_too_large_response(route))?;
     let body_bytes = Some(bytes.len() as u64);
     let model = match serde_json::from_slice::<serde_json::Value>(&bytes) {
         Ok(value) => resolve_model_label(&value, field, observability),
@@ -303,10 +329,20 @@ async fn extract_model(
     ))
 }
 
-#[derive(Clone, Copy)]
+fn body_too_large_response(route: &str) -> Response {
+    if matches!(route, "/v1/load_lora_adapter" | "/v1/unload_lora_adapter") {
+        lifecycle_body_too_large_response()
+    } else {
+        (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelLabelField {
     Model,
     ModelId,
+    LoraModel,
+    LoraModelQuery,
 }
 
 fn resolve_model_label(
@@ -315,14 +351,24 @@ fn resolve_model_label(
     observability: &ObservabilityState,
 ) -> String {
     let model = match field {
-        ModelLabelField::Model => value.get("model").and_then(|model| model.as_str()),
+        ModelLabelField::Model | ModelLabelField::LoraModel | ModelLabelField::LoraModelQuery => {
+            value.get("model").and_then(|model| model.as_str())
+        }
         ModelLabelField::ModelId => value.get("model_id").and_then(|model| model.as_str()),
     };
 
     match field {
         ModelLabelField::Model => resolve_defaultable_model_label(model, observability),
-        ModelLabelField::ModelId => resolve_explicit_model_label(model),
+        ModelLabelField::LoraModel | ModelLabelField::LoraModelQuery => {
+            resolve_normalized_model_label(model, observability)
+        }
+        ModelLabelField::ModelId => resolve_explicit_model_label(model, observability),
     }
+}
+
+fn query_model(query: Option<&str>) -> Option<String> {
+    url::form_urlencoded::parse(query?.as_bytes())
+        .find_map(|(key, value)| (key == "model" && !value.is_empty()).then(|| value.into_owned()))
 }
 
 fn resolve_defaultable_model_label(
@@ -336,15 +382,50 @@ fn resolve_defaultable_model_label(
             .ok()
             .flatten()
             .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
-        Some(model) => model.to_string(),
+        Some(model) => known_model_label(model, observability),
     }
 }
 
-fn resolve_explicit_model_label(model: Option<&str>) -> String {
+fn resolve_explicit_model_label(model: Option<&str>, observability: &ObservabilityState) -> String {
     model
         .filter(|model| !model.is_empty())
-        .unwrap_or(UNKNOWN_MODEL)
-        .to_string()
+        .map(|model| known_model_label(model, observability))
+        .unwrap_or_else(|| UNKNOWN_MODEL.to_string())
+}
+
+fn resolve_normalized_model_label(
+    model: Option<&str>,
+    observability: &ObservabilityState,
+) -> String {
+    resolve_defaultable_model_label(normalize_model_label_input(model), observability)
+}
+
+fn normalize_model_label_input(model: Option<&str>) -> Option<&str> {
+    model.map(str::trim).filter(|model| !model.is_empty())
+}
+
+fn known_model_label(model: &str, observability: &ObservabilityState) -> String {
+    let base_model_exists = observability
+        .mistralrs
+        .get_model_status(model)
+        .ok()
+        .flatten()
+        .is_some();
+    let adapter_model_exists = list_lora_adapter_models(&observability.mistralrs)
+        .ok()
+        .is_some_and(|models| adapter_model_label_is_known(model, &models));
+    if base_model_exists || adapter_model_exists {
+        model.to_string()
+    } else {
+        UNKNOWN_MODEL.to_string()
+    }
+}
+
+fn adapter_model_label_is_known(
+    model: &str,
+    models: &[crate::lora_adapters::LoraAdapterModel],
+) -> bool {
+    is_resolvable_lora_adapter_model(models, model)
 }
 
 fn is_housekeeping(method: &str, route: &str, uri_path: &str) -> bool {
@@ -377,6 +458,14 @@ fn model_label_field(route: &str) -> Option<ModelLabelField> {
             | "/v1/audio/speech"
     ) {
         return Some(ModelLabelField::Model);
+    }
+
+    if matches!(route, "/v1/load_lora_adapter" | "/v1/unload_lora_adapter") {
+        return Some(ModelLabelField::LoraModel);
+    }
+
+    if route == "/v1/lora_adapters" {
+        return Some(ModelLabelField::LoraModelQuery);
     }
 
     if matches!(
@@ -457,4 +546,98 @@ fn log_request_done(
 fn rounded_duration_ms(latency_seconds: f64) -> f64 {
     let millis = latency_seconds * MILLIS_PER_SECOND;
     (millis * ACCESS_LOG_MS_ROUNDING).round() / ACCESS_LOG_MS_ROUNDING
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        adapter_model_label_is_known, body_too_large_response, model_label_field,
+        normalize_model_label_input, query_model, ModelLabelField,
+    };
+    use crate::lora_adapters::LoraAdapterModel;
+    use axum::body::to_bytes;
+    use mistralrs_core::{AdapterGenerationId, LoraAdapterInfo};
+
+    fn adapter_model(id: &str, parent: &str, alias: &str) -> LoraAdapterModel {
+        LoraAdapterModel {
+            id: id.to_string(),
+            parent: parent.to_string(),
+            adapter: LoraAdapterInfo {
+                alias: alias.to_string(),
+                source: "source".to_string(),
+                revision: None,
+                generation: AdapterGenerationId::from_bytes([1; 32]),
+                rank: 8,
+                bytes: 16,
+            },
+        }
+    }
+
+    #[test]
+    fn extracts_model_from_adapter_list_query() {
+        assert_eq!(
+            query_model(Some("ignored=value&model=org%2Fmodel")),
+            Some("org/model".to_string())
+        );
+        assert_eq!(query_model(Some("model=")), None);
+        assert_eq!(query_model(None), None);
+    }
+
+    #[test]
+    fn model_labels_use_trimmed_request_ids() {
+        assert_eq!(normalize_model_label_input(None), None);
+        assert_eq!(normalize_model_label_input(Some("   ")), None);
+        assert_eq!(normalize_model_label_input(Some(" model ")), Some("model"));
+        assert_eq!(
+            normalize_model_label_input(Some(" default ")),
+            Some("default")
+        );
+    }
+
+    #[test]
+    fn only_lora_management_routes_trim_model_ids() {
+        assert_eq!(
+            model_label_field("/v1/load_lora_adapter"),
+            Some(ModelLabelField::LoraModel)
+        );
+        assert_eq!(
+            model_label_field("/v1/lora_adapters"),
+            Some(ModelLabelField::LoraModelQuery)
+        );
+        assert_eq!(
+            model_label_field("/v1/chat/completions"),
+            Some(ModelLabelField::Model)
+        );
+        assert_eq!(
+            model_label_field("/v1/models/status"),
+            Some(ModelLabelField::ModelId)
+        );
+    }
+
+    #[test]
+    fn adapter_model_labels_are_bounded_by_resolvable_cards() {
+        let models = vec![
+            adapter_model("base-a::code", "base-a", "code"),
+            adapter_model("base-b::code", "base-b", "code"),
+            adapter_model("base-a::math", "base-a", "math"),
+        ];
+
+        assert!(adapter_model_label_is_known("base-a::code", &models));
+        assert!(adapter_model_label_is_known("math", &models));
+        assert!(!adapter_model_label_is_known("code", &models));
+        assert!(!adapter_model_label_is_known(
+            "unbounded-user-value",
+            &models
+        ));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_body_limit_uses_the_lora_error_envelope() {
+        let response = body_too_large_response("/v1/load_lora_adapter");
+        assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "request_body_too_large");
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+    }
 }

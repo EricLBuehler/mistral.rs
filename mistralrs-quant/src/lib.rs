@@ -20,6 +20,9 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(test)]
+#[path = "build_support/cuda_headers.rs"]
+mod cuda_headers;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -47,7 +50,6 @@ mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors};
 pub use uqff::{
@@ -60,6 +62,39 @@ pub use uqff::{
     UqffReportOptions, UqffTensor, UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult,
     UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
+
+#[doc(hidden)]
+pub fn gguf_affine_adjust_cache_bytes(
+    device: &Device,
+    dtype: DType,
+    available_bytes: usize,
+    requested_cache_bytes: usize,
+    minimum_cache_bytes: usize,
+    may_reduce_cache: bool,
+) -> Result<usize> {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_adjust_cache_bytes(
+            device,
+            dtype,
+            available_bytes,
+            requested_cache_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        )
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (
+            device,
+            dtype,
+            available_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        );
+        Ok(requested_cache_bytes)
+    }
+}
 
 #[cfg(feature = "metal")]
 pub use afq::ops::{
@@ -89,13 +124,18 @@ pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, quantize_input_q8_1,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
+    quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
     ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
 #[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
+#[cfg(feature = "cuda")]
 pub use gguf::fast_mmq::{
-    grouped as grouped_moe_mmq, grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair,
-    grouped_pair as grouped_moe_mmq_pair, supports as supports_mmq,
+    grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
+    grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
@@ -107,8 +147,22 @@ pub use isq_executor::{
     IsqPlanParams, IsqRequest, IsqResourceEstimate,
 };
 pub use lora::{
-    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
-    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
+    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
+    register_dynamic_lora_site, with_lora_execution, with_lora_execution_repeated_row,
+    with_lora_execution_row_range, DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights,
+    LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraExpertDelta,
+    LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection, LoraExpertProjectionNames,
+    LoraExpertProjectionWeights, LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights,
+    LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey,
+    LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, RoutedLoraAdapterWeight,
+    RoutedLoraInputMode, RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, StaticLoraConfig,
+    ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use lora::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
@@ -126,7 +180,7 @@ pub use utils::isq::{
 };
 pub use utils::softcap;
 pub use utils::softmax_with_sinks;
-pub use utils::{fused_glu, GluActivationType};
+pub use utils::{fused_glu, fused_split_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
@@ -138,9 +192,41 @@ pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
     pub executor: IsqExecutor,
     pub capture: IsqCaptureMode,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqConfig {
+    pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
+    pub overrides: Vec<ImmediateIsqOverride>,
+    pub capture: IsqCaptureMode,
+}
+
+impl ImmediateIsqConfig {
+    pub fn new(ty: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) -> Self {
+        Self {
+            ty,
+            predicates,
+            promoted_predicates: Vec::new(),
+            overrides: Vec::new(),
+            capture,
+        }
+    }
+
+    pub fn with_promoted_predicates(mut self, promoted_predicates: Vec<Regex>) -> Self {
+        self.promoted_predicates = promoted_predicates;
+        self
+    }
+
+    pub fn with_overrides(mut self, overrides: Vec<ImmediateIsqOverride>) -> Self {
+        self.overrides = overrides;
+        self
+    }
 }
 
 /// Whether load-time ISQ quantizes layers or captures them unquantized for later quantization.
@@ -193,6 +279,7 @@ pub fn layer_index_from_prefix(prefix: &str) -> Option<usize> {
 pub struct ImmediateIsqMatch {
     pub ty: Option<IsqType>,
     pub device: Option<Device>,
+    pub promote_default: bool,
 }
 
 thread_local! {
@@ -211,14 +298,22 @@ pub fn set_immediate_isq_with_executor(
     capture: IsqCaptureMode,
     executor: IsqExecutor,
 ) {
+    set_immediate_isq_config(
+        ImmediateIsqConfig::new(isq, predicates, capture).with_overrides(overrides),
+        executor,
+    );
+}
+
+pub fn set_immediate_isq_config(config: ImmediateIsqConfig, executor: IsqExecutor) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
-            ty: isq,
-            predicates,
-            overrides,
+            ty: config.ty,
+            predicates: config.predicates,
+            promoted_predicates: config.promoted_predicates,
+            overrides: config.overrides,
             executor,
-            capture,
+            capture: config.capture,
         });
     });
 }
@@ -283,6 +378,17 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    let promote_default = params
+        .promoted_predicates
+        .iter()
+        .any(|predicate| predicate.is_match(prefix));
+    let default_ty = params.ty.map(|ty| {
+        if promote_default {
+            ty.promote_for_sensitive_tensor()
+        } else {
+            ty
+        }
+    });
     if params.capture == IsqCaptureMode::CaptureAll {
         // Capture everything; topology overrides still pin per-layer ty/device.
         if let Some(override_hit) = params
@@ -291,13 +397,15 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             .find(|override_entry| override_entry.matches(prefix))
         {
             return Some(ImmediateIsqMatch {
-                ty: override_hit.ty.or(params.ty),
+                ty: override_hit.ty.or(default_ty),
                 device: override_hit.device.clone(),
+                promote_default,
             });
         }
         return Some(ImmediateIsqMatch {
             ty: None,
             device: None,
+            promote_default,
         });
     }
 
@@ -306,18 +414,19 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
         .iter()
         .find(|override_entry| override_entry.matches(prefix))
     {
-        let ty = override_hit.ty.or(params.ty);
+        let ty = override_hit.ty.or(default_ty);
         // Device-only overrides still need a match so the layer gets relocated
         if ty.is_some() || override_hit.device.is_some() {
             return Some(ImmediateIsqMatch {
                 ty,
                 device: override_hit.device.clone(),
+                promote_default,
             });
         }
         return None;
     }
 
-    if let Some(ty) = params.ty {
+    if let Some(ty) = default_ty {
         if params
             .predicates
             .iter()
@@ -326,6 +435,7 @@ fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<Im
             return Some(ImmediateIsqMatch {
                 ty: Some(ty),
                 device: None,
+                promote_default,
             });
         }
     }
@@ -764,6 +874,22 @@ impl std::fmt::Display for IsqType {
 }
 
 impl IsqType {
+    pub fn promote_for_sensitive_tensor(self) -> Self {
+        match self {
+            Self::AFQ2 | Self::AFQ3 | Self::AFQ4 => Self::AFQ6,
+            Self::AFQ6 | Self::AFQ8 => Self::AFQ8,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q4_0 | Self::Q4_1 => Self::Q6K,
+            Self::Q5K
+            | Self::Q6K
+            | Self::Q8K
+            | Self::Q5_0
+            | Self::Q5_1
+            | Self::Q8_0
+            | Self::Q8_1 => Self::Q8_0,
+            ty => ty,
+        }
+    }
+
     /// Factor by which the weight size is reduced over the given dtype.
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
@@ -1210,10 +1336,38 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
+        self.embedding_forward_raw(ids)?.to_dtype(output_dtype)
+    }
+
+    fn embedding_forward_raw(&self, _ids: &Tensor) -> Result<Tensor> {
+        candle_core::bail!(
+            "{} does not support `embedding_forward`. Please raise an issue.",
+            self.name()
+        )
+    }
+
     /// Get the underlying QTensor if this is a GGUF quantized layer.
     /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn prepare_gguf_affine_raw(
+        &self,
+        _flat_batch: usize,
+        _dtype: DType,
+        _device: &Device,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
+        Ok(None)
     }
 
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
@@ -1245,6 +1399,14 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         None
+    }
+
+    fn is_dynamic_lora_active(&self) -> bool {
+        false
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        replacement
     }
 
     fn has_bias(&self) -> bool {
@@ -1288,6 +1450,104 @@ impl Module for dyn QuantMethod {
 }
 
 #[cfg(feature = "cuda")]
+pub fn try_fused_quantized_ffn(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    down: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some()
+        || up.stats_snapshot().is_some()
+        || down.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() || down.is_dynamic_lora_active()
+    {
+        return Ok(None);
+    }
+    if gate.has_bias() || up.has_bias() || down.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let (flat_batch, k) = match xs.dims() {
+        [batch, k] => (*batch, *k),
+        [batch, rows, k] => (*batch * *rows, *k),
+        _ => return Ok(None),
+    };
+    if flat_batch < gguf::GGUF_AFFINE_MIN_BATCH {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(down_q) = down.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+    let (intermediate, gate_cols) = gate_q.shape().dims2()?;
+    let (_, down_cols) = down_q.shape().dims2()?;
+    if gate_cols != k || down_cols != intermediate {
+        return Ok(None);
+    }
+    if !gate_q.device().same_device(xs.device())
+        || !up_q.device().same_device(xs.device())
+        || !down_q.device().same_device(xs.device())
+    {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let down_ready = down.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready && down_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            let intermediate = fused_glu(&gate_out, &up_out, activation)?;
+            drop(gate_out);
+            drop(up_out);
+            let out = down
+                .try_gguf_affine_forward_raw(&intermediate)?
+                .expect("prepared GGUF affine down projection");
+            return Ok(Some(out));
+        }
+    }
+
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    if gate_q.dtype() != up_q.dtype()
+        || !gguf::fast_mmq::supports(gate_q.dtype())
+        || !gguf::fast_mmq::supports(down_q.dtype())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmq::fused_ffn(
+        &gate_q, &up_q, &down_q, xs, activation,
+    )?))
+}
+
+#[cfg(feature = "cuda")]
 pub fn try_fused_quantized_gate_up(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -1295,6 +1555,12 @@ pub fn try_fused_quantized_gate_up(
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
     if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() {
         return Ok(None);
     }
     if gate.has_bias() || up.has_bias() {
@@ -1310,12 +1576,6 @@ pub fn try_fused_quantized_gate_up(
     let Some(up_q) = up.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != up_q.dtype() {
-        return Ok(None);
-    }
-    if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
-        return Ok(None);
-    }
     if gate_q.shape() != up_q.shape() {
         return Ok(None);
     }
@@ -1324,7 +1584,7 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, ncols) = gate_q.shape().dims2()?;
@@ -1332,9 +1592,39 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_glu(
-        &gate_q, &up_q, xs, activation,
-    )?))
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
+        }
+    }
+
+    if gate_q.dtype() != up_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    } else {
+        if !gguf::fast_mmq::supports(gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    }
 }
 
 /// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
@@ -1370,6 +1660,13 @@ pub fn try_fused_quantized_qkv(
     if !xs.device().is_cuda() {
         return Ok(None);
     }
+    if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if q.is_dynamic_lora_active() || k.is_dynamic_lora_active() || v.is_dynamic_lora_active() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }
@@ -1386,16 +1683,12 @@ pub fn try_fused_quantized_qkv(
     let Some(v_q) = v.get_qtensor() else {
         return Ok(None);
     };
-    let dtype = q_q.dtype();
-    if dtype != k_q.dtype() || dtype != v_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
-        return Ok(None);
-    }
 
     let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, q_cols) = q_q.shape().dims2()?;
@@ -1405,7 +1698,40 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let q_ready = q.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let k_ready = k.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let v_ready = v.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if q_ready && k_ready && v_ready {
+            let q_out = q
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine query projection");
+            let k_out = k
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine key projection");
+            let v_out = v
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine value projection");
+            return Ok(Some((q_out, k_out, v_out)));
+        }
+    }
+
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    } else {
+        if !gguf::fast_mmq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    }
 }
 
 /// Metal fused gate+up: single Metal kernel that does both matmuls with shared
@@ -1516,7 +1842,7 @@ pub fn try_fused_gate_up_metal(
     metal_kernels::call_afq_qmm_gate_up(
         device.device(),
         &encoder,
-        &metal_kernels::Kernels::new(),
+        metal_kernels::Kernels::global(),
         dtype,
         (
             xs_storage.buffer(),
@@ -1659,7 +1985,7 @@ pub fn try_fused_qkv_metal(
     metal_kernels::call_afq_qmm_qkv(
         device.device(),
         &encoder,
-        &metal_kernels::Kernels::new(),
+        metal_kernels::Kernels::global(),
         dtype,
         (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
         qw_m.buffer(),
@@ -1778,7 +2104,11 @@ pub fn linear_no_bias(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1788,7 +2118,6 @@ pub fn linear_no_bias(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1828,9 +2157,6 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1838,13 +2164,9 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear(
@@ -1859,7 +2181,11 @@ pub fn linear(
             if let Some(layer) =
                 reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return Ok(layer);
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
             }
         }
     }
@@ -1869,7 +2195,6 @@ pub fn linear(
         vb
     };
 
-    let mut lora_merged = false;
     let layer = if let Some(quant_conf) = &config {
         match quant_conf {
             QuantizedConfig::GptqAwq { .. } => gptq_linear(in_dim, out_dim, quant_conf, vb)?,
@@ -1909,9 +2234,6 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let (weight, merged) =
-                merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-            lora_merged = merged;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1920,13 +2242,9 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    // merged weights diverge from the source checkpoint; no shard means no from-source requant
-    let tracked_shard = if lora_merged {
-        None
-    } else {
-        Some(Shard::default())
-    };
-    apply_immediate_isq_sharded(layer, base_vb, tracked_shard)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear_b(
@@ -1966,6 +2284,131 @@ mod tests {
             Device::Cpu,
             make_dummy_regexes,
         )
+    }
+
+    fn immediate_params(
+        ty: Option<IsqType>,
+        overrides: Vec<ImmediateIsqOverride>,
+    ) -> ImmediateIsqParams {
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        ImmediateIsqParams {
+            guard: QuantizeOntoGuard::new(),
+            ty,
+            predicates: vec![Regex::new(r"\.weight$").unwrap()],
+            promoted_predicates: vec![
+                Regex::new(r"^model\.embed_tokens\.(?:weight|bias)$").unwrap()
+            ],
+            overrides,
+            executor,
+            capture: IsqCaptureMode::Immediate,
+        }
+    }
+
+    #[test]
+    fn sensitive_tensor_policy_promotes_expected_types() {
+        for ty in [IsqType::AFQ2, IsqType::AFQ3, IsqType::AFQ4] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ6);
+        }
+        for ty in [IsqType::AFQ6, IsqType::AFQ8] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ8);
+        }
+        for ty in [
+            IsqType::Q2K,
+            IsqType::Q3K,
+            IsqType::Q4K,
+            IsqType::Q4_0,
+            IsqType::Q4_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q6K);
+        }
+        for ty in [
+            IsqType::Q5K,
+            IsqType::Q6K,
+            IsqType::Q8K,
+            IsqType::Q5_0,
+            IsqType::Q5_1,
+            IsqType::Q8_0,
+            IsqType::Q8_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q8_0);
+        }
+        assert_eq!(IsqType::HQQ4.promote_for_sensitive_tensor(), IsqType::HQQ4);
+    }
+
+    #[test]
+    fn immediate_isq_promotion_requires_an_explicit_predicate() {
+        let params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, Some(IsqType::AFQ6));
+        assert!(promoted.promote_default);
+
+        let lookalike = resolve_immediate_isq(&params, "vision.embed_tokens.weight").unwrap();
+        assert_eq!(lookalike.ty, Some(IsqType::AFQ4));
+        assert!(!lookalike.promote_default);
+    }
+
+    #[test]
+    fn immediate_isq_explicit_type_wins_over_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ2));
+        assert!(matched.promote_default);
+    }
+
+    #[test]
+    fn immediate_isq_uses_sensitive_default_only_for_sensitive_tensors() {
+        for (base, sensitive) in [
+            (IsqType::AFQ6, IsqType::AFQ8),
+            (IsqType::Q4K, IsqType::Q6K),
+            (IsqType::Q6K, IsqType::Q8_0),
+        ] {
+            let params = immediate_params(Some(base), Vec::new());
+            let embedding = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+            assert_eq!(embedding.ty, Some(sensitive));
+            let projection =
+                resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+            assert_eq!(projection.ty, Some(base));
+        }
+    }
+
+    #[test]
+    fn immediate_isq_device_only_override_keeps_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: None,
+                device: Some(Device::Cpu),
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn capture_all_records_promotion_without_pinning_a_type() {
+        let mut params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        params.capture = IsqCaptureMode::CaptureAll;
+
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, None);
+        assert!(promoted.promote_default);
+
+        let regular =
+            resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+        assert_eq!(regular.ty, None);
+        assert!(!regular.promote_default);
     }
 
     #[test]

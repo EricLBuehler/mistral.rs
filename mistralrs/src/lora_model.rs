@@ -1,4 +1,6 @@
-use mistralrs_core::{NormalLoaderBuilder, NormalSpecificConfig};
+use mistralrs_core::{
+    LoraAdapterSpec, LoraRuntimeConfig, NormalLoaderBuilder, NormalSpecificConfig,
+};
 
 use crate::{
     model_builder_trait::{
@@ -10,25 +12,51 @@ use crate::{
 /// Wrapper of [`TextModelBuilder`] for LoRA models.
 pub struct LoraModelBuilder {
     text_model: TextModelBuilder,
-    lora_adapter_ids: Vec<String>,
+    adapters: Vec<LoraAdapterSpec>,
+    runtime_config: LoraRuntimeConfig,
 }
 
 impl LoraModelBuilder {
-    /// Create a LoRA builder from a [`TextModelBuilder`] and LoRA adapter IDs.
-    pub fn from_text_model_builder(
-        text_model: TextModelBuilder,
-        lora_adapter_ids: impl IntoIterator<Item = impl ToString>,
-    ) -> Self {
+    /// Create a dynamic LoRA builder from a base text model.
+    pub fn from_text_model_builder(text_model: TextModelBuilder) -> Self {
         Self {
             text_model,
-            lora_adapter_ids: lora_adapter_ids
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect(),
+            adapters: Vec::new(),
+            runtime_config: LoraRuntimeConfig::default(),
         }
     }
 
-    /// Load the LoRA model and return a ready-to-use [`Model`].
+    /// Preload an adapter under a request-facing alias.
+    pub fn with_adapter(mut self, alias: impl Into<String>, source: impl Into<String>) -> Self {
+        self.adapters.push(LoraAdapterSpec::new(alias, source));
+        self
+    }
+
+    /// Preload an adapter repository at a specific Hugging Face revision.
+    pub fn with_adapter_revision(
+        mut self,
+        alias: impl Into<String>,
+        source: impl Into<String>,
+        revision: impl Into<String>,
+    ) -> Self {
+        self.adapters
+            .push(LoraAdapterSpec::new(alias, source).with_revision(revision));
+        self
+    }
+
+    /// Preload several typed adapter specifications.
+    pub fn with_adapters(mut self, adapters: impl IntoIterator<Item = LoraAdapterSpec>) -> Self {
+        self.adapters.extend(adapters);
+        self
+    }
+
+    /// Set adapter residency and rank limits.
+    pub fn with_runtime_config(mut self, runtime_config: LoraRuntimeConfig) -> Self {
+        self.runtime_config = runtime_config;
+        self
+    }
+
+    /// Build the base model and its dynamic LoRA runtime.
     pub async fn build(self) -> anyhow::Result<Model> {
         let text_model = self.text_model.clone();
         let config = NormalSpecificConfig {
@@ -36,11 +64,11 @@ impl LoraModelBuilder {
             organization: self.text_model.organization,
             write_uqff: self.text_model.write_uqff,
             from_uqff: self.text_model.from_uqff,
-            imatrix: None,
-            calibration_file: None,
+            imatrix: self.text_model.imatrix,
+            calibration_file: self.text_model.calibration_file,
             hf_cache_path: self.text_model.hf_cache_path,
-            matformer_config_path: None,
-            matformer_slice_name: None,
+            matformer_config_path: self.text_model.matformer_config_path,
+            matformer_slice_name: self.text_model.matformer_slice_name,
         };
 
         maybe_initialize_logging(self.text_model.with_logging);
@@ -53,7 +81,7 @@ impl LoraModelBuilder {
             self.text_model.no_kv_cache,
             self.text_model.jinja_explicit,
         )
-        .with_lora(self.lora_adapter_ids)
+        .with_lora(self.adapters, self.runtime_config)
         .build(self.text_model.loader_type)?;
 
         let (pipeline, scheduler_config, add_model_config) =

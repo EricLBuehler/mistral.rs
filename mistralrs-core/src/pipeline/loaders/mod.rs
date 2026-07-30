@@ -50,7 +50,7 @@ pub use diffusion_loaders::{
 
 use crate::{
     matformer::MatformerSliceConfig, paged_attention::ModelConfigLike, DeviceMapMetadata,
-    DeviceMapSetting, PagedAttentionConfig, TryIntoDType,
+    DeviceMapSetting, PagedAttentionConfig, Topology, TryIntoDType,
 };
 
 use super::{paths::AdapterPaths, Pipeline};
@@ -397,6 +397,167 @@ impl QuantizationConfigShim {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct AutoDeviceMapQuantization<'a> {
+    source: AutoDeviceMapQuantizationSource<'a>,
+    topology: Option<&'a Topology>,
+}
+
+#[derive(Clone, Copy)]
+enum AutoDeviceMapQuantizationSource<'a> {
+    Isq(Option<IsqType>),
+    Uqff(&'a mistralrs_quant::UqffReader),
+}
+
+impl<'a> AutoDeviceMapQuantization<'a> {
+    pub fn isq(isq: Option<IsqType>, topology: Option<&'a Topology>) -> Self {
+        Self {
+            source: AutoDeviceMapQuantizationSource::Isq(isq),
+            topology,
+        }
+    }
+
+    pub fn uqff(reader: &'a mistralrs_quant::UqffReader) -> Self {
+        Self {
+            source: AutoDeviceMapQuantizationSource::Uqff(reader),
+            topology: None,
+        }
+    }
+
+    #[cfg(test)]
+    fn unpromoted_pack_factor_for(
+        &self,
+        name: &str,
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        self.pack_factor_for_candidates(&[name], dtype, fallback, false)
+    }
+
+    pub fn promoted_pack_factor_for(
+        &self,
+        name: &str,
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        self.pack_factor_for_candidates(&[name], dtype, fallback, true)
+    }
+
+    fn pack_factor_for_candidates(
+        &self,
+        names: &[&str],
+        dtype: DType,
+        fallback: usize,
+        promote_default: bool,
+    ) -> Result<usize> {
+        match self.source {
+            AutoDeviceMapQuantizationSource::Uqff(reader) => {
+                for name in names {
+                    if let Some(pack_factor) = reader.pack_factor_for(name, dtype)? {
+                        return Ok(pack_factor);
+                    }
+                }
+                Ok(1)
+            }
+            AutoDeviceMapQuantizationSource::Isq(default) => {
+                let ty = names
+                    .iter()
+                    .find_map(|name| {
+                        self.topology
+                            .and_then(|topology| topology.match_for_name(name))
+                            .and_then(|topology| topology.isq)
+                    })
+                    .or_else(|| {
+                        default.map(|ty| {
+                            if promote_default {
+                                ty.promote_for_sensitive_tensor()
+                            } else {
+                                ty
+                            }
+                        })
+                    });
+                Ok(ty.map(|ty| ty.pack_factor(dtype)).unwrap_or(fallback))
+            }
+        }
+    }
+}
+
+fn promoted_tensor_pack_factor(
+    quantization: Option<&AutoDeviceMapQuantization<'_>>,
+    name: &str,
+    dtype: DType,
+    fallback: usize,
+) -> Result<usize> {
+    quantization.map_or(Ok(fallback), |quantization| {
+        quantization.promoted_pack_factor_for(name, dtype, fallback)
+    })
+}
+
+fn tied_promoted_tensor_pack_factor(
+    quantization: Option<&AutoDeviceMapQuantization<'_>>,
+    embedding_name: &str,
+    legacy_head_name: &str,
+    dtype: DType,
+    fallback: usize,
+) -> Result<usize> {
+    quantization.map_or(Ok(fallback), |quantization| match quantization.source {
+        AutoDeviceMapQuantizationSource::Uqff(_) => quantization.pack_factor_for_candidates(
+            &[embedding_name, legacy_head_name],
+            dtype,
+            fallback,
+            true,
+        ),
+        AutoDeviceMapQuantizationSource::Isq(_) => {
+            quantization.promoted_pack_factor_for(embedding_name, dtype, fallback)
+        }
+    })
+}
+
+fn language_model_pack_factors(
+    quantization: Option<&AutoDeviceMapQuantization<'_>>,
+    embedding_name: &str,
+    head_name: &str,
+    tied: bool,
+    dtype: DType,
+    fallback: usize,
+) -> Result<(usize, usize)> {
+    let embedding = if tied {
+        tied_promoted_tensor_pack_factor(quantization, embedding_name, head_name, dtype, fallback)?
+    } else {
+        promoted_tensor_pack_factor(quantization, embedding_name, dtype, fallback)?
+    };
+    let head = promoted_tensor_pack_factor(quantization, head_name, dtype, fallback)?;
+    Ok((embedding, head))
+}
+
+fn language_model_pack_factors_with_aliases(
+    quantization: Option<&AutoDeviceMapQuantization<'_>>,
+    embedding_names: &[&str],
+    head_names: &[&str],
+    tied: bool,
+    dtype: DType,
+    fallback: usize,
+) -> Result<(usize, usize)> {
+    let embedding = quantization.map_or(Ok(fallback), |quantization| {
+        if tied
+            && matches!(
+                quantization.source,
+                AutoDeviceMapQuantizationSource::Uqff(_)
+            )
+        {
+            let mut candidates = embedding_names.to_vec();
+            candidates.extend_from_slice(head_names);
+            quantization.pack_factor_for_candidates(&candidates, dtype, fallback, true)
+        } else {
+            quantization.pack_factor_for_candidates(embedding_names, dtype, fallback, true)
+        }
+    })?;
+    let head = quantization.map_or(Ok(fallback), |quantization| {
+        quantization.pack_factor_for_candidates(head_names, dtype, fallback, true)
+    })?;
+    Ok((embedding, head))
+}
+
 pub trait DeviceMappedModelLoader {
     /// Maximum activation size of non-mapped parts of this model.
     /// Useful for the multimodal models which may prefer to keep the vison components on the GPU.
@@ -417,6 +578,7 @@ pub trait DeviceMappedModelLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&AutoDeviceMapQuantization<'_>>,
         matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize>;
     /// weight_pack_factor only applies to quantized weights.
@@ -521,4 +683,75 @@ pub trait Loader: Send + Sync {
 
     fn get_id(&self) -> String;
     fn get_kind(&self) -> ModelKind;
+}
+
+#[cfg(test)]
+mod auto_device_map_quantization_tests {
+    use super::*;
+
+    const EMBEDDING: &str = "model.embed_tokens.weight";
+    const HEAD: &str = "lm_head.weight";
+
+    #[test]
+    fn explicit_promotion_and_topology_overrides_resolve_in_estimates() -> Result<()> {
+        let dtype = DType::BF16;
+        for (default, sensitive) in [
+            (IsqType::AFQ4, IsqType::AFQ6),
+            (IsqType::Q4K, IsqType::Q6K),
+            (IsqType::Q5K, IsqType::Q8_0),
+            (IsqType::Q6K, IsqType::Q8_0),
+        ] {
+            let automatic = AutoDeviceMapQuantization::isq(Some(default), None);
+            assert_eq!(
+                automatic.promoted_pack_factor_for(EMBEDDING, dtype, 1)?,
+                sensitive.pack_factor(dtype),
+                "{default}"
+            );
+            assert_eq!(
+                automatic.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
+                default.pack_factor(dtype),
+                "{default}"
+            );
+            assert_eq!(
+                automatic.unpromoted_pack_factor_for(
+                    "model.layers.0.mlp.down_proj.weight",
+                    dtype,
+                    1,
+                )?,
+                default.pack_factor(dtype),
+                "{default}"
+            );
+        }
+
+        let topology = Topology::from_str(
+            "'/^model\\.embed_tokens\\.weight$/':\n  isq: Q2K\n'/^lm_head\\.weight$/':\n  isq: Q8_0\n",
+        )?;
+        let overridden = AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology));
+        assert_eq!(
+            overridden.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
+            IsqType::Q2K.pack_factor(dtype)
+        );
+        assert_eq!(
+            overridden.unpromoted_pack_factor_for(HEAD, dtype, 1)?,
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        assert_eq!(
+            tied_promoted_tensor_pack_factor(Some(&overridden), EMBEDDING, HEAD, dtype, 1,)?,
+            IsqType::Q2K.pack_factor(dtype)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn topology_only_quantization_uses_fallback_for_unmatched_tensors() -> Result<()> {
+        let dtype = DType::BF16;
+        let topology = Topology::from_str("'/^model\\.embed_tokens\\.weight$/':\n  isq: AFQ8\n")?;
+        let quantization = AutoDeviceMapQuantization::isq(None, Some(&topology));
+        assert_eq!(
+            quantization.unpromoted_pack_factor_for(EMBEDDING, dtype, 1)?,
+            IsqType::AFQ8.pack_factor(dtype)
+        );
+        assert_eq!(quantization.unpromoted_pack_factor_for(HEAD, dtype, 3)?, 3);
+        Ok(())
+    }
 }

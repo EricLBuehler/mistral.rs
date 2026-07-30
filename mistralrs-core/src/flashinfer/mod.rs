@@ -133,7 +133,11 @@ impl AttentionBackend for FlashInferAttentionBackend {
 }
 
 fn supports_flashinfer_group_size(q_heads: usize, kv_heads: usize) -> bool {
-    kv_heads != 0 && q_heads.is_multiple_of(kv_heads) && q_heads / kv_heads <= 8
+    if kv_heads == 0 || !q_heads.is_multiple_of(kv_heads) {
+        return false;
+    }
+    // Must match DISPATCH_GQA_GROUP_SIZE in FlashInfer's utils.cuh.
+    matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 8 | 16)
 }
 
 impl FlashInferPagedAttentionViews {
@@ -203,4 +207,22 @@ fn metadata_tensor<'a>(
 ) -> Result<&'a Tensor> {
     map.get(device)
         .ok_or_else(|| candle_core::Error::msg(format!("{name} missing")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_flashinfer_group_size;
+
+    #[test]
+    fn flashinfer_group_size_matches_kernel_instantiations() {
+        for group_size in [1, 2, 3, 4, 8, 16] {
+            assert!(supports_flashinfer_group_size(group_size * 2, 2));
+        }
+
+        for group_size in [0, 5, 6, 7, 9, 15, 17] {
+            assert!(!supports_flashinfer_group_size(group_size * 2, 2));
+        }
+        assert!(!supports_flashinfer_group_size(14, 0));
+        assert!(!supports_flashinfer_group_size(15, 2));
+    }
 }

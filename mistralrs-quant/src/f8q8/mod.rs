@@ -269,6 +269,40 @@ impl F8Q8Linear {
         let output = &output[..n];
         Tensor::from_slice(output, &self.shape, &Device::Cpu)?.to_dtype(dtype)
     }
+
+    fn dequantize_rows(&self, ids: &Tensor) -> Result<Tensor> {
+        let (row_count, row_size) = self.shape.dims2()?;
+        let output_shape = [ids.dims(), &[row_size]].concat();
+        let ids = ids
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .to_vec1::<u32>()?;
+        let mut output = Vec::with_capacity(ids.len() * row_size);
+
+        for id in ids {
+            let id = id as usize;
+            if id >= row_count {
+                candle_core::bail!("embedding index {id} is out of bounds for {row_count} rows");
+            }
+            let mut offset = id * row_size;
+            let end = offset + row_size;
+            while offset < end {
+                let block = &self.data[offset / QK8_0];
+                let block_offset = offset % QK8_0;
+                let len = (QK8_0 - block_offset).min(end - offset);
+                let scale = block.dq_d();
+                output.extend(
+                    block.qs[block_offset..block_offset + len]
+                        .iter()
+                        .map(|value| *value as f32 * scale),
+                );
+                offset += len;
+            }
+        }
+
+        Tensor::from_vec(output, output_shape, &Device::Cpu)
+    }
 }
 
 impl QuantMethod for F8Q8Linear {
@@ -282,6 +316,10 @@ impl QuantMethod for F8Q8Linear {
 
     fn dequantize_w(&self) -> Result<Tensor> {
         self.dequantize(DType::F32)
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.dequantize_rows(ids)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -437,6 +475,30 @@ mod tests {
         assert!(
             max_err < 0.1,
             "F8Q8 non-divisible shape roundtrip max error {max_err} exceeds threshold"
+        );
+    }
+
+    #[test]
+    fn test_f8q8_embedding_gathers_before_dequantizing() {
+        let data = (0..185)
+            .map(|i| (i as f32 - 92.0) / 37.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_slice(&data, (5, 37), &Device::Cpu).unwrap();
+        let linear = F8Q8Linear::from_weight(&weight, None).unwrap();
+        let ids = Tensor::new(&[[4u32, 1], [3, 1]], &Device::Cpu).unwrap();
+        let actual = linear.embedding_forward_raw(&ids).unwrap();
+        let expected = linear
+            .dequantize(DType::F32)
+            .unwrap()
+            .index_select(&ids.flatten_all().unwrap(), 0)
+            .unwrap()
+            .reshape((2, 2, 37))
+            .unwrap();
+
+        assert_eq!(actual.dims(), &[2, 2, 37]);
+        assert_eq!(
+            actual.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            expected.flatten_all().unwrap().to_vec1::<f32>().unwrap()
         );
     }
 
