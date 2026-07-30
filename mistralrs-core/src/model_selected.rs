@@ -360,7 +360,7 @@ pub enum ModelSelected {
 
     /// Select a GGUF model.
     GGUF {
-        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// `tok_model_id` optionally overrides embedded configuration and tokenizer assets.
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
         /// removing all remote accesses.
         #[arg(short, long)]

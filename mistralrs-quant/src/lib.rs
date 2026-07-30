@@ -51,17 +51,68 @@ mod vector_fp8;
 
 use gptq::gptq_linear;
 use regex::Regex;
-pub use safetensors::{Shard, ShardedSafeTensors};
+pub use safetensors::{Shard, ShardedSafeTensors, TensorShapes};
 pub use uqff::{
-    build_output_report_from_layers, build_uqff_report, build_uqff_report_from_artifacts,
-    inspect_uqff_artifacts, inspect_uqff_path, stored_type_from_tensors, uqff_version_tensors,
-    verify_uqff_artifacts, verify_uqff_path, write_uqff_report, QuantizationIssue,
-    QuantizationReport, ShardedVarBuilder, TrackedModule, Tracker, UqffArtifactFile,
+    bias_shard, build_output_report_from_layers, build_uqff_report,
+    build_uqff_report_from_artifacts, inspect_uqff_artifacts, inspect_uqff_path, shard_range,
+    slice_blocked_data, stored_type_from_tensors, uqff_version_tensors, verify_uqff_artifacts,
+    verify_uqff_path, write_uqff_report, BiasShard, QuantizationIssue, QuantizationReport,
+    QuantizedExpertKeys, ShardedVarBuilder, TrackedModule, Tracker, UqffArtifactFile,
     UqffArtifactGroup, UqffArtifacts, UqffExpertKeys, UqffFallbackReport, UqffGeneratedBy,
     UqffInspection, UqffLayerReport, UqffMetadataSummary, UqffOutputReport, UqffReader, UqffReport,
     UqffReportOptions, UqffTensor, UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult,
     UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
+
+pub trait QuantizedWeightSource: Send + Sync {
+    fn contains(&self, name: &str) -> bool;
+
+    fn load_linear(
+        &self,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Option<Arc<dyn QuantMethod>>>;
+
+    fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>>;
+
+    fn shard_alignment(&self, key: &str) -> Result<usize>;
+
+    fn pack_factor(&self, dtype: DType) -> Result<usize>;
+
+    fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>>;
+}
+
+impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
+    fn contains(&self, name: &str) -> bool {
+        (**self).contains(name)
+    }
+
+    fn load_linear(
+        &self,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Option<Arc<dyn QuantMethod>>> {
+        (**self).load_linear(key, device, shard)
+    }
+
+    fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>> {
+        (**self).load_optional_tensor(name, device)
+    }
+
+    fn shard_alignment(&self, key: &str) -> Result<usize> {
+        (**self).shard_alignment(key)
+    }
+
+    fn pack_factor(&self, dtype: DType) -> Result<usize> {
+        (**self).pack_factor(dtype)
+    }
+
+    fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
+        (**self).pack_factor_for(key, dtype)
+    }
+}
 
 #[doc(hidden)]
 pub fn gguf_affine_adjust_cache_bytes(
@@ -120,6 +171,9 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+pub use gguf::archive::{
+    GgufArchive, GgufDType, GgufEndian, GgufShardInfo, GgufTensorData, GgufTensorInfo, GgufVersion,
+};
 pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
@@ -138,6 +192,9 @@ pub use gguf::fast_mmq::{
     grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
+pub use gguf::{
+    GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
+};
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
@@ -2100,9 +2157,9 @@ pub fn linear_no_bias(
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
     if config.is_none() {
-        if let Some(reader) = base_vb.uqff_reader() {
+        if let Some(source) = base_vb.weight_source() {
             if let Some(layer) =
-                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+                source.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
                 return maybe_wrap_dynamic_lora(
                     &base_vb,
@@ -2177,9 +2234,9 @@ pub fn linear(
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
     if config.is_none() {
-        if let Some(reader) = base_vb.uqff_reader() {
+        if let Some(source) = base_vb.weight_source() {
             if let Some(layer) =
-                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+                source.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
                 return maybe_wrap_dynamic_lora(
                     &base_vb,

@@ -16,7 +16,7 @@ use std::{
 use anyhow::Result;
 use as_any::AsAny;
 use candle_core::{DType, Device};
-use mistralrs_quant::{IsqType, QuantizedConfig};
+use mistralrs_quant::{IsqType, QuantizedConfig, QuantizedWeightSource};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -406,7 +406,7 @@ pub struct AutoDeviceMapQuantization<'a> {
 #[derive(Clone, Copy)]
 enum AutoDeviceMapQuantizationSource<'a> {
     Isq(Option<IsqType>),
-    Uqff(&'a mistralrs_quant::UqffReader),
+    WeightSource(&'a dyn QuantizedWeightSource),
 }
 
 impl<'a> AutoDeviceMapQuantization<'a> {
@@ -417,11 +417,15 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         }
     }
 
-    pub fn uqff(reader: &'a mistralrs_quant::UqffReader) -> Self {
+    pub fn weight_source(source: &'a dyn QuantizedWeightSource) -> Self {
         Self {
-            source: AutoDeviceMapQuantizationSource::Uqff(reader),
+            source: AutoDeviceMapQuantizationSource::WeightSource(source),
             topology: None,
         }
+    }
+
+    pub fn uqff(source: &'a dyn QuantizedWeightSource) -> Self {
+        Self::weight_source(source)
     }
 
     #[cfg(test)]
@@ -451,9 +455,9 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         promote_default: bool,
     ) -> Result<usize> {
         match self.source {
-            AutoDeviceMapQuantizationSource::Uqff(reader) => {
+            AutoDeviceMapQuantizationSource::WeightSource(source) => {
                 for name in names {
-                    if let Some(pack_factor) = reader.pack_factor_for(name, dtype)? {
+                    if let Some(pack_factor) = source.pack_factor_for(name, dtype)? {
                         return Ok(pack_factor);
                     }
                 }
@@ -501,12 +505,8 @@ fn tied_promoted_tensor_pack_factor(
     fallback: usize,
 ) -> Result<usize> {
     quantization.map_or(Ok(fallback), |quantization| match quantization.source {
-        AutoDeviceMapQuantizationSource::Uqff(_) => quantization.pack_factor_for_candidates(
-            &[embedding_name, legacy_head_name],
-            dtype,
-            fallback,
-            true,
-        ),
+        AutoDeviceMapQuantizationSource::WeightSource(_) => quantization
+            .pack_factor_for_candidates(&[embedding_name, legacy_head_name], dtype, fallback, true),
         AutoDeviceMapQuantizationSource::Isq(_) => {
             quantization.promoted_pack_factor_for(embedding_name, dtype, fallback)
         }
@@ -542,7 +542,7 @@ fn language_model_pack_factors_with_aliases(
         if tied
             && matches!(
                 quantization.source,
-                AutoDeviceMapQuantizationSource::Uqff(_)
+                AutoDeviceMapQuantizationSource::WeightSource(_)
             )
         {
             let mut candidates = embedding_names.to_vec();
@@ -672,7 +672,7 @@ pub trait Loader: Send + Sync {
     )]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,

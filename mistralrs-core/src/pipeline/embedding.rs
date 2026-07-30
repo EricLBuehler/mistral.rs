@@ -208,7 +208,7 @@ impl Loader for EmbeddingLoader {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -221,7 +221,7 @@ impl Loader for EmbeddingLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -501,20 +501,21 @@ impl Loader for EmbeddingLoader {
         );
 
         let (model, tracker) = if use_distributed {
-            let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
-                dtype,
-                &device,
-                &available_devices,
-                tensor_parallelism.world_size(),
-                silent,
-                &config,
-                loading_isq,
-                self.config.from_uqff.is_some(),
-                self.config.write_uqff.is_some(),
-                IsqOrganization::Default,
-                &*self.inner,
-                paths.as_ref(),
-            )?;
+            let (mapper, sharded_vb) =
+                distributed::prepare_distributed_mapper(distributed::DistributedMapperConfig {
+                    dtype,
+                    device: &device,
+                    available_devices: &available_devices,
+                    global_world_size_override: tensor_parallelism.world_size(),
+                    silent,
+                    config: &config,
+                    loading_isq,
+                    from_uqff: self.config.from_uqff.is_some(),
+                    write_uqff: self.config.write_uqff.is_some(),
+                    organization: IsqOrganization::Default,
+                    model: &*self.inner,
+                    weights: distributed::DistributedWeightSource::Paths(paths),
+                })?;
             let sharded_vb = if let Some(reader) = uqff_reader.clone() {
                 sharded_vb.with_uqff_reader(reader)
             } else {

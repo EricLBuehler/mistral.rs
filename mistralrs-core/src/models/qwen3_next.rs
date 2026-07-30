@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache};
+use crate::gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
@@ -87,6 +87,8 @@ pub struct Config {
     #[serde(default = "default_tie")]
     pub tie_word_embeddings: bool,
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
+    gdn_v_head_layout: GdnVHeadLayout,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +151,9 @@ impl GdnConfig for Config {
     }
     fn quantization_config(&self) -> &Option<QuantizedConfig> {
         &self.quantization_config
+    }
+    fn v_head_layout(&self) -> GdnVHeadLayout {
+        self.gdn_v_head_layout
     }
 }
 
@@ -686,7 +691,7 @@ impl Model {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
-        _is_gptx: bool,
+        is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -753,7 +758,7 @@ impl Model {
                         rot_dim,
                         cfg.max_position_embeddings,
                         device,
-                        true,
+                        is_gptx,
                         vb_m.dtype(),
                     )?;
                     e.insert(Arc::new(rope));
@@ -813,15 +818,27 @@ impl Model {
                         &comm,
                     )?)
                 }
-                LayerType::LinearAttention => LayerImpl::LinearAttention(GatedDeltaNet::load(
-                    vb_layer.clone(),
-                    cfg as &dyn GdnConfig,
-                    &*mapper,
-                    i,
-                    normal_loading_metadata.loading_isq,
-                    &comm,
-                    GdnInputProjectionKind::Grouped,
-                )?),
+                LayerType::LinearAttention => {
+                    let vb_linear_attn = vb_layer.pp("linear_attn");
+                    let projection_kind = if vb_linear_attn.contains_tensor("in_proj_b.weight")
+                        && vb_linear_attn.contains_tensor("in_proj_a.weight")
+                    {
+                        GdnInputProjectionKind::Split
+                    } else if vb_linear_attn.contains_tensor("in_proj_qkv.weight") {
+                        GdnInputProjectionKind::SplitQkvzGroupedBa
+                    } else {
+                        GdnInputProjectionKind::Grouped
+                    };
+                    LayerImpl::LinearAttention(GatedDeltaNet::load(
+                        vb_layer.clone(),
+                        cfg as &dyn GdnConfig,
+                        &*mapper,
+                        i,
+                        normal_loading_metadata.loading_isq,
+                        &comm,
+                        projection_kind,
+                    )?)
+                }
             };
 
             let input_layernorm = GemmaRmsNorm::new(

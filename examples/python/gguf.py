@@ -1,10 +1,15 @@
+"""Load and run a standalone GGUF model from Hugging Face.
+
+Set `tok_model_id` only when the original model repo is needed for configuration or tokenizer
+assets.
+"""
+
 from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
     which=Which.GGUF(
-        tok_model_id="mistralai/Mistral-7B-Instruct-v0.1",
-        quantized_model_id="TheBloke/Mistral-7B-Instruct-v0.1-GGUF",
-        quantized_filename="mistral-7b-instruct-v0.1.Q4_K_M.gguf",
+        quantized_model_id="unsloth/Qwen3-0.6B-GGUF",
+        quantized_filename="Qwen3-0.6B-Q4_K_M.gguf",
     )
 )
 

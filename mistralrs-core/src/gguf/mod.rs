@@ -1,12 +1,17 @@
 mod chat_template;
 mod content;
 mod gguf_tokenizer;
+pub(crate) mod normal_bindings;
+pub(crate) mod normal_config;
+pub(crate) mod normal_registry;
 use strum::EnumString;
 
 use anyhow::{Context, Result};
-pub(crate) use chat_template::get_gguf_chat_template;
+pub(crate) use chat_template::{get_gguf_chat_template, get_gguf_chat_template_from_metadata};
 pub(crate) use content::Content;
-pub(crate) use gguf_tokenizer::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
+pub(crate) use gguf_tokenizer::{
+    convert_gguf_metadata_to_hf_tokenizer, convert_gguf_to_hf_tokenizer, GgufTokenizerConversion,
+};
 use std::str::FromStr;
 
 pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";

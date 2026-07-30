@@ -89,14 +89,14 @@ GGUF is not auto-detected; select it with `--format gguf` and name the file with
 
 ```bash
 # from the Hub
-mistralrs run --format gguf -m bartowski/Meta-Llama-3.1-8B-Instruct-GGUF \
-  -f Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+mistralrs run --format gguf -m unsloth/Qwen3-0.6B-GGUF \
+  -f Qwen3-0.6B-Q4_K_M.gguf
 
 # from a local directory
 mistralrs run --format gguf -m /path/to/dir -f model-q4k.gguf
 ```
 
-Multi-file models pass semicolon-separated names to `-f`. The tokenizer and chat template are read from the GGUF metadata; pass `--tok-model-id <hf-id>` to source them from the original repo instead.
+Multi-file models pass semicolon-separated names to `-f`.
 
 </TabItem>
 <TabItem label="Python">
@@ -106,8 +106,8 @@ from mistralrs import Runner, Which
 
 runner = Runner(
     which=Which.GGUF(
-        quantized_model_id="bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-        quantized_filename="Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+        quantized_model_id="unsloth/Qwen3-0.6B-GGUF",
+        quantized_filename="Qwen3-0.6B-Q4_K_M.gguf",
     )
 )
 ```
@@ -121,8 +121,8 @@ runner = Runner(
 use mistralrs::GgufModelBuilder;
 
 let model = GgufModelBuilder::new(
-    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-    vec!["Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"],
+    "unsloth/Qwen3-0.6B-GGUF",
+    vec!["Qwen3-0.6B-Q4_K_M.gguf"],
 )
 .build()
 .await?;
@@ -132,6 +132,13 @@ let model = GgufModelBuilder::new(
 
 </TabItem>
 </Tabs>
+
+Most text GGUF files are standalone: mistral.rs reads the model configuration, tokenizer, and chat
+template from the file. Text-serving features are available when supported by the model and
+backend. If those assets are missing or unsuitable, use the original model repo as an optional
+fallback:
+`--tok-model-id <hf-id>` on the CLI, `tok_model_id="<hf-id>"` in Python, or
+`.with_tok_model_id("<hf-id>")` in Rust.
 
 ## Forcing an architecture
 

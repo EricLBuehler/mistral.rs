@@ -546,21 +546,43 @@ pub(crate) fn ipc_name() -> anyhow::Result<Name<'static>> {
     Ok(printname.to_ns_name::<GenericNamespaced>()?)
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(crate) enum DistributedWeightSource<'a> {
+    Paths(&'a dyn ModelPaths),
+    Prepared(ShardedVarBuilder),
+}
+
+pub(crate) struct DistributedMapperConfig<'a, T: ?Sized> {
+    pub dtype: DType,
+    pub device: &'a Device,
+    pub available_devices: &'a [Device],
+    pub global_world_size_override: Option<usize>,
+    pub silent: bool,
+    pub config: &'a str,
+    pub loading_isq: bool,
+    pub from_uqff: bool,
+    pub write_uqff: bool,
+    pub organization: IsqOrganization,
+    pub model: &'a T,
+    pub weights: DistributedWeightSource<'a>,
+}
+
 pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLoader + ?Sized>(
-    dtype: DType,
-    device: &Device,
-    available_devices: &[Device],
-    global_world_size_override: Option<usize>,
-    silent: bool,
-    config: &str,
-    loading_isq: bool,
-    from_uqff: bool,
-    write_uqff: bool,
-    organization: IsqOrganization,
-    model: &T,
-    paths: &dyn ModelPaths,
+    args: DistributedMapperConfig<'_, T>,
 ) -> anyhow::Result<(Box<dyn DeviceMapper + Send + Sync>, ShardedVarBuilder)> {
+    let DistributedMapperConfig {
+        dtype,
+        device,
+        available_devices,
+        global_world_size_override,
+        silent,
+        config,
+        loading_isq,
+        from_uqff,
+        write_uqff,
+        organization,
+        model,
+        weights,
+    } = args;
     if !(cfg!(feature = "cuda") || cfg!(feature = "ring")) {
         tracing::warn!(
             "Distributed support was not included in the build, be sure to build with `--features nccl`."
@@ -740,17 +762,20 @@ pub(crate) fn prepare_distributed_mapper<T: DeviceMappedModelLoader + IsqModelLo
         None
     };
 
-    let sharded_vb = varbuilder_utils::from_mmaped_safetensors(
-        paths.get_weight_filenames().to_vec(),
-        vec![],
-        Some(dtype),
-        &Device::Cpu,
-        vec![],
-        silent,
-        make_dummy_regexes,
-        |_| true,
-        Arc::new(|_| DeviceForLoadTensor::Base),
-    )?;
+    let sharded_vb = match weights {
+        DistributedWeightSource::Paths(paths) => varbuilder_utils::from_mmaped_safetensors(
+            paths.get_weight_filenames().to_vec(),
+            vec![],
+            Some(dtype),
+            &Device::Cpu,
+            vec![],
+            silent,
+            make_dummy_regexes,
+            |_| true,
+            Arc::new(|_| DeviceForLoadTensor::Base),
+        )?,
+        DistributedWeightSource::Prepared(vb) => vb.set_dtype(dtype),
+    };
 
     info!("Loading all ranks.");
     // The mapper is specific to this pipeline

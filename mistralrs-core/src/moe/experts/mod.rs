@@ -98,7 +98,7 @@ impl MoEExperts {
         act: Activation,
     ) -> Result<Self> {
         let experts_vb = vb.pp("experts").set_device(layer_device.clone());
-        if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
+        if let Some(fast) = FastExpertsWeights::from_weight_source(cfg, &experts_vb, comm)? {
             let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),
@@ -172,7 +172,7 @@ impl MoEExperts {
         quantization_config: &Option<QuantizedConfig>,
         act: Activation,
     ) -> Result<Self> {
-        if let Some(fast) = FastExpertsWeights::from_uqff(cfg, &experts_vb, comm)? {
+        if let Some(fast) = FastExpertsWeights::from_weight_source(cfg, &experts_vb, comm)? {
             let lora_site = Self::register_lora_site(cfg, &experts_vb, comm, fast.sharded)?;
             return Ok(Self::from_backend(
                 MoEExpertsBackendImpl::Fast(fast),

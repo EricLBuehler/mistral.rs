@@ -519,6 +519,17 @@ macro_rules! get_paths_gguf {
         } else {
             PathBuf::from_str("")?
         };
+        let config_filename = if $this.model_id.is_some()
+            && dir_list.contains(&"params.json".to_string())
+        {
+            tracing::trace!("Loading `params.json` at `{}`", this_model_id);
+            $crate::api_get_file!(api, "params.json", model_id, &revision)
+        } else if $this.model_id.is_some() && dir_list.contains(&"config.json".to_string()) {
+            tracing::trace!("Loading `config.json` at `{}`", this_model_id);
+            $crate::api_get_file!(api, "config.json", model_id, &revision)
+        } else {
+            PathBuf::from_str("")?
+        };
 
         let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             tracing::trace!("Loading `chat_template.json` at `{}`", this_model_id);
@@ -534,7 +545,7 @@ macro_rules! get_paths_gguf {
 
         Ok(Box::new($path_name {
             tokenizer_filename,
-            config_filename: PathBuf::from_str("")?,
+            config_filename,
             filenames,
             adapter_paths,
             template_filename: chat_template,
@@ -608,6 +619,7 @@ macro_rules! normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -641,6 +653,7 @@ macro_rules! normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -711,6 +724,7 @@ macro_rules! multimodal_normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -750,6 +764,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -814,6 +829,7 @@ macro_rules! embedding_normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: None,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -852,6 +868,7 @@ macro_rules! embedding_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: None,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -934,6 +951,7 @@ macro_rules! xlora_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             &None,
         )?;
@@ -1013,6 +1031,7 @@ macro_rules! lora_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+            rope_pairing: None,
             },
             $attention_mechanism,
         )?;

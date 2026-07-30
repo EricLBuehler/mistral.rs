@@ -4,7 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor};
 use candle_nn::LayerNorm;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -43,7 +44,6 @@ pub struct Config {
     pub(crate) sliding_window: Option<usize>,
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
-    #[allow(dead_code)]
     pub(crate) tie_word_embeddings: bool,
 }
 
@@ -479,7 +479,17 @@ impl Model {
             cfg.norm_epsilon,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = embed_tokens.clone();
+        let lm_head = if cfg.tie_word_embeddings {
+            embed_tokens.clone()
+        } else {
+            ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &cfg.quantization_config,
+                false,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        };
         Ok(Self {
             embed_tokens,
             layers,

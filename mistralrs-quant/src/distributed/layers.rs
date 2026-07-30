@@ -29,14 +29,14 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     }
 }
 
-fn load_uqff_linear(
+fn load_weight_source_linear(
     config: &Option<QuantizedConfig>,
     vb: &ShardedVarBuilder,
 ) -> Result<Option<Arc<dyn QuantMethod>>> {
-    load_uqff_linear_shard(config, Shard::default(), vb)
+    load_weight_source_linear_shard(config, Shard::default(), vb)
 }
 
-fn load_uqff_linear_shard(
+fn load_weight_source_linear_shard(
     config: &Option<QuantizedConfig>,
     shard: Shard,
     vb: &ShardedVarBuilder,
@@ -45,11 +45,11 @@ fn load_uqff_linear_shard(
         return Ok(None);
     }
 
-    let Some(reader) = vb.uqff_reader() else {
+    let Some(source) = vb.weight_source() else {
         return Ok(None);
     };
 
-    reader.load_linear(&vb.prefix(), vb.device(), shard)
+    source.load_linear(&vb.prefix(), vb.device(), shard)
 }
 
 /// This layer has a weight that is parallelized along the input dimension,
@@ -76,7 +76,7 @@ impl RowParallelLayer {
         let shard = shard(1, rank, world_size);
 
         let base_vb = vb.clone();
-        if let Some(weight) = load_uqff_linear_shard(config, shard, &base_vb)? {
+        if let Some(weight) = load_weight_source_linear_shard(config, shard, &base_vb)? {
             let weight = maybe_wrap_dynamic_lora(
                 &base_vb,
                 weight,
@@ -89,8 +89,8 @@ impl RowParallelLayer {
             // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
             let bias = if bias {
                 base_vb
-                    .uqff_reader()
-                    .expect("reader present")
+                    .weight_source()
+                    .expect("weight source present")
                     .load_optional_tensor(&format!("{}.bias", base_vb.prefix()), base_vb.device())?
             } else {
                 None
@@ -466,7 +466,7 @@ impl ColumnParallelLayer {
         site_key: LoraSiteKey,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
-        if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
+        if let Some(layer) = load_weight_source_linear_shard(config, shard, &base_vb)? {
             return maybe_wrap_dynamic_lora_with_key(
                 &base_vb,
                 layer,
@@ -690,6 +690,14 @@ impl QuantMethod for ColumnParallelLayer {
         Ok(xs)
     }
 
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.gather_forward_raw(a, indices)?;
+        if let Some(bias) = &self.bias {
+            xs = xs.broadcast_add(bias)?;
+        }
+        Ok(xs)
+    }
+
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         let weight = self.weight.add_delta_w(delta)?;
         Ok(Arc::new(Self {
@@ -823,7 +831,7 @@ impl ReplicatedLayer {
     pub fn from_linear(lin: Linear, vb: ShardedVarBuilder) -> Result<Arc<dyn QuantMethod>> {
         let (out_dim, in_dim) = lin.weight().dims2()?;
         let spec = LoraLinearSpec::replicated(in_dim, out_dim);
-        if let Some(layer) = load_uqff_linear(&None, &vb)? {
+        if let Some(layer) = load_weight_source_linear(&None, &vb)? {
             return maybe_wrap_dynamic_lora(&vb, layer, spec);
         }
 
@@ -854,7 +862,7 @@ impl ReplicatedLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
-        if let Some(layer) = load_uqff_linear(config, &base_vb)? {
+        if let Some(layer) = load_weight_source_linear(config, &base_vb)? {
             return maybe_wrap_dynamic_lora(
                 &base_vb,
                 layer,

@@ -38,6 +38,7 @@ use crate::{
 };
 
 use super::{AutoDeviceMapParams, DeviceMappedModelLoader};
+use crate::gguf::normal_registry::RopePairing;
 
 pub trait NormalModel: IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin {
     fn forward(
@@ -89,6 +90,7 @@ pub struct NormalLoadingMetadata {
     pub multi_progress: Arc<MultiProgress>,
     // Optional Matryoshka Transformer slicing configuration
     pub matformer_slicing_config: Option<MatformerSliceConfig>,
+    pub(crate) rope_pairing: Option<RopePairing>,
 }
 
 pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
@@ -111,6 +113,17 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
     fn is_gptx(&self, config: &str) -> Result<bool>;
+    fn is_gptx_for(
+        &self,
+        config: &str,
+        normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<bool> {
+        match normal_loading_metadata.rope_pairing {
+            Some(RopePairing::Adjacent) => Ok(false),
+            Some(RopePairing::HalfSplit) => Ok(true),
+            None => self.is_gptx(config),
+        }
+    }
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
         Ok(true)
     }
@@ -492,7 +505,7 @@ impl NormalModelLoader for MistralLoader {
         Ok(Box::new(models::mistral::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -514,7 +527,7 @@ impl NormalModelLoader for MistralLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -704,7 +717,7 @@ impl NormalModelLoader for GemmaLoader {
         Ok(Box::new(models::gemma::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -727,7 +740,7 @@ impl NormalModelLoader for GemmaLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -915,7 +928,7 @@ impl NormalModelLoader for LlamaLoader {
         Ok(Box::new(models::llama::Llama::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -938,7 +951,7 @@ impl NormalModelLoader for LlamaLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -1125,7 +1138,7 @@ impl NormalModelLoader for MixtralLoader {
         Ok(Box::new(models::mixtral::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1148,7 +1161,7 @@ impl NormalModelLoader for MixtralLoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -1344,7 +1357,7 @@ impl NormalModelLoader for Phi2Loader {
         Ok(Box::new(models::phi2::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1367,7 +1380,7 @@ impl NormalModelLoader for Phi2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -1553,7 +1566,7 @@ impl NormalModelLoader for Phi3Loader {
         Ok(Box::new(models::phi3::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1576,7 +1589,7 @@ impl NormalModelLoader for Phi3Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -1762,7 +1775,7 @@ impl NormalModelLoader for Qwen2Loader {
         Ok(Box::new(models::qwen2::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1970,7 +1983,7 @@ impl NormalModelLoader for Gemma2Loader {
         Ok(Box::new(models::gemma2::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1993,7 +2006,7 @@ impl NormalModelLoader for Gemma2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -2182,7 +2195,7 @@ impl NormalModelLoader for Starcoder2Loader {
         Ok(Box::new(models::starcoder2::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2205,7 +2218,7 @@ impl NormalModelLoader for Starcoder2Loader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -2388,7 +2401,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
         Ok(Box::new(models::phi3_5_moe::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2411,7 +2424,7 @@ impl NormalModelLoader for Phi3_5MoELoader {
             lora_config,
             xlora_config,
             xlora_ordering,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             preload_adapters,
         )?))
@@ -2621,7 +2634,7 @@ impl NormalModelLoader for DeepSeekV2Loader {
         Ok(Box::new(models::deepseek2::DeepSeekV2::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2965,7 +2978,7 @@ impl NormalModelLoader for DeepSeekV3Loader {
         Ok(Box::new(models::deepseek3::DeepSeekV3::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3310,7 +3323,7 @@ impl NormalModelLoader for Qwen3Loader {
         Ok(Box::new(models::qwen3::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3514,7 +3527,7 @@ impl NormalModelLoader for HunYuanDenseV1Loader {
         Ok(Box::new(models::hunyuan_v1_dense::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3717,7 +3730,7 @@ impl NormalModelLoader for HunYuanMoEV1Loader {
         Ok(Box::new(models::hunyuan_v1_moe::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3949,7 +3962,7 @@ impl NormalModelLoader for GLM4Loader {
         Ok(Box::new(models::glm4::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4147,7 +4160,7 @@ impl NormalModelLoader for GLM4MoeLiteLoader {
         Ok(Box::new(models::glm4_moe_lite::Glm4MoeLite::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4488,7 +4501,7 @@ impl NormalModelLoader for GLM4MoeLoader {
         Ok(Box::new(models::glm4_moe::Glm4Moe::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4828,7 +4841,7 @@ impl NormalModelLoader for Qwen3MoELoader {
         Ok(Box::new(models::qwen3_moe::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5058,7 +5071,7 @@ impl NormalModelLoader for SmolLm3Loader {
         Ok(Box::new(models::smollm3::SmolLm3::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5260,7 +5273,7 @@ impl NormalModelLoader for GraniteMoeHybridLoader {
         Ok(Box::new(models::granite::GraniteMoeHybrid::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5386,10 +5399,7 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
     ) -> Result<Vec<usize>> {
         let cfg: crate::models::granite::Config = serde_json::from_str(config)?;
 
-        let per_layer_elems = {
-            let input_layernorm = cfg.hidden_size;
-            let post_attention_layernorm = cfg.hidden_size;
-
+        let attention_elems = {
             let size_in = cfg.hidden_size;
             let size_q = cfg.head_dim() * cfg.num_attention_heads;
             let size_kv = cfg.head_dim() * cfg.num_key_value_heads();
@@ -5397,26 +5407,54 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
             let k_proj = size_in * size_kv / weight_pack_factor;
             let v_proj = size_in * size_kv / weight_pack_factor;
             let o_proj = size_q * size_in / weight_pack_factor;
-
-            let h_size = cfg.hidden_size;
-            let shared_i_size = cfg.shared_intermediate_size();
-            // GraniteMLP: input_linear (h_size -> shared_i_size * 2), output_linear (shared_i_size -> h_size)
-            let input_linear = h_size * shared_i_size * 2 / weight_pack_factor;
-            let output_linear = shared_i_size * h_size / weight_pack_factor;
-
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + k_proj
-                + v_proj
-                + o_proj
-                + input_linear
-                + output_linear
+            q_proj + k_proj + v_proj + o_proj
         };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
+
+        let mamba_elems = {
+            let intermediate_size = cfg.mamba_intermediate_size();
+            let conv_dim = cfg.mamba_conv_dim();
+            let num_heads = cfg.mamba_n_heads();
+            let projection_size = intermediate_size + conv_dim + num_heads;
+            let in_proj =
+                projection_size * cfg.hidden_size + bias_if!(cfg.mamba_proj_bias, projection_size);
+            let conv1d = conv_dim * cfg.mamba_d_conv + bias_if!(cfg.mamba_conv_bias, conv_dim);
+            let state = num_heads * 3;
+            let norm = intermediate_size;
+            let out_proj = cfg.hidden_size * intermediate_size
+                + bias_if!(cfg.mamba_proj_bias, cfg.hidden_size);
+            in_proj + conv1d + state + norm + out_proj
+        };
+
+        let shared_mlp_elems = {
+            let shared_intermediate_size = if cfg.num_local_experts == 0 {
+                cfg.shared_intermediate_size()
+            } else {
+                cfg.shared_intermediate_size.unwrap_or(0)
+            };
+            cfg.hidden_size * shared_intermediate_size * 2 / weight_pack_factor
+                + shared_intermediate_size * cfg.hidden_size / weight_pack_factor
+        };
+        let routed_moe_elems = if cfg.num_local_experts > 0 {
+            let router = cfg.num_local_experts * cfg.hidden_size;
+            let input_linear = cfg.num_local_experts * cfg.intermediate_size * 2 * cfg.hidden_size;
+            let output_linear = cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size;
+            router + input_linear + output_linear
+        } else {
+            0
+        };
+        let common_elems = cfg.hidden_size * 2 + shared_mlp_elems + routed_moe_elems;
+
+        Ok(cfg
+            .layer_types()
+            .into_iter()
+            .map(|layer_type| {
+                let operator_elems = match layer_type {
+                    crate::models::granite::GraniteLayerType::Attention => attention_elems,
+                    crate::models::granite::GraniteLayerType::Mamba => mamba_elems,
+                };
+                (common_elems + operator_elems) * dtype.size_in_bytes()
+            })
+            .collect())
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
@@ -5463,7 +5501,7 @@ impl NormalModelLoader for GptOssLoader {
         Ok(Box::new(models::gpt_oss::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5601,25 +5639,21 @@ impl DeviceMappedModelLoader for GptOssLoader {
             let o_proj =
                 size_q * size_in / weight_pack_factor + bias_if!(cfg.attention_bias, size_in);
 
-            // MoE experts - MXFP4 quantized, so very compact
-            // gate_up_proj: [num_experts, intermediate_size * 2, hidden_size/2] packed
-            // down_proj: [num_experts, hidden_size, intermediate_size/2] packed
-            // At 4 bits per weight, packing factor is 2
-            let mxfp4_pack = 2;
-            let gate_up_proj_size =
-                cfg.num_local_experts * cfg.intermediate_size * 2 * cfg.hidden_size / mxfp4_pack;
-            let down_proj_size =
-                cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size / mxfp4_pack;
-            // Plus scales at 1 byte per 32 elements
-            let gate_up_scales =
-                cfg.num_local_experts * cfg.intermediate_size * 2 * cfg.hidden_size / 32;
-            let down_scales = cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size / 32;
-            // Plus biases
+            let expert_weights = if matches!(
+                cfg.quantization_config.as_ref(),
+                Some(mistralrs_quant::QuantizedConfig::MXFP4 {})
+            ) {
+                let gate_up = cfg.num_local_experts * cfg.intermediate_size * 2 * cfg.hidden_size;
+                let down = cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size;
+                gate_up / 2 + down / 2 + gate_up / 32 + down / 32
+            } else {
+                let projection = cfg.num_local_experts * cfg.hidden_size * cfg.intermediate_size
+                    / weight_pack_factor;
+                projection * 3
+            };
             let gate_up_bias = cfg.num_local_experts * cfg.intermediate_size * 2;
             let down_bias = cfg.num_local_experts * cfg.hidden_size;
-            // Router
-            let router = cfg.hidden_size * cfg.num_local_experts;
-            // Sinks per head
+            let router = cfg.hidden_size * cfg.num_local_experts + cfg.num_local_experts;
             let sinks = cfg.num_attention_heads;
 
             input_layernorm
@@ -5628,10 +5662,7 @@ impl DeviceMappedModelLoader for GptOssLoader {
                 + k_proj
                 + v_proj
                 + o_proj
-                + gate_up_proj_size
-                + down_proj_size
-                + gate_up_scales
-                + down_scales
+                + expert_weights
                 + gate_up_bias
                 + down_bias
                 + router
@@ -5688,7 +5719,7 @@ impl NormalModelLoader for Qwen3NextLoader {
         Ok(Box::new(models::qwen3_next::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5918,7 +5949,7 @@ impl NormalModelLoader for Lfm2Loader {
         Ok(Box::new(models::lfm2::Model::new(
             &cfg,
             vb,
-            self.is_gptx(config)?,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6219,5 +6250,85 @@ mod tests {
         let config = r#"{"architectures":["LlamaForCausalLM"]}"#;
 
         assert_promoted_isq_predicates("AutoNormalLoader", &AutoNormalLoader, config);
+    }
+
+    #[test]
+    fn granite_estimates_attention_mamba_and_moe_storage() {
+        let mut config = serde_json::json!({
+            "hidden_size": 8,
+            "intermediate_size": 6,
+            "shared_intermediate_size": 4,
+            "vocab_size": 32,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "rms_norm_eps": 0.00001,
+            "max_position_embeddings": 128,
+            "rope_scaling": null,
+            "quantization_config": null,
+            "layer_types": ["attention", "mamba"],
+            "mamba_n_heads": 4,
+            "mamba_n_groups": 1,
+            "mamba_d_state": 2,
+            "mamba_d_head": 4,
+            "mamba_d_conv": 3,
+            "mamba_expand": 2,
+            "mamba_conv_bias": true,
+            "mamba_proj_bias": true,
+            "num_local_experts": 3
+        });
+
+        let sizes = GraniteMoeHybridLoader
+            .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
+            .unwrap();
+        assert_eq!(sizes, vec![2464, 4496]);
+
+        config["shared_intermediate_size"] = serde_json::Value::Null;
+        config["num_hidden_layers"] = serde_json::json!(1);
+        config["layer_types"] = serde_json::json!(["attention"]);
+        let pure_moe = GraniteMoeHybridLoader
+            .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
+            .unwrap();
+        assert_eq!(pure_moe, vec![2272]);
+
+        config["num_local_experts"] = serde_json::json!(0);
+        let pure_dense = GraniteMoeHybridLoader
+            .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
+            .unwrap();
+        assert_eq!(pure_dense, vec![736]);
+    }
+
+    #[test]
+    fn gpt_oss_estimates_split_and_mxfp4_experts() {
+        let mut config = serde_json::json!({
+            "vocab_size": 32,
+            "hidden_size": 8,
+            "intermediate_size": 6,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 0.00001,
+            "rope_theta": 10000.0,
+            "sliding_window": 16,
+            "head_dim": 4,
+            "quantization_config": null,
+            "num_local_experts": 3,
+            "num_experts_per_tok": 2,
+            "layer_types": ["full_attention"],
+            "attention_bias": true,
+            "rope_scaling": null
+        });
+
+        let split = GptOssLoader
+            .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
+            .unwrap();
+        assert_eq!(split, vec![1764]);
+
+        config["quantization_config"] = serde_json::json!({"quant_method": "mxfp4"});
+        let mxfp4 = GptOssLoader
+            .layer_sizes_in_bytes(&config.to_string(), DType::F32, 2, None)
+            .unwrap();
+        assert_eq!(mxfp4, vec![1816]);
     }
 }

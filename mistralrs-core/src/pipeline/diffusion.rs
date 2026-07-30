@@ -109,7 +109,7 @@ impl Loader for DiffusionLoader {
             })))
         };
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -122,7 +122,7 @@ impl Loader for DiffusionLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -132,7 +132,6 @@ impl Loader for DiffusionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths = &paths
-            .as_ref()
             .as_any()
             .downcast_ref::<DiffusionModelPaths>()
             .expect("Path downcast failed.")
@@ -218,6 +217,7 @@ impl Loader for DiffusionLoader {
                         real_device: device.clone(),
                         multi_progress: Arc::new(new_multi_progress()),
                         matformer_slicing_config: None,
+                        rope_pairing: None,
                     },
                     attention_mechanism,
                     silent,

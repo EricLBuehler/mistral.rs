@@ -2,7 +2,7 @@ use candle_core::{DType, Result, Storage, Tensor, D};
 use rayon::prelude::*;
 
 use super::cache::GdnLayerCache;
-use super::config::GdnDims;
+use super::config::{GdnDims, GdnVHeadLayout};
 use crate::pipeline::RecurrentBatchKind;
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -189,6 +189,17 @@ fn compute_beta_g_cpu(
     Ok((beta, g))
 }
 
+fn expand_k_heads(x: &Tensor, dims: &GdnDims, batch_size: usize, seq_len: usize) -> Result<Tensor> {
+    if dims.v_per_group == 1 {
+        return Ok(x.clone());
+    }
+    let expanded = match dims.v_head_layout {
+        GdnVHeadLayout::Grouped => x.unsqueeze(3)?.repeat((1, 1, 1, dims.v_per_group, 1))?,
+        GdnVHeadLayout::Tiled => x.unsqueeze(2)?.repeat((1, 1, dims.v_per_group, 1, 1))?,
+    };
+    expanded.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_recurrence_from_convolved(
     mixed_qkv: &Tensor,
@@ -221,19 +232,8 @@ pub fn apply_recurrence_from_convolved(
     let q = q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
     let k = k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
     let v = v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?;
-    let (q, k) = if dims.v_per_group > 1 {
-        let q = q
-            .unsqueeze(3)?
-            .repeat((1, 1, 1, dims.v_per_group, 1))?
-            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-        let k = k
-            .unsqueeze(3)?
-            .repeat((1, 1, 1, dims.v_per_group, 1))?
-            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-        (q, k)
-    } else {
-        (q, k)
-    };
+    let q = expand_k_heads(&q, dims, batch_size, seq_len)?;
+    let k = expand_k_heads(&k, dims, batch_size, seq_len)?;
     let (beta, g) = compute_beta_g(b, a, a_log, dt_bias, dtype)?;
     let q = l2_norm(&q, QK_NORM_EPS)?;
     let k = l2_norm(&k, QK_NORM_EPS)?;
@@ -289,7 +289,7 @@ fn decode_recurrence_cpu_from_convolved(
         .for_each(|(gate_idx, (state_head, out_head))| {
             let bidx = gate_idx / dims.num_v_heads;
             let hv = gate_idx % dims.num_v_heads;
-            let hk = hv / dims.v_per_group;
+            let hk = dims.k_head_for_v_head(hv);
             let row = bidx * dims.conv_dim;
             let q_base = row + hk * dims.head_k_dim;
             let k_base = row + dims.key_dim + hk * dims.head_k_dim;
@@ -429,6 +429,7 @@ fn recurrence_cuda_from_convolved(
             dims.num_v_heads,
             dims.head_k_dim,
             dims.head_v_dim,
+            dims.v_head_layout == GdnVHeadLayout::Tiled,
         )?
     } else {
         let (q_bh, k_bh, v_bh, g_bh, beta_bh) = crate::cuda::gdn::prepare_recurrence_inputs_cuda(
@@ -443,6 +444,7 @@ fn recurrence_cuda_from_convolved(
             dims.num_v_heads,
             dims.head_k_dim,
             dims.head_v_dim,
+            dims.v_head_layout == GdnVHeadLayout::Tiled,
         )?;
         if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
             crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(
@@ -964,11 +966,12 @@ mod tests {
             .collect()
     }
 
-    fn dims(
+    fn dims_with_layout(
         num_k_heads: usize,
         num_v_heads: usize,
         head_k_dim: usize,
         head_v_dim: usize,
+        v_head_layout: GdnVHeadLayout,
     ) -> GdnDims {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
@@ -983,7 +986,23 @@ mod tests {
             value_dim,
             conv_dim: key_dim * 2 + value_dim,
             v_per_group: num_v_heads / num_k_heads,
+            v_head_layout,
         }
+    }
+
+    fn dims(
+        num_k_heads: usize,
+        num_v_heads: usize,
+        head_k_dim: usize,
+        head_v_dim: usize,
+    ) -> GdnDims {
+        dims_with_layout(
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            GdnVHeadLayout::Grouped,
+        )
     }
 
     fn assert_close(lhs: &Tensor, rhs: &Tensor) -> CandleResult<()> {
@@ -1070,19 +1089,8 @@ mod tests {
         let q = q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
         let k = k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?;
-        let (q, k) = if dims.v_per_group > 1 {
-            let q = q
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            let k = k
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            (q, k)
-        } else {
-            (q, k)
-        };
+        let q = expand_k_heads(&q, &dims, batch_size, seq_len)?;
+        let k = expand_k_heads(&k, &dims, batch_size, seq_len)?;
         let (beta, g) = compute_beta_g(&b, &a, &a_log, &dt_bias, DType::F32)?;
         let q = l2_norm(&q, QK_NORM_EPS)?;
         let k = l2_norm(&k, QK_NORM_EPS)?;
@@ -1131,6 +1139,28 @@ mod tests {
             conv_outputs.push(out);
         }
         candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
+    }
+
+    #[test]
+    fn key_heads_expand_in_grouped_and_tiled_order() -> CandleResult<()> {
+        let dev = Device::Cpu;
+        let keys = Tensor::from_vec(vec![10.0f32, 20.0], (1, 1, 2, 1), &dev)?;
+        let grouped = dims_with_layout(2, 4, 1, 1, GdnVHeadLayout::Grouped);
+        let tiled = dims_with_layout(2, 4, 1, 1, GdnVHeadLayout::Tiled);
+
+        assert_eq!(
+            expand_k_heads(&keys, &grouped, 1, 1)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            [10.0, 10.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            expand_k_heads(&keys, &tiled, 1, 1)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            [10.0, 20.0, 10.0, 20.0]
+        );
+        Ok(())
     }
 
     #[test]
@@ -1247,6 +1277,7 @@ mod tests {
     #[test]
     fn decode_recurrence_cpu_matches_tensor_path() -> CandleResult<()> {
         run_decode_case(dims(2, 4, 5, 3), 2)?;
-        run_decode_case(dims(3, 3, 4, 2), 1)
+        run_decode_case(dims(3, 3, 4, 2), 1)?;
+        run_decode_case(dims_with_layout(2, 4, 5, 3, GdnVHeadLayout::Tiled), 2)
     }
 }

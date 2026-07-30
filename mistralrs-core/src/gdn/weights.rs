@@ -8,9 +8,11 @@ use super::config::{GdnConfig, GdnDims};
 use super::norm::RmsNormGated;
 use super::projection::GdnInputProjection;
 
+#[derive(Clone, Copy)]
 pub enum GdnInputProjectionKind {
     Grouped,
     Split,
+    SplitQkvzGroupedBa,
 }
 
 pub struct GdnWeights {
@@ -95,6 +97,29 @@ impl GdnWeights {
                     cfg.quantization_config(),
                     false,
                     vb_la.pp("in_proj_a"),
+                )?,
+            },
+            GdnInputProjectionKind::SplitQkvzGroupedBa => GdnInputProjection::SplitQkvzGroupedBa {
+                in_proj_qkv: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.conv_dim,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_qkv"),
+                )?,
+                in_proj_z: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.value_dim,
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_z"),
+                )?,
+                in_proj_ba: ReplicatedLayer::new(
+                    dims.hidden_size,
+                    dims.ba_out_dim(),
+                    cfg.quantization_config(),
+                    false,
+                    vb_la.pp("in_proj_ba"),
                 )?,
             },
         };

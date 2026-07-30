@@ -1,13 +1,12 @@
 // https://github.com/huggingface/transformers/blob/8685b3c5d2dd2550527773d2a02499495a759e31/src/transformers/convert_slow_tokenizer.py
 
-use std::sync::atomic::Ordering;
+use std::{collections::HashMap, sync::atomic::Ordering};
 
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::DEBUG;
 use ahash::AHashMap;
 use anyhow::Result;
 use candle_core::quantized::gguf_file::Value;
-use itertools::Itertools;
 use tokenizers::pre_tokenizers::{
     sequence::Sequence,
     split::{Split, SplitPattern},
@@ -19,12 +18,40 @@ use tokenizers::{
         self, byte_fallback::ByteFallback, byte_level::ByteLevel, fuse::Fuse, strip::Strip,
     },
     models::{bpe::BpeBuilder, unigram::Unigram},
-    normalizers::{self, Prepend, Replace},
+    normalizers::{self, Prepend, Replace, NFC},
     processors, AddedToken, DecoderWrapper, ModelWrapper, NormalizerWrapper, Tokenizer,
 };
 use tracing::info;
 
 use super::Content;
+
+const GPT2_REGEX: &str =
+    "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)";
+const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const QWEN2_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const QWEN35_REGEX: &str = "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const DEEPSEEK_LLM_REGEXES: &[&str] = &[
+    r"[\r\n]",
+    r"\s?[A-Za-z\x{b5}\x{c0}-\x{d6}\x{d8}-\x{f6}\x{f8}-\x{1ba}\x{1bc}-\x{1bf}\x{1c4}-\x{293}\x{295}-\x{2af}\x{370}-\x{373}\x{376}\x{377}\x{37b}-\x{37d}\x{37f}\x{386}\x{388}-\x{38a}\x{38c}\x{38e}-\x{3a1}\x{3a3}-\x{3f5}\x{3f7}-\x{481}\x{48a}-\x{52f}\x{531}-\x{556}\x{10a0}-\x{10c5}\x{13a0}-\x{13f5}\x{13f8}-\x{13fd}\x{1c90}-\x{1cba}\x{1cbd}-\x{1cbf}\x{1d00}-\x{1d2b}\x{1d6b}-\x{1d77}\x{1d79}-\x{1d9a}\x{1e00}-\x{1f15}\x{1f18}-\x{1f1d}\x{1f20}-\x{1f45}\x{1f48}-\x{1f4d}\x{1f50}-\x{1f57}\x{1f59}\x{1f5b}\x{1f5d}\x{1f5f}-\x{1f7d}\x{1f80}-\x{1fb4}\x{1fb6}-\x{1fbc}\x{1fbe}\x{1fc2}-\x{1fc4}\x{1fc6}-\x{1fcc}\x{1fd0}-\x{1fd3}\x{1fd6}-\x{1fdb}\x{1fe0}-\x{1fec}\x{1ff2}-\x{1ff4}\x{1ff6}-\x{1ffc}\x{2102}\x{2107}\x{210a}-\x{2113}\x{2115}\x{2119}-\x{211d}\x{2124}\x{2126}\x{2128}\x{212a}-\x{212d}\x{212f}-\x{2134}\x{2139}\x{213c}-\x{213f}\x{2145}-\x{2149}\x{214e}\x{2183}\x{2184}\x{2c00}-\x{2c7b}\x{2c7e}-\x{2ce4}\x{2ceb}-\x{2cee}\x{2cf2}\x{2cf3}\x{a640}-\x{a66d}\x{a680}-\x{a69b}\x{a722}-\x{a76f}\x{a771}-\x{a787}\x{a78b}-\x{a78e}\x{ab70}-\x{abbf}\x{fb00}-\x{fb06}\x{fb13}-\x{fb17}\x{ff21}-\x{ff3a}\x{ff41}-\x{ff5a}\x{10400}-\x{1044f}\x{104b0}-\x{104d3}\x{104d8}-\x{104fb}\x{10c80}-\x{10cb2}\x{10cc0}-\x{10cf2}\x{118a0}-\x{118df}\x{1e900}-\x{1e943}]+",
+    r"\s?[!-/:-~\x{ff01}-\x{ff0f}\x{ff1a}-\x{ff5e}\x{2018}-\x{201f}\x{3000}-\x{3002}]+",
+    r"\s+$",
+    r"[\x{4e00}-\x{9fa5}\x{800}-\x{4e00}\x{ac00}-\x{d7ff}]+",
+    r"\p{N}+",
+];
+const DEEPSEEK_CODER_REGEXES: &[&str] = &[
+    r"[\r\n]",
+    r"\s?\p{L}+",
+    r"\s?\p{P}+",
+    r"[\x{4e00}-\x{9fa5}\x{800}-\x{4e00}\x{ac00}-\x{d7ff}]+",
+    r"\p{N}",
+];
+const DEEPSEEK_V3_REGEXES: &[&str] = &[
+    "\\p{N}{1,3}",
+    "[\\x{4e00}-\\x{9fa5}\\x{3040}-\\x{309f}\\x{30a0}-\\x{30ff}]+",
+    "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+];
+const GPT4O_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const TEKKEN_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 
 pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
@@ -35,6 +62,7 @@ pub(crate) struct GgufTokenizerConversion {
 
 struct PropsGGUF {
     model: String,
+    pre: Option<String>,
     tokens: Vec<String>,
     added_tokens: Option<Vec<String>>,
     scores: Option<Vec<f32>>,
@@ -53,6 +81,7 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         let props = Self {
             model: c.get_value("model")?,
+            pre: c.get_option_value("pre")?,
             tokens: c.get_value("tokens")?,
             added_tokens: c.get_value("added_tokens").ok(),
             scores: c.get_value("scores").ok(),
@@ -87,9 +116,15 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
     content: &Content<'_, R>,
 ) -> Result<GgufTokenizerConversion> {
+    convert_gguf_metadata_to_hf_tokenizer(content.get_metadata())
+}
+
+pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
+    values: &HashMap<String, Value>,
+) -> Result<GgufTokenizerConversion> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer.ggml",
-        metadata: content.get_metadata(),
+        metadata: values,
     };
 
     let md_get = |s: &str| match metadata.metadata.get(s) {
@@ -171,6 +206,123 @@ enum TokenizerKind {
     Bpe,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BpePreTokenizerKind {
+    Llama3,
+    Dbrx,
+    Qwen2,
+    Gpt2,
+    Starcoder,
+    Glm4,
+    DeepSeekLlm,
+    DeepSeekCoder,
+    DeepSeekV3,
+    Gpt4O,
+    Tekken,
+}
+
+#[derive(Debug)]
+struct BpePreTokenizerSpec {
+    kind: BpePreTokenizerKind,
+    regexes: &'static [&'static str],
+    ignore_merges: bool,
+    normalize_nfc: bool,
+}
+
+fn bpe_pre_tokenizer_spec(pre: Option<&str>) -> Result<BpePreTokenizerSpec> {
+    let pre = pre.ok_or_else(|| {
+        anyhow::anyhow!(
+            "GGUF BPE tokenizer is missing required metadata `tokenizer.ggml.pre`; refusing to guess a pre-tokenizer regex"
+        )
+    })?;
+    let spec = match pre {
+        "llama3" | "llama-v3" | "llama-bpe" | "lfm2" | "pixtral" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Llama3,
+            regexes: &[LLAMA3_REGEX],
+            ignore_merges: true,
+            normalize_nfc: false,
+        },
+        "dbrx" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Dbrx,
+            regexes: &[LLAMA3_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "qwen2" | "deepseek-r1-qwen" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Qwen2,
+            regexes: &[QWEN2_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "qwen35" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Qwen2,
+            regexes: &[QWEN35_REGEX],
+            ignore_merges: false,
+            normalize_nfc: true,
+        },
+        "gpt-2" | "phi-2" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Gpt2,
+            regexes: &[GPT2_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "starcoder" | "smollm" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Starcoder,
+            regexes: &["\\p{N}", GPT2_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "glm4" | "chatglm-bpe" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Glm4,
+            regexes: &[LLAMA3_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "deepseek-llm" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::DeepSeekLlm,
+            regexes: DEEPSEEK_LLM_REGEXES,
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "deepseek-coder" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::DeepSeekCoder,
+            regexes: DEEPSEEK_CODER_REGEXES,
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "deepseek-v3" | "hunyuan-dense" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::DeepSeekV3,
+            regexes: DEEPSEEK_V3_REGEXES,
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "hunyuan" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Qwen2,
+            regexes: &[QWEN2_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "gpt-4o" | "llama4" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Gpt4O,
+            regexes: &[GPT4O_REGEX],
+            ignore_merges: false,
+            normalize_nfc: false,
+        },
+        "tekken" => BpePreTokenizerSpec {
+            kind: BpePreTokenizerKind::Tekken,
+            regexes: &[TEKKEN_REGEX],
+            ignore_merges: true,
+            normalize_nfc: false,
+        },
+        _ => {
+            anyhow::bail!(
+                "GGUF BPE pre-tokenizer `{pre}` is not supported for standalone conversion; use the original tokenizer.json or add its exact tokenizer.ggml.pre profile"
+            )
+        }
+    };
+    Ok(spec)
+}
+
 fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     let PropsGGUF { unk, eos, bos, .. } = *p;
     // Unigram (SentencePiece) default UNK is 0
@@ -221,6 +373,13 @@ fn unigram_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 }
 
 fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
+    let pre_tokenizer = bpe_pre_tokenizer_spec(p.pre.as_deref())?;
+    tracing::debug!(
+        "Using GGUF BPE pre-tokenizer `{}` as {:?}",
+        p.pre.as_deref().unwrap(),
+        pre_tokenizer.kind
+    );
+
     // BPE merges have each string item as a space-delimited pair:
     // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
     let merges = p
@@ -229,13 +388,18 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
         .iter()
         .map(|merge| {
-            let split: (&str, &str) = merge
-                .splitn(2, ' ')
-                .collect_tuple()
-                .expect("Failed to convert split into 2-tuple");
-            (split.0.to_string(), split.1.to_string())
+            let (left, right) = merge.split_once(' ').ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid GGUF BPE merge `{merge}`; expected two space-delimited tokens"
+                )
+            })?;
+            anyhow::ensure!(
+                !left.is_empty() && !right.is_empty(),
+                "Invalid GGUF BPE merge `{merge}`; both tokens must be non-empty"
+            );
+            Ok((left.to_string(), right.to_string()))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut vocab = AHashMap::new();
     for (i, token) in p.tokens.iter().enumerate() {
@@ -245,7 +409,9 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
 
     let PropsGGUF { bos, eos, unk, .. } = *p;
 
-    let mut bpe = BpeBuilder::new().vocab_and_merges(vocab, merges);
+    let mut bpe = BpeBuilder::new()
+        .vocab_and_merges(vocab, merges)
+        .ignore_merges(pre_tokenizer.ignore_merges);
     if let Some(unk) = unk {
         bpe = bpe.unk_token(p.tokens[unk as usize].to_string());
     };
@@ -255,26 +421,31 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     let mut tokenizer = TokenizerX::new(
         ModelWrapper::BPE(bpe),
         Some(Decoder::ByteLevel(true, true, true)),
-        None,
+        pre_tokenizer.normalize_nfc.then_some(Normalizer::Nfc),
     )?;
 
-    let split = Split::new(
-        SplitPattern::Regex("(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+".to_string()),
-        SplitDelimiterBehavior::Isolated,
-        false,
-    ).unwrap();
-
-    // example:
-    // "type": "ByteLevel",
-    // "add_prefix_space": false,
-    // "trim_offsets": false,
-    // "use_regex": false
-    let pre_tokenizer = Sequence::new(vec![
-        PreTokenizerWrapper::Split(split),
-        PreTokenizerWrapper::ByteLevel(ByteLevel::new(false, false, false)),
-    ]);
-
-    tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
+    let mut pre_tokenizers = pre_tokenizer
+        .regexes
+        .iter()
+        .map(|regex| {
+            Split::new(
+                SplitPattern::Regex((*regex).to_string()),
+                SplitDelimiterBehavior::Isolated,
+                false,
+            )
+            .map(PreTokenizerWrapper::Split)
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "Invalid regex for GGUF BPE pre-tokenizer `{}`: {error}",
+                    p.pre.as_deref().unwrap()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    pre_tokenizers.push(PreTokenizerWrapper::ByteLevel(ByteLevel::new(
+        false, false, false,
+    )));
+    tokenizer.with_pre_tokenizer(Some(Sequence::new(pre_tokenizers)));
 
     tokenizer.with_decoder(Some(decoders::byte_level::ByteLevel::new(
         false, false, false,
@@ -362,6 +533,7 @@ impl TryFrom<Decoder<'_>> for DecoderWrapper {
 // Convenient alternative to upstream:
 // https://docs.rs/tokenizers/latest/tokenizers/normalizers/enum.NormalizerWrapper.html
 enum Normalizer<'a> {
+    Nfc,
     Prepend(&'a str),
     Replace(&'a str, &'a str),
     Sequence(Vec<Self>),
@@ -372,6 +544,7 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
     fn try_from(variant: Normalizer) -> Result<Self, Self::Error> {
         let value: NormalizerWrapper = match variant {
+            Normalizer::Nfc => NFC.into(),
             Normalizer::Prepend(prepend) => Prepend::new(prepend.to_owned()).into(),
             Normalizer::Replace(pattern, content) => Replace::new(pattern, content)
                 .map_err(anyhow::Error::msg)?
@@ -392,6 +565,7 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
+    use super::{bpe_pre_tokenizer_spec, bpe_tokenizer, BpePreTokenizerKind, PropsGGUF};
     use anyhow::Result;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
@@ -493,6 +667,131 @@ mod tests {
         tokenizer
             .decode(token_ids, skip_special_tokens)
             .map_err(anyhow::Error::msg)
+    }
+
+    fn test_bpe_props(pre: Option<&str>) -> PropsGGUF {
+        PropsGGUF {
+            model: "gpt2".to_string(),
+            pre: pre.map(str::to_string),
+            tokens: ["<eos>", "a", "b", "ab"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            added_tokens: None,
+            scores: None,
+            merges: Some(Vec::new()),
+            unk: None,
+            bos: None,
+            eos: 0,
+        }
+    }
+
+    #[test]
+    fn bpe_pre_tokenizer_profiles_cover_normal_families() -> Result<()> {
+        let cases = [
+            ("llama3", BpePreTokenizerKind::Llama3, true, false, 1),
+            ("llama-bpe", BpePreTokenizerKind::Llama3, true, false, 1),
+            ("lfm2", BpePreTokenizerKind::Llama3, true, false, 1),
+            ("dbrx", BpePreTokenizerKind::Dbrx, false, false, 1),
+            ("qwen2", BpePreTokenizerKind::Qwen2, false, false, 1),
+            ("qwen35", BpePreTokenizerKind::Qwen2, false, true, 1),
+            ("gpt-2", BpePreTokenizerKind::Gpt2, false, false, 1),
+            ("phi-2", BpePreTokenizerKind::Gpt2, false, false, 1),
+            ("starcoder", BpePreTokenizerKind::Starcoder, false, false, 2),
+            ("smollm", BpePreTokenizerKind::Starcoder, false, false, 2),
+            ("glm4", BpePreTokenizerKind::Glm4, false, false, 1),
+            (
+                "deepseek-llm",
+                BpePreTokenizerKind::DeepSeekLlm,
+                false,
+                false,
+                6,
+            ),
+            (
+                "deepseek-coder",
+                BpePreTokenizerKind::DeepSeekCoder,
+                false,
+                false,
+                5,
+            ),
+            (
+                "deepseek-v3",
+                BpePreTokenizerKind::DeepSeekV3,
+                false,
+                false,
+                3,
+            ),
+            (
+                "hunyuan-dense",
+                BpePreTokenizerKind::DeepSeekV3,
+                false,
+                false,
+                3,
+            ),
+            ("hunyuan", BpePreTokenizerKind::Qwen2, false, false, 1),
+            ("gpt-4o", BpePreTokenizerKind::Gpt4O, false, false, 1),
+            ("tekken", BpePreTokenizerKind::Tekken, true, false, 1),
+        ];
+
+        for (pre, kind, ignore_merges, normalize_nfc, regex_count) in cases {
+            let spec = bpe_pre_tokenizer_spec(Some(pre))?;
+            assert_eq!(spec.kind, kind, "{pre}");
+            assert_eq!(spec.ignore_merges, ignore_merges, "{pre}");
+            assert_eq!(spec.normalize_nfc, normalize_nfc, "{pre}");
+            assert_eq!(spec.regexes.len(), regex_count, "{pre}");
+            bpe_tokenizer(&test_bpe_props(Some(pre)))?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn llama3_and_lfm2_enable_ignore_merges() -> Result<()> {
+        for pre in ["llama3", "lfm2"] {
+            let (tokenizer, _) = bpe_tokenizer(&test_bpe_props(Some(pre)))?;
+            let encoding = tokenizer
+                .encode_fast("ab", false)
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(encoding.get_ids(), &[3], "{pre}");
+        }
+
+        let (tokenizer, _) = bpe_tokenizer(&test_bpe_props(Some("qwen2")))?;
+        let encoding = tokenizer
+            .encode_fast("ab", false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[1, 2]);
+        Ok(())
+    }
+
+    #[test]
+    fn dbrx_profile_keeps_three_digit_chunks() -> Result<()> {
+        let mut props = test_bpe_props(Some("dbrx"));
+        props.tokens = ["<eos>", "1", "2", "3", "4", "12", "123", "1234"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        props.merges = Some(
+            ["1 2", "12 3", "123 4"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        );
+        let (tokenizer, _) = bpe_tokenizer(&props)?;
+        let encoding = tokenizer
+            .encode_fast("1234", false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[6, 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_or_unknown_bpe_pre_tokenizer_fails_explicitly() {
+        let missing = bpe_tokenizer(&test_bpe_props(None)).unwrap_err();
+        assert!(missing.to_string().contains("tokenizer.ggml.pre"));
+        assert!(missing.to_string().contains("refusing to guess"));
+
+        let unknown = bpe_tokenizer(&test_bpe_props(Some("future-tokenizer"))).unwrap_err();
+        assert!(unknown.to_string().contains("future-tokenizer"));
+        assert!(unknown.to_string().contains("original tokenizer.json"));
     }
 
     #[test]

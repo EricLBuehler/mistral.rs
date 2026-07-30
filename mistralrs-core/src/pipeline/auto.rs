@@ -509,7 +509,7 @@ impl Loader for AutoLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -518,7 +518,7 @@ impl Loader for AutoLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let config = self.read_config_from_path(paths.as_ref())?;
+        let config = self.read_config_from_path(paths)?;
         self.ensure_loader(&config)?;
         self.loader
             .lock()

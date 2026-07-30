@@ -3,7 +3,7 @@ use candle_nn::Linear;
 use mistralrs_quant::{
     apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, LoraExpertInputMode,
     LoraExpertProjection, PreQuantizedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    Shard, ShardedVarBuilder, UnquantLinear, UqffExpertKeys,
+    QuantizedExpertKeys, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -149,18 +149,16 @@ pub(super) fn experts_are_prequantized(
 }
 
 impl FastExpertsWeights {
-    /// Load the three stacked expert layers from a UQFF artifact under their canonical names.
-    /// Shards across ranks when the quantization geometry allows; replicates otherwise.
-    pub(super) fn from_uqff(
+    pub(super) fn from_weight_source(
         cfg: &MoEExpertsConfig,
         experts_vb: &ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Option<FastExpertsWeights>> {
-        let Some(reader) = experts_vb.uqff_reader() else {
+        let Some(source) = experts_vb.weight_source() else {
             return Ok(None);
         };
-        let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        if !reader.contains(&format!("{}.weight", keys.gate)) {
+        let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
+        if !source.contains(&format!("{}.weight", keys.gate)) {
             return Ok(None);
         }
 
@@ -170,12 +168,12 @@ impl FastExpertsWeights {
         // down shards its packed (input) dim, so the per-rank slice must be block-aligned.
         let sharded = world_size > 1
             && inter.is_multiple_of(world_size)
-            && reader
+            && source
                 .shard_alignment(&keys.down)
                 .is_ok_and(|align| (inter / world_size).is_multiple_of(align));
         if world_size > 1 && !sharded {
             mistralrs_quant::log::once_log_warn(
-                "UQFF expert quantization geometry does not allow sharding; replicating experts per rank.",
+                "Expert quantization geometry does not allow sharding; replicating experts per rank.",
             );
         }
 
@@ -198,9 +196,9 @@ impl FastExpertsWeights {
 
         let device = experts_vb.device();
         let load = |key: &str, shard: Shard| -> Result<Arc<dyn QuantMethod>> {
-            reader.load_linear(key, device, shard)?.ok_or_else(|| {
-                candle_core::Error::Msg(format!("Missing UQFF expert tensor `{key}`."))
-            })
+            source
+                .load_linear(key, device, shard)?
+                .ok_or_else(|| candle_core::Error::Msg(format!("Missing expert weight `{key}`.")))
         };
         Ok(Some(FastExpertsWeights {
             fused_gate_proj: load(&keys.gate, gate_shard)?,
@@ -261,7 +259,7 @@ impl FastExpertsWeights {
                 QuantMethodConfig::Unquantized(Linear::new(w, None)),
             )?))
         };
-        let keys = UqffExpertKeys::new(&experts_vb.prefix());
+        let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
         let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
         let checkpoint = ExpertCheckpoint::new(cfg, read_vb, comm)?;
         let load = |proj: ExpertProj,

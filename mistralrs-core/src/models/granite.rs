@@ -249,7 +249,7 @@ impl crate::amoe::AnyMoeTrainableLayer for GraniteMlp {}
 
 /// Top-K gating router for sparse MoE
 struct GraniteTopKGating {
-    layer: candle_nn::Linear,
+    layer: Arc<dyn QuantMethod>,
     num_experts: usize,
     top_k: usize,
 }
@@ -259,10 +259,16 @@ impl GraniteTopKGating {
         input_size: usize,
         num_experts: usize,
         top_k: usize,
+        quantization_config: &Option<QuantizedConfig>,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let weight = vb.pp("layer").get((num_experts, input_size), "weight")?;
-        let layer = candle_nn::Linear::new(weight, None);
+        let layer = ReplicatedLayer::new(
+            input_size,
+            num_experts,
+            quantization_config,
+            false,
+            vb.pp("layer"),
+        )?;
         Ok(Self {
             layer,
             num_experts,
@@ -270,17 +276,9 @@ impl GraniteTopKGating {
         })
     }
 
-    /// Routes tokens to experts
-    /// Returns (batch_index, batch_gates, expert_size)
-    /// - batch_index: indices of tokens assigned to each expert (sorted by expert)
-    /// - batch_gates: routing weights for each token-expert pair (sorted by expert)
-    /// - expert_size: number of tokens assigned to each expert
-    fn forward(&self, x: &Tensor) -> Result<(Tensor, Tensor, Vec<usize>)> {
-        let device = x.device();
-        let dtype = x.dtype();
-
+    fn topk(&self, x: &Tensor) -> Result<crate::ops::TopKOutput> {
         let logits = self.layer.forward(x)?;
-        let topk = crate::ops::moe_router_topk(
+        crate::ops::moe_router_topk(
             &logits,
             crate::ops::MoeRouterTopKConfig {
                 top_k: self.top_k,
@@ -293,7 +291,15 @@ impl GraniteTopKGating {
             },
             None,
             None,
-        )?;
+        )
+    }
+
+    fn grouped_routes(
+        &self,
+        topk: &crate::ops::TopKOutput,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<(Tensor, Tensor, Vec<usize>)> {
         let selected_experts = topk.indices.to_vec2::<u32>()?;
         let routing_weights = topk
             .values
@@ -340,8 +346,13 @@ impl GraniteTopKGating {
 }
 
 /// Parallel experts layer - processes all experts in a batched manner
+enum GraniteParallelExpertWeights {
+    Dense(Vec<Tensor>),
+    Quantized(Arc<dyn QuantMethod>),
+}
+
 struct GraniteParallelExperts {
-    weights: Vec<Tensor>,
+    weights: GraniteParallelExpertWeights,
     output_size: usize,
 }
 
@@ -352,20 +363,52 @@ impl GraniteParallelExperts {
         output_size: usize,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
+        if let Some(source) = vb.weight_source() {
+            if let Some(weight) =
+                source.load_linear(&vb.prefix(), vb.device(), mistralrs_quant::Shard::default())?
+            {
+                return Ok(Self {
+                    weights: GraniteParallelExpertWeights::Quantized(weight),
+                    output_size,
+                });
+            }
+        }
         let all_weights = vb.get((num_experts, output_size, input_size), "weight")?;
         let weights = (0..num_experts)
             .map(|i| all_weights.i(i))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            weights,
+            weights: GraniteParallelExpertWeights::Dense(weights),
             output_size,
         })
+    }
+
+    fn quantized(&self) -> Option<&Arc<dyn QuantMethod>> {
+        match &self.weights {
+            GraniteParallelExpertWeights::Dense(_) => None,
+            GraniteParallelExpertWeights::Quantized(weight) => Some(weight),
+        }
     }
 
     fn forward(&self, x: &Tensor, expert_size: &[usize]) -> Result<Tensor> {
         let dtype = x.dtype();
         let device = x.device();
 
+        if let GraniteParallelExpertWeights::Quantized(weight) = &self.weights {
+            let expert_ids = expert_size
+                .iter()
+                .enumerate()
+                .flat_map(|(expert, count)| std::iter::repeat_n(expert as u32, *count))
+                .collect::<Vec<_>>();
+            let rows = expert_ids.len();
+            let expert_ids = Tensor::from_vec(expert_ids, (rows, 1), device)?;
+            return weight
+                .gather_forward(&x.unsqueeze(1)?, &expert_ids)?
+                .squeeze(1);
+        }
+        let GraniteParallelExpertWeights::Dense(weights) = &self.weights else {
+            unreachable!()
+        };
         let mut outputs = Vec::new();
         let mut offset = 0;
 
@@ -374,7 +417,7 @@ impl GraniteParallelExperts {
                 continue;
             }
             let expert_input = x.narrow(0, offset, size)?;
-            let expert_output = expert_input.matmul(&self.weights[expert_idx].t()?)?;
+            let expert_output = expert_input.matmul(&weights[expert_idx].t()?)?;
             outputs.push(expert_output);
             offset += size;
         }
@@ -415,7 +458,13 @@ impl GraniteMoE {
                 input_size,
                 vb.pp("output_linear"),
             )?,
-            router: GraniteTopKGating::new(input_size, num_experts, top_k, vb.pp("router"))?,
+            router: GraniteTopKGating::new(
+                input_size,
+                num_experts,
+                top_k,
+                &cfg.quantization_config,
+                vb.pp("router"),
+            )?,
             input_size,
         })
     }
@@ -427,7 +476,23 @@ impl GraniteMoE {
         let num_tokens = batch_size * seq_len;
 
         let x_flat = x.reshape((num_tokens, emb_size))?;
-        let (batch_index, batch_gates, expert_size) = self.router.forward(&x_flat)?;
+        let topk = self.router.topk(&x_flat)?;
+        if let (Some(input_linear), Some(output_linear)) = (
+            self.input_linear.quantized(),
+            self.output_linear.quantized(),
+        ) {
+            let hidden = input_linear.gather_forward(&x_flat.unsqueeze(1)?, &topk.indices)?;
+            let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
+            let hidden =
+                crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
+            let expert_outputs = output_linear.gather_forward(&hidden, &topk.indices)?;
+            return expert_outputs
+                .broadcast_mul(&topk.values.to_dtype(dtype)?.unsqueeze(2)?)?
+                .sum(1)?
+                .reshape((batch_size, seq_len, self.input_size));
+        }
+        let (batch_index, batch_gates, expert_size) =
+            self.router.grouped_routes(&topk, dtype, device)?;
 
         if batch_index.dim(0)? == 0 {
             return Tensor::zeros((batch_size, seq_len, self.input_size), dtype, device);
@@ -679,14 +744,14 @@ impl RmsNormGated {
 
 /// Mamba2-style mixer layer
 struct MambaLayer {
-    in_proj: candle_nn::Linear,
+    in_proj: Arc<dyn QuantMethod>,
     conv1d_weight: Tensor,
     conv1d_bias: Option<Tensor>,
     dt_bias: Tensor,
     a_log: Tensor,
     d: Tensor,
     norm: RmsNormGated,
-    out_proj: candle_nn::Linear,
+    out_proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     head_dim: usize,
     intermediate_size: usize,
@@ -698,9 +763,6 @@ struct MambaLayer {
 }
 
 impl MambaLayer {
-    /// Load Mamba layer weights.
-    /// When `isq_target_device` is Some, all weights are moved to the specified device.
-    /// This is used during ISQ to ensure Mamba weights (which are not quantized) stay on GPU.
     fn load(
         vb: ShardedVarBuilder,
         cfg: &Config,
@@ -715,13 +777,21 @@ impl MambaLayer {
         let n_groups = cfg.mamba_n_groups;
 
         let projection_size = intermediate_size + conv_dim + num_heads;
-        let in_proj_vb = vb.pp("in_proj");
-        let mut in_proj_weight = in_proj_vb.get((projection_size, cfg.hidden_size), "weight")?;
-        let mut in_proj_bias = if cfg.mamba_proj_bias {
-            Some(in_proj_vb.get(projection_size, "bias")?)
-        } else {
-            None
+        let projection_vb = |name: &str| {
+            let vb = vb.pp(name);
+            if let Some(device) = isq_target_device {
+                vb.set_device(device.clone())
+            } else {
+                vb
+            }
         };
+        let in_proj = ReplicatedLayer::new(
+            cfg.hidden_size,
+            projection_size,
+            &cfg.quantization_config,
+            cfg.mamba_proj_bias,
+            projection_vb("in_proj"),
+        )?;
 
         let mut conv1d_weight = vb
             .pp("conv1d")
@@ -742,27 +812,19 @@ impl MambaLayer {
             isq_target_device,
         )?;
 
-        let out_proj_vb = vb.pp("out_proj");
-        let mut out_proj_weight =
-            out_proj_vb.get((cfg.hidden_size, intermediate_size), "weight")?;
-        let mut out_proj_bias = if cfg.mamba_proj_bias {
-            Some(out_proj_vb.get(cfg.hidden_size, "bias")?)
-        } else {
-            None
-        };
+        let out_proj = ReplicatedLayer::new(
+            intermediate_size,
+            cfg.hidden_size,
+            &cfg.quantization_config,
+            cfg.mamba_proj_bias,
+            projection_vb("out_proj"),
+        )?;
 
-        // When ISQ is enabled, move all Mamba weights to target GPU device
-        // This prevents device mismatch issues since Mamba layers use candle_nn::Linear
-        // (not QuantMethod) and their weights don't get quantized/moved by ISQ pipeline
         if let Some(target_dev) = isq_target_device {
             tracing::debug!(
                 "Moving Mamba weights to {:?} for ISQ compatibility",
                 target_dev
             );
-            in_proj_weight = in_proj_weight.to_device(target_dev)?;
-            if let Some(ref bias) = in_proj_bias {
-                in_proj_bias = Some(bias.to_device(target_dev)?);
-            }
             conv1d_weight = conv1d_weight.to_device(target_dev)?;
             if let Some(ref bias) = conv1d_bias {
                 conv1d_bias = Some(bias.to_device(target_dev)?);
@@ -770,14 +832,7 @@ impl MambaLayer {
             dt_bias = dt_bias.to_device(target_dev)?;
             a_log = a_log.to_device(target_dev)?;
             d = d.to_device(target_dev)?;
-            out_proj_weight = out_proj_weight.to_device(target_dev)?;
-            if let Some(ref bias) = out_proj_bias {
-                out_proj_bias = Some(bias.to_device(target_dev)?);
-            }
         }
-
-        let in_proj = candle_nn::Linear::new(in_proj_weight, in_proj_bias);
-        let out_proj = candle_nn::Linear::new(out_proj_weight, out_proj_bias);
 
         Ok(Self {
             in_proj,
@@ -1281,7 +1336,7 @@ struct MambaBlock {
     rms_1: RmsNorm,
     mamba: MambaLayer,
     rms_2: RmsNorm,
-    mlp: Box<dyn MlpLayer>,
+    mlp: Option<Box<dyn MlpLayer>>,
     block_sparse_moe: Option<GraniteMoE>,
     residual_multiplier: f32,
 }
@@ -1301,14 +1356,8 @@ impl MambaBlock {
         let residual = &x;
         let normed = self.rms_2.forward(&x)?;
 
-        // Combine MoE and shared MLP outputs (if MoE present)
-        let ffn_out = if let Some(ref moe) = self.block_sparse_moe {
-            let moe_out = moe.forward(&normed)?;
-            let mlp_out = self.mlp.forward(&normed)?;
-            (moe_out + mlp_out)?
-        } else {
-            self.mlp.forward(&normed)?
-        };
+        let ffn_out =
+            granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;
 
         let ffn_out = scale_tensor(ffn_out, self.residual_multiplier)?;
         ffn_out + residual
@@ -1328,13 +1377,8 @@ impl MambaBlock {
         let residual = &x;
         let normed = self.rms_2.forward(&x)?;
 
-        let ffn_out = if let Some(ref moe) = self.block_sparse_moe {
-            let moe_out = moe.forward(&normed)?;
-            let mlp_out = self.mlp.forward(&normed)?;
-            (moe_out + mlp_out)?
-        } else {
-            self.mlp.forward(&normed)?
-        };
+        let ffn_out =
+            granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;
 
         let ffn_out = scale_tensor(ffn_out, self.residual_multiplier)?;
         ffn_out + residual
@@ -1348,8 +1392,6 @@ impl MambaBlock {
         loading_isq: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        // When ISQ is enabled, get the target device to move Mamba weights to GPU
-        // This prevents device mismatch since Mamba uses candle_nn::Linear (not QuantMethod)
         let isq_target_device = if loading_isq {
             mapper.device_for(layer_idx, false)
         } else {
@@ -1361,11 +1403,13 @@ impl MambaBlock {
             cfg,
             isq_target_device,
         )?;
-        let mlp = GraniteMlp::new(
-            mapper.set_device(layer_idx, vb.clone(), loading_isq),
-            cfg,
-            comm,
-        )?;
+        let mlp_vb = mapper.set_device(layer_idx, vb.clone(), loading_isq);
+        let shared_input_vb = mlp_vb.pp("shared_mlp").pp("input_linear");
+        let mlp = if crate::layers::contains_tensor_or_weight_source(&shared_input_vb, "weight") {
+            Some(Box::new(GraniteMlp::new(mlp_vb, cfg, comm)?) as Box<dyn MlpLayer>)
+        } else {
+            None
+        };
         // Load MoE if num_local_experts > 0
         let block_sparse_moe = if cfg.num_local_experts > 0 {
             Some(GraniteMoE::new(
@@ -1389,7 +1433,7 @@ impl MambaBlock {
             rms_1,
             mamba,
             rms_2,
-            mlp: Box::new(mlp),
+            mlp,
             block_sparse_moe,
             residual_multiplier: cfg.residual_multiplier,
         })
@@ -1593,7 +1637,7 @@ struct Block {
     rms_1: RmsNorm,
     attn: CausalSelfAttention,
     rms_2: RmsNorm,
-    mlp: Box<dyn MlpLayer>,
+    mlp: Option<Box<dyn MlpLayer>>,
     block_sparse_moe: Option<GraniteMoE>,
     residual_multiplier: f32,
 }
@@ -1619,14 +1663,8 @@ impl Block {
         let residual = &x;
         let normed = self.rms_2.forward(&x)?;
 
-        // Combine MoE and shared MLP outputs (if MoE present)
-        let ffn_out = if let Some(ref moe) = self.block_sparse_moe {
-            let moe_out = moe.forward(&normed)?;
-            let mlp_out = self.mlp.forward(&normed)?;
-            (moe_out + mlp_out)?
-        } else {
-            self.mlp.forward(&normed)?
-        };
+        let ffn_out =
+            granite_ffn_forward(self.mlp.as_deref(), self.block_sparse_moe.as_ref(), &normed)?;
 
         // Scale residual connection
         let ffn_out = scale_tensor(ffn_out, self.residual_multiplier)?;
@@ -1652,11 +1690,13 @@ impl Block {
             paged_attn,
             comm,
         )?;
-        let mlp = GraniteMlp::new(
-            mapper.set_device(layer_idx, vb.clone(), loading_isq),
-            cfg,
-            comm,
-        )?;
+        let mlp_vb = mapper.set_device(layer_idx, vb.clone(), loading_isq);
+        let shared_input_vb = mlp_vb.pp("shared_mlp").pp("input_linear");
+        let mlp = if crate::layers::contains_tensor_or_weight_source(&shared_input_vb, "weight") {
+            Some(Box::new(GraniteMlp::new(mlp_vb, cfg, comm)?) as Box<dyn MlpLayer>)
+        } else {
+            None
+        };
         // Load MoE if num_local_experts > 0
         let block_sparse_moe = if cfg.num_local_experts > 0 {
             Some(GraniteMoE::new(
@@ -1680,7 +1720,7 @@ impl Block {
             rms_1,
             attn,
             rms_2,
-            mlp: Box::new(mlp),
+            mlp,
             block_sparse_moe,
             residual_multiplier: cfg.residual_multiplier,
         })
@@ -1692,6 +1732,21 @@ fn scale_tensor(tensor: Tensor, scale: f32) -> Result<Tensor> {
         Ok(tensor)
     } else {
         tensor.affine(scale as f64, 0.)
+    }
+}
+
+fn granite_ffn_forward(
+    mlp: Option<&dyn MlpLayer>,
+    moe: Option<&GraniteMoE>,
+    xs: &Tensor,
+) -> Result<Tensor> {
+    match (mlp, moe) {
+        (Some(mlp), Some(moe)) => mlp.forward(xs)? + moe.forward(xs)?,
+        (Some(mlp), None) => mlp.forward(xs),
+        (None, Some(moe)) => moe.forward(xs),
+        (None, None) => {
+            candle_core::bail!("Granite layer has neither dense nor expert FFN weights")
+        }
     }
 }
 
@@ -1806,7 +1861,7 @@ impl GraniteMoeHybrid {
     pub fn new(
         cfg: &Config,
         vb: ShardedVarBuilder,
-        _is_gptx: bool,
+        is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -1816,6 +1871,7 @@ impl GraniteMoeHybrid {
             cfg,
             vb_m,
             vb_lm_head,
+            is_gptx,
             normal_loading_metadata,
             attention_mechanism,
         )
@@ -1825,6 +1881,7 @@ impl GraniteMoeHybrid {
         cfg: &Config,
         vb_m: ShardedVarBuilder,
         vb_lm_head: ShardedVarBuilder,
+        is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -1900,7 +1957,7 @@ impl GraniteMoeHybrid {
                         head_dim,
                         cfg.max_position_embeddings,
                         device,
-                        true, // is_gpt_neox style
+                        is_gptx,
                         vb_m.dtype(),
                     )?;
                     e.insert(Arc::new(rope));
@@ -2299,8 +2356,16 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         let mut mlps = Vec::new();
         for layer in &self.layers {
             match layer {
-                DecoderLayer::Attention(block) => mlps.push(&*block.mlp),
-                DecoderLayer::Mamba(block) => mlps.push(&*block.mlp),
+                DecoderLayer::Attention(block) => {
+                    if let Some(mlp) = block.mlp.as_deref() {
+                        mlps.push(mlp);
+                    }
+                }
+                DecoderLayer::Mamba(block) => {
+                    if let Some(mlp) = block.mlp.as_deref() {
+                        mlps.push(mlp);
+                    }
+                }
             }
         }
         mlps
@@ -2309,8 +2374,16 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         let mut mlps = Vec::new();
         for layer in &mut self.layers {
             match layer {
-                DecoderLayer::Attention(block) => mlps.push(&mut block.mlp),
-                DecoderLayer::Mamba(block) => mlps.push(&mut block.mlp),
+                DecoderLayer::Attention(block) => {
+                    if let Some(mlp) = block.mlp.as_mut() {
+                        mlps.push(mlp);
+                    }
+                }
+                DecoderLayer::Mamba(block) => {
+                    if let Some(mlp) = block.mlp.as_mut() {
+                        mlps.push(mlp);
+                    }
+                }
             }
         }
         mlps
@@ -2333,10 +2406,16 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         }
 
         // Helper to get MLP from a layer
-        fn get_mlp(layer: &DecoderLayer) -> &dyn MlpLayer {
+        fn get_mlp(layer: &DecoderLayer) -> Result<&dyn MlpLayer> {
             match layer {
-                DecoderLayer::Attention(block) => &*block.mlp,
-                DecoderLayer::Mamba(block) => &*block.mlp,
+                DecoderLayer::Attention(block) => block
+                    .mlp
+                    .as_deref()
+                    .ok_or_else(|| candle_core::Error::msg("Granite layer has no shared MLP")),
+                DecoderLayer::Mamba(block) => block
+                    .mlp
+                    .as_deref()
+                    .ok_or_else(|| candle_core::Error::msg("Granite layer has no shared MLP")),
             }
         }
 
@@ -2349,7 +2428,7 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
 
                 match expert_type {
                     AnyMoeExpertType::FineTuned => {
-                        let layer_mlp = get_mlp(&self.layers[layer_idx]);
+                        let layer_mlp = get_mlp(&self.layers[layer_idx])?;
                         let (dtype, device) = layer_mlp.dtype_device();
                         // For GraniteMlp, we need custom handling
                         let cfg_for_layer = Config {
@@ -2404,9 +2483,10 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         }
         for (layer_idx, expert) in layers.into_iter().zip(experts) {
             let mlp_box = match &mut self.layers[layer_idx] {
-                DecoderLayer::Attention(block) => &mut block.mlp,
-                DecoderLayer::Mamba(block) => &mut block.mlp,
-            };
+                DecoderLayer::Attention(block) => block.mlp.as_mut(),
+                DecoderLayer::Mamba(block) => block.mlp.as_mut(),
+            }
+            .ok_or_else(|| candle_core::Error::msg("Granite layer has no shared MLP"))?;
             let mut experts_all = vec![mlp_box.clone()];
             experts_all.extend(expert);
             let (dtype, device) = mlp_box.dtype_device();
@@ -2422,7 +2502,10 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
         Ok(())
     }
     fn amoe_supported(&self) -> bool {
-        true
+        self.layers.iter().all(|layer| match layer {
+            DecoderLayer::Attention(block) => block.mlp.is_some(),
+            DecoderLayer::Mamba(block) => block.mlp.is_some(),
+        })
     }
 }
 
@@ -2450,6 +2533,12 @@ mod tests {
             .collect()
     }
 
+    fn unquant_linear(weight: Tensor, bias: Option<Tensor>) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(mistralrs_quant::UnquantLinear::new(
+            mistralrs_quant::QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, bias)),
+        )?))
+    }
+
     fn mamba_layer(device: &Device) -> Result<MambaLayer> {
         let in_proj_weight = Tensor::from_vec(
             patterned(PROJECTION_SIZE * HIDDEN_SIZE, 1, 0.08, 0.01),
@@ -2468,9 +2557,8 @@ mod tests {
         )?;
         let out_proj_bias =
             Tensor::from_vec(patterned(HIDDEN_SIZE, 4, 0.02, 0.0), (HIDDEN_SIZE,), device)?;
-
         Ok(MambaLayer {
-            in_proj: candle_nn::Linear::new(in_proj_weight, Some(in_proj_bias)),
+            in_proj: unquant_linear(in_proj_weight, Some(in_proj_bias))?,
             conv1d_weight: Tensor::from_vec(
                 patterned(CONV_DIM * CONV_WIDTH, 5, 0.08, 0.01),
                 (CONV_DIM, 1, CONV_WIDTH),
@@ -2492,7 +2580,7 @@ mod tests {
                 )?,
                 eps: 1e-5,
             },
-            out_proj: candle_nn::Linear::new(out_proj_weight, Some(out_proj_bias)),
+            out_proj: unquant_linear(out_proj_weight, Some(out_proj_bias))?,
             num_heads: NUM_HEADS,
             head_dim: HEAD_DIM,
             intermediate_size: INTERMEDIATE_SIZE,
@@ -2590,6 +2678,90 @@ mod tests {
         assert_close(&packed, &reference)?;
         assert_close(&packed_cache.conv_state, &reference_conv_state)?;
         assert_close(&packed_cache.ssm_state, &reference_ssm_state)
+    }
+
+    #[test]
+    fn packed_expert_forward_matches_dense_grouping() -> Result<()> {
+        const EXPERTS: usize = 3;
+        const TOP_K: usize = 2;
+        const EXPERT_INTERMEDIATE: usize = 3;
+
+        let device = Device::Cpu;
+        let input_weights = Tensor::from_vec(
+            patterned(
+                EXPERTS * EXPERT_INTERMEDIATE * 2 * HIDDEN_SIZE,
+                20,
+                0.08,
+                0.01,
+            ),
+            (EXPERTS, EXPERT_INTERMEDIATE * 2, HIDDEN_SIZE),
+            &device,
+        )?;
+        let output_weights = Tensor::from_vec(
+            patterned(EXPERTS * HIDDEN_SIZE * EXPERT_INTERMEDIATE, 21, 0.09, -0.01),
+            (EXPERTS, HIDDEN_SIZE, EXPERT_INTERMEDIATE),
+            &device,
+        )?;
+        let router = unquant_linear(
+            Tensor::from_vec(
+                patterned(EXPERTS * HIDDEN_SIZE, 22, 0.1, 0.0),
+                (EXPERTS, HIDDEN_SIZE),
+                &device,
+            )?,
+            None,
+        )?;
+        let dense = GraniteMoE {
+            input_linear: GraniteParallelExperts {
+                weights: GraniteParallelExpertWeights::Dense(
+                    (0..EXPERTS)
+                        .map(|expert| input_weights.i(expert))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                output_size: EXPERT_INTERMEDIATE * 2,
+            },
+            output_linear: GraniteParallelExperts {
+                weights: GraniteParallelExpertWeights::Dense(
+                    (0..EXPERTS)
+                        .map(|expert| output_weights.i(expert))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                output_size: HIDDEN_SIZE,
+            },
+            router: GraniteTopKGating {
+                layer: router.clone(),
+                num_experts: EXPERTS,
+                top_k: TOP_K,
+            },
+            input_size: HIDDEN_SIZE,
+        };
+        let packed = GraniteMoE {
+            input_linear: GraniteParallelExperts {
+                weights: GraniteParallelExpertWeights::Quantized(unquant_linear(
+                    input_weights,
+                    None,
+                )?),
+                output_size: EXPERT_INTERMEDIATE * 2,
+            },
+            output_linear: GraniteParallelExperts {
+                weights: GraniteParallelExpertWeights::Quantized(unquant_linear(
+                    output_weights,
+                    None,
+                )?),
+                output_size: HIDDEN_SIZE,
+            },
+            router: GraniteTopKGating {
+                layer: router,
+                num_experts: EXPERTS,
+                top_k: TOP_K,
+            },
+            input_size: HIDDEN_SIZE,
+        };
+        let input = Tensor::from_vec(
+            patterned(2 * 3 * HIDDEN_SIZE, 23, 0.2, 0.01),
+            (2, 3, HIDDEN_SIZE),
+            &device,
+        )?;
+        assert_close(&packed.forward(&input)?, &dense.forward(&input)?)
     }
 
     #[test]

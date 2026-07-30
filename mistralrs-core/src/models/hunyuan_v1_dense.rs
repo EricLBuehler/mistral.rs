@@ -114,7 +114,7 @@ impl Attention {
             hidden_sz,
             num_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
@@ -123,7 +123,7 @@ impl Attention {
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
@@ -132,7 +132,7 @@ impl Attention {
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
@@ -141,7 +141,7 @@ impl Attention {
             num_heads * head_dim,
             hidden_sz,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
@@ -301,12 +301,13 @@ impl DecoderLayer {
             paged_attn,
             comm,
         )?;
-        let mlp = Mlp::new(
+        let mlp = Mlp::new_with_bias(
             mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
             cfg.hidden_size,
             cfg.intermediate_size,
             &cfg.quantization_config,
             cfg.hidden_act,
+            cfg.mlp_bias,
             comm,
         )?;
         let input_layernorm = RmsNorm::new(

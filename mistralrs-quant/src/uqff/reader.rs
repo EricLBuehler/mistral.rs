@@ -10,7 +10,8 @@ use safetensors::tensor::Dtype;
 use super::{bias_shard, BiasShard};
 use crate::{
     safetensors::MmapedSafetensors, AfqLayer, F8Q8Linear, FP8Linear, GgufMatMul, HqqLayer, IsqType,
-    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType, Shard, UnquantLinear,
+    MXFP4Layer, QuantMethod, QuantizedSerde, QuantizedSerdeType, QuantizedWeightSource, Shard,
+    UnquantLinear,
 };
 
 pub struct UqffReader {
@@ -273,6 +274,37 @@ impl UqffReader {
             .flatten_all()?
             .to_vec1()?;
         Ok(values.into_iter().map(|value| value as usize).collect())
+    }
+}
+
+impl QuantizedWeightSource for UqffReader {
+    fn contains(&self, name: &str) -> bool {
+        UqffReader::contains(self, name)
+    }
+
+    fn load_linear(
+        &self,
+        key: &str,
+        device: &Device,
+        shard: Shard,
+    ) -> Result<Option<Arc<dyn QuantMethod>>> {
+        UqffReader::load_linear(self, key, device, shard)
+    }
+
+    fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>> {
+        UqffReader::load_optional_tensor(self, name, device)
+    }
+
+    fn shard_alignment(&self, key: &str) -> Result<usize> {
+        UqffReader::shard_alignment(self, key)
+    }
+
+    fn pack_factor(&self, dtype: candle_core::DType) -> Result<usize> {
+        UqffReader::pack_factor(self, dtype)
+    }
+
+    fn pack_factor_for(&self, key: &str, dtype: candle_core::DType) -> Result<Option<usize>> {
+        UqffReader::pack_factor_for(self, key, dtype)
     }
 }
 

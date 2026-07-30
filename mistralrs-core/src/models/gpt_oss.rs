@@ -4,8 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizedConfig,
+    ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -328,13 +328,48 @@ impl Attention {
 struct GptOssMoE {
     gate: Linear,
     gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
-    gate_up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
+    projections: GptOssExpertProjections,
     expert_lora: Option<Arc<mistralrs_quant::LoraExpertSiteHandle>>,
     num_experts_per_tok: usize,
     intermediate_size: usize,
     alpha: f32,
     limit: f32,
+}
+
+enum GptOssExpertProjections {
+    Interleaved {
+        gate_up: Arc<dyn QuantMethod>,
+        down: Arc<dyn QuantMethod>,
+    },
+    Split {
+        gate: Arc<dyn QuantMethod>,
+        up: Arc<dyn QuantMethod>,
+        down: Arc<dyn QuantMethod>,
+    },
+}
+
+fn load_gpt_oss_expert_projection(
+    vb: &ShardedVarBuilder,
+    name: &str,
+    shape: (usize, usize, usize),
+) -> Result<Arc<dyn QuantMethod>> {
+    let projection_vb = vb.pp(name);
+    if let Some(source) = vb.weight_source() {
+        if let Some(layer) =
+            source.load_linear(&projection_vb.prefix(), vb.device(), Shard::default())?
+        {
+            return Ok(layer);
+        }
+    }
+    let weight = projection_vb.get(shape, "weight")?;
+    let bias = if projection_vb.contains_tensor("bias") {
+        Some(projection_vb.get((shape.0, shape.1), "bias")?)
+    } else {
+        None
+    };
+    Ok(Arc::new(UnquantLinear::new(
+        QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
+    )?))
 }
 
 impl GptOssMoE {
@@ -371,29 +406,61 @@ impl GptOssMoE {
             None => None,
         };
 
-        let gate_up_proj = MXFP4Layer::packed_gptoss_linear(
-            cfg.num_local_experts,
-            cfg.hidden_size,
-            cfg.intermediate_size * 2,
-            true,
-            "gate_up_proj",
-            experts_vb.clone(),
-        )?;
-
-        let down_proj = MXFP4Layer::packed_gptoss_linear(
-            cfg.num_local_experts,
-            cfg.intermediate_size,
-            cfg.hidden_size,
-            true,
-            "down_proj",
-            experts_vb,
-        )?;
+        let projections = if experts_vb.contains_tensor("gate_up_proj_blocks") {
+            GptOssExpertProjections::Interleaved {
+                gate_up: MXFP4Layer::packed_gptoss_linear(
+                    cfg.num_local_experts,
+                    cfg.hidden_size,
+                    cfg.intermediate_size * 2,
+                    true,
+                    "gate_up_proj",
+                    experts_vb.clone(),
+                )?,
+                down: MXFP4Layer::packed_gptoss_linear(
+                    cfg.num_local_experts,
+                    cfg.intermediate_size,
+                    cfg.hidden_size,
+                    true,
+                    "down_proj",
+                    experts_vb,
+                )?,
+            }
+        } else {
+            GptOssExpertProjections::Split {
+                gate: load_gpt_oss_expert_projection(
+                    &experts_vb,
+                    "gate_proj",
+                    (
+                        cfg.num_local_experts,
+                        cfg.intermediate_size,
+                        cfg.hidden_size,
+                    ),
+                )?,
+                up: load_gpt_oss_expert_projection(
+                    &experts_vb,
+                    "up_proj",
+                    (
+                        cfg.num_local_experts,
+                        cfg.intermediate_size,
+                        cfg.hidden_size,
+                    ),
+                )?,
+                down: load_gpt_oss_expert_projection(
+                    &experts_vb,
+                    "down_proj",
+                    (
+                        cfg.num_local_experts,
+                        cfg.hidden_size,
+                        cfg.intermediate_size,
+                    ),
+                )?,
+            }
+        };
 
         Ok(Self {
             gate,
             gate_lora,
-            gate_up_proj,
-            down_proj,
+            projections,
             expert_lora,
             num_experts_per_tok: cfg.num_experts_per_tok,
             intermediate_size: cfg.intermediate_size,
@@ -428,8 +495,6 @@ impl GptOssMoE {
         )?;
         let (topk_weights, topk_ids) = (topk.values, topk.indices);
 
-        let gate_up = self.gate_up_proj.gather_forward(&xs_flat, &topk_ids)?;
-        let (num_tokens, topk_dim, _) = gate_up.dims3()?;
         let expert_lora = self
             .expert_lora
             .as_ref()
@@ -437,37 +502,51 @@ impl GptOssMoE {
             .transpose()?
             .flatten();
 
-        let activated = if let Some(lora) = &expert_lora {
-            let (gate, up) = lora.add_gate_up_delta_owned(&xs_flat, gate_up, &topk_ids)?;
-            gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
-        } else {
-            #[cfg(feature = "cuda")]
-            {
-                let gate_up_for_kernel =
-                    gate_up.reshape((num_tokens * topk_dim, self.intermediate_size, 2))?;
-                let result = mistralrs_quant::gptoss_swiglu_interleaved(
-                    &gate_up_for_kernel,
-                    self.intermediate_size,
-                    self.alpha,
-                    self.limit,
-                )?;
-                result.reshape((num_tokens, topk_dim, self.intermediate_size))?
+        let activated = match &self.projections {
+            GptOssExpertProjections::Interleaved { gate_up, .. } => {
+                let gate_up = gate_up.gather_forward(&xs_flat, &topk_ids)?;
+                let (num_tokens, topk_dim, _) = gate_up.dims3()?;
+                if let Some(lora) = &expert_lora {
+                    let (gate, up) = lora.add_gate_up_delta_owned(&xs_flat, gate_up, &topk_ids)?;
+                    gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
+                } else {
+                    let gate_up =
+                        gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
+                    let gate = gate_up.narrow(D::Minus1, 0, 1)?.squeeze(D::Minus1)?;
+                    let up = gate_up.narrow(D::Minus1, 1, 1)?.squeeze(D::Minus1)?;
+                    gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
+                }
             }
-            #[cfg(not(feature = "cuda"))]
-            {
-                let gate_up_reshaped =
-                    gate_up.reshape((num_tokens, topk_dim, self.intermediate_size, 2))?;
-                let gate = gate_up_reshaped
-                    .narrow(D::Minus1, 0, 1)?
-                    .squeeze(D::Minus1)?;
-                let up = gate_up_reshaped
-                    .narrow(D::Minus1, 1, 1)?
-                    .squeeze(D::Minus1)?;
+            GptOssExpertProjections::Split { gate, up, .. } => {
+                let mut gate = gate.gather_forward(&xs_flat, &topk_ids)?;
+                let mut up = up.gather_forward(&xs_flat, &topk_ids)?;
+                if let Some(lora) = &expert_lora {
+                    gate = lora.add_delta_owned(
+                        mistralrs_quant::LoraExpertProjection::Gate,
+                        &xs_flat,
+                        gate,
+                        &topk_ids,
+                        None,
+                        mistralrs_quant::LoraExpertInputMode::TokenRows,
+                    )?;
+                    up = lora.add_delta_owned(
+                        mistralrs_quant::LoraExpertProjection::Up,
+                        &xs_flat,
+                        up,
+                        &topk_ids,
+                        None,
+                        mistralrs_quant::LoraExpertInputMode::TokenRows,
+                    )?;
+                }
                 gptoss_swiglu(&gate, &up, self.alpha, self.limit)?
             }
         };
 
-        let expert_out = self.down_proj.gather_forward(&activated, &topk_ids)?;
+        let down = match &self.projections {
+            GptOssExpertProjections::Interleaved { down, .. }
+            | GptOssExpertProjections::Split { down, .. } => down,
+        };
+        let expert_out = down.gather_forward(&activated, &topk_ids)?;
         let expert_out = match &expert_lora {
             Some(lora) => lora.add_delta_owned(
                 mistralrs_quant::LoraExpertProjection::Down,

@@ -49,7 +49,7 @@ pub struct FormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// Model ID for tokenizer when using quantized format
+    /// Optional model ID overriding configuration and tokenizer assets for a quantized model
     #[arg(long)]
     pub tok_model_id: Option<String>,
 

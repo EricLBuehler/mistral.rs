@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
@@ -9,10 +10,15 @@ pub mod fast_mmvq;
 mod ffi;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+mod weight_source;
+
+pub use weight_source::{
+    GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
+};
 
 use candle_core::{
     quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
-    DType, Device, Result, Tensor,
+    DType, Device, Result, Shape, Tensor,
 };
 use candle_nn::Module;
 use safetensors::tensor::Dtype;
@@ -506,8 +512,17 @@ impl QuantMethod for GgufMatMul {
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
-        if let Some(ref b) = self.b {
-            res.broadcast_add(b)
+        if let Some(b) = &self.b {
+            if b.rank() == 2 {
+                let mut shape = indices.dims().to_vec();
+                shape.push(b.dim(1)?);
+                let bias = b
+                    .index_select(&indices.flatten_all()?, 0)?
+                    .reshape(Shape::from(shape))?;
+                res.broadcast_add(&bias)
+            } else {
+                res.broadcast_add(b)
+            }
         } else {
             Ok(res)
         }

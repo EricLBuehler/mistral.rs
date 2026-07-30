@@ -157,7 +157,7 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Source the tokenizer and chat template from this model ID (must contain `tokenizer.json` and `tokenizer_config.json`).
+    /// Override the GGUF configuration, tokenizer, and chat template with assets from this model ID.
     pub fn with_tok_model_id(mut self, tok_model_id: impl ToString) -> Self {
         self.tok_model_id = Some(tok_model_id.to_string());
         self

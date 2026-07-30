@@ -5,7 +5,7 @@ use candle_core::{DType, Device, Result, Shape, Tensor};
 use candle_nn::var_builder::{Backend, VarBuilderArgs};
 use safetensors::tensor::Dtype;
 
-use crate::{QuantizedSerdeType, Shard, ShardedSafeTensors};
+use crate::{QuantizedSerdeType, QuantizedWeightSource, Shard, ShardedSafeTensors};
 
 mod reader;
 mod report;
@@ -106,25 +106,52 @@ pub fn uqff_version_tensors() -> Vec<UqffTensor> {
 }
 
 /// Resolve a shard against logical dims: `None` for a full load, else `(dim, start, len)`.
-pub(crate) fn shard_range(shard: Shard, dims: &[usize]) -> Result<Option<(usize, usize, usize)>> {
+pub fn shard_range(shard: Shard, dims: &[usize]) -> Result<Option<(usize, usize, usize)>> {
     match shard {
-        Shard::Simple { world_size: 1, .. } => Ok(None),
         Shard::Simple {
             dim,
             rank,
             world_size,
         } => {
-            let size = dims[dim];
+            let size = *dims.get(dim).ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "Cannot shard dimension {dim} of rank-{} tensor.",
+                    dims.len()
+                ))
+            })?;
+            if world_size == 0 {
+                candle_core::bail!("Shard world size must be non-zero.");
+            }
+            if rank >= world_size {
+                candle_core::bail!("Shard rank {rank} is outside world size {world_size}.");
+            }
+            if world_size == 1 {
+                return Ok(None);
+            }
             if !size.is_multiple_of(world_size) {
                 candle_core::bail!(
-                    "UQFF shard dim {dim} of size {size} is not divisible by world size {world_size}."
+                    "Weight shard dim {dim} of size {size} is not divisible by world size {world_size}."
                 );
             }
             let len = size / world_size;
             Ok(Some((dim, rank * len, len)))
         }
         Shard::Offset { dim, offset, len } => {
-            if offset == 0 && len == dims[dim] {
+            let size = *dims.get(dim).ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "Cannot shard dimension {dim} of rank-{} tensor.",
+                    dims.len()
+                ))
+            })?;
+            let end = offset
+                .checked_add(len)
+                .ok_or_else(|| candle_core::Error::Msg("Shard range overflow.".to_string()))?;
+            if end > size {
+                candle_core::bail!(
+                    "Shard range {offset}..{end} exceeds dimension {dim} of size {size}."
+                );
+            }
+            if offset == 0 && len == size {
                 Ok(None)
             } else {
                 Ok(Some((dim, offset, len)))
@@ -134,7 +161,7 @@ pub(crate) fn shard_range(shard: Shard, dims: &[usize]) -> Result<Option<(usize,
 }
 
 /// How a shard maps onto a layer's bias.
-pub(crate) enum BiasShard {
+pub enum BiasShard {
     /// Embed the full bias (no shard, or a shard the bias is independent of).
     Full,
     /// Do not embed: the input dim is sharded, so the caller adds the bias post-reduce.
@@ -143,7 +170,14 @@ pub(crate) enum BiasShard {
     Narrow(usize, usize),
 }
 
-pub(crate) fn bias_shard(range: Option<(usize, usize, usize)>, weight_rank: usize) -> BiasShard {
+pub fn bias_shard(range: Option<(usize, usize, usize)>, weight_rank: usize) -> BiasShard {
+    if weight_rank < 2 {
+        return if range.is_none() {
+            BiasShard::Full
+        } else {
+            BiasShard::Skip
+        };
+    }
     match range {
         None => BiasShard::Full,
         Some((dim, _, _)) if dim == weight_rank - 1 => BiasShard::Skip,
@@ -186,7 +220,7 @@ pub(crate) fn u32_scalar_with_suffix(
 
 /// Slice raw block-quantized data along `dim`. The last dim is packed: `block` elements per
 /// `block_bytes` bytes, and rows must be whole blocks.
-pub(crate) fn slice_blocked_data(
+pub fn slice_blocked_data(
     data: &[u8],
     dims: &[usize],
     block: usize,
@@ -195,13 +229,50 @@ pub(crate) fn slice_blocked_data(
     start: usize,
     len: usize,
 ) -> Result<Vec<u8>> {
-    let last = *dims.last().expect("dims is non-empty");
+    if block == 0 || block_bytes == 0 {
+        candle_core::bail!("Packed block sizes must be non-zero.");
+    }
+    let Some(&last) = dims.last() else {
+        candle_core::bail!("Cannot shard scalar packed data.");
+    };
+    let size = *dims.get(dim).ok_or_else(|| {
+        candle_core::Error::Msg(format!(
+            "Cannot shard dimension {dim} of rank-{} packed tensor.",
+            dims.len()
+        ))
+    })?;
+    let end = start
+        .checked_add(len)
+        .ok_or_else(|| candle_core::Error::Msg("Packed shard range overflow.".to_string()))?;
+    if end > size {
+        candle_core::bail!(
+            "Packed shard range {start}..{end} exceeds dimension {dim} of size {size}."
+        );
+    }
     if !last.is_multiple_of(block) {
         candle_core::bail!(
             "Cannot shard block-quantized data: last dim {last} is not a multiple of block size {block}."
         );
     }
-    let row_bytes = last / block * block_bytes;
+    let row_bytes = (last / block)
+        .checked_mul(block_bytes)
+        .ok_or_else(|| candle_core::Error::Msg("Packed row byte size overflow.".to_string()))?;
+    let rows = dims[..dims.len() - 1]
+        .iter()
+        .try_fold(1usize, |count, size| {
+            count.checked_mul(*size).ok_or_else(|| {
+                candle_core::Error::Msg("Packed tensor row count overflow.".to_string())
+            })
+        })?;
+    let expected_bytes = rows
+        .checked_mul(row_bytes)
+        .ok_or_else(|| candle_core::Error::Msg("Packed tensor byte size overflow.".to_string()))?;
+    if data.len() < expected_bytes {
+        candle_core::bail!(
+            "Packed tensor needs {expected_bytes} bytes for shape {dims:?}, but only {} are available.",
+            data.len()
+        );
+    }
     if dim == dims.len() - 1 {
         if !start.is_multiple_of(block) || !len.is_multiple_of(block) {
             candle_core::bail!(
@@ -210,7 +281,6 @@ pub(crate) fn slice_blocked_data(
         }
         let off = start / block * block_bytes;
         let sub = len / block * block_bytes;
-        let rows: usize = dims[..dims.len() - 1].iter().product();
         let mut out = Vec::with_capacity(rows * sub);
         for row in 0..rows {
             let base = row * row_bytes + off;
@@ -218,10 +288,28 @@ pub(crate) fn slice_blocked_data(
         }
         Ok(out)
     } else {
-        let chunk_bytes: usize =
-            dims[dim + 1..dims.len() - 1].iter().product::<usize>() * row_bytes;
-        let pre: usize = dims[..dim].iter().product();
-        let mut out = Vec::with_capacity(pre * len * chunk_bytes);
+        let inner = dims[dim + 1..dims.len() - 1]
+            .iter()
+            .try_fold(1usize, |count, size| {
+                count.checked_mul(*size).ok_or_else(|| {
+                    candle_core::Error::Msg("Packed tensor inner size overflow.".to_string())
+                })
+            })?;
+        let chunk_bytes = inner.checked_mul(row_bytes).ok_or_else(|| {
+            candle_core::Error::Msg("Packed tensor chunk size overflow.".to_string())
+        })?;
+        let pre = dims[..dim].iter().try_fold(1usize, |count, size| {
+            count.checked_mul(*size).ok_or_else(|| {
+                candle_core::Error::Msg("Packed tensor outer size overflow.".to_string())
+            })
+        })?;
+        let capacity = pre
+            .checked_mul(len)
+            .and_then(|value| value.checked_mul(chunk_bytes))
+            .ok_or_else(|| {
+                candle_core::Error::Msg("Packed shard byte size overflow.".to_string())
+            })?;
+        let mut out = Vec::with_capacity(capacity);
         for p in 0..pre {
             let base = (p * dims[dim] + start) * chunk_bytes;
             out.extend_from_slice(&data[base..base + len * chunk_bytes]);
@@ -230,14 +318,13 @@ pub(crate) fn slice_blocked_data(
     }
 }
 
-/// Canonical UQFF names for the three stacked expert layers, shared by every write site and the read probe.
-pub struct UqffExpertKeys {
+pub struct QuantizedExpertKeys {
     pub gate: String,
     pub up: String,
     pub down: String,
 }
 
-impl UqffExpertKeys {
+impl QuantizedExpertKeys {
     pub fn new(experts_prefix: &str) -> Self {
         Self {
             gate: format!("{experts_prefix}.gate_proj"),
@@ -247,11 +334,13 @@ impl UqffExpertKeys {
     }
 }
 
+pub type UqffExpertKeys = QuantizedExpertKeys;
+
 #[derive(Clone)]
 pub struct ShardedVarBuilder {
     base: VarBuilderArgs<'static, ShardedSafeTensors>,
     tracker: Tracker,
-    uqff_reader: Option<Arc<UqffReader>>,
+    weight_source: Option<Arc<dyn QuantizedWeightSource>>,
     shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
     lora_registry: Option<Arc<crate::LoraLayerRegistry>>,
 }
@@ -261,7 +350,7 @@ impl ShardedVarBuilder {
         Self {
             base,
             tracker: Tracker::new(),
-            uqff_reader: None,
+            weight_source: None,
             shapes: None,
             lora_registry: None,
         }
@@ -293,7 +382,7 @@ impl ShardedVarBuilder {
         Self {
             base,
             tracker: self.tracker.clone(),
-            uqff_reader: self.uqff_reader.clone(),
+            weight_source: self.weight_source.clone(),
             shapes: self.shapes.clone(),
             lora_registry: self.lora_registry.clone(),
         }
@@ -397,13 +486,17 @@ impl ShardedVarBuilder {
         &self.tracker
     }
 
-    pub fn with_uqff_reader(mut self, reader: Arc<UqffReader>) -> Self {
-        self.uqff_reader = Some(reader);
+    pub fn with_weight_source(mut self, source: Arc<dyn QuantizedWeightSource>) -> Self {
+        self.weight_source = Some(source);
         self
     }
 
-    pub fn uqff_reader(&self) -> Option<&Arc<UqffReader>> {
-        self.uqff_reader.as_ref()
+    pub fn weight_source(&self) -> Option<&Arc<dyn QuantizedWeightSource>> {
+        self.weight_source.as_ref()
+    }
+
+    pub fn with_uqff_reader(self, reader: Arc<UqffReader>) -> Self {
+        self.with_weight_source(reader)
     }
 
     pub fn with_lora_registry(mut self, registry: Arc<crate::LoraLayerRegistry>) -> Self {
@@ -424,6 +517,51 @@ impl ShardedVarBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct TestWeightSource;
+
+    impl QuantizedWeightSource for TestWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            name == "model.weight"
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: Shard,
+        ) -> Result<Option<Arc<dyn crate::QuantMethod>>> {
+            Ok(None)
+        }
+
+        fn load_optional_tensor(&self, _name: &str, _device: &Device) -> Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    #[test]
+    fn weight_source_survives_builder_transforms() {
+        let backend: HashMap<String, Tensor> = HashMap::new();
+        let vb = ShardedSafeTensors::wrap(backend, DType::F32, Device::Cpu)
+            .with_weight_source(Arc::new(TestWeightSource));
+        let vb = vb.pp("model").to_dtype(DType::F64);
+
+        assert!(vb
+            .weight_source()
+            .is_some_and(|source| source.contains("model.weight")));
+    }
 
     #[test]
     fn shard_range_resolves() -> Result<()> {

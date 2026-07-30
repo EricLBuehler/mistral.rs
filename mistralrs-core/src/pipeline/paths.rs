@@ -466,7 +466,7 @@ pub fn get_model_paths(
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
-    paths: &Box<dyn ModelPaths>,
+    paths: &dyn ModelPaths,
     jinja_explicit: Option<&String>,
     chat_template_explicit: Option<&String>,
     chat_template_fallback: Option<&String>,
