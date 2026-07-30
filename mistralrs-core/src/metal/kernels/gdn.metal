@@ -426,9 +426,10 @@ instantiate_conv1d_update(bfloat16_t);
 template <typename T>
 [[kernel]] void causal_conv1d_full_kernel(
     const device T *x [[buffer(0)]], const device T *weight [[buffer(1)]],
-    device T *output [[buffer(2)]], constant int &batch_size [[buffer(3)]],
-    constant int &conv_dim [[buffer(4)]], constant int &seq_len [[buffer(5)]],
-    constant int &kernel_size [[buffer(6)]],
+    const device T *conv_state [[buffer(2)]], device T *output [[buffer(3)]],
+    constant int &batch_size [[buffer(4)]],
+    constant int &conv_dim [[buffer(5)]], constant int &seq_len [[buffer(6)]],
+    constant int &kernel_size [[buffer(7)]],
     uint3 gid [[thread_position_in_grid]]) {
   const int ch = gid.x;
   const int pos = gid.y;
@@ -439,11 +440,13 @@ template <typename T>
 
   const device T *x_bch = x + (b * conv_dim + ch) * seq_len;
   const device T *w = weight + ch * kernel_size;
+  const device T *cs = conv_state + (b * conv_dim + ch) * kernel_size;
 
   float acc = 0.0f;
   for (int i = 0; i < kernel_size; i++) {
     int src_pos = pos - (kernel_size - 1) + i;
-    float x_val = (src_pos >= 0) ? (float)x_bch[src_pos] : 0.0f;
+    float x_val =
+        src_pos >= 0 ? (float)x_bch[src_pos] : (float)cs[kernel_size + src_pos];
     acc += x_val * (float)w[i];
   }
 
@@ -456,11 +459,13 @@ template <typename T>
 
 template <typename T>
 [[kernel]] void save_conv_state_kernel(const device T *x [[buffer(0)]],
-                                       device T *conv_state_out [[buffer(1)]],
-                                       constant int &batch_size [[buffer(2)]],
-                                       constant int &conv_dim [[buffer(3)]],
-                                       constant int &seq_len [[buffer(4)]],
-                                       constant int &kernel_size [[buffer(5)]],
+                                       const device T *conv_state_in
+                                       [[buffer(1)]],
+                                       device T *conv_state_out [[buffer(2)]],
+                                       constant int &batch_size [[buffer(3)]],
+                                       constant int &conv_dim [[buffer(4)]],
+                                       constant int &seq_len [[buffer(5)]],
+                                       constant int &kernel_size [[buffer(6)]],
                                        uint2 gid [[thread_position_in_grid]]) {
   const int ch = gid.x;
   const int b = gid.y;
@@ -469,12 +474,13 @@ template <typename T>
     return;
 
   const device T *x_bch = x + (b * conv_dim + ch) * seq_len;
+  const device T *prior = conv_state_in + (b * conv_dim + ch) * kernel_size;
   device T *cs = conv_state_out + (b * conv_dim + ch) * kernel_size;
 
   int pad = kernel_size - seq_len;
   for (int i = 0; i < kernel_size; i++) {
     if (i < pad) {
-      cs[i] = (T)0.0f;
+      cs[i] = prior[i + seq_len];
     } else {
       cs[i] = x_bch[seq_len - kernel_size + i];
     }
@@ -484,12 +490,13 @@ template <typename T>
 #define instantiate_conv1d_full(type)                                          \
   template [[host_name("causal_conv1d_full_" #type)]] [[kernel]]               \
   void causal_conv1d_full_kernel<type>(                                        \
-      const device type *, const device type *, device type *, constant int &, \
-      constant int &, constant int &, constant int &, uint3);                  \
+      const device type *, const device type *, const device type *,           \
+      device type *, constant int &, constant int &, constant int &,           \
+      constant int &, uint3);                                                  \
   template [[host_name("save_conv_state_" #type)]] [[kernel]]                  \
-  void save_conv_state_kernel<type>(const device type *, device type *,        \
-                                    constant int &, constant int &,            \
-                                    constant int &, constant int &, uint2);
+  void save_conv_state_kernel<type>(                                           \
+      const device type *, const device type *, device type *, constant int &, \
+      constant int &, constant int &, constant int &, uint2);
 
 instantiate_conv1d_full(half);
 instantiate_conv1d_full(bfloat16_t);

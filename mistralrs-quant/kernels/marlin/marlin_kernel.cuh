@@ -70,6 +70,15 @@ template <int lut> __device__ inline int lop3(int a, int b, int c) {
   return res;
 }
 
+template <int start_byte, int mask>
+__device__ inline uint32_t prmt(uint32_t value) {
+  uint32_t result;
+  asm volatile("prmt.b32 %0, %1, %2, %3;\n"
+               : "=r"(result)
+               : "r"(value), "n"(start_byte), "n"(mask));
+  return result;
+}
+
 template <typename scalar_t, ScalarTypeID w_type_id>
 __device__ inline typename ScalarType<scalar_t>::FragB dequant(int q);
 
@@ -174,6 +183,54 @@ dequant<nv_bfloat16, ScalarTypeID::kU4>(int q) {
                       *reinterpret_cast<const nv_bfloat162 *>(&ADD));
   return frag_b;
 }
+
+template <>
+__device__ inline typename ScalarType<half>::FragB
+dequant<half, ScalarTypeID::kU8>(int q) {
+  static constexpr uint32_t START_BYTE = 0x64646464;
+  static constexpr uint32_t MASK_01 = 0x5250;
+  static constexpr uint32_t MASK_23 = 0x5351;
+  static constexpr uint32_t BIAS = 0x64006400;
+
+  uint32_t lo = prmt<START_BYTE, MASK_01>(q);
+  uint32_t hi = prmt<START_BYTE, MASK_23>(q);
+  typename ScalarType<half>::FragB frag_b;
+  frag_b[0] = __hsub2(*reinterpret_cast<half2 *>(&lo),
+                      *reinterpret_cast<const half2 *>(&BIAS));
+  frag_b[1] = __hsub2(*reinterpret_cast<half2 *>(&hi),
+                      *reinterpret_cast<const half2 *>(&BIAS));
+  return frag_b;
+}
+
+template <>
+__device__ inline typename ScalarType<nv_bfloat16>::FragB
+dequant<nv_bfloat16, ScalarTypeID::kU8>(int q) {
+  float values[4];
+  uint32_t *value_bits = reinterpret_cast<uint32_t *>(values);
+  static constexpr uint32_t FP32_BASE = 0x4B000000;
+  static constexpr float FP32_BIAS = 8388608.0f;
+  static constexpr uint32_t MASK_0 = 0x7650;
+  static constexpr uint32_t MASK_1 = 0x7652;
+  static constexpr uint32_t MASK_2 = 0x7651;
+  static constexpr uint32_t MASK_3 = 0x7653;
+  static constexpr uint32_t PACK_MASK = 0x7632;
+
+  value_bits[0] = __byte_perm(q, FP32_BASE, MASK_0);
+  value_bits[1] = __byte_perm(q, FP32_BASE, MASK_1);
+  value_bits[2] = __byte_perm(q, FP32_BASE, MASK_2);
+  value_bits[3] = __byte_perm(q, FP32_BASE, MASK_3);
+  values[0] -= FP32_BIAS;
+  values[1] -= FP32_BIAS;
+  values[2] -= FP32_BIAS;
+  values[3] -= FP32_BIAS;
+
+  typename ScalarType<nv_bfloat16>::FragB frag_b;
+  uint32_t *result = reinterpret_cast<uint32_t *>(&frag_b);
+  result[0] = __byte_perm(value_bits[0], value_bits[1], PACK_MASK);
+  result[1] = __byte_perm(value_bits[2], value_bits[3], PACK_MASK);
+  return frag_b;
+}
+
 // Multiply dequantized values by the corresponding quantization scale; used
 // only for grouped quantization.
 template <typename scalar_t>
@@ -232,7 +289,7 @@ template <typename scalar_t,
           const ScalarTypeID w_type_id,
           const bool has_act_order, // whether act_order is enabled
           const bool has_zp,        // whether zero-points are enabled
-          const int num_bits
+          const int num_bits, const bool is_zp_float = false
           // with a separate quantization scale
           >
 __global__ void
@@ -269,7 +326,6 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
   using FragS = typename ScalarType<scalar_t>::FragS;
   using FragZP = typename ScalarType<scalar_t>::FragZP;
 
-  const bool is_zp_float = false;
   // static constexpr auto w_type = vllm::ScalarType::from_id(w_type_id);
 
   constexpr int pack_factor = 32 / num_bits;
@@ -492,6 +548,9 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
       if constexpr (group_blocks != -1) {
         zp_sh_rd = 8 * ((threadIdx.x / 32) % (thread_n_blocks / 4)) +
                    (threadIdx.x % 32) / 4;
+      } else {
+        zp_sh_rd = 8 * ((threadIdx.x / 32) % (thread_n_blocks / 4)) +
+                   (threadIdx.x % 32) % 4;
       }
     } else {
       zp_sh_rd = num_ints_per_thread * num_col_threads *
@@ -856,7 +915,24 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
     if constexpr (has_zp) {
       int pipe = full_pipe % stages;
 
-      if constexpr (group_blocks == -1) {
+      if constexpr (is_zp_float && group_blocks == -1) {
+        reinterpret_cast<int4 *>(&frag_zpf[k % 2])[0] = sh_zp[zp_sh_rd];
+      } else if constexpr (is_zp_float && group_blocks >= thread_k_blocks) {
+        int4 *sh_zp_stage =
+            sh_zp + zp_sh_stage * ((group_blocks / thread_k_blocks) *
+                                   (pipe / (group_blocks / thread_k_blocks)));
+        reinterpret_cast<int4 *>(&frag_zpf[k % 2])[0] = sh_zp_stage[zp_sh_rd];
+      } else if constexpr (is_zp_float) {
+        auto warp_id = threadIdx.x / 32;
+        int n_warps = thread_n_blocks / 4;
+        int warp_row = warp_id / n_warps;
+        int cur_k = warp_row * 16;
+        cur_k += k_iter_size * (k % b_sh_wr_iters);
+        int cur_group_id = (cur_k / 16) / group_blocks;
+        int4 *sh_zp_stage = sh_zp + zp_sh_stage * pipe;
+        reinterpret_cast<int4 *>(&frag_zpf[k % 2])[0] =
+            sh_zp_stage[zp_sh_rd + cur_group_id * zp_sh_stride];
+      } else if constexpr (group_blocks == -1) {
         for (int i = 0; i < num_ints_per_thread; i++) {
           frag_qzp[k % 2][i] = (reinterpret_cast<int *>(sh_zp))[zp_sh_rd + i];
         }
@@ -901,7 +977,7 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
 
   // Execute the actual tensor core matmul of a sub-tile.
   auto matmul = [&](int k) {
-    if constexpr (has_zp) {
+    if constexpr (has_zp && !is_zp_float) {
       FragB frag_zp_0;
       FragB frag_zp_1;
       int zp_quant_0, zp_quant_1;
@@ -935,13 +1011,18 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
       if constexpr (num_bits == 4) {
         b_quant_0 = frag_b_quant[k % 2][0][j];
         b_quant_1 = b_quant_0 >> 8;
+      } else {
+        static_assert(num_bits == 8);
+        int *frag_b_quant_ptr = reinterpret_cast<int *>(frag_b_quant[k % 2]);
+        b_quant_0 = frag_b_quant_ptr[j * 2];
+        b_quant_1 = frag_b_quant_ptr[j * 2 + 1];
       }
 
       frag_b0 = dequant<scalar_t, w_type_id>(b_quant_0);
       frag_b1 = dequant<scalar_t, w_type_id>(b_quant_1);
 
       // Apply zero-point to frag_b0
-      if constexpr (has_zp) {
+      if constexpr (has_zp && !is_zp_float) {
         sub_zp<scalar_t>(frag_b0, frag_zp[j], 0);
       }
 
@@ -956,8 +1037,12 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
         }
       }
 
+      if constexpr (has_zp && is_zp_float) {
+        sub_zp<scalar_t>(frag_b0, frag_zpf[k % 2][j], 0);
+      }
+
       // Apply zero-point to frag_b1
-      if constexpr (has_zp) {
+      if constexpr (has_zp && !is_zp_float) {
         sub_zp<scalar_t>(frag_b1, frag_zp[j], 1);
       }
 
@@ -971,6 +1056,10 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
         if constexpr (group_blocks != -1) {
           scale<scalar_t>(frag_b1, frag_s[k % 2][j], 1);
         }
+      }
+
+      if constexpr (has_zp && is_zp_float) {
+        sub_zp<scalar_t>(frag_b1, frag_zpf[k % 2][j], 1);
       }
 
 #pragma unroll
@@ -1325,8 +1414,7 @@ Marlin(const int4 *__restrict__ A, // fp16 input matrix of shape mxk
 const int USER_THREADS =
     256;              // Note: This is only used with user-provided thread_k/n
 const int STAGES = 4; // 4 pipeline stages fit into shared memory
-const int SHARED_MEM =
-    96 * 1024; // max shared memory on compute capability 8.6 (< 8.0)
+const int DEFAULT_SHARED_MEM = 96 * 1024;
 static constexpr int pack_factor_4bit =
     8; // We have 8 4-bit vals inside a 32 bit
 
@@ -1336,16 +1424,19 @@ static constexpr int pack_factor_4bit =
            thread_n_blocks == THREAD_N_BLOCKS &&                               \
            thread_k_blocks == THREAD_K_BLOCKS &&                               \
            group_blocks == GROUP_BLOCKS && num_threads == NUM_THREADS) {       \
-    cudaFuncSetAttribute(                                                      \
+    cudaError_t attribute_status = cudaFuncSetAttribute(                       \
         Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS,        \
                THREAD_K_BLOCKS, STAGES, GROUP_BLOCKS, w_type_id, false,        \
-               has_zp, num_bits>,                                              \
-        cudaFuncAttributeMaxDynamicSharedMemorySize, SHARED_MEM);              \
+               has_zp, num_bits, is_zp_float>,                                 \
+        cudaFuncAttributeMaxDynamicSharedMemorySize, shared_mem);              \
+    if (attribute_status != cudaSuccess)                                       \
+      throw std::runtime_error(cudaGetErrorString(attribute_status));          \
     Marlin<scalar_t, NUM_THREADS, THREAD_M_BLOCKS, THREAD_N_BLOCKS,            \
            THREAD_K_BLOCKS, STAGES, GROUP_BLOCKS, w_type_id, false, has_zp,    \
-           num_bits><<<blocks, NUM_THREADS, SHARED_MEM, stream>>>(             \
-        A_ptr, B_ptr, C_ptr, s_ptr, zp_ptr, g_idx_ptr, prob_m, prob_n, prob_k, \
-        num_groups, locks);                                                    \
+           num_bits, is_zp_float>                                              \
+        <<<blocks, NUM_THREADS, shared_mem, stream>>>(                         \
+            A_ptr, B_ptr, C_ptr, s_ptr, zp_ptr, g_idx_ptr, prob_m, prob_n,     \
+            prob_k, num_groups, locks);                                        \
   }
 
 typedef struct {
@@ -1378,8 +1469,9 @@ static thread_config_t large_batch_thread_configs[] = {
 };
 
 inline int get_scales_cache_size(thread_config_t const &th_config, int prob_m,
-                          int prob_n, int prob_k, int num_bits, int group_size,
-                          bool has_act_order, bool is_k_full) {
+                                 int prob_n, int prob_k, int num_bits,
+                                 int group_size, bool has_act_order,
+                                 bool is_k_full) {
   bool cache_scales_chunk = has_act_order && !is_k_full;
 
   int tb_n = th_config.thread_n;
@@ -1408,9 +1500,10 @@ inline int get_scales_cache_size(thread_config_t const &th_config, int prob_m,
   }
 }
 
-inline bool is_valid_cache_size(thread_config_t const &th_config, int max_m_blocks,
-                         int prob_m, int prob_n, int prob_k, int num_bits,
-                         int scales_cache_size, int max_shared_mem) {
+inline bool is_valid_cache_size(thread_config_t const &th_config,
+                                int max_m_blocks, int prob_m, int prob_n,
+                                int prob_k, int num_bits, int scales_cache_size,
+                                int max_shared_mem) {
   int pack_factor = 32 / num_bits;
 
   // Get B size
@@ -1448,9 +1541,9 @@ inline bool is_valid_cache_size(thread_config_t const &th_config, int max_m_bloc
 }
 
 inline bool is_valid_config(thread_config_t const &th_config, int max_m_blocks,
-                     int prob_m, int prob_n, int prob_k, int num_bits,
-                     int group_size, bool has_act_order, bool is_k_full,
-                     int max_shared_mem) {
+                            int prob_m, int prob_n, int prob_k, int num_bits,
+                            int group_size, bool has_act_order, bool is_k_full,
+                            bool has_zp, bool is_zp_float, int max_shared_mem) {
   // Sanity
   if (th_config.thread_k == -1 || th_config.thread_n == -1 ||
       th_config.num_threads == -1) {
@@ -1476,6 +1569,10 @@ inline bool is_valid_config(thread_config_t const &th_config, int max_m_blocks,
   int scales_cache_size =
       get_scales_cache_size(th_config, prob_m, prob_n, prob_k, num_bits,
                             group_size, has_act_order, is_k_full);
+  if (has_zp) {
+    scales_cache_size +=
+        is_zp_float ? scales_cache_size : scales_cache_size * num_bits / 16;
+  }
 
   // Check that pipeline fits into cache
   if (!is_valid_cache_size(th_config, max_m_blocks, prob_m, prob_n, prob_k,
@@ -1487,16 +1584,17 @@ inline bool is_valid_config(thread_config_t const &th_config, int max_m_blocks,
 }
 
 static exec_config_t determine_thread_config(int prob_m, int prob_n, int prob_k,
-                                      int num_bits, int group_size,
-                                      bool has_act_order, bool is_k_full,
-                                      int max_shared_mem) {
+                                             int num_bits, int group_size,
+                                             bool has_act_order, bool is_k_full,
+                                             bool has_zp, bool is_zp_float,
+                                             int max_shared_mem) {
   int max_m_blocks = 4;
   while (max_m_blocks > 0) {
     if (prob_m <= 16) {
       for (auto th_config : small_batch_thread_configs) {
         if (is_valid_config(th_config, max_m_blocks, prob_m, prob_n, prob_k,
                             num_bits, group_size, has_act_order, is_k_full,
-                            max_shared_mem)) {
+                            has_zp, is_zp_float, max_shared_mem)) {
           return exec_config_t{max_m_blocks, th_config};
         }
       }
@@ -1504,7 +1602,7 @@ static exec_config_t determine_thread_config(int prob_m, int prob_n, int prob_k,
       for (auto th_config : large_batch_thread_configs) {
         if (is_valid_config(th_config, max_m_blocks, prob_m, prob_n, prob_k,
                             num_bits, group_size, has_act_order, is_k_full,
-                            max_shared_mem)) {
+                            has_zp, is_zp_float, max_shared_mem)) {
           return exec_config_t{max_m_blocks, th_config};
         }
       }
@@ -1531,14 +1629,27 @@ static exec_config_t determine_thread_config(int prob_m, int prob_n, int prob_k,
   __CALL_IF(4, N_BLOCKS, K_BLOCKS, 4, NUM_THREADS)                             \
   __CALL_IF(4, N_BLOCKS, K_BLOCKS, 8, NUM_THREADS)
 
+#define CALL_IF_AFFINE(N_BLOCKS, K_BLOCKS, NUM_THREADS)                        \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 1, NUM_THREADS)                             \
+  __CALL_IF(1, N_BLOCKS, K_BLOCKS, 2, NUM_THREADS)                             \
+  __CALL_IF(2, N_BLOCKS, K_BLOCKS, 1, NUM_THREADS)                             \
+  __CALL_IF(2, N_BLOCKS, K_BLOCKS, 2, NUM_THREADS)                             \
+  __CALL_IF(3, N_BLOCKS, K_BLOCKS, 1, NUM_THREADS)                             \
+  __CALL_IF(3, N_BLOCKS, K_BLOCKS, 2, NUM_THREADS)                             \
+  __CALL_IF(4, N_BLOCKS, K_BLOCKS, 1, NUM_THREADS)                             \
+  __CALL_IF(4, N_BLOCKS, K_BLOCKS, 2, NUM_THREADS)
+
 template <typename scalar_t, const ScalarTypeID w_type_id,
           const bool has_zp, // whether zero-points are enabled
-          const int num_bits>
+          const int num_bits, const bool is_zp_float = false>
 void marlin_matmul(const void *A, const void *B, void *scales, void *zeros,
                    void *C, int prob_m, int prob_k, int prob_n, void *workspace,
                    int groupsize, int64_t stream_) {
 
   int dev = 0;
+  cudaError_t status = cudaGetDevice(&dev);
+  if (status != cudaSuccess)
+    throw std::runtime_error(cudaGetErrorString(status));
   cudaStream_t stream = (cudaStream_t)stream_;
   int thread_k = -1;
   int thread_n = -1;
@@ -1551,12 +1662,17 @@ void marlin_matmul(const void *A, const void *B, void *scales, void *zeros,
 
   bool has_act_order = false;
   bool is_k_full = true;
-  if (sms == -1)
-    cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+  if (sms == -1) {
+    status = cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev);
+    if (status != cudaSuccess)
+      throw std::runtime_error(cudaGetErrorString(status));
+  }
   int max_shared_mem = 0;
-  cudaDeviceGetAttribute(&max_shared_mem,
-                         cudaDevAttrMaxSharedMemoryPerBlockOptin, 0);
-  CHECK(max_shared_mem > 0, "error");
+  status = cudaDeviceGetAttribute(&max_shared_mem,
+                                  cudaDevAttrMaxSharedMemoryPerBlockOptin, dev);
+  if (status != cudaSuccess)
+    throw std::runtime_error(cudaGetErrorString(status));
+  int shared_mem = min(max_shared_mem, DEFAULT_SHARED_MEM);
   // Set thread config
   exec_config_t exec_cfg;
   if (thread_k != -1 && thread_n != -1) {
@@ -1565,9 +1681,9 @@ void marlin_matmul(const void *A, const void *B, void *scales, void *zeros,
         exec_config_t{4, thread_config_t{thread_k, thread_n, default_threads}};
   } else {
     // Auto config
-    exec_cfg =
-        determine_thread_config(prob_m, prob_n, prob_k, num_bits, groupsize,
-                                has_act_order, is_k_full, max_shared_mem);
+    exec_cfg = determine_thread_config(prob_m, prob_n, prob_k, num_bits,
+                                       groupsize, has_act_order, is_k_full,
+                                       has_zp, is_zp_float, shared_mem);
   }
 
   int num_threads = exec_cfg.tb_cfg.num_threads;
@@ -1626,14 +1742,31 @@ void marlin_matmul(const void *A, const void *B, void *scales, void *zeros,
     // For compilation speed, we only define the kernel configurations that have
     // seemed useful (in terms of performance) in our testing, however many more
     // are, in principle, possible.
-    if (false) {
-    }
-    CALL_IF(8, 8, 256)
-    CALL_IF(16, 4, 256)
-    CALL_IF(8, 4, 128)
-    CALL_IF(4, 8, 128)
-    else {
-      throw std::runtime_error("Unsupported shapes: MKN");
+    if constexpr (is_zp_float) {
+      if (false) {
+      }
+      CALL_IF_AFFINE(8, 8, 256)
+      CALL_IF_AFFINE(16, 4, 256)
+      CALL_IF_AFFINE(8, 4, 128)
+      CALL_IF_AFFINE(4, 8, 128)
+      else {
+        throw std::runtime_error(
+            "Unsupported affine config: m=" + std::to_string(thread_m_blocks) +
+            ", n=" + std::to_string(thread_n_blocks) +
+            ", k=" + std::to_string(thread_k_blocks) +
+            ", g=" + std::to_string(group_blocks) +
+            ", threads=" + std::to_string(num_threads));
+      }
+    } else {
+      if (false) {
+      }
+      CALL_IF(8, 8, 256)
+      CALL_IF(16, 4, 256)
+      CALL_IF(8, 4, 128)
+      CALL_IF(4, 8, 128)
+      else {
+        throw std::runtime_error("Unsupported shapes: MKN");
+      }
     }
 
     A_ptr += 16 * thread_m_blocks * (prob_k / 8) * par;

@@ -167,6 +167,9 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Ordered record of all tool calls made during the agentic loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
@@ -192,6 +195,9 @@ pub struct ChatCompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Option<Usage>,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Set on the final chunk so streaming clients can read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -224,6 +230,9 @@ pub struct CompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionResponse);
@@ -239,6 +248,9 @@ pub struct CompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionChunkResponse);

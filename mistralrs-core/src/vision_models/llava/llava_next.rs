@@ -23,6 +23,9 @@ use crate::utils::unvarbuilder::UnVarBuilder;
 use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
 use crate::vision_models::llava::utils::get_anyres_image_grid_shape;
+use crate::vision_models::multimodal_layout::{
+    MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+};
 use crate::{layers, AnyMoeConfig, AnyMoeExpertType};
 
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
@@ -33,6 +36,7 @@ pub(crate) struct LLaVANextVisionSpecificArgs {
     pub num_image_tokens: Option<Vec<usize>>,     // number of image tokens for each image
     pub num_image_samples: Option<Vec<usize>>,    // number of image samples for each image
     pub image_hashes: Vec<u64>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
 }
 
 pub struct MMProjector {
@@ -225,6 +229,7 @@ impl Model {
         num_image_samples: Vec<usize>,
         image_sizes: &[(u32, u32)],
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
         let image_indexes = input_ids
             .squeeze(0)?
@@ -237,6 +242,39 @@ impl Model {
 
         let images_typed = images.to_dtype(self.dtype)?;
         let n_images = num_image_samples.len();
+        if n_images == 0 {
+            candle_core::bail!("LLaVA-Next received image pixels without image metadata");
+        }
+        if image_sizes.len() != n_images || num_image_tokens.len() != n_images {
+            candle_core::bail!("LLaVA-Next image metadata has inconsistent cardinality");
+        }
+        if !image_hashes.is_empty() && image_hashes.len() != n_images {
+            candle_core::bail!(
+                "LLaVA-Next received {} image hashes for {n_images} images",
+                image_hashes.len()
+            );
+        }
+        if image_indexes.len() != n_images {
+            candle_core::bail!(
+                "LLaVA-Next received {} image placeholders for {n_images} images",
+                image_indexes.len()
+            );
+        }
+        let mut total_samples = 0usize;
+        for &sample_count in &num_image_samples {
+            if sample_count == 0 {
+                candle_core::bail!("LLaVA-Next image has no preprocessed samples");
+            }
+            total_samples = total_samples.checked_add(sample_count).ok_or_else(|| {
+                candle_core::Error::Msg("LLaVA-Next image sample count overflow".into())
+            })?;
+        }
+        if images_typed.dim(0)? != total_samples {
+            candle_core::bail!(
+                "LLaVA-Next received {} image samples but metadata describes {total_samples}",
+                images_typed.dim(0)?
+            );
+        }
 
         // Per-image caching: each image may have multiple samples (base + tiles).
         let image_features_vec: Vec<Tensor>;
@@ -256,7 +294,19 @@ impl Model {
                     .expect("encoder cache lock poisoned");
                 for (i, &hash) in image_hashes.iter().enumerate() {
                     if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                        per_image[i] = Some(cached[0].clone());
+                        let cached = cached.first().ok_or_else(|| {
+                            candle_core::Error::Msg(
+                                "cached LLaVA-Next image has no encoder output".into(),
+                            )
+                        })?;
+                        if cached.dim(0)? != num_image_samples[i] {
+                            candle_core::bail!(
+                                "cached LLaVA-Next image has {} samples but metadata describes {}",
+                                cached.dim(0)?,
+                                num_image_samples[i]
+                            );
+                        }
+                        per_image[i] = Some(cached.clone());
                     } else {
                         miss_indices.push(i);
                     }
@@ -265,15 +315,21 @@ impl Model {
 
             if !miss_indices.is_empty() {
                 // Collect miss samples and encode them as a batch.
-                let miss_samples: Vec<Tensor> = miss_indices
-                    .iter()
-                    .flat_map(|&idx| {
-                        let (start, end) = (sample_offsets[idx], sample_offsets[idx + 1]);
-                        (start..end).map(|j| images_typed.get(j).unwrap())
-                    })
-                    .collect();
+                let mut miss_samples = Vec::new();
+                for &idx in &miss_indices {
+                    for sample in sample_offsets[idx]..sample_offsets[idx + 1] {
+                        miss_samples.push(images_typed.get(sample)?);
+                    }
+                }
                 let miss_pixels = Tensor::stack(&miss_samples, 0)?;
                 let miss_encoded = self.encode_images(&miss_pixels)?;
+                if miss_encoded.dim(0)? != miss_samples.len() {
+                    candle_core::bail!(
+                        "LLaVA-Next encoder returned {} samples for {} inputs",
+                        miss_encoded.dim(0)?,
+                        miss_samples.len()
+                    );
+                }
 
                 let mut offset = 0;
                 let mut guard = self
@@ -295,11 +351,24 @@ impl Model {
 
             image_features_vec = per_image
                 .into_iter()
-                .map(|o| o.expect("all images should be resolved"))
-                .collect();
+                .enumerate()
+                .map(|(index, output)| {
+                    output.ok_or_else(|| {
+                        candle_core::Error::Msg(format!(
+                            "LLaVA-Next image {index} has no encoder output"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
         } else {
             // Fallback: no hashes, encode all at once.
             let image_features = self.encode_images(&images_typed)?;
+            if image_features.dim(0)? != total_samples {
+                candle_core::bail!(
+                    "LLaVA-Next encoder returned {} samples for {total_samples} inputs",
+                    image_features.dim(0)?
+                );
+            }
             let mut feats = Vec::new();
             let mut index = 0;
             for num_image_sample in &num_image_samples {
@@ -312,11 +381,17 @@ impl Model {
             .iter()
             .enumerate()
             .map(|(image_idx, image_feature)| {
-                let base_image_feature = image_feature.get(0).unwrap();
-                let patch_image_feature = image_feature.i(1..).unwrap();
+                let base_image_feature = image_feature.get(0)?;
+                let patch_image_feature = image_feature.i(1..)?;
                 let height = self.clip_vision_tower.num_patches_per_side();
                 let width = height;
-                assert_eq!(height * width, base_image_feature.dims()[0]);
+                if height * width != base_image_feature.dim(0)? {
+                    candle_core::bail!(
+                        "LLaVA-Next base image has {} patches but the vision tower expects {}",
+                        base_image_feature.dim(0)?,
+                        height * width
+                    );
+                }
                 let image_size = image_sizes[image_idx];
                 let image_grid_pinpoints = self.config.image_grid_pinpoints.clone().unwrap();
                 let (num_patch_width, num_patch_height) = get_anyres_image_grid_shape(
@@ -349,6 +424,40 @@ impl Model {
                 Ok(new_image_feature)
             })
             .collect::<Result<Vec<Tensor>>>()?;
+        if image_features_vec.len() != num_image_tokens.len() {
+            candle_core::bail!("LLaVA-Next encoder output cardinality is inconsistent");
+        }
+        for (output, &token_count) in image_features_vec.iter().zip(&num_image_tokens) {
+            let (output_batch, output_rows, _) = output.dims3()?;
+            if output_batch != 1 || output_rows != token_count {
+                candle_core::bail!(
+                    "LLaVA-Next encoder returned shape {:?} for a {token_count}-token placeholder",
+                    output.dims()
+                );
+            }
+        }
+        if let Some(layout) = packed_layout {
+            if image_hashes.len() != image_features_vec.len() {
+                candle_core::bail!(
+                    "packed LLaVA-Next image metadata does not match encoder outputs"
+                );
+            }
+            let encoder_outputs = image_hashes
+                .iter()
+                .copied()
+                .zip(image_features_vec)
+                .map(|(hash, output)| {
+                    (
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                            hash,
+                        },
+                        vec![output],
+                    )
+                })
+                .collect::<MultimodalEncoderOutputs>();
+            return layout.splice_embeddings(&result, &encoder_outputs);
+        }
         for (i, image_index) in image_indexes.iter().enumerate() {
             result = result.slice_assign(
                 &[
@@ -375,17 +484,27 @@ impl Model {
         num_image_tokens: Option<Vec<usize>>,
         num_image_samples: Option<Vec<usize>>,
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
-            // we assume(as it should be) only prompt request contains image
+            let num_image_tokens = num_image_tokens.ok_or_else(|| {
+                candle_core::Error::Msg("LLaVA-Next input is missing image token counts".into())
+            })?;
+            let num_image_samples = num_image_samples.ok_or_else(|| {
+                candle_core::Error::Msg("LLaVA-Next input is missing image sample counts".into())
+            })?;
+            let image_sizes = image_sizes.ok_or_else(|| {
+                candle_core::Error::Msg("LLaVA-Next input is missing image sizes".into())
+            })?;
             let input_embeds = self.prepare_inputs_labels_for_multimodal(
                 input_ids,
                 pixel_values,
-                num_image_tokens.unwrap(),
-                num_image_samples.unwrap(),
-                &image_sizes.unwrap(),
+                num_image_tokens,
+                num_image_samples,
+                &image_sizes,
                 image_hashes,
+                packed_layout,
             )?;
             self.llm.forward_input_embed(input_ids, input_embeds, ctx)
         } else {
@@ -421,6 +540,14 @@ impl crate::speculative::SpeculativeTargetMixin for Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Model {}
 
 impl MultimodalModel for Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -433,6 +560,7 @@ impl MultimodalModel for Model {
             num_image_tokens,
             num_image_samples,
             image_hashes,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVANextVisionSpecificArgs`");
@@ -449,6 +577,7 @@ impl MultimodalModel for Model {
             num_image_tokens,
             num_image_samples,
             &image_hashes,
+            packed_layout.as_ref(),
             ctx,
         )
     }

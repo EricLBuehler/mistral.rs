@@ -4,16 +4,14 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::serde_default_fn;
-use candle_core::{Device, Module, Result, Tensor};
-use candle_nn::Linear;
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
-    softcap, ColumnParallelLayer, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    RowParallelLayer, ShardedVarBuilder, UnquantLinear,
+    softcap, ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
-    attention::{AttentionMask, SdpaParams},
+    attention::{flash_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
@@ -22,13 +20,46 @@ use crate::{
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
-        NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
+        NormalLoadingMetadata, NormalModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
+
+fn layers_support_packed_prefill(
+    head_dim: usize,
+    has_softcap: impl IntoIterator<Item = bool>,
+) -> bool {
+    has_softcap
+        .into_iter()
+        .all(|has_softcap| flash_backend_supports(head_dim, has_softcap))
+}
+
+fn layer_uses_sliding_window(layer_idx: usize) -> bool {
+    layer_idx.is_multiple_of(2)
+}
+
+fn cache_types(
+    num_hidden_layers: usize,
+    max_position_embeddings: usize,
+    sliding_window: usize,
+) -> Vec<NormalCacheType> {
+    (0..num_hidden_layers)
+        .map(|layer_idx| {
+            if layer_uses_sliding_window(layer_idx) {
+                NormalCacheType::SlidingWindow {
+                    window: sliding_window,
+                }
+            } else {
+                NormalCacheType::Normal {
+                    max_seq_len: max_position_embeddings,
+                }
+            }
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct Config {
@@ -150,7 +181,7 @@ impl Attention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            use_sliding_window: layer_idx.is_multiple_of(2), // Order is SWA, global, SWA
+            use_sliding_window: layer_uses_sliding_window(layer_idx),
             paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
@@ -363,10 +394,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     hidden_size: usize,
     device: Device,
     cache: EitherCache,
@@ -395,10 +427,11 @@ impl Model {
         let mapper = normal_loading_metadata.mapper;
 
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let mut ropes = HashMap::new();
@@ -455,24 +488,20 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = mapper.cast_nm_device(
-            embed_tokens.embeddings(),
-            normal_loading_metadata.loading_isq,
-        )?;
+        let lm_head = embed_tokens.clone();
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(lm_head, None),
-            ))?),
+            lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             hidden_size: cfg.hidden_size,
-            cache: EitherCache::Normal(NormalCache::new_sliding(
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
-                Some(cfg.sliding_window),
-            )),
+                cfg.sliding_window,
+            ))),
             max_seq_len: cfg.max_position_embeddings,
             sliding_window: cfg.sliding_window,
             final_logit_softcapping: cfg.final_logit_softcapping,
@@ -497,7 +526,7 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.forward(input_ids)?;
+        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
@@ -620,6 +649,14 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        layers_support_packed_prefill(
+            self.cfg.k_head_dim,
+            self.layers
+                .iter()
+                .map(|layer| layer.self_attn.sdpa_params.softcap.is_some()),
+        )
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
@@ -744,5 +781,49 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packed_softcap_requires_a_supported_flash_v2_head_dim() {
+        assert_eq!(
+            layers_support_packed_prefill(128, [true]),
+            cfg!(feature = "flash-attn")
+        );
+        assert!(!layers_support_packed_prefill(512, [true]));
+        assert_eq!(
+            layers_support_packed_prefill(128, [false]),
+            flash_backend_supports(128, false)
+        );
+    }
+
+    #[test]
+    fn eager_cache_layout_matches_alternating_attention_layers() {
+        let types = cache_types(5, 8192, 4096);
+
+        assert!(matches!(
+            &types[0],
+            NormalCacheType::SlidingWindow { window: 4096 }
+        ));
+        assert!(matches!(
+            &types[1],
+            NormalCacheType::Normal { max_seq_len: 8192 }
+        ));
+        assert!(matches!(
+            &types[2],
+            NormalCacheType::SlidingWindow { window: 4096 }
+        ));
+        assert!(matches!(
+            &types[3],
+            NormalCacheType::Normal { max_seq_len: 8192 }
+        ));
+        assert!(matches!(
+            &types[4],
+            NormalCacheType::SlidingWindow { window: 4096 }
+        ));
     }
 }

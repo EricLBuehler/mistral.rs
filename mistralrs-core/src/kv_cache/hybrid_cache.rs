@@ -363,6 +363,7 @@ pub struct HybridCache {
     /// Shape: (batch_size,) containing pool slot indices.
     state_indices: Option<Tensor>,
     state_indices_host: Option<Vec<u32>>,
+    device_state_indices: Vec<(Device, Tensor)>,
 }
 
 impl HybridCache {
@@ -371,11 +372,18 @@ impl HybridCache {
     pub fn new(
         config: HybridCacheConfig,
         dtype: candle_core::DType,
-        device: &Device,
+        layer_devices: &[Device],
     ) -> Result<Self> {
+        if layer_devices.len() != config.layer_types.len() {
+            candle_core::bail!(
+                "Hybrid cache has {} layers but {} layer devices",
+                config.layer_types.len(),
+                layer_devices.len()
+            );
+        }
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
-        for layer_type in &config.layer_types {
+        for (layer_type, device) in config.layer_types.iter().zip(layer_devices) {
             let cache = match layer_type {
                 HybridLayerType::Attention => HybridLayerCache::Attention(KvCache::new_normal(
                     2,
@@ -399,6 +407,7 @@ impl HybridCache {
             config,
             state_indices: None,
             state_indices_host: None,
+            device_state_indices: Vec::new(),
         })
     }
 
@@ -495,6 +504,7 @@ impl HybridCache {
         }
         self.state_indices = None;
         self.state_indices_host = None;
+        self.device_state_indices.clear();
     }
 
     pub fn num_layers(&self) -> usize {
@@ -524,6 +534,7 @@ impl HybridCache {
     pub fn set_state_indices(&mut self, indices: Option<Tensor>) {
         self.state_indices = indices;
         self.state_indices_host = None;
+        self.cache_device_state_indices();
     }
 
     pub fn set_state_indices_with_host(
@@ -533,6 +544,46 @@ impl HybridCache {
     ) {
         self.state_indices = indices;
         self.state_indices_host = host_indices;
+        self.cache_device_state_indices();
+    }
+
+    fn cache_device_state_indices(&mut self) {
+        self.device_state_indices.clear();
+        let devices = self
+            .caches
+            .iter()
+            .filter_map(|cache| match cache {
+                HybridLayerCache::Recurrent(pool) => Some(pool.device().clone()),
+                HybridLayerCache::Attention(_) => None,
+            })
+            .fold(Vec::<Device>::new(), |mut devices, device| {
+                if !devices
+                    .iter()
+                    .any(|cached_device| cached_device.same_device(&device))
+                {
+                    devices.push(device);
+                }
+                devices
+            });
+        for device in devices {
+            if self
+                .state_indices
+                .as_ref()
+                .is_some_and(|indices| indices.device().same_device(&device))
+            {
+                continue;
+            }
+            let indices = if let Some(host_indices) = &self.state_indices_host {
+                Tensor::from_vec(host_indices.clone(), (host_indices.len(),), &device)
+            } else if let Some(indices) = &self.state_indices {
+                indices.to_device(&device)
+            } else {
+                continue;
+            };
+            if let Ok(indices) = indices {
+                self.device_state_indices.push((device, indices));
+            }
+        }
     }
 
     /// Get the state indices for the current batch.
@@ -543,6 +594,98 @@ impl HybridCache {
 
     pub fn state_indices_host(&self) -> Option<&[u32]> {
         self.state_indices_host.as_deref()
+    }
+
+    pub fn state_index_tensors(&self) -> Vec<Tensor> {
+        self.state_indices
+            .iter()
+            .chain(self.device_state_indices.iter().map(|(_, indices)| indices))
+            .cloned()
+            .collect()
+    }
+
+    pub fn state_indices_for_layer(&mut self, layer: usize) -> Result<Option<Tensor>> {
+        let device = match self.caches.get(layer) {
+            Some(HybridLayerCache::Recurrent(pool)) => pool.device().clone(),
+            _ => return Ok(None),
+        };
+        if let Some(indices) = &self.state_indices {
+            if indices.device().same_device(&device) {
+                return Ok(Some(indices.clone()));
+            }
+        }
+        if let Some((_, indices)) = self
+            .device_state_indices
+            .iter()
+            .find(|(cached_device, _)| cached_device.same_device(&device))
+        {
+            return Ok(Some(indices.clone()));
+        }
+        let indices = if let Some(host_indices) = &self.state_indices_host {
+            Tensor::from_vec(host_indices.clone(), (host_indices.len(),), &device)?
+        } else if let Some(indices) = &self.state_indices {
+            indices.to_device(&device)?
+        } else {
+            return Ok(None);
+        };
+        self.device_state_indices.push((device, indices.clone()));
+        Ok(Some(indices))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(layer_types: Vec<HybridLayerType>) -> HybridCacheConfig {
+        HybridCacheConfig {
+            layer_types,
+            max_seq_len: 32,
+            recurrent: RecurrentLayerConfig {
+                conv_dim: 2,
+                conv_width: 3,
+                state_dims: vec![2, 2],
+                recurrent_dtype: None,
+            },
+        }
+    }
+
+    #[test]
+    fn requires_one_device_per_layer() {
+        let error = HybridCache::new(
+            config(vec![HybridLayerType::Attention, HybridLayerType::Recurrent]),
+            DType::F32,
+            &[Device::Cpu],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("1 layer devices"));
+    }
+
+    #[test]
+    fn recurrent_indices_are_local_to_the_layer_pool() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![
+                HybridLayerType::Recurrent,
+                HybridLayerType::Attention,
+                HybridLayerType::Recurrent,
+            ]),
+            DType::F32,
+            &devices,
+        )?;
+        let state_indices = Tensor::from_vec(vec![1u32, 3], (2,), &Device::Cpu)?;
+        cache.set_state_indices_with_host(Some(state_indices), Some(vec![1, 3]));
+
+        assert!(cache.state_indices_for_layer(1)?.is_none());
+        for layer in [0, 2] {
+            let indices = cache.state_indices_for_layer(layer)?.unwrap();
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer).unwrap() else {
+                unreachable!()
+            };
+            assert!(indices.device().same_device(pool.device()));
+            assert_eq!(indices.to_vec1::<u32>()?, vec![1, 3]);
+        }
+        Ok(())
     }
 }
 

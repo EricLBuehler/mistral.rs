@@ -446,7 +446,7 @@ impl CustomOp3 for DequantizeOp {
             BnbQuantType::Nf4 => crate::metal_kernels::call_dequant_bnb_nf4(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 self.out_ty.into(),
                 input_s.buffer(),
                 absmax_s.buffer(),
@@ -459,7 +459,7 @@ impl CustomOp3 for DequantizeOp {
             BnbQuantType::Fp4 => crate::metal_kernels::call_dequant_bnb_fp4(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 self.out_ty.into(),
                 input_s.buffer(),
                 absmax_s.buffer(),
@@ -472,7 +472,7 @@ impl CustomOp3 for DequantizeOp {
             BnbQuantType::Int8 => crate::metal_kernels::call_dequant_bnb_int8(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 self.out_ty.into(),
                 input_s.buffer(),
                 absmax_s.buffer(),

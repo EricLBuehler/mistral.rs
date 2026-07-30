@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
 # Thin CUDA runtime image. The prebuilt CUDA package (the `mistralrs` binary plus its bundled
-# `lib/` and, for cutile builds, `bin/tileiras`) is staged into `dist/` by the release workflow
-# and copied in - not compiled here. BASE_TAG selects the CUDA runtime matching the binary's
-# toolkit. Build via .github/workflows/release.yml.
+# `lib/`) is staged into `dist/` by the release workflow and copied in - not compiled here.
+# BASE_TAG selects the CUDA runtime matching the binary's toolkit. Build via
+# .github/workflows/release.yml.
 
 ARG BASE_TAG=12.8.1-cudnn
 FROM nvidia/cuda:${BASE_TAG}-runtime-ubuntu22.04 AS runtime
@@ -25,8 +25,7 @@ HEREDOC
 # TARGETARCH (amd64/arm64) is set by buildx; the release workflow stages dist/<arch>/.
 ARG TARGETARCH
 COPY dist/${TARGETARCH}/ /opt/mistralrs/
-RUN ln -sf /opt/mistralrs/mistralrs /usr/local/bin/mistralrs && \
-    if [ -f /opt/mistralrs/bin/tileiras ]; then ln -sf /opt/mistralrs/bin/tileiras /usr/local/bin/tileiras; fi
+RUN ln -sf /opt/mistralrs/mistralrs /usr/local/bin/mistralrs
 # Chat templates for models that ship without one
 COPY chat_templates /chat_templates
 

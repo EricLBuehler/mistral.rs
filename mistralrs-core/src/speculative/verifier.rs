@@ -176,15 +176,15 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
             sampler.speculative_target_probs(flat_logits(target_row.clone())?, seq.get_toks())?;
         let candidate_probs =
             sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
-        if target_probs.len() != candidate_probs.len() {
+        if target_probs.sampling.len() != candidate_probs.len() {
             candle_core::bail!(
                 "speculative target/candidate vocab mismatch: target={}, candidate={}",
-                target_probs.len(),
+                target_probs.sampling.len(),
                 candidate_probs.len()
             );
         }
         let draft_idx = draft as usize;
-        let p_i = target_probs.get(draft_idx).copied().unwrap_or(0.0);
+        let p_i = target_probs.sampling.get(draft_idx).copied().unwrap_or(0.0);
         let q_i = candidate_probs.get(draft_idx).copied().unwrap_or(0.0);
         let accept_prob = if q_i <= 0.0 {
             if p_i > 0.0 {
@@ -202,7 +202,8 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
 
         if draw <= accept_prob {
             accepted += 1;
-            let sampled = sampler.logprobs_from_probs(draft, &target_probs, return_logprobs)?;
+            let sampled =
+                sampler.logprobs_from_probs(draft, &target_probs.reporting, return_logprobs)?;
             finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
             if matches!(seq.getstate(), SequenceState::Done(_)) {
                 let keep_len = base_len + 1 + accepted;
@@ -218,14 +219,20 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         }
 
         let mut adjusted_probs = target_probs
+            .sampling
             .iter()
             .zip(candidate_probs.iter())
             .map(|(p, q)| (p - q).max(0.0))
             .collect::<Vec<_>>();
         if normalize_probs(&mut adjusted_probs).is_err() {
-            adjusted_probs = target_probs;
+            adjusted_probs = target_probs.sampling;
         }
-        let sampled = sampler.sample_from_probs(&adjusted_probs, return_logprobs, rng.clone())?;
+        let sampled = sampler.sample_from_probs(
+            &adjusted_probs,
+            &target_probs.reporting,
+            return_logprobs,
+            rng.clone(),
+        )?;
         let sampled_token = sampled.token;
         let keep_len = base_len + 1 + accepted;
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, true).await?;
@@ -250,7 +257,12 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
     let sampler = seq.sampler();
     let target_probs =
         sampler.speculative_target_probs(flat_logits(row.clone())?, seq.get_toks())?;
-    let continuation = sampler.sample_from_probs(&target_probs, return_logprobs, rng)?;
+    let continuation = sampler.sample_from_probs(
+        &target_probs.sampling,
+        &target_probs.reporting,
+        return_logprobs,
+        rng,
+    )?;
     let continuation_token = continuation.token;
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
 
