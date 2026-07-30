@@ -549,7 +549,10 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     max_seq_len,
                     rope_scaling_factor,
                     device,
-                    false,
+                    // Gemma 3 uses NeoX-style (rotate-half) RoPE, matching the
+                    // safetensors Gemma3 loader (is_gptx = true) and llama.cpp's
+                    // GGML_ROPE_TYPE_NEOX for this architecture.
+                    true,
                     dtype,
                 )?),
             );
@@ -560,7 +563,7 @@ impl ModelConfig::FromGGUF for ModelWeights {
                     rope_dim,
                     max_seq_len,
                     device,
-                    false,
+                    true,
                     dtype,
                 )?),
             );
