@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use crate::{
     background_tasks::get_background_task_manager,
-    cached_responses::get_response_cache,
+    cached_responses::{get_response_cache, ResponseCache},
     chat_completion::{parse_request as parse_chat_request, ChatCompletionParseContext},
     completion_core::{handle_completion_error, BaseCompletionResponder},
     handler_core::{
@@ -60,6 +60,17 @@ use crate::{
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
     util::sanitize_error_message,
 };
+
+fn store_response_if_requested(
+    cache: &dyn ResponseCache,
+    store: bool,
+    response: &ResponseResource,
+) -> Result<()> {
+    if store {
+        cache.store_response(response.id.clone(), response.clone())?;
+    }
+    Ok(())
+}
 
 /// Input type for OpenResponses API requests
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -992,6 +1003,13 @@ impl OpenResponsesStreamer {
 
         resource
     }
+
+    fn store_terminal_response(&self, response: &ResponseResource) {
+        // Persist before yielding the terminal event. Retrieval must not depend
+        // on the client polling the stream again for the trailing `[DONE]`.
+        let cache = get_response_cache();
+        let _ = store_response_if_requested(cache.as_ref(), self.store, response);
+    }
 }
 
 impl futures::Stream for OpenResponsesStreamer {
@@ -1078,6 +1096,8 @@ impl futures::Stream for OpenResponsesStreamer {
                     let seq = self.streaming_state.next_sequence_number();
                     let mut response = self.build_current_response(ResponseStatus::Failed);
                     response.error = Some(ResponseError::new("model_error", msg.to_string()));
+
+                    self.store_terminal_response(&response);
 
                     let event = OpenResponsesStreamEvent::ResponseFailed {
                         sequence_number: seq,
@@ -1251,6 +1271,8 @@ impl futures::Stream for OpenResponsesStreamer {
                             ));
                         }
 
+                        self.store_terminal_response(&response);
+
                         events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
                             sequence_number: seq,
                             response,
@@ -1288,6 +1310,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         &self.shell_output_items,
                         &self.files,
                     );
+                    self.store_terminal_response(&response);
                     let event = OpenResponsesStreamEvent::ResponseCompleted {
                         sequence_number: seq,
                         response,
@@ -2196,6 +2219,42 @@ fn handle_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cached_responses::InMemoryResponseCache;
+
+    #[test]
+    fn stored_streaming_response_is_retrievable() {
+        let cache = InMemoryResponseCache::new();
+        let response = ResponseResource::new(
+            "resp_streaming_stored".to_string(),
+            "test-model".to_string(),
+            1,
+        )
+        .with_status(ResponseStatus::Completed);
+
+        store_response_if_requested(&cache, true, &response).unwrap();
+
+        let stored = cache
+            .get_response(&response.id)
+            .unwrap()
+            .expect("store=true response should be retrievable");
+        assert_eq!(stored.id, response.id);
+        assert_eq!(stored.status, ResponseStatus::Completed);
+    }
+
+    #[test]
+    fn streaming_response_is_not_stored_when_disabled() {
+        let cache = InMemoryResponseCache::new();
+        let response = ResponseResource::new(
+            "resp_streaming_not_stored".to_string(),
+            "test-model".to_string(),
+            1,
+        )
+        .with_status(ResponseStatus::Completed);
+
+        store_response_if_requested(&cache, false, &response).unwrap();
+
+        assert!(cache.get_response(&response.id).unwrap().is_none());
+    }
 
     #[test]
     fn message_output_item_reuses_id_across_stream_lifecycle() {
