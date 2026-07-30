@@ -81,6 +81,7 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "charset",
     "http2",
 ] }
+encoding_rs = "0.8.35"
 base64 = "0.22.1"
 tempfile = "3"
 half = "2.7.1"
