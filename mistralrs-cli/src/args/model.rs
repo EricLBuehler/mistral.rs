@@ -7,7 +7,10 @@ use mistralrs_core::{
     MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 const KILOBYTE: u64 = 1_000;
 const MEGABYTE: u64 = 1_000_000;
@@ -40,20 +43,20 @@ pub struct ModelSourceOptions {
 /// Format options for model loading
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct FormatOptions {
-    /// Model format: plain (safetensors), gguf, or ggml
-    /// Auto-detected if not specified
+    /// Model format: plain (safetensors), GGUF, or GGML.
+    /// Auto-detected from `-f` when not specified.
     #[arg(long, value_enum)]
     pub format: Option<ModelFormat>,
 
-    /// Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple)
+    /// GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple)
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// Multimodal projector filename(s) for GGUF (semicolon-separated for multiple)
+    /// GGUF projector override; normally selected automatically (semicolon-separated for multiple)
     #[arg(long)]
     pub mmproj: Option<String>,
 
-    /// Optional model ID overriding configuration and tokenizer assets for a quantized model
+    /// Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model
     #[arg(long)]
     pub tok_model_id: Option<String>,
 
@@ -61,10 +64,159 @@ pub struct FormatOptions {
     #[arg(long, default_value_t = 1)]
     #[serde(default = "default_gqa")]
     pub gqa: usize,
+
+    #[doc(hidden)]
+    #[arg(skip)]
+    #[serde(skip)]
+    pub direct_file_only: bool,
+}
+
+impl FormatOptions {
+    pub(crate) fn normalize(&mut self) -> anyhow::Result<()> {
+        let mut format = self.format;
+        if self.mmproj.is_some() {
+            match format {
+                Some(ModelFormat::Plain | ModelFormat::Ggml) => {
+                    anyhow::bail!("`--mmproj` requires GGUF format")
+                }
+                Some(ModelFormat::Gguf) => {}
+                None => format = Some(ModelFormat::Gguf),
+            }
+        }
+
+        let Some(raw_filenames) = self.quantized_file.as_ref() else {
+            self.format = format;
+            return Ok(());
+        };
+        let filenames = split_quantized_filenames(raw_filenames)?;
+        let mut inferred = None;
+        let mut has_unknown = false;
+        for filename in &filenames {
+            let Some(candidate) = ModelFormat::from_filename(filename) else {
+                has_unknown = true;
+                continue;
+            };
+            if inferred.is_some_and(|current| current != candidate) {
+                anyhow::bail!(
+                    "`--quantized-file` contains mixed GGUF and GGML filenames; use one format per model"
+                );
+            }
+            inferred = Some(candidate);
+        }
+
+        match format {
+            Some(ModelFormat::Plain) => {
+                anyhow::bail!("`--quantized-file` cannot be used with plain model format")
+            }
+            Some(explicit) => {
+                if inferred.is_some_and(|candidate| candidate != explicit) {
+                    anyhow::bail!(
+                        "`--format {}` conflicts with the `--quantized-file` suffix",
+                        explicit.as_str()
+                    );
+                }
+            }
+            None if has_unknown => {
+                anyhow::bail!(
+                    "Cannot infer model format from `--quantized-file`; use `.gguf`/`.ggml` filenames or pass `--format`"
+                )
+            }
+            None => {
+                format = inferred;
+            }
+        }
+
+        self.format = format;
+        self.quantized_file = Some(filenames.join(";"));
+        Ok(())
+    }
+
+    pub(crate) fn derive_local_model_root(&mut self) -> anyhow::Result<String> {
+        let raw_filenames = self.quantized_file.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("--model-id (-m) is required unless `-f` is provided")
+        })?;
+        let filenames = split_quantized_filenames(raw_filenames)?;
+        let mut root = None;
+        let mut basenames = Vec::with_capacity(filenames.len());
+
+        for filename in filenames {
+            let path = Path::new(filename);
+            if !path.is_file() {
+                anyhow::bail!(
+                    "Local quantized model file `{}` does not exist or is not a file",
+                    path.display()
+                );
+            }
+            let basename = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| anyhow::anyhow!("Invalid quantized model path `{filename}`"))?;
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            if root.as_ref().is_some_and(|current| current != parent) {
+                anyhow::bail!(
+                    "Quantized model shards must share one parent directory when `--model-id` is omitted"
+                );
+            }
+            root = Some(parent.to_path_buf());
+            basenames.push(basename.to_string());
+        }
+
+        let root = root.unwrap_or_else(|| PathBuf::from("."));
+        self.quantized_file = Some(basenames.join(";"));
+        if let Some(mmproj) = self.mmproj.as_ref() {
+            let filenames = split_quantized_filenames(mmproj)?;
+            let current_dir = std::env::current_dir()?;
+            self.mmproj = Some(
+                filenames
+                    .into_iter()
+                    .map(|filename| -> anyhow::Result<String> {
+                        let path = Path::new(filename);
+                        let path = if path.is_absolute() {
+                            if !path.is_file() {
+                                anyhow::bail!(
+                                    "Local GGUF projector file `{}` does not exist or is not a file",
+                                    path.display()
+                                );
+                            }
+                            path.strip_prefix(&root).unwrap_or(path).to_path_buf()
+                        } else if path
+                            .strip_prefix(&root)
+                            .is_ok_and(|relative| path.is_file() && !relative.as_os_str().is_empty())
+                        {
+                            path.strip_prefix(&root)
+                                .expect("projector path was checked against the model root")
+                                .to_path_buf()
+                        } else if path.parent().is_none_or(|parent| parent.as_os_str().is_empty())
+                            && root.join(path).is_file()
+                        {
+                            path.to_path_buf()
+                        } else if path.is_file() {
+                            current_dir.join(path)
+                        } else if root.join(path).is_file() {
+                            path.to_path_buf()
+                        } else {
+                            anyhow::bail!(
+                                "Local GGUF projector file `{}` does not exist relative to the \
+                                 current directory or model directory",
+                                path.display()
+                            );
+                        };
+                        Ok(path.to_string_lossy().into_owned())
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .join(";"),
+            );
+        }
+        self.direct_file_only = true;
+        Ok(root.to_string_lossy().into_owned())
+    }
 }
 
 /// Model format type
-#[derive(Clone, Copy, ValueEnum, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelFormat {
     /// Plain model (safetensors)
@@ -74,6 +226,37 @@ pub enum ModelFormat {
     Gguf,
     /// GGML quantized model
     Ggml,
+}
+
+impl ModelFormat {
+    fn from_filename(filename: &str) -> Option<Self> {
+        match Path::new(filename)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("gguf") => Some(Self::Gguf),
+            Some("ggml") => Some(Self::Ggml),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Gguf => "gguf",
+            Self::Ggml => "ggml",
+        }
+    }
+}
+
+fn split_quantized_filenames(value: &str) -> anyhow::Result<Vec<&str>> {
+    let filenames = value.split(';').map(str::trim).collect::<Vec<_>>();
+    if filenames.is_empty() || filenames.iter().any(|filename| filename.is_empty()) {
+        anyhow::bail!("`--quantized-file` must contain nonempty filenames");
+    }
+    Ok(filenames)
 }
 
 /// Adapter options (LoRA/X-LoRA)
@@ -346,8 +529,9 @@ fn default_lora_max_bytes() -> u64 {
 /// Quantization options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
-    /// Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.)
-    /// This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF.
+    /// Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise
+    /// prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level.
+    /// Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs`
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 

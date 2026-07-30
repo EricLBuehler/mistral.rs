@@ -240,7 +240,8 @@ These load directly, with no ISQ conversion:
 - **UQFF**: the native pre-quantized format. Loaded automatically by `--quant` when a sibling
   UQFF repo exists, or explicitly via `--from-uqff`. See the
   [UQFF guide](/mistral.rs/guides/quantization/uqff/).
-- **GGUF**: loaded via `--format gguf -f <file>`.
+- **GGUF**: load a local file directly with `-f <file.gguf>`, or select a published variant with
+  `-m <gguf-repo> --quant <level>`.
 - **GPTQ, AWQ**: detected from the source repo's config and loaded directly; no `--quant` or
   `--isq` needed.
 

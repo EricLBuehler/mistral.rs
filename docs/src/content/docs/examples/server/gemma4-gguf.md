@@ -12,7 +12,7 @@ Send image and audio input to a Gemma 4 GGUF model.
 Start the server with:
 
 ```bash
-mistralrs serve -m unsloth/gemma-4-E4B-it-GGUF --format gguf -f gemma-4-E4B-it-Q4_K_M.gguf --mmproj mmproj-BF16.gguf --tok-model-id google/gemma-4-E4B-it
+mistralrs serve -m unsloth/gemma-4-E4B-it-GGUF --quant 4
 ```
 
 ````python
@@ -21,7 +21,7 @@ mistralrs serve -m unsloth/gemma-4-E4B-it-GGUF --format gguf -f gemma-4-E4B-it-Q
 Start the server with:
 
 ```bash
-mistralrs serve -m unsloth/gemma-4-E4B-it-GGUF --format gguf -f gemma-4-E4B-it-Q4_K_M.gguf --mmproj mmproj-BF16.gguf --tok-model-id google/gemma-4-E4B-it
+mistralrs serve -m unsloth/gemma-4-E4B-it-GGUF --quant 4
 ```
 """
 
@@ -30,7 +30,9 @@ from openai import OpenAI
 
 client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
 
-IMAGE_URL = "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/banner.png"
+IMAGE_URL = (
+    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/banner.png"
+)
 AUDIO_URL = "https://raw.githubusercontent.com/google-gemma/cookbook/refs/heads/main/apps/sample-data/journal1.wav"
 
 completion = client.chat.completions.create(

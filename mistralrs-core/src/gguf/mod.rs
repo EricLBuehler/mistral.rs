@@ -1,3 +1,4 @@
+pub(crate) mod base_model;
 mod chat_template;
 mod content;
 pub(crate) mod gemma3_bindings;

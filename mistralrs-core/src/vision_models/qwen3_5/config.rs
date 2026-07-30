@@ -1,5 +1,6 @@
 use mistralrs_quant::QuantizedConfig;
 
+use crate::gdn::GdnVHeadLayout;
 use crate::layers::Activation;
 use crate::serde_default_fn;
 
@@ -56,9 +57,87 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
+    pub(crate) gdn_v_head_layout: GdnVHeadLayout,
 }
 
 impl TextConfig {
+    pub fn validate(&self) -> candle_core::Result<()> {
+        if !self.rope_theta().is_finite() || self.rope_theta() <= 0.0 {
+            candle_core::bail!("Qwen3.5 rope theta must be finite and positive");
+        }
+        if !self.partial_rotary_factor().is_finite()
+            || self.partial_rotary_factor() <= 0.0
+            || self.partial_rotary_factor() > 1.0
+        {
+            candle_core::bail!("Qwen3.5 partial rotary factor must be in (0, 1]");
+        }
+        if self.num_hidden_layers == 0 {
+            candle_core::bail!("Qwen3.5 requires at least one hidden layer");
+        }
+        if self.full_attention_interval == 0
+            || self.full_attention_interval > self.num_hidden_layers
+        {
+            candle_core::bail!(
+                "Qwen3.5 full_attention_interval {} is invalid for {} layers",
+                self.full_attention_interval,
+                self.num_hidden_layers
+            );
+        }
+        if self.num_attention_heads == 0
+            || self.num_key_value_heads == 0
+            || !self
+                .num_attention_heads
+                .is_multiple_of(self.num_key_value_heads)
+        {
+            candle_core::bail!(
+                "Qwen3.5 has incompatible attention head counts: {} query and {} KV",
+                self.num_attention_heads,
+                self.num_key_value_heads
+            );
+        }
+        if self.linear_num_key_heads == 0
+            || self.linear_num_value_heads == 0
+            || !self
+                .linear_num_value_heads
+                .is_multiple_of(self.linear_num_key_heads)
+        {
+            candle_core::bail!(
+                "Qwen3.5 has incompatible GDN head counts: {} key and {} value",
+                self.linear_num_key_heads,
+                self.linear_num_value_heads
+            );
+        }
+        if self.linear_key_head_dim == 0
+            || self.linear_value_head_dim == 0
+            || self.linear_conv_kernel_dim == 0
+        {
+            candle_core::bail!("Qwen3.5 GDN dimensions must be non-zero");
+        }
+        let rot_dim = self.rot_dim();
+        if rot_dim == 0 || rot_dim > self.head_dim || !rot_dim.is_multiple_of(2) {
+            candle_core::bail!(
+                "Qwen3.5 rotary dimension {rot_dim} must be positive, even, and no larger than head_dim {}",
+                self.head_dim
+            );
+        }
+        if self.mrope_section().len() != 3 || self.mrope_section().contains(&0) {
+            candle_core::bail!("Qwen3.5 MRoPE requires three non-zero sections");
+        }
+        let section_width = self
+            .mrope_section()
+            .iter()
+            .try_fold(0usize, |sum, section| sum.checked_add(*section))
+            .ok_or_else(|| candle_core::Error::msg("Qwen3.5 MRoPE section width overflow"))?;
+        if section_width.checked_mul(2) != Some(rot_dim) {
+            candle_core::bail!(
+                "Qwen3.5 MRoPE sections span {} dimensions, expected {rot_dim}",
+                section_width.saturating_mul(2)
+            );
+        }
+        Ok(())
+    }
+
     pub fn rope_theta(&self) -> f64 {
         self.rope_parameters.rope_theta
     }

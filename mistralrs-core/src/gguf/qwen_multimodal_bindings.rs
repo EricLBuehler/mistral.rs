@@ -151,6 +151,24 @@ pub(crate) fn build_qwen_multimodal_bindings(archive: &GgufArchive) -> Result<Gg
     )
 }
 
+pub(crate) fn build_qwen35_text_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
+    let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
+        .context("GGUF metadata is missing `general.architecture`")?;
+    if architecture != "qwen35" {
+        bail!("Qwen3.5 text binding does not support `{architecture}`");
+    }
+    let inventory = TensorInventory::from_archive(archive);
+    let mut bindings = GgufBindingMap::new();
+    bind_text(
+        &inventory,
+        QwenMultimodalFamily::Qwen35,
+        Some(read_gdn_metadata(archive)?),
+        true,
+        &mut bindings,
+    )?;
+    Ok(bindings)
+}
+
 fn qwen_family(archive: &GgufArchive) -> Result<QwenMultimodalFamily> {
     let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
         .context("GGUF metadata is missing `general.architecture`")?;
@@ -289,7 +307,7 @@ fn build_qwen_multimodal_bindings_from_inventory(
     gdn: Option<GdnMetadata>,
 ) -> Result<GgufBindingMap> {
     let mut bindings = GgufBindingMap::new();
-    bind_text(inventory, family, gdn, &mut bindings)?;
+    bind_text(inventory, family, gdn, false, &mut bindings)?;
     if family.uses_qwen3_vision() {
         bind_qwen3_vision(inventory, deepstack_layers, &mut bindings)?;
     } else {
@@ -302,6 +320,7 @@ fn bind_text(
     inventory: &TensorInventory,
     family: QwenMultimodalFamily,
     gdn: Option<GdnMetadata>,
+    preserve_tiled_gdn: bool,
     bindings: &mut GgufBindingMap,
 ) -> Result<()> {
     let model = if family.uses_language_model_prefix() {
@@ -370,7 +389,11 @@ fn bind_text(
         bind_experts(inventory, &native, &source, bindings);
         bind_shared_expert(inventory, &native, &source, bindings)?;
         if let Some(gdn) = gdn {
-            bind_gdn(inventory, &native, &source, gdn, bindings)?;
+            if preserve_tiled_gdn {
+                bind_gdn_tiled(inventory, &native, &source, gdn, bindings)?;
+            } else {
+                bind_gdn(inventory, &native, &source, gdn, bindings)?;
+            }
         }
     }
     Ok(())
@@ -426,6 +449,84 @@ fn bind_shared_expert(
         };
         bindings.insert(format!("{native}.mlp.shared_expert_gate.weight"), binding);
     }
+    Ok(())
+}
+
+fn bind_gdn_tiled(
+    inventory: &TensorInventory,
+    native: &str,
+    source: &str,
+    metadata: GdnMetadata,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let native = format!("{native}.linear_attn");
+    let qkv = format!("{source}.attn_qkv.weight");
+    if inventory.contains(&qkv) {
+        let shape = inventory.shape(&qkv)?;
+        let &[rows, _] = shape else {
+            bail!("Qwen3.5 GDN tensor `{qkv}` must be rank 2");
+        };
+        let value_dim = metadata.value_dim()?;
+        let expected_rows = metadata
+            .key_dim()?
+            .checked_mul(2)
+            .and_then(|qk| qk.checked_add(value_dim))
+            .context("Qwen3.5 GDN projection dimension overflow")?;
+        if rows != expected_rows {
+            bail!("Qwen3.5 GDN tensor `{qkv}` has incompatible shape {shape:?}");
+        }
+        bindings.insert(
+            format!("{native}.in_proj_qkv.weight"),
+            GgufTensorBinding::tensor(&qkv),
+        );
+    }
+    for (target, role) in [
+        ("in_proj_z.weight", "attn_gate.weight"),
+        ("in_proj_b.weight", "ssm_beta.weight"),
+        ("in_proj_a.weight", "ssm_alpha.weight"),
+        ("dt_bias", "ssm_dt.bias"),
+        ("out_proj.weight", "ssm_out.weight"),
+    ] {
+        bind(
+            inventory,
+            bindings,
+            format!("{native}.{target}"),
+            format!("{source}.{role}"),
+        );
+    }
+    let a = format!("{source}.ssm_a");
+    if inventory.contains(&a) {
+        bindings.insert(
+            format!("{native}.A_log"),
+            GgufTensorBinding::tensor(&a).affine(-1.0, 0.0).log(),
+        );
+    }
+    let conv = format!("{source}.ssm_conv1d.weight");
+    if inventory.contains(&conv) {
+        let shape = inventory.shape(&conv)?;
+        let &[channels, kernel] = shape else {
+            bail!("Qwen3.5 GDN convolution `{conv}` must be rank 2");
+        };
+        let value_dim = metadata.value_dim()?;
+        let expected_channels = metadata
+            .key_dim()?
+            .checked_mul(2)
+            .and_then(|qk| qk.checked_add(value_dim))
+            .context("Qwen3.5 GDN convolution dimension overflow")?;
+        if channels != expected_channels {
+            bail!("Qwen3.5 GDN convolution `{conv}` has incompatible shape {shape:?}");
+        }
+        bindings.insert(
+            format!("{native}.conv1d.weight"),
+            GgufTensorBinding::tensor(&conv).reshape(vec![channels, 1, kernel]),
+        );
+    }
+    bind(
+        inventory,
+        bindings,
+        format!("{native}.norm.weight"),
+        format!("{source}.ssm_norm.weight"),
+    );
     Ok(())
 }
 
@@ -1190,6 +1291,61 @@ mod tests {
             ),
             Some(GgufTensorBinding::Tensor(source))
                 if source == "blk.0.ffn_gate_exps.weight"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn qwen35_text_preserves_tiled_quantized_gdn_weights() -> Result<()> {
+        let metadata = GdnMetadata {
+            key_heads: 2,
+            value_heads: 4,
+            key_head_dim: 2,
+            value_head_dim: 2,
+        };
+        let inventory = inventory(&[
+            ("token_embd.weight", &[32, 8]),
+            ("output_norm.weight", &[8]),
+            ("blk.0.attn_qkv.weight", &[16, 8]),
+            ("blk.0.attn_gate.weight", &[8, 8]),
+            ("blk.0.ssm_beta.weight", &[4, 8]),
+            ("blk.0.ssm_alpha.weight", &[4, 8]),
+            ("blk.0.ssm_dt.bias", &[4]),
+            ("blk.0.ssm_a", &[4]),
+            ("blk.0.ssm_conv1d.weight", &[16, 3]),
+            ("blk.0.ssm_norm.weight", &[2]),
+            ("blk.0.ssm_out.weight", &[8, 8]),
+        ]);
+        let mut bindings = GgufBindingMap::new();
+        bind_text(
+            &inventory,
+            QwenMultimodalFamily::Qwen35,
+            Some(metadata),
+            true,
+            &mut bindings,
+        )?;
+        for (target, source) in [
+            ("in_proj_qkv.weight", "blk.0.attn_qkv.weight"),
+            ("in_proj_z.weight", "blk.0.attn_gate.weight"),
+            ("in_proj_b.weight", "blk.0.ssm_beta.weight"),
+            ("in_proj_a.weight", "blk.0.ssm_alpha.weight"),
+            ("dt_bias", "blk.0.ssm_dt.bias"),
+            ("out_proj.weight", "blk.0.ssm_out.weight"),
+        ] {
+            assert!(matches!(
+                bindings.get(&format!(
+                    "model.language_model.layers.0.linear_attn.{target}"
+                )),
+                Some(GgufTensorBinding::Tensor(actual)) if actual == source
+            ));
+        }
+        assert!(matches!(
+            bindings.get("model.language_model.layers.0.linear_attn.A_log"),
+            Some(GgufTensorBinding::Log { .. })
+        ));
+        assert!(matches!(
+            bindings.get("model.language_model.layers.0.linear_attn.conv1d.weight"),
+            Some(GgufTensorBinding::Reshape { dims, .. }) if dims == &[16, 1, 3]
         ));
         Ok(())
     }

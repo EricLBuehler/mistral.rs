@@ -135,7 +135,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 
 | Section | Purpose |
 |---|---|
-| `[models.format]` | Weight format selection (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
+| `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
 | `[models.quantization]` | Quantization: `quant` (front-door, same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`. |
 | `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
@@ -190,8 +190,18 @@ model_id = "google/gemma-4-E4B-it"
 quant = "4"
 ```
 
-A multimodal Gemma 4 GGUF entry names both the model and projector files and uses the original
-model repo for its non-weight assets:
+A multimodal GGUF repository can select its quantized model, projector, and supporting assets from
+the model ID and quantization level:
+
+```toml
+[[models]]
+model_id = "unsloth/gemma-4-E4B-it-GGUF"
+
+[models.quantization]
+quant = "4"
+```
+
+Use format fields only when you want an exact artifact or asset source:
 
 ```toml
 [[models]]
@@ -218,10 +228,11 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `quant` (CLI `--quant`, TOML key `quant`) is the front door: it tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` rejects `quant = "auto"` (`--quant auto`) because `tune` is the recommender.
+- `quant` (CLI `--quant`, TOML key `quant`) is the front door: a GGUF repository selects a matching GGUF variant; other model repositories prefer a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) and fall back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` rejects `quant = "auto"` (`--quant auto`) because `tune` is the recommender.
 - `--calibration-file` conflicts with `--imatrix`.
-- `mmproj` (`--mmproj`) requires GGUF format. Multimodal GGUF entries also require
-  `quantized_file` (`-f`/`--quantized-file`) and cannot be combined with LoRA or X-LoRA.
+- Multimodal GGUF repositories select a projector automatically. Use `mmproj` (`--mmproj`) to
+  override that choice and `tok_model_id` (`--tok-model-id`) to override the configuration,
+  tokenizer, and processor source. Multimodal GGUF cannot be combined with LoRA or X-LoRA.
 - Dynamic LoRA (`enable_lora` or `lora`), legacy raw GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. `tgt_non_granular_index` requires `xlora`.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.

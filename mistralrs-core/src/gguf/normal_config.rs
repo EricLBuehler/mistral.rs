@@ -44,7 +44,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 25] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 26] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -138,6 +138,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 25] = &[
         build: build_qwen3_next,
     },
     NormalConfigBuilder {
+        loader: NormalLoaderType::Qwen3_5,
+        build: build_qwen35,
+    },
+    NormalConfigBuilder {
         loader: NormalLoaderType::Lfm2,
         build: build_lfm2,
     },
@@ -209,7 +213,10 @@ pub(crate) fn normalize_external_normal_config(
     let Some(shape) = external_config_shape(object)? else {
         let mut text_config = object.clone();
         text_config.insert("quantization_config".to_string(), JsonValue::Null);
-        if architecture == CanonicalGgufArchitecture::Qwen35Moe {
+        if matches!(
+            architecture,
+            CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
+        ) {
             text_config.insert(GDN_V_HEAD_LAYOUT_FIELD.to_string(), json!("tiled"));
         }
         return serde_json::to_string(&text_config)
@@ -233,7 +240,7 @@ pub(crate) fn normalize_external_normal_config(
                     shape.label()
                 )
             })?,
-        ExternalConfigShape::Qwen35Text => object.clone(),
+        ExternalConfigShape::Qwen35Text | ExternalConfigShape::Qwen35MoeText => object.clone(),
     };
     if let Some(nested_hint) = loader_hint_from_config_object(&text_config)? {
         anyhow::ensure!(
@@ -246,11 +253,26 @@ pub(crate) fn normalize_external_normal_config(
     text_config.insert("quantization_config".to_string(), JsonValue::Null);
     if matches!(
         shape,
-        ExternalConfigShape::Nested(NestedTextConfig::Qwen35Moe) | ExternalConfigShape::Qwen35Text
+        ExternalConfigShape::Nested(NestedTextConfig::Qwen35Moe)
+            | ExternalConfigShape::Qwen35MoeText
     ) {
         normalize_qwen35_text_config(&mut text_config)?;
     }
-    if architecture == CanonicalGgufArchitecture::Qwen35Moe {
+    if matches!(
+        shape,
+        ExternalConfigShape::Nested(NestedTextConfig::Qwen35) | ExternalConfigShape::Qwen35Text
+    ) {
+        if let Some(tie_word_embeddings) = object.get("tie_word_embeddings") {
+            text_config.insert(
+                "tie_word_embeddings".to_string(),
+                tie_word_embeddings.clone(),
+            );
+        }
+    }
+    if matches!(
+        architecture,
+        CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
+    ) {
         text_config.insert(GDN_V_HEAD_LAYOUT_FIELD.to_string(), json!("tiled"));
     }
 
@@ -272,6 +294,7 @@ fn loader_hint_from_config_object(
     match config_model_type(object)? {
         Some("mistral3") => Ok(Some(NormalLoaderType::Mistral)),
         Some("lfm2_vl") => Ok(Some(NormalLoaderType::Lfm2)),
+        Some("qwen3_5" | "qwen3_5_text") => Ok(Some(NormalLoaderType::Qwen3_5)),
         Some("qwen3_5_moe" | "qwen3_5_moe_text") => Ok(Some(NormalLoaderType::Qwen3Next)),
         _ => Ok(None),
     }
@@ -281,6 +304,9 @@ fn normal_loader_from_architecture(architecture: &str) -> anyhow::Result<NormalL
     match architecture {
         "Mistral3ForConditionalGeneration" => return Ok(NormalLoaderType::Mistral),
         "Lfm2VlForConditionalGeneration" => return Ok(NormalLoaderType::Lfm2),
+        "Qwen3_5ForConditionalGeneration" | "Qwen3_5ForCausalLM" => {
+            return Ok(NormalLoaderType::Qwen3_5)
+        }
         "Qwen3_5MoeForConditionalGeneration" | "Qwen3_5MoeForCausalLM" => {
             return Ok(NormalLoaderType::Qwen3Next)
         }
@@ -297,6 +323,7 @@ fn normal_loader_from_architecture(architecture: &str) -> anyhow::Result<NormalL
 enum NestedTextConfig {
     Mistral3,
     Lfm2Vl,
+    Qwen35,
     Qwen35Moe,
 }
 
@@ -304,6 +331,7 @@ enum NestedTextConfig {
 enum ExternalConfigShape {
     Nested(NestedTextConfig),
     Qwen35Text,
+    Qwen35MoeText,
 }
 
 impl ExternalConfigShape {
@@ -311,7 +339,8 @@ impl ExternalConfigShape {
         match self {
             Self::Nested(NestedTextConfig::Mistral3) => NormalLoaderType::Mistral,
             Self::Nested(NestedTextConfig::Lfm2Vl) => NormalLoaderType::Lfm2,
-            Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35Text => {
+            Self::Nested(NestedTextConfig::Qwen35) | Self::Qwen35Text => NormalLoaderType::Qwen3_5,
+            Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35MoeText => {
                 NormalLoaderType::Qwen3Next
             }
         }
@@ -321,7 +350,8 @@ impl ExternalConfigShape {
         match self {
             Self::Nested(NestedTextConfig::Mistral3) => "Mistral3",
             Self::Nested(NestedTextConfig::Lfm2Vl) => "LFM2-VL",
-            Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35Text => "Qwen3.5 MoE",
+            Self::Nested(NestedTextConfig::Qwen35) | Self::Qwen35Text => "Qwen3.5",
+            Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35MoeText => "Qwen3.5 MoE",
         }
     }
 }
@@ -339,6 +369,12 @@ fn external_config_shape(
     if architecture == Some("Lfm2VlForConditionalGeneration") || model_type == Some("lfm2_vl") {
         return Ok(Some(ExternalConfigShape::Nested(NestedTextConfig::Lfm2Vl)));
     }
+    if architecture == Some("Qwen3_5ForConditionalGeneration") || model_type == Some("qwen3_5") {
+        return Ok(Some(ExternalConfigShape::Nested(NestedTextConfig::Qwen35)));
+    }
+    if architecture == Some("Qwen3_5ForCausalLM") || model_type == Some("qwen3_5_text") {
+        return Ok(Some(ExternalConfigShape::Qwen35Text));
+    }
     if architecture == Some("Qwen3_5MoeForConditionalGeneration")
         || model_type == Some("qwen3_5_moe")
     {
@@ -347,7 +383,7 @@ fn external_config_shape(
         )));
     }
     if architecture == Some("Qwen3_5MoeForCausalLM") || model_type == Some("qwen3_5_moe_text") {
-        return Ok(Some(ExternalConfigShape::Qwen35Text));
+        return Ok(Some(ExternalConfigShape::Qwen35MoeText));
     }
     Ok(None)
 }
@@ -1702,6 +1738,116 @@ fn build_qwen3_next(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     Ok(JsonValue::Object(config))
 }
 
+fn build_qwen35(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    reject_unsupported_rope_scaling(metadata, "Qwen3.5")?;
+    let fields = StandardFields::read(metadata, None)?;
+    let rotary_dim = metadata.required_usize("rope.dimension_count")?;
+    let partial_rotary_factor = ratio_f64(
+        metadata,
+        "partial_rotary_factor",
+        rotary_dim,
+        fields.head_dim,
+    )?;
+    if rotary_dim == 0 || rotary_dim > fields.head_dim || !rotary_dim.is_multiple_of(2) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be positive, even, and no larger than head dimension {}",
+            metadata.key("rope.dimension_count"),
+            fields.head_dim
+        )));
+    }
+    if !fields.rope_theta.is_finite() || fields.rope_theta <= 0.0 {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must be finite and positive",
+            metadata.key("rope.freq_base")
+        )));
+    }
+    if let Some(value_head_dim) = metadata.optional_usize("attention.value_length")? {
+        if value_head_dim != fields.head_dim {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "Qwen3.5 attention key length {} differs from value length {value_head_dim}",
+                fields.head_dim
+            )));
+        }
+    }
+    let mut mrope_section = metadata.required_usize_values("rope.dimension_sections")?;
+    while mrope_section.last() == Some(&0) {
+        mrope_section.pop();
+    }
+    if mrope_section.len() != 3 || mrope_section.contains(&0) {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` must contain three non-zero MRoPE sections",
+            metadata.key("rope.dimension_sections")
+        )));
+    }
+    let section_width = mrope_section.iter().try_fold(0usize, |sum, width| {
+        sum.checked_add(*width)
+            .ok_or_else(|| NormalConfigSynthesisError::new("Qwen3.5 MRoPE section width overflow"))
+    })?;
+    let represented_rotary_dim = section_width.checked_mul(2).ok_or_else(|| {
+        NormalConfigSynthesisError::new("Qwen3.5 MRoPE rotary dimension overflow")
+    })?;
+    if represented_rotary_dim != rotary_dim {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "GGUF metadata `{}` spans {} rotary dimensions, expected {rotary_dim}",
+            metadata.key("rope.dimension_sections"),
+            represented_rotary_dim
+        )));
+    }
+    let value_head_count = metadata.required_usize("ssm.time_step_rank")?;
+    let key_head_count = metadata.required_usize("ssm.group_count")?;
+    if key_head_count == 0
+        || value_head_count == 0
+        || !value_head_count.is_multiple_of(key_head_count)
+    {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen3.5 has incompatible GDN head counts: {key_head_count} key and {value_head_count} value"
+        )));
+    }
+    let value_head_dim = exact_div(
+        metadata,
+        "linear_value_head_dim",
+        metadata.required_usize("ssm.inner_size")?,
+        value_head_count,
+    )?;
+    let mut config = fields.rms_json();
+    config.remove("rope_theta");
+    config.remove("sliding_window");
+    config.insert("hidden_act".into(), json!("silu"));
+    config.insert("head_dim".into(), json!(fields.head_dim));
+    config.insert(
+        "rope_parameters".into(),
+        json!({
+            "rope_theta": fields.rope_theta,
+            "mrope_section": mrope_section,
+            "partial_rotary_factor": partial_rotary_factor,
+        }),
+    );
+    let full_attention_interval = metadata.required_usize("full_attention_interval")?;
+    if full_attention_interval == 0 || full_attention_interval > fields.num_hidden_layers {
+        return Err(NormalConfigSynthesisError::new(format!(
+            "Qwen3.5 full attention interval {full_attention_interval} is invalid for {} layers",
+            fields.num_hidden_layers
+        )));
+    }
+    config.insert(
+        "full_attention_interval".into(),
+        json!(full_attention_interval),
+    );
+    config.insert(
+        "linear_conv_kernel_dim".into(),
+        json!(metadata.required_usize("ssm.conv_kernel")?),
+    );
+    config.insert(
+        "linear_key_head_dim".into(),
+        json!(metadata.required_usize("ssm.state_size")?),
+    );
+    config.insert("linear_value_head_dim".into(), json!(value_head_dim));
+    config.insert("linear_num_key_heads".into(), json!(key_head_count));
+    config.insert("linear_num_value_heads".into(), json!(value_head_count));
+    config.insert(GDN_V_HEAD_LAYOUT_FIELD.into(), json!("tiled"));
+    Ok(JsonValue::Object(config))
+}
+
 fn build_lfm2(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     build_lfm(metadata, false)
 }
@@ -2489,7 +2635,9 @@ mod tests {
 
         if matches!(
             loader,
-            NormalLoaderType::Qwen3Next | NormalLoaderType::GraniteMoeHybrid
+            NormalLoaderType::Qwen3Next
+                | NormalLoaderType::Qwen3_5
+                | NormalLoaderType::GraniteMoeHybrid
         ) {
             insert_u32(&mut metadata, architecture, "ssm.conv_kernel", 4);
             insert_u32(&mut metadata, architecture, "ssm.inner_size", 1_024);
@@ -2498,7 +2646,10 @@ mod tests {
             insert_u32(&mut metadata, architecture, "ssm.group_count", 4);
         }
 
-        if matches!(loader, NormalLoaderType::Qwen3Next) {
+        if matches!(
+            loader,
+            NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen3_5
+        ) {
             insert_u32(&mut metadata, architecture, "full_attention_interval", 4);
             tensors.extend(
                 ["blk.1.ssm_a.weight", "blk.1.ssm_conv1d.weight"]
@@ -2506,6 +2657,19 @@ mod tests {
                     .map(str::to_string),
             );
             if architecture == CanonicalGgufArchitecture::Qwen35Moe {
+                tensors.extend(
+                    ["blk.1.ssm_alpha.weight", "blk.1.ssm_beta.weight"]
+                        .into_iter()
+                        .map(str::to_string),
+                );
+            }
+            if architecture == CanonicalGgufArchitecture::Qwen35 {
+                insert_u32_array(
+                    &mut metadata,
+                    architecture,
+                    "rope.dimension_sections",
+                    &[11, 11, 10, 0],
+                );
                 tensors.extend(
                     ["blk.1.ssm_alpha.weight", "blk.1.ssm_beta.weight"]
                         .into_iter()
@@ -2624,6 +2788,9 @@ mod tests {
             NormalLoaderType::Qwen3Next => {
                 assert_deserializes::<models::qwen3_next::Config>(loader, config)
             }
+            NormalLoaderType::Qwen3_5 => {
+                assert_deserializes::<crate::vision_models::qwen3_5::TextConfig>(loader, config)
+            }
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 assert_deserializes::<models::lfm2::Config>(loader, config)
             }
@@ -2683,6 +2850,85 @@ mod tests {
             crate::gdn::GdnVHeadLayout::Tiled
         );
         assert_native_config_deserializes(&loader, config);
+    }
+
+    #[test]
+    fn qwen35_standalone_metadata_synthesizes_dense_text_config() {
+        let loader = NormalLoaderType::Qwen3_5;
+        let architecture = CanonicalGgufArchitecture::Qwen35;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        insert_u32(&mut metadata, architecture, "vocab_size", 248_320);
+        insert_u32(&mut metadata, architecture, "context_length", 262_144);
+        insert_u32(&mut metadata, architecture, "embedding_length", 2_560);
+        insert_u32(&mut metadata, architecture, "feed_forward_length", 9_216);
+        insert_u32(&mut metadata, architecture, "block_count", 32);
+        insert_u32(&mut metadata, architecture, "attention.head_count", 16);
+        insert_u32(&mut metadata, architecture, "attention.head_count_kv", 4);
+        insert_u32(&mut metadata, architecture, "attention.key_length", 256);
+        insert_u32(&mut metadata, architecture, "attention.value_length", 256);
+        insert_f32(
+            &mut metadata,
+            architecture,
+            "attention.layer_norm_rms_epsilon",
+            1e-6,
+        );
+        insert_u32(&mut metadata, architecture, "rope.dimension_count", 64);
+        insert_f32(&mut metadata, architecture, "rope.freq_base", 10_000_000.0);
+        insert_u32(&mut metadata, architecture, "ssm.state_size", 128);
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 16);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 32);
+        insert_u32(&mut metadata, architecture, "ssm.inner_size", 4_096);
+
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(config["vocab_size"], 248_320);
+        assert_eq!(config["hidden_size"], 2_560);
+        assert_eq!(config["intermediate_size"], 9_216);
+        assert_eq!(config["num_hidden_layers"], 32);
+        assert_eq!(config["head_dim"], 256);
+        assert_eq!(config["rope_parameters"]["partial_rotary_factor"], 0.25);
+        assert_eq!(
+            config["rope_parameters"]["mrope_section"],
+            json!([11, 11, 10])
+        );
+        assert_eq!(config[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        let native: crate::vision_models::qwen3_5::TextConfig =
+            serde_json::from_value(config.clone()).unwrap();
+        assert_eq!(
+            crate::gdn::GdnConfig::v_head_layout(&native),
+            crate::gdn::GdnVHeadLayout::Tiled
+        );
+        assert_native_config_deserializes(&loader, config);
+    }
+
+    #[test]
+    fn qwen35_rejects_invalid_hybrid_and_mrope_metadata() {
+        let loader = NormalLoaderType::Qwen3_5;
+        let architecture = CanonicalGgufArchitecture::Qwen35;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        insert_u32(&mut metadata, architecture, "full_attention_interval", 0);
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("full attention interval"));
+
+        insert_u32(&mut metadata, architecture, "full_attention_interval", 4);
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "rope.dimension_sections",
+            &[11, 0, 21, 0],
+        );
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("three non-zero MRoPE sections"));
+
+        insert_u32_array(
+            &mut metadata,
+            architecture,
+            "rope.dimension_sections",
+            &[11, 11, 10, 0],
+        );
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 3);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 8);
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("incompatible GDN head counts"));
     }
 
     #[test]
@@ -2868,6 +3114,7 @@ mod tests {
             NormalLoaderType::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
             NormalLoaderType::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
             NormalLoaderType::Qwen3Next => "Qwen3NextForCausalLM",
+            NormalLoaderType::Qwen3_5 => "Qwen3_5ForCausalLM",
             NormalLoaderType::Lfm2 => "Lfm2ForCausalLM",
             NormalLoaderType::Lfm2Moe => "Lfm2MoeForCausalLM",
         }
@@ -2895,7 +3142,10 @@ mod tests {
             .unwrap();
             let mut expected = raw_value;
             expected["quantization_config"] = JsonValue::Null;
-            if gguf_architecture == CanonicalGgufArchitecture::Qwen35Moe {
+            if matches!(
+                gguf_architecture,
+                CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
+            ) {
                 expected[GDN_V_HEAD_LAYOUT_FIELD] = json!("tiled");
             }
             assert_eq!(
@@ -3085,6 +3335,59 @@ mod tests {
         assert_eq!(value["intermediate_size"], 512);
         assert_eq!(value[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
         assert_native_config_deserializes(&NormalLoaderType::Qwen3Next, value);
+    }
+
+    #[test]
+    fn qwen35_external_config_unwraps_dense_text_config() {
+        let raw = json!({
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "model_type": "qwen3_5",
+            "tie_word_embeddings": false,
+            "text_config": {
+                "model_type": "qwen3_5_text",
+                "vocab_size": 32000,
+                "hidden_size": 512,
+                "intermediate_size": 1024,
+                "num_hidden_layers": 4,
+                "num_attention_heads": 8,
+                "num_key_value_heads": 4,
+                "hidden_act": "silu",
+                "max_position_embeddings": 4096,
+                "rms_norm_eps": 0.00001,
+                "head_dim": 64,
+                "rope_parameters": {
+                    "rope_theta": 10000000.0,
+                    "mrope_section": [3, 3, 2],
+                    "partial_rotary_factor": 0.25
+                },
+                "linear_conv_kernel_dim": 4,
+                "linear_key_head_dim": 64,
+                "linear_value_head_dim": 64,
+                "linear_num_key_heads": 4,
+                "linear_num_value_heads": 8,
+                "full_attention_interval": 4,
+                "tie_word_embeddings": true
+            },
+            "vision_config": {
+                "sentinel": true
+            }
+        })
+        .to_string();
+        assert_eq!(
+            normal_loader_hint_from_external_config(&raw).unwrap(),
+            Some(NormalLoaderType::Qwen3_5)
+        );
+        let normalized = normalize_external_normal_config(
+            &NormalLoaderType::Qwen3_5,
+            CanonicalGgufArchitecture::Qwen35,
+            &raw,
+        )
+        .unwrap();
+        let value: JsonValue = serde_json::from_str(&normalized).unwrap();
+        assert!(value.get("vision_config").is_none());
+        assert_eq!(value["tie_word_embeddings"], false);
+        assert_eq!(value[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        assert_native_config_deserializes(&NormalLoaderType::Qwen3_5, value);
     }
 
     #[test]

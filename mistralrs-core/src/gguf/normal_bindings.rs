@@ -9,6 +9,9 @@ pub(crate) fn build_normal_bindings(
     loader: &NormalLoaderType,
     architecture: CanonicalGgufArchitecture,
 ) -> Result<GgufBindingMap> {
+    if matches!(loader, NormalLoaderType::Qwen3_5) {
+        return super::qwen_multimodal_bindings::build_qwen35_text_bindings(archive);
+    }
     let mut bindings = GgufBindingMap::new();
     let block_count = native_block_count(archive, architecture)?;
     bind_root_tensors(archive, loader, architecture, &mut bindings);

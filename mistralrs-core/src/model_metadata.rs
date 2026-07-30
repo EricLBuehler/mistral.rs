@@ -171,6 +171,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-Next-80B-A3B-Instruct")],
             },
+            Self::Qwen3_5 => ArchMetadata {
+                families: &["Qwen3.5"],
+                modalities: m,
+                examples: &[ex!("Qwen/Qwen3.5-4B")],
+            },
             Self::Lfm2 => ArchMetadata {
                 families: &["LFM2", "LFM2.5"],
                 modalities: m,
@@ -396,6 +401,7 @@ impl NormalLoaderType {
             Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
             Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
             Self::Qwen3Next => "Qwen3NextForCausalLM",
+            Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
         }

@@ -10,6 +10,7 @@ use super::{
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::WorkerTransferData;
 use crate::gguf::{
+    base_model::infer_hf_base_model_id,
     convert_gguf_metadata_to_hf_tokenizer, convert_gguf_to_hf_tokenizer, get_gguf_chat_template,
     get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
@@ -27,6 +28,7 @@ use crate::gguf::{Content, GGUFArchitecture};
 use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
+use crate::pipeline::hf::{build_api, get_file, list_repo_files};
 use crate::pipeline::loaders::DeviceMappedModelLoader;
 use crate::pipeline::multimodal::{
     MultimodalLoaderBuilder, MultimodalSpecificConfig, PreparedMultimodalSource,
@@ -47,20 +49,46 @@ use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
     MultimodalLoaderType, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
 use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
+    "gemma3",
+    "gemma3n",
+    "gemma4",
+    "llama4",
+    "qwen2vl",
+    "qwen3vl",
+    "qwen3vlmoe",
+];
+
+fn preferred_hf_config(files: &[String]) -> Option<&'static str> {
+    if files.iter().any(|file| file == "config.json") {
+        Some("config.json")
+    } else if files.iter().any(|file| file == "params.json") {
+        Some("params.json")
+    } else {
+        None
+    }
+}
+
+fn requires_multimodal_projector(architecture: &str) -> bool {
+    PROJECTOR_REQUIRED_ARCHITECTURES
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(architecture))
+}
 
 enum Model {
     XLoraLlama(XLoraQLlama),
@@ -312,6 +340,13 @@ impl GGUFLoader {
             Some(candle_core::quantized::gguf_file::Value::String(value)) => Some(value.as_str()),
             _ => None,
         };
+        if requires_multimodal_projector(architecture) {
+            bail!(
+                "GGUF architecture `{architecture}` requires a companion multimodal projector; \
+                 pass `--mmproj <file>` or use a GGUF repository containing one. Main-only text \
+                 loading is not supported for this architecture"
+            );
+        }
         let descriptor = GgufDescriptor::new(architecture, &metadata_keys, &tensor_names)?
             .with_model_identity(
                 metadata_string("general.name"),
@@ -548,6 +583,135 @@ impl GGUFLoader {
             paged_attn_config,
         )
     }
+
+    fn infer_multimodal_asset_paths(
+        &self,
+        paths: &dyn ModelPaths,
+        mmproj_paths: &[PathBuf],
+        token_source: &TokenSource,
+        silent: bool,
+    ) -> Result<Option<LocalModelPaths<PathBuf>>> {
+        if self.model_id.is_some() {
+            return Ok(None);
+        }
+
+        if !paths.get_config_filename().as_os_str().is_empty()
+            && paths.get_preprocessor_config().is_some()
+            && paths.get_processor_config().is_some()
+        {
+            return Ok(None);
+        }
+
+        let config_missing = paths.get_config_filename().as_os_str().is_empty();
+        let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        let projector_archive = mistralrs_quant::GgufArchive::open(mmproj_paths)?;
+        let inferred_model_id = infer_hf_base_model_id([
+            ("model", model_archive.metadata()),
+            ("projector", projector_archive.metadata()),
+        ]);
+        let inferred_model_id = match inferred_model_id {
+            Ok(inferred_model_id) => inferred_model_id,
+            Err(error) if config_missing => {
+                return Err(error).context(
+                    "Cannot infer original model assets from GGUF base-model metadata; pass \
+                     `--tok-model-id <original-model-id>` to override it",
+                )
+            }
+            Err(error) => {
+                warn!(
+                    "Could not infer optional GGUF processor assets from base-model metadata: \
+                     {error}"
+                );
+                return Ok(None);
+            }
+        };
+        let Some(inferred_model_id) = inferred_model_id else {
+            if config_missing {
+                bail!(
+                    "multimodal GGUF requires its original `config.json`, but the GGUF files do \
+                     not identify one unambiguous Hugging Face base model; pass \
+                     `--tok-model-id <original-model-id>`"
+                );
+            }
+            return Ok(None);
+        };
+
+        let revision = "main";
+        let api = match build_api(token_source, !silent) {
+            Ok(api) => api,
+            Err(error) if config_missing => return Err(error),
+            Err(error) => {
+                warn!("Could not prepare optional GGUF processor asset discovery: {error}");
+                return Ok(None);
+            }
+        };
+        let api = api.repo(Repo::with_revision(
+            inferred_model_id.clone(),
+            RepoType::Model,
+            revision.to_string(),
+        ));
+        let model_id = Path::new(&inferred_model_id);
+        let files = match list_repo_files(&api, model_id, true, revision) {
+            Ok(files) => files,
+            Err(error) if config_missing => return Err(error),
+            Err(error) => {
+                warn!(
+                    "Could not discover optional GGUF processor assets from \
+                     `{inferred_model_id}`: {error}"
+                );
+                return Ok(None);
+            }
+        };
+        let get_optional = |filename: &str| -> Option<PathBuf> {
+            if files.iter().any(|file| file == filename) {
+                match get_file(&api, model_id, filename, revision) {
+                    Ok(path) => Some(path),
+                    Err(error) => {
+                        warn!(
+                            "Could not load optional GGUF processor asset `{filename}` from \
+                             `{inferred_model_id}`: {error}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        let config_filename = if config_missing {
+            let Some(config_name) = preferred_hf_config(&files) else {
+                bail!(
+                    "GGUF base model `{inferred_model_id}` has no `config.json` or `params.json`; \
+                     pass `--tok-model-id <original-model-id>`"
+                );
+            };
+            get_file(&api, model_id, config_name, revision)?
+        } else {
+            paths.get_config_filename().clone()
+        };
+        let preprocessor_config = match paths.get_preprocessor_config() {
+            Some(filename) => Some(filename.clone()),
+            None => get_optional("preprocessor_config.json"),
+        };
+        let processor_config = match paths.get_processor_config() {
+            Some(filename) => Some(filename.clone()),
+            None => get_optional("processor_config.json"),
+        };
+
+        info!("Using GGUF base-model assets from `{inferred_model_id}`.");
+        Ok(Some(LocalModelPaths {
+            tokenizer_filename: PathBuf::new(),
+            config_filename,
+            template_filename: paths.get_template_filename().clone(),
+            filenames: paths.get_weight_filenames().to_vec(),
+            adapter_paths: paths.get_adapter_paths().clone(),
+            gen_conf: paths.get_gen_conf_filename().cloned(),
+            preprocessor_config,
+            processor_config,
+            chat_template_json_filename: paths.get_chat_template_explicit().clone(),
+        }))
+    }
 }
 
 impl Loader for GGUFLoader {
@@ -594,8 +758,18 @@ impl Loader for GGUFLoader {
                 silent
             );
             let mmproj_paths = mmproj_paths?;
+            let inferred_paths = self.infer_multimodal_asset_paths(
+                paths.as_ref(),
+                mmproj_paths.get_weight_filenames(),
+                &token_source,
+                silent,
+            )?;
+            let paths = inferred_paths
+                .as_ref()
+                .map(|paths| paths as &dyn ModelPaths)
+                .unwrap_or(paths.as_ref());
             return self.load_native_multimodal(NativeMultimodalLoadArgs {
-                paths: paths.as_ref(),
+                paths,
                 mmproj_paths: mmproj_paths.get_weight_filenames(),
                 dtype,
                 device,
@@ -1020,3 +1194,28 @@ impl Pipeline for GGUFPipeline {
 
 // TODO
 impl AnyMoePipelineMixin for GGUFPipeline {}
+
+#[cfg(test)]
+mod tests {
+    use super::{preferred_hf_config, requires_multimodal_projector};
+
+    #[test]
+    fn scopes_main_only_multimodal_architectures() {
+        assert!(!requires_multimodal_projector("qwen35"));
+        assert!(!requires_multimodal_projector("QWEN35"));
+        assert!(requires_multimodal_projector("gemma4"));
+        assert!(!requires_multimodal_projector("qwen35moe"));
+        assert!(!requires_multimodal_projector("mistral3"));
+    }
+
+    #[test]
+    fn prefers_hugging_face_config_over_native_params() {
+        let files = vec!["params.json".to_string(), "config.json".to_string()];
+        assert_eq!(preferred_hf_config(&files), Some("config.json"));
+        assert_eq!(
+            preferred_hf_config(&["params.json".to_string()]),
+            Some("params.json")
+        );
+        assert_eq!(preferred_hf_config(&[]), None);
+    }
+}

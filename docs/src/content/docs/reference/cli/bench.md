@@ -15,14 +15,14 @@ mistralrs bench [OPTIONS] [COMMAND]
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -34,7 +34,7 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -81,10 +81,10 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -96,7 +96,7 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -132,10 +132,10 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -147,7 +147,7 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -180,12 +180,12 @@ mistralrs bench multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -263,12 +263,12 @@ mistralrs bench embedding [OPTIONS] --model-id <MODEL_ID>
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |

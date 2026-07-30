@@ -1,9 +1,15 @@
 //! Resolution for the `--quant` front-door.
 
-use std::{fs, path::Path};
+mod gguf_discovery;
+
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use tracing::{debug, info, warn};
+
+pub(crate) use gguf_discovery::{
+    has_gguf_model_files, list_local_files_recursive, resolve_gguf_projector, resolve_gguf_quant,
+};
 
 use mistralrs_core::{
     auto_tune, parse_isq_value, parse_uqff_shard, probe_hf_repo_files, resolve_uqff_shorthand,
@@ -134,23 +140,7 @@ fn selected_repo_files(model_id: &str, token_source: &TokenSource) -> Result<Opt
 }
 
 fn local_model_files(model_path: &Path) -> Result<Vec<String>> {
-    if !model_path.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    for entry in fs::read_dir(model_path).map_err(|err| {
-        anyhow!(
-            "Cannot list local model directory `{}`: {err}",
-            model_path.display()
-        )
-    })? {
-        let entry = entry?;
-        if let Some(name) = entry.path().file_name().and_then(|name| name.to_str()) {
-            files.push(name.to_string());
-        }
-    }
-    Ok(files)
+    list_local_files_recursive(model_path)
 }
 
 fn resolve_selected_uqff(

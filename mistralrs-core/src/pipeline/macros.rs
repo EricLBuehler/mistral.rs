@@ -519,12 +519,12 @@ macro_rules! get_paths_gguf {
         } else {
             PathBuf::from_str("")?
         };
-        let config_filename = if dir_list.contains(&"params.json".to_string()) {
-            tracing::trace!("Loading `params.json` at `{}`", this_model_id);
-            $crate::api_get_file!(api, "params.json", model_id, &revision)
-        } else if dir_list.contains(&"config.json".to_string()) {
+        let config_filename = if dir_list.contains(&"config.json".to_string()) {
             tracing::trace!("Loading `config.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "config.json", model_id, &revision)
+        } else if dir_list.contains(&"params.json".to_string()) {
+            tracing::trace!("Loading `params.json` at `{}`", this_model_id);
+            $crate::api_get_file!(api, "params.json", model_id, &revision)
         } else {
             PathBuf::from_str("")?
         };

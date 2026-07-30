@@ -821,7 +821,16 @@ pub fn probe_hf_repo_files(
             RepoType::Model,
             revision.to_string(),
         ));
-    repo.info()
-        .ok()
-        .map(|info| info.siblings.into_iter().map(|s| s.rfilename).collect())
+    match repo.info() {
+        Ok(info) => Some(
+            info.siblings
+                .into_iter()
+                .map(|sibling| sibling.rfilename)
+                .collect(),
+        ),
+        Err(_) => {
+            let files = offline_snapshot_files(Path::new(model_id), revision);
+            (!files.is_empty()).then_some(files)
+        }
+    }
 }

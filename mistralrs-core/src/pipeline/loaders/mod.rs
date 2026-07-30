@@ -26,7 +26,7 @@ pub use normal_loaders::{
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
     MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader,
-    Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{

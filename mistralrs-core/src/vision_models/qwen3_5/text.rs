@@ -16,18 +16,20 @@ use super::{
     packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
 };
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
+    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
+    layers::{self, CausalMasker, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
+    layers_masker::{CausalMaskConfig, PastKvLenCache},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
-        RecurrentBatchKind,
+        EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel, RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -56,6 +58,9 @@ impl GdnConfig for TextConfig {
     }
     fn quantization_config(&self) -> &Option<QuantizedConfig> {
         &self.quantization_config
+    }
+    fn v_head_layout(&self) -> GdnVHeadLayout {
+        self.gdn_v_head_layout
     }
 }
 
@@ -395,6 +400,13 @@ impl DecoderLayer {
 
 // ====================== Text Model ======================
 
+#[derive(Clone, Copy)]
+enum TextWeightPrefix {
+    LanguageModelModel,
+    ModelLanguageModel,
+    Model,
+}
+
 pub struct Qwen3_5TextModel {
     embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
@@ -407,6 +419,7 @@ pub struct Qwen3_5TextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
+    weight_prefix: TextWeightPrefix,
 }
 
 impl Qwen3_5TextModel {
@@ -417,12 +430,24 @@ impl Qwen3_5TextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        cfg.validate()?;
         let mapper = normal_loading_metadata.mapper;
-        let vb_m =
+        let (vb_m, weight_prefix) =
             if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
-                vb.pp("language_model").pp("model")
+                (
+                    vb.pp("language_model").pp("model"),
+                    TextWeightPrefix::LanguageModelModel,
+                )
+            } else if layers::contains_tensor_or_uqff(
+                &vb,
+                "model.language_model.embed_tokens.weight",
+            ) {
+                (
+                    vb.pp("model").pp("language_model"),
+                    TextWeightPrefix::ModelLanguageModel,
+                )
             } else {
-                vb.pp("model").pp("language_model")
+                (vb.pp("model"), TextWeightPrefix::Model)
             };
 
         let embed_tokens = layers::embedding_with_legacy_tied_uqff(
@@ -620,6 +645,7 @@ impl Qwen3_5TextModel {
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
             mapper,
+            weight_prefix,
         })
     }
 
@@ -803,7 +829,11 @@ impl Qwen3_5TextModel {
 impl IsqModel for Qwen3_5TextModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        let uvb_lm = uvb.pp("model").pp("language_model");
+        let uvb_lm = match self.weight_prefix {
+            TextWeightPrefix::LanguageModelModel => uvb.pp("language_model").pp("model"),
+            TextWeightPrefix::ModelLanguageModel => uvb.pp("model").pp("language_model"),
+            TextWeightPrefix::Model => uvb.pp("model"),
+        };
         uvb_lm.pp("embed_tokens").add(&self.embed_tokens);
         uvb_lm.pp("norm").add(&self.norm);
 
@@ -840,3 +870,92 @@ impl IsqModel for Qwen3_5TextModel {
         uvb.to_safetensors()
     }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {}
+
+impl NormalModel for Qwen3_5TextModel {
+    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        let input_embeds = self.embed_tokens(input_ids)?;
+        let attention_mask = if ctx.is_paged() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &ForwardMaskCache::Paged(ctx.seqlen_offsets()),
+                self.dtype,
+                &CausalMaskConfig::default(),
+            )?
+        } else {
+            let hybrid_cache = self.cache.hybrid();
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &*hybrid_cache as &dyn PastKvLenCache,
+                self.dtype,
+                &CausalMaskConfig::default(),
+            )?
+        };
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            attention_mask
+        } else {
+            AttentionMask::None
+        };
+        let (batch_size, seq_len) = input_ids.dims2()?;
+        let text_positions = ctx
+            .text_positions(input_ids.device(), seq_len)?
+            .ok_or_else(|| candle_core::Error::msg("Qwen3.5 is missing text positions"))?
+            .clone();
+        let position_ids = text_positions
+            .reshape((batch_size, seq_len))?
+            .unsqueeze(0)?
+            .repeat((3, 1, 1))?;
+        self.forward_embeds(
+            input_embeds,
+            &attention_mask,
+            &position_ids,
+            ctx.seqlen_offsets(),
+            ctx,
+            None,
+            None,
+        )
+    }
+
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        candle_core::bail!("Qwen3.5 does not support X-LoRA forward")
+    }
+
+    fn is_xlora(&self) -> bool {
+        false
+    }
+
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+}
+
+impl AnyMoeBaseModelMixin for Qwen3_5TextModel {}

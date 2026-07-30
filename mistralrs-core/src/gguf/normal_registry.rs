@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 25;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 25;
+pub(crate) const NORMAL_LOADER_TYPE_COUNT: usize = 26;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 26;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -17,6 +17,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     Qwen3,
     Qwen3Moe,
     Qwen3Next,
+    Qwen35,
     Qwen35Moe,
     Starcoder2,
     DeepSeek2,
@@ -47,6 +48,7 @@ impl CanonicalGgufArchitecture {
             Self::Qwen3 => "qwen3",
             Self::Qwen3Moe => "qwen3moe",
             Self::Qwen3Next => "qwen3next",
+            Self::Qwen35 => "qwen35",
             Self::Qwen35Moe => "qwen35moe",
             Self::Starcoder2 => "starcoder2",
             Self::DeepSeek2 => "deepseek2",
@@ -87,6 +89,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "qwen3" => Ok(Self::Qwen3),
             "qwen3moe" => Ok(Self::Qwen3Moe),
             "qwen3next" => Ok(Self::Qwen3Next),
+            "qwen35" => Ok(Self::Qwen35),
             "qwen35moe" => Ok(Self::Qwen35Moe),
             "starcoder2" => Ok(Self::Starcoder2),
             "deepseek2" => Ok(Self::DeepSeek2),
@@ -369,6 +372,15 @@ const QWEN3_NEXT_METADATA: &[&str] = &[
     "{arch}.ssm.inner_size",
     "{arch}.ssm.state_size",
 ];
+const QWEN35_METADATA: &[&str] = &[
+    "{arch}.full_attention_interval",
+    "{arch}.rope.dimension_sections",
+    "{arch}.ssm.conv_kernel",
+    "{arch}.ssm.group_count",
+    "{arch}.ssm.inner_size",
+    "{arch}.ssm.state_size",
+    "{arch}.ssm.time_step_rank",
+];
 const LFM2_METADATA: &[&str] = &["{arch}.shortconv.l_cache"];
 const LFM2_MOE_METADATA: &[&str] = &[
     "{arch}.shortconv.l_cache",
@@ -394,6 +406,7 @@ const QWEN35_MOE_TENSORS: &[&str] = &[
     ".ssm_alpha.",
     ".ssm_beta.",
 ];
+const QWEN35_TENSORS: &[&str] = &[".ssm_a", ".ssm_conv1d.", ".ssm_alpha.", ".ssm_beta."];
 const SHORTCONV_TENSORS: &[&str] = &[".shortconv.conv.", ".shortconv.in_proj."];
 
 const GLM_MROPE_UNSUPPORTED: &[&str] = &["{arch}.rope.dimension_sections"];
@@ -413,6 +426,7 @@ const QWEN2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen2];
 const QWEN3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3];
 const QWEN3_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Moe];
 const QWEN3_NEXT_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3Next];
+const QWEN35_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Qwen3_5];
 const STARCODER2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Starcoder2];
 const DEEPSEEK2_LOADERS: &[NormalLoaderType] = &[
     NormalLoaderType::DeepSeekV2,
@@ -516,6 +530,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         rope_pairing: RopePairing::HalfSplit,
         required_metadata: QWEN3_NEXT_METADATA,
         required_tensors: SSM_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Qwen35,
+        compatible_loaders: QWEN35_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: QWEN35_METADATA,
+        required_tensors: QWEN35_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
     GgufSchema {
@@ -801,6 +823,16 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; NORMAL_LOADER_TYPE
             GgufLayout::StackedExperts,
             GgufLayout::PerLayerInventory,
             GgufLayout::Qwen3NextSplitQkvzGroupedBa,
+            GgufLayout::Qwen35SplitQkvzSplitBetaAlpha,
+            GgufLayout::ShiftedRmsNorm,
+        ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Qwen3_5,
+        architectures: &[CanonicalGgufArchitecture::Qwen35],
+        layouts: &[
+            GgufLayout::Direct,
+            GgufLayout::PerLayerInventory,
             GgufLayout::Qwen35SplitQkvzSplitBetaAlpha,
             GgufLayout::ShiftedRmsNorm,
         ],
@@ -1193,6 +1225,10 @@ mod tests {
                 NormalLoaderType::Qwen3Next,
                 GgufLayout::Qwen35SplitQkvzSplitBetaAlpha,
             ),
+            (
+                NormalLoaderType::Qwen3_5,
+                GgufLayout::Qwen35SplitQkvzSplitBetaAlpha,
+            ),
         ];
         for (loader, layout) in cases {
             assert!(adapter_for(&loader).unwrap().layouts.contains(&layout));
@@ -1421,6 +1457,16 @@ mod tests {
             .unwrap();
         let resolved = resolve_native_adapter(&descriptor, None).unwrap();
         assert_eq!(resolved.adapter.loader, NormalLoaderType::Qwen3Next);
+        assert_eq!(resolved.reason, ResolutionReason::SingleCandidate);
+    }
+
+    #[test]
+    fn qwen35_metadata_and_inventory_resolve_to_dense_text() {
+        let schema = schema_for(CanonicalGgufArchitecture::Qwen35);
+        let (metadata, tensors) = valid_fixture(schema, &[], &[]);
+        let descriptor = descriptor_from_fixture(schema, &metadata, &tensors);
+        let resolved = resolve_native_adapter(&descriptor, None).unwrap();
+        assert_eq!(resolved.adapter.loader, NormalLoaderType::Qwen3_5);
         assert_eq!(resolved.reason, ResolutionReason::SingleCandidate);
     }
 }
