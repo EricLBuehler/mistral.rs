@@ -166,6 +166,14 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("tencent/Hunyuan-A13B-Instruct")],
             },
+            Self::HyV3 => ArchMetadata {
+                families: &["HyV3", "Hy3", "Hy-MT2"],
+                modalities: m,
+                examples: &[
+                    ex!("tencent/Hy3", "Hy3"),
+                    ex!("tencent/Hy-MT2-30B-A3B", "Hy-MT2"),
+                ],
+            },
             Self::Qwen3Next => ArchMetadata {
                 families: &["Qwen3-Next", "Qwen3-Coder-Next"],
                 modalities: m,
@@ -395,6 +403,7 @@ impl NormalLoaderType {
             Self::GptOss => "GptOssForCausalLM",
             Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
             Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
+            Self::HyV3 => "HYV3ForCausalLM",
             Self::Qwen3Next => "Qwen3NextForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",

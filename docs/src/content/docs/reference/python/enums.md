@@ -30,6 +30,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.SmolLm3` | `'smollm3'` |
 | `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
 | `Architecture.GptOss` | `'gptoss'` |
+| `Architecture.HyV3` | `'hy_v3'` |
 | `Architecture.Qwen3Next` | `'qwen3next'` |
 | `Architecture.Lfm2` | `'lfm2'` |
 | `Architecture.Lfm2Moe` | `'lfm2_moe'` |

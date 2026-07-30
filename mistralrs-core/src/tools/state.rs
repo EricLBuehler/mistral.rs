@@ -496,4 +496,18 @@ mod tests {
 
         assert!(lark(&grammar).contains(r#"start: ">" @json_body "</tool_calls>""#));
     }
+
+    #[test]
+    fn hy_v3_preferred_format_uses_native_tool_calls_prefix() {
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::HyV3)).unwrap();
+
+        let grammar = state
+            .maybe_activate_continuation_grammar(Some("<tool_calls"))
+            .expect("HYV3 grammar must activate before the suffix token");
+
+        assert!(lark(&grammar).contains(r#"start: ">" body_plain | ":opensource>" body_open"#));
+        assert_eq!(grammar.grammars.len(), 1);
+    }
 }
