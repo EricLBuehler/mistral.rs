@@ -412,14 +412,20 @@ pub fn causal_conv1d_cuda(
 
             Ok((output, conv_state_new))
         } else {
-            // Full path: allocate new conv_state and output
             let output_buf = unsafe { dev.alloc::<T>(batch_size * conv_dim * seq_len) }?;
             let cs_buf = unsafe { dev.alloc::<T>(batch_size * conv_dim * kernel_size) }?;
+            let (cs_s, cs_l) = conv_state.storage_and_layout();
+            let cs_s = match &*cs_s {
+                candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
+                _ => candle::bail!("conv_state must be a cuda tensor"),
+            };
+            let cs_offset = cs_l.start_offset();
 
             unsafe {
                 crate::cuda::ffi::causal_conv1d_full(
                     x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
                     w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                    cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *const c_void,
                     cs_buf.device_ptr(cs_buf.stream()).0 as *mut c_void,
                     output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                     batch_size as i32,
@@ -447,9 +453,12 @@ pub fn causal_conv1d_cuda(
         }
     }
 
+    let x = x.contiguous()?;
+    let weight = weight.contiguous()?;
+    let conv_state = conv_state.contiguous()?;
     match x.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(x, weight, conv_state, kernel_size, is_update, 0),
-        DType::BF16 => cuda_fwd::<half::bf16>(x, weight, conv_state, kernel_size, is_update, 1),
+        DType::F16 => cuda_fwd::<half::f16>(&x, &weight, &conv_state, kernel_size, is_update, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(&x, &weight, &conv_state, kernel_size, is_update, 1),
         other => candle_core::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
     }
 }
@@ -1186,6 +1195,67 @@ mod tests {
         ] {
             run_case(case, &dev)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn causal_conv1d_full_continuation_matches_one_shot_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let batch_size = 2;
+        let conv_dim = 19;
+        let seq_len = 7;
+        let split = 3;
+        let kernel_size = 4;
+        let x = tensor3(
+            patterned(batch_size * conv_dim * seq_len, 20, 0.08, 0.01),
+            (batch_size, conv_dim, seq_len),
+            &dev,
+        )?
+        .to_dtype(DType::F16)?;
+        let weight = tensor2(
+            patterned(conv_dim * kernel_size, 21, 0.05, -0.01),
+            (conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::F16)?;
+        let initial_state = tensor3(
+            patterned(batch_size * conv_dim * kernel_size, 22, 0.03, 0.0),
+            (batch_size, conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::F16)?;
+
+        let (one_shot, one_shot_state) =
+            causal_conv1d_cuda(&x, &weight, &initial_state, kernel_size, false)?;
+        let (first, first_state) = causal_conv1d_cuda(
+            &x.narrow(2, 0, split)?,
+            &weight,
+            &initial_state,
+            kernel_size,
+            false,
+        )?;
+        let (second, chunked_state) = causal_conv1d_cuda(
+            &x.narrow(2, split, seq_len - split)?,
+            &weight,
+            &first_state,
+            kernel_size,
+            false,
+        )?;
+        let chunked = Tensor::cat(&[first, second], 2)?;
+
+        assert_close(
+            "causal conv output",
+            &flat(&one_shot.to_dtype(DType::F32)?)?,
+            &flat(&chunked.to_dtype(DType::F32)?)?,
+            2.0e-3,
+        );
+        assert_close(
+            "causal conv state",
+            &flat(&one_shot_state.to_dtype(DType::F32)?)?,
+            &flat(&chunked_state.to_dtype(DType::F32)?)?,
+            2.0e-3,
+        );
         Ok(())
     }
 }

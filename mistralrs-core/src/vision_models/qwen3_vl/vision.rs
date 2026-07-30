@@ -377,7 +377,7 @@ impl Qwen3VLVisionModel {
     pub fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let patch_embed = PatchEmbed::new(cfg, vb.pp("patch_embed"))?;
         let quant: Option<QuantizedConfig> = None;
-        let pos_embed = layers::embedding(
+        let pos_embed = layers::dense_embedding(
             cfg.num_position_embeddings,
             cfg.hidden_size,
             vb.pp("pos_embed"),

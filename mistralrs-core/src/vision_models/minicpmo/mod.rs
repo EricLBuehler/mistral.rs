@@ -1,9 +1,10 @@
 use std::{
     any::Any,
+    ops::Range,
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor};
 pub use config::MiniCpmOConfig;
 pub use inputs_processor::MiniCpmOProcessor;
 use mistralrs_quant::ShardedVarBuilder;
@@ -14,6 +15,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     models::qwen2,
     paged_attention::{
+        block_hash::MultimodalKind,
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigMetadata,
     },
@@ -22,6 +24,9 @@ use crate::{
         NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
 };
 
 use self::siglip::SiglipVisionTransformer;
@@ -38,6 +43,18 @@ pub struct MiniCpmOModel {
     vpm: SiglipVisionTransformer,
     resampler: Resampler,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+}
+
+pub(crate) struct MiniCpmOVisualInput {
+    pub key: MultimodalEncoderKey,
+    pub pixel_values: Vec<Tensor>,
+    pub tgt_sizes: Tensor,
+}
+
+pub(crate) struct MiniCpmOLegacyMap {
+    pub key: MultimodalEncoderKey,
+    pub source_output: usize,
+    pub destination: Range<usize>,
 }
 
 impl MiniCpmOModel {
@@ -78,249 +95,178 @@ impl MiniCpmOModel {
         })
     }
 
+    fn encode_visual_input(
+        &self,
+        device: &Device,
+        input: &MiniCpmOVisualInput,
+    ) -> Result<Vec<Tensor>> {
+        if input.key.kind != MultimodalKind::Image {
+            candle_core::bail!("MiniCPMO received a non-image visual input");
+        }
+        if input.pixel_values.len() != input.tgt_sizes.dim(0)? {
+            candle_core::bail!(
+                "MiniCPMO visual input has {} slices but {} target sizes",
+                input.pixel_values.len(),
+                input.tgt_sizes.dim(0)?
+            );
+        }
+        if let Some(cached) = self
+            .encoder_cache
+            .lock()
+            .expect("encoder cache lock poisoned")
+            .get(CacheModality::Image, input.key.hash)
+        {
+            if cached.len() == input.pixel_values.len() {
+                return Ok(cached);
+            }
+        }
+
+        let target_sizes = input.tgt_sizes.to_vec2::<u32>()?;
+        let mut pixels = input
+            .pixel_values
+            .iter()
+            .map(|pixel| pixel.flatten_to(1)?.permute((1, 0)))
+            .collect::<Result<Vec<_>>>()?;
+        let max_pixel_len = pixels
+            .iter()
+            .map(|pixel| pixel.dim(0))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .ok_or_else(|| candle_core::Error::msg("MiniCPMO visual input has no slices"))?;
+        pixels = pixels
+            .into_iter()
+            .map(|pixel| pixel.pad_with_zeros(0, 0, max_pixel_len - pixel.dim(0)?))
+            .collect::<Result<Vec<_>>>()?;
+        let batch_size = pixels.len();
+        let pixels = Tensor::stack(&pixels, 0)?
+            .permute((0, 2, 1))?
+            .reshape((batch_size, 3, (), max_pixel_len))?
+            .to_dtype(self.llm.embed_dtype())?;
+        let max_patch_count = target_sizes
+            .iter()
+            .map(|size| (size[0] * size[1]) as usize)
+            .max()
+            .unwrap_or(0);
+        let mut patch_mask = Tensor::zeros((batch_size, 1, max_patch_count), DType::U8, device)?;
+        for (batch, size) in target_sizes.iter().enumerate() {
+            let patch_count = (size[0] * size[1]) as usize;
+            patch_mask = patch_mask.slice_assign(
+                &[batch..batch + 1, 0..1, 0..patch_count],
+                &Tensor::ones((1, 1, patch_count), DType::U8, device)?,
+            )?;
+        }
+
+        let vision_batch_size = self.cfg.vision_batch_size.max(1);
+        let mut vision_batches = Vec::with_capacity(batch_size.div_ceil(vision_batch_size));
+        for start in (0..batch_size).step_by(vision_batch_size) {
+            let len = vision_batch_size.min(batch_size - start);
+            vision_batches.push(self.vpm.forward(
+                &pixels.narrow(0, start, len)?,
+                &AttentionMask::Custom(patch_mask.narrow(0, start, len)?),
+                Some(&input.tgt_sizes.narrow(0, start, len)?),
+            )?);
+        }
+        let vision = if vision_batches.len() == 1 {
+            vision_batches.remove(0)
+        } else {
+            Tensor::cat(&vision_batches, 0)?
+        };
+        let outputs = self.resampler.forward(&vision, &target_sizes)?;
+        let mut per_slice_outputs = Vec::with_capacity(batch_size);
+        for slice_idx in 0..batch_size {
+            let output = outputs.get(slice_idx)?;
+            if output.dim(0)? != self.cfg.query_num {
+                candle_core::bail!(
+                    "MiniCPMO resampler produced {} rows, expected {}",
+                    output.dim(0)?,
+                    self.cfg.query_num
+                );
+            }
+            per_slice_outputs.push(output);
+        }
+        self.encoder_cache
+            .lock()
+            .expect("encoder cache lock poisoned")
+            .insert(
+                CacheModality::Image,
+                input.key.hash,
+                per_slice_outputs.clone(),
+            );
+        Ok(per_slice_outputs)
+    }
+
     fn get_vllm_embedding(
         &self,
         input_ids: &Tensor,
-        device: &Device,
-        pixel_values_all: Option<Vec<Vec<Tensor>>>,
-        tgt_sizes: Option<Vec<Tensor>>,
-        image_bound: Option<Vec<Tensor>>,
-        image_hashes: &[u64],
+        visual_inputs: &[MiniCpmOVisualInput],
+        legacy_maps: &[Vec<MiniCpmOLegacyMap>],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
-        let mut vllm_embedding = self.llm.get_input_embeddings(input_ids)?;
-
-        if let Some(pixel_values_all) = pixel_values_all {
-            let tgt_sizes_all = tgt_sizes.as_ref().expect("Need tgt_sizes");
-            let image_bound = image_bound.expect("Need image_bound");
-            let image_bound_vec = image_bound
-                .into_iter()
-                .map(|x| x.to_vec2::<u32>())
-                .collect::<Result<Vec<_>>>()?;
-
-            // Flatten per-batch images and their tgt_sizes into a single list,
-            // tracking which batch element each image belongs to.
-            let mut all_pixel_values_raw = Vec::new();
-            let mut all_tgt_sizes_raw = Vec::new();
-            let mut img_cnts = Vec::new();
-            {
-                for (tgt_idx, pixel_values) in pixel_values_all.iter().enumerate() {
-                    img_cnts.push(pixel_values.len());
-                    let tgt = &tgt_sizes_all[tgt_idx];
-                    let tgt_rows = tgt.dim(0)?;
-                    for (j, pv) in pixel_values.iter().enumerate() {
-                        all_pixel_values_raw.push(pv.clone());
-                        all_tgt_sizes_raw.push(tgt.get(j)?);
-                    }
-                    let _ = tgt_rows;
-                }
-            }
-            let n_total_images = all_pixel_values_raw.len();
-
-            // Per-image caching
-            let n_hashes = image_hashes.len();
-            let vision_embedding = if n_hashes > 0 && n_hashes == n_total_images {
-                let mut per_image_features: Vec<Option<Tensor>> = vec![None; n_total_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image_features[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
-                        }
-                    }
-                }
-
-                if !miss_indices.is_empty() {
-                    // Encode misses one at a time (images can have different sizes/patches)
-                    for &idx in &miss_indices {
-                        let pv = &all_pixel_values_raw[idx];
-                        let tgt_size_tensor = all_tgt_sizes_raw[idx].unsqueeze(0)?;
-                        let tgt_size_vec = tgt_size_tensor.to_vec2::<u32>()?;
-
-                        // Prepare single-image pixel values
-                        let single_pv = pv.flatten_to(1)?.permute((1, 0))?;
-                        let single_pv = single_pv.unsqueeze(0)?; // (1, L, 3)
-                        let (_, l, _) = single_pv.dims3()?;
-                        let single_pv = single_pv.permute((0, 2, 1))?.reshape((1, 3, (), l))?;
-                        let single_pv = single_pv.to_dtype(self.llm.embed_dtype())?;
-
-                        let max_patches = (tgt_size_vec[0][0] * tgt_size_vec[0][1]) as usize;
-                        let mut patch_attn_mask =
-                            Tensor::zeros((1, 1, max_patches), DType::U8, device)?;
-                        patch_attn_mask = patch_attn_mask.slice_assign(
-                            &[0..1, 0..1, 0..max_patches],
-                            &Tensor::ones((1, 1, max_patches), DType::U8, device)?,
-                        )?;
-
-                        let vpm_out = self.vpm.forward(
-                            &single_pv,
-                            &AttentionMask::Custom(patch_attn_mask.clone()),
-                            Some(&tgt_size_tensor),
-                        )?;
-                        let feats = self.resampler.forward(&vpm_out, &tgt_size_vec)?;
-                        // feats shape: (1, query_num, hidden_size)
-                        let feats = feats.get(0)?; // (query_num, hidden_size)
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[idx],
-                                vec![feats.clone()],
-                            );
-                        }
-                        per_image_features[idx] = Some(feats);
-                    }
-                }
-
-                // Stack all per-image features
-                let all_feats: Vec<Tensor> = per_image_features
-                    .into_iter()
-                    .map(|f| f.expect("all images should be resolved"))
-                    .collect();
-                Tensor::stack(&all_feats, 0)?
-            } else {
-                // Original path: no hashes, encode everything
-                let mut all_pixel_values = Vec::new();
-                for pv in &all_pixel_values_raw {
-                    all_pixel_values.push(pv.flatten_to(1)?.permute((1, 0))?);
-                }
-
-                let tgt_sizes = Tensor::cat(tgt_sizes_all, 0)?;
-                let tgt_sizes_vec = tgt_sizes.to_vec2::<u32>()?;
-
-                let max_patches = (tgt_sizes.i((.., 0))? * tgt_sizes.i((.., 1))?)?
-                    .max(0)?
-                    .to_scalar::<u32>()? as usize;
-
-                let lens = all_pixel_values
-                    .iter()
-                    .map(|pixel_values| pixel_values.dim(0))
-                    .collect::<Result<Vec<_>>>()?;
-                let max_len = lens.into_iter().max().expect("No pixel values somehow?");
-                all_pixel_values = all_pixel_values
-                    .into_iter()
-                    .map(|pixel_values| {
-                        pixel_values.pad_with_zeros(0, 0, max_len - pixel_values.dim(0)?)
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let mut all_pixel_values = Tensor::stack(&all_pixel_values, 0)?;
-
-                let (b, l, _) = all_pixel_values.dims3()?;
-                all_pixel_values = all_pixel_values
-                    .permute((0, 2, 1))?
-                    .reshape((b, 3, (), l))?;
-
-                let mut patch_attn_mask = Tensor::zeros((b, 1, max_patches), DType::U8, device)?;
-                for (i, tgt_sizes_vec_i) in tgt_sizes_vec.iter().enumerate().take(b) {
-                    let n = (tgt_sizes_vec_i[0] * tgt_sizes_vec_i[1]) as usize;
-                    patch_attn_mask = patch_attn_mask.slice_assign(
-                        &[i..i + 1, 0..1, 0..n],
-                        &Tensor::ones((1, 1, n), DType::U8, device)?,
-                    )?;
-                }
-
-                let vision_batch_size = self.cfg.vision_batch_size;
-                all_pixel_values = all_pixel_values.to_dtype(self.llm.embed_dtype())?;
-
-                let mut vision_embedding = if b > vision_batch_size {
-                    let mut hs = Vec::new();
-                    for i in (0..b).step_by(vision_batch_size) {
-                        let start_idx = i;
-                        let end_idx = i + vision_batch_size;
-                        let tmp_hs = self.vpm.forward(
-                            &all_pixel_values.i(start_idx..end_idx)?,
-                            &AttentionMask::Custom(patch_attn_mask.i(start_idx..end_idx)?),
-                            Some(&tgt_sizes.i(start_idx..end_idx)?),
-                        )?;
-                        hs.push(tmp_hs);
-                    }
-                    Tensor::cat(&hs, 0)?
-                } else {
-                    self.vpm.forward(
-                        &all_pixel_values,
-                        &AttentionMask::Custom(patch_attn_mask.clone()),
-                        Some(&tgt_sizes),
-                    )?
-                };
-                vision_embedding = self.resampler.forward(&vision_embedding, &tgt_sizes_vec)?;
-                vision_embedding
-            };
-
-            let mut start = 0;
-            let mut vision_hidden_states = Vec::new();
-            for pixel_values in &pixel_values_all {
-                let img_cnt = pixel_values.len();
-                if img_cnt > 0 {
-                    vision_hidden_states.push(Some(
-                        vision_embedding
-                            .i(start..start + img_cnt)?
-                            .to_dtype(vllm_embedding.dtype())?,
-                    ));
-                    start += img_cnt;
-                } else {
-                    vision_hidden_states.push(None);
-                }
-            }
-
-            let mut new_vllm_embedding = Vec::new();
-            for i in 0..input_ids.dim(0)? {
-                if let Some(cur_vs_hs) = &vision_hidden_states[i] {
-                    let mut cur_vllm_emb = vllm_embedding.i(i)?;
-                    let cur_image_bound = &image_bound_vec[i];
-                    if !cur_image_bound.is_empty() {
-                        let mut image_indices = Vec::new();
-                        for r in cur_image_bound {
-                            image_indices.push(Tensor::arange(r[0], r[1], device)?);
-                        }
-                        let image_indices = Tensor::stack(&image_indices, 0)?;
-
-                        let indices = image_indices
-                            .reshape(((), 1))?
-                            .repeat((1, cur_vllm_emb.dim(D::Minus1)?))?;
-                        // Zero out the current data
-                        let cur_vllm_emb_neg = cur_vllm_emb.gather(&indices, 0)?.neg()?;
-                        cur_vllm_emb = cur_vllm_emb.scatter_add(&indices, &cur_vllm_emb_neg, 0)?;
-                        // Add the image data
-                        cur_vllm_emb = cur_vllm_emb.scatter_add(
-                            &indices,
-                            &cur_vs_hs.reshape(((), cur_vs_hs.dim(D::Minus1)?))?,
-                            0,
-                        )?;
-                        new_vllm_embedding.push(cur_vllm_emb);
-                    }
-                }
-            }
-            vllm_embedding = Tensor::stack(&new_vllm_embedding, 0)?;
+        let mut embedding = self.llm.get_input_embeddings(input_ids)?;
+        let mut encoder_outputs = MultimodalEncoderOutputs::new();
+        for input in visual_inputs {
+            let outputs = self.encode_visual_input(self.llm.device(), input)?;
+            encoder_outputs.insert(input.key, outputs);
         }
 
-        Ok(vllm_embedding)
+        if let Some(layout) = packed_layout {
+            return layout.splice_embeddings(&embedding, &encoder_outputs);
+        }
+        if legacy_maps.len() != input_ids.dim(0)? {
+            candle_core::bail!(
+                "MiniCPMO legacy map count {} does not match batch {}",
+                legacy_maps.len(),
+                input_ids.dim(0)?
+            );
+        }
+        let hidden_size = embedding.dim(2)?;
+        for (batch, maps) in legacy_maps.iter().enumerate() {
+            for map in maps {
+                if map.destination.end > input_ids.dim(1)? {
+                    candle_core::bail!("MiniCPMO image destination exceeds the input row");
+                }
+                let outputs = encoder_outputs.get(&map.key).ok_or_else(|| {
+                    candle_core::Error::msg(format!(
+                        "missing MiniCPMO image output with hash {}",
+                        map.key.hash
+                    ))
+                })?;
+                let output = outputs.get(map.source_output).ok_or_else(|| {
+                    candle_core::Error::msg(format!(
+                        "missing MiniCPMO slice output {} for hash {}",
+                        map.source_output, map.key.hash
+                    ))
+                })?;
+                if output.dims2()? != (map.destination.len(), hidden_size) {
+                    candle_core::bail!(
+                        "MiniCPMO slice output shape {:?} does not match destination {:?}",
+                        output.shape(),
+                        map.destination
+                    );
+                }
+                embedding = embedding.slice_assign(
+                    &[batch..batch + 1, map.destination.clone(), 0..hidden_size],
+                    &output
+                        .to_device(embedding.device())?
+                        .to_dtype(embedding.dtype())?
+                        .unsqueeze(0)?,
+                )?;
+            }
+        }
+        Ok(embedding)
     }
 
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        pixel_values_all: Option<Vec<Vec<Tensor>>>,
-        tgt_sizes: Option<Vec<Tensor>>,
-        image_bound: Option<Vec<Tensor>>,
-        image_hashes: &[u64],
+        visual_inputs: &[MiniCpmOVisualInput],
+        legacy_maps: &[Vec<MiniCpmOLegacyMap>],
+        packed_layout: Option<&PackedMultimodalLayout>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let vllm_embedding = self.get_vllm_embedding(
-            input_ids,
-            self.llm.device(),
-            pixel_values_all,
-            tgt_sizes,
-            image_bound,
-            image_hashes,
-        )?;
+        let vllm_embedding =
+            self.get_vllm_embedding(input_ids, visual_inputs, legacy_maps, packed_layout)?;
 
         self.llm.forward_embed(input_ids, vllm_embedding, ctx)
     }
@@ -328,10 +274,9 @@ impl MiniCpmOModel {
 
 #[derive(Default)]
 pub(crate) struct MiniCpmOSpecificArgs {
-    pub(crate) pixel_values_all: Option<Vec<Vec<Tensor>>>,
-    pub(crate) tgt_sizes: Option<Vec<Tensor>>,
-    pub(crate) image_bound: Option<Vec<Tensor>>,
-    pub(crate) image_hashes: Vec<u64>,
+    pub(crate) visual_inputs: Vec<MiniCpmOVisualInput>,
+    pub(crate) legacy_maps: Vec<Vec<MiniCpmOLegacyMap>>,
+    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
@@ -339,6 +284,14 @@ impl crate::speculative::SpeculativeTargetMixin for MiniCpmOModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for MiniCpmOModel {}
 
 impl MultimodalModel for MiniCpmOModel {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn cache(&self) -> &EitherCache {
         self.llm.cache()
     }
@@ -359,28 +312,26 @@ impl MultimodalModel for MiniCpmOModel {
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let MiniCpmOSpecificArgs {
-            pixel_values_all,
-            tgt_sizes,
-            image_bound,
-            image_hashes,
+            visual_inputs,
+            legacy_maps,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `MiniCpmOSpecificArgs`");
         self.forward(
             input_ids,
-            pixel_values_all,
-            tgt_sizes,
-            image_bound,
-            &image_hashes,
+            &visual_inputs,
+            &legacy_maps,
+            packed_layout.as_ref(),
             ctx,
         )
     }
-    fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
+    fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
+        let batch_size = input_ids.dim(0).unwrap_or(1);
         Box::new(MiniCpmOSpecificArgs {
-            pixel_values_all: None,
-            tgt_sizes: None,
-            image_bound: None,
-            image_hashes: vec![],
+            visual_inputs: Vec::new(),
+            legacy_maps: (0..batch_size).map(|_| Vec::new()).collect(),
+            packed_layout: None,
         })
     }
     fn encoder_cache_counters(

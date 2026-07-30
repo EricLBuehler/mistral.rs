@@ -2,10 +2,41 @@
 
 pub mod context;
 mod fused_moe;
+mod routed_lora;
 mod warmup;
 
 pub use fused_moe::{cutile_grouped_gemm, register_moe_shape};
+pub use routed_lora::{
+    cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
+    selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,
+    try_cutile_routed_lora, try_cutile_routed_lora_no_sort, CutileRoutedLoraConfig,
+    CutileRoutedLoraDeviceKey, CutileRoutedLoraLaunch, CutileRoutedLoraOptimizationHint,
+    CutileRoutedLoraShapeKey, CutileRoutedLoraStatus, CutileRoutedLoraTuningKey,
+    CutileRoutedLoraUnsupported, CUTILE_ROUTED_LORA_MAX_RANK,
+};
 pub use warmup::warmup_moe_kernels;
+
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        return (*message).to_string();
+    }
+    "non-string panic".to_string()
+}
+
+pub(super) fn catch_cutile_panic<T>(
+    operation: &str,
+    f: impl FnOnce() -> candle_core::Result<T>,
+) -> candle_core::Result<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            candle_core::bail!("cuTile {operation} panicked: {}", panic_message(payload))
+        }
+    }
+}
 
 pub fn device_compute_capability(dev: &candle_core::CudaDevice) -> (i32, i32) {
     use candle_core::cuda::cudarc::driver::{result, sys};
@@ -37,9 +68,13 @@ pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
         return false;
     };
 
+    device_supported_for(cuda_code, major, minor)
+}
+
+fn device_supported_for(cuda_code: u32, major: i32, minor: i32) -> bool {
     (major == 8 && cuda_code >= 1302)
         || (major == 9 && minor == 0 && cuda_code >= 1303)
-        || (major >= 10 && cuda_code >= 1301)
+        || (major >= 10 && cuda_code >= 1302)
 }
 
 fn build_cuda_version_code() -> Option<u32> {
@@ -71,30 +106,72 @@ fn tileiras_version_supported(output: &str) -> bool {
     major > MIN_TILEIRAS_MAJOR || (major == MIN_TILEIRAS_MAJOR && minor >= MIN_TILEIRAS_MINOR)
 }
 
-/// Whether the external `tileiras` JIT assembler is reachable at runtime and accepts this Tile IR.
-/// Probed once; resolution matches cutile-compiler: `CUTILE_TILEIRAS_PATH` env, else PATH lookup.
-pub fn jit_available() -> bool {
-    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *AVAILABLE.get_or_init(|| {
-        let bin = std::env::var_os("CUTILE_TILEIRAS_PATH")
-            .filter(|v| !v.is_empty())
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from("tileiras"));
-        let Ok(output) = std::process::Command::new(bin).arg("--version").output() else {
-            return false;
-        };
-        if !output.status.success() {
-            return false;
-        }
-        let mut version = String::from_utf8_lossy(&output.stdout).into_owned();
-        version.push_str(&String::from_utf8_lossy(&output.stderr));
-        tileiras_version_supported(&version)
-    })
+#[derive(Debug)]
+struct TileirasCapabilities {
+    targets: Vec<i32>,
+}
+
+fn parse_tileiras_targets(output: &str) -> Vec<i32> {
+    let mut targets = output
+        .split_whitespace()
+        .filter_map(|part| part.strip_prefix("=sm_"))
+        .filter(|part| part.chars().all(|c| c.is_ascii_digit()))
+        .filter_map(|part| part.parse().ok())
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets.dedup();
+    targets
+}
+
+fn tileiras_output(bin: &std::path::Path, arg: &str) -> Option<String> {
+    let output = std::process::Command::new(bin).arg(arg).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    Some(text)
+}
+
+fn tileiras_capabilities() -> Option<&'static TileirasCapabilities> {
+    static CAPABILITIES: std::sync::OnceLock<Option<TileirasCapabilities>> =
+        std::sync::OnceLock::new();
+    CAPABILITIES
+        .get_or_init(|| {
+            let bin = cutile_compiler::cuda_tile_runtime_utils::tileiras_binary();
+            let version = tileiras_output(&bin, "--version")?;
+            if !tileiras_version_supported(&version) {
+                return None;
+            }
+            let targets = parse_tileiras_targets(&tileiras_output(&bin, "--help")?);
+            if targets.is_empty() {
+                return None;
+            }
+            Some(TileirasCapabilities { targets })
+        })
+        .as_ref()
+}
+
+/// Whether `tileiras` can JIT this Tile IR for the active GPU.
+pub fn jit_available(dev: &candle_core::CudaDevice) -> bool {
+    let (major, minor) = device_compute_capability(dev);
+    let target = major * 10 + minor;
+    tileiras_capabilities().is_some_and(|capabilities| capabilities.targets.contains(&target))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::tileiras_version_supported;
+    use super::{device_supported_for, parse_tileiras_targets, tileiras_version_supported};
+
+    #[test]
+    fn cuda_architecture_gate_matches_tileiras_support() {
+        assert!(!device_supported_for(1301, 8, 0));
+        assert!(device_supported_for(1302, 8, 0));
+        assert!(!device_supported_for(1302, 9, 0));
+        assert!(device_supported_for(1303, 9, 0));
+        assert!(!device_supported_for(1301, 10, 0));
+        assert!(device_supported_for(1302, 10, 0));
+    }
 
     #[test]
     fn tileiras_version_gate_accepts_compatible_versions() {
@@ -107,6 +184,22 @@ mod tests {
         assert!(tileiras_version_supported(
             "Cuda compilation tools, release 14.0, V14.0.1"
         ));
+    }
+
+    #[test]
+    fn tileiras_target_parser_reads_only_gpu_values() {
+        let help = "--gpu-name=<value>\n  =sm_80 - SM 80\n  =sm_121 - SM 121\n  sm_90\n  =sm_bad";
+        assert_eq!(parse_tileiras_targets(help), vec![80, 121]);
+    }
+
+    #[test]
+    fn dependency_panics_become_errors() {
+        let error = super::catch_cutile_panic("test JIT", || -> candle_core::Result<()> {
+            panic!("tileiras rejected the target")
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("test JIT panicked"));
+        assert!(error.to_string().contains("tileiras rejected the target"));
     }
 }
 

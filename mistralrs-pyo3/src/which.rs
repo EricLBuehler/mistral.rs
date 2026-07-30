@@ -3,9 +3,31 @@ use std::path::PathBuf;
 use either::Either;
 use mistralrs_core::{
     AutoDeviceMapParams, DiffusionLoaderType, EmbeddingLoaderType, ModelDType,
-    MultimodalLoaderType, NormalLoaderType,
+    MultimodalLoaderType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
+    DEFAULT_LORA_MAX_RANK,
 };
 use pyo3::{pyclass, pymethods};
+
+#[pyclass(get_all)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoraAdapter {
+    pub alias: String,
+    pub source: String,
+    pub revision: Option<String>,
+}
+
+#[pymethods]
+impl LoraAdapter {
+    #[new]
+    #[pyo3(signature = (alias, source, revision=None))]
+    fn new(alias: String, source: String, revision: Option<String>) -> Self {
+        Self {
+            alias,
+            source,
+            revision,
+        }
+    }
+}
 
 #[pyclass(eq, eq_int)]
 #[derive(Debug, Clone, PartialEq)]
@@ -335,9 +357,9 @@ pub enum Which {
     },
 
     #[pyo3(constructor = (
-        adapter_model_ids,
+        model_id,
+        adapters = None,
         arch = None,
-        model_id = None,
         tokenizer_json = None,
         topology = None,
         write_uqff = None,
@@ -345,11 +367,14 @@ pub enum Which {
         dtype = ModelDType::Auto,
         auto_map_params = None,
         hf_cache_path = None,
+        max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
+        max_rank = DEFAULT_LORA_MAX_RANK,
+        max_bytes = DEFAULT_LORA_MAX_BYTES,
     ))]
     Lora {
-        adapter_model_ids: Vec<String>,
+        model_id: String,
+        adapters: Option<Vec<LoraAdapter>>,
         arch: Option<Architecture>,
-        model_id: Option<String>,
         tokenizer_json: Option<String>,
         topology: Option<String>,
         write_uqff: Option<PathBuf>,
@@ -357,6 +382,9 @@ pub enum Which {
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
+        max_adapters: usize,
+        max_rank: usize,
+        max_bytes: u64,
     },
 
     #[pyo3(constructor = (

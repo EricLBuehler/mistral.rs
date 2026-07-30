@@ -32,22 +32,28 @@ use crate::{
         ReIsqRequest, TuneModelRequest, TuneProfileRequest,
     },
     image_generation::__path_image_generation,
+    lora_adapters::{
+        __path_list_lora_adapters, __path_load_lora_adapter, __path_unload_lora_adapter,
+        LoadLoraAdapterRequest, LoraAdapterErrorBody, LoraAdapterErrorResponse,
+        LoraAdapterListResponse, LoraAdapterObject, UnloadLoraAdapterRequest,
+    },
     metrics::__path_metrics,
     openai::{
-        AudioResponseFormat, ChatCompletionRequest, CompletionRequest, EmbeddingData,
-        EmbeddingEncodingFormat, EmbeddingInput, EmbeddingRequest, EmbeddingResponse,
-        EmbeddingUsage, EmbeddingVector, FunctionCalled, Grammar, ImageGenerationRequest,
-        JsonSchemaResponseFormat, Message, MessageContent, MessageInnerContent, ModelObject,
-        ModelObjects, OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
-        OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
-        OpenAiCodeInterpreterToolType, OpenAiFunctionToolType, OpenAiResponsesFunctionTool,
-        OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool, OpenAiShellToolType, OpenAiTool,
-        OpenAiWebSearchTool, OpenAiWebSearchToolType, OpenAiWebSearchUserLocation, ResponseFormat,
-        ResponsesAnnotation, ResponsesChunk, ResponsesContent, ResponsesCreateRequest,
-        ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput, ResponsesError,
-        ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
-        ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
-        SpeechGenerationRequest, StopTokens, ToolCall,
+        AdapterGenerationSelection, AdapterSelection, AudioResponseFormat, ChatCompletionRequest,
+        CompletionRequest, EmbeddingData, EmbeddingEncodingFormat, EmbeddingInput,
+        EmbeddingRequest, EmbeddingResponse, EmbeddingUsage, EmbeddingVector, FunctionCalled,
+        Grammar, ImageGenerationRequest, JsonSchemaResponseFormat, Message, MessageContent,
+        MessageInnerContent, ModelObject, ModelObjects, OpenAiCodeInterpreterAutoContainer,
+        OpenAiCodeInterpreterContainer, OpenAiCodeInterpreterContainerType,
+        OpenAiCodeInterpreterTool, OpenAiCodeInterpreterToolType, OpenAiFunctionToolType,
+        OpenAiResponsesFunctionTool, OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool,
+        OpenAiShellToolType, OpenAiTool, OpenAiWebSearchTool, OpenAiWebSearchToolType,
+        OpenAiWebSearchUserLocation, ResponseFormat, ResponsesAnnotation, ResponsesChunk,
+        ResponsesContent, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent,
+        ResponsesDeltaOutput, ResponsesError, ResponsesIncompleteDetails,
+        ResponsesInputTokensDetails, ResponsesMessages, ResponsesObject, ResponsesOutput,
+        ResponsesOutputTokensDetails, ResponsesUsage, SpeechGenerationRequest, StopTokens,
+        ToolCall,
     },
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
@@ -110,11 +116,13 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
             ApprovalDecisionResponse,
+            AdapterGenerationSelection,
+            AdapterSelection,
             ApproximateUserLocation,
             AnthropicContainer,
             AnthropicContentBlock,
@@ -157,6 +165,11 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             FunctionCalled,
             Grammar,
             ImageGenerationRequest,
+            LoadLoraAdapterRequest,
+            LoraAdapterErrorBody,
+            LoraAdapterErrorResponse,
+            LoraAdapterListResponse,
+            LoraAdapterObject,
             ImageGenerationResponseFormat,
             JsonSchemaResponseFormat,
             Message,
@@ -215,6 +228,7 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             ToolType,
             TuneModelRequest,
             TuneProfileRequest,
+            UnloadLoraAdapterRequest,
             UrlCitation,
             WebSearchContentType,
             WebSearchFilters,
@@ -224,7 +238,8 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             WebSearchUserLocation
         )),
         tags(
-            (name = "Mistral.rs", description = "Mistral.rs API")
+            (name = "Mistral.rs", description = "Mistral.rs API"),
+            (name = "LoRA adapters", description = "Dynamic LoRA discovery and lifecycle operations")
         ),
         info(
             title = "Mistral.rs",
@@ -266,6 +281,70 @@ mod tests {
     fn render() -> String {
         let doc = get_openapi_doc(None);
         serde_json::to_string_pretty(&doc).expect("openapi doc serializes") + "\n"
+    }
+
+    #[test]
+    fn inference_responses_have_schemas_with_adapter_generation() {
+        let value = serde_json::to_value(get_openapi_doc(None)).unwrap();
+        for schema in [
+            "ChatCompletionResponse",
+            "ChatCompletionChunkResponse",
+            "CompletionResponse",
+            "CompletionChunkResponse",
+            "ResponseResource",
+        ] {
+            assert!(
+                value["components"]["schemas"][schema]["properties"]
+                    .get("adapter_generation")
+                    .is_some(),
+                "missing adapter_generation from {schema}"
+            );
+        }
+
+        for path in ["/v1/chat/completions", "/v1/completions", "/v1/responses"] {
+            assert!(
+                value["paths"][path]["post"]["responses"]["200"]["content"]
+                    .as_object()
+                    .is_some_and(|content| !content.is_empty()),
+                "missing response content schema for {path}"
+            );
+        }
+
+        for path in ["/v1/load_lora_adapter", "/v1/unload_lora_adapter"] {
+            assert!(
+                value["paths"][path]["post"]["description"]
+                    .as_str()
+                    .is_some_and(
+                        |description| description.contains("only when runtime LoRA mutation")
+                    )
+            );
+        }
+
+        let list_model = &value["paths"]["/v1/lora_adapters"]["get"]["parameters"][0];
+        assert_eq!(list_model["name"], "model");
+        assert_eq!(list_model["in"], "query");
+        assert_eq!(list_model["required"], false);
+
+        let load_example = &value["paths"]["/v1/load_lora_adapter"]["post"]["requestBody"]
+            ["content"]["application/json"]["example"];
+        assert_eq!(
+            load_example,
+            &serde_json::json!({
+                "lora_name": "production",
+                "lora_path": "/srv/adapters/production"
+            })
+        );
+
+        let unload_example = &value["paths"]["/v1/unload_lora_adapter"]["post"]["requestBody"]
+            ["content"]["application/json"]["example"];
+        assert_eq!(
+            unload_example,
+            &serde_json::json!({"lora_name": "production"})
+        );
+
+        assert!(value["paths"]["/v1/lora_adapters"]["get"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("Always registered")));
     }
 
     // docs/openapi.json is a committed artifact consumed by the docs site.

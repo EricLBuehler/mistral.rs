@@ -72,8 +72,11 @@ pub(crate) fn cpu_kv_f16() -> bool {
             || (std::arch::is_x86_feature_detected!("avx2")
                 && std::arch::is_x86_feature_detected!("fma")
                 && std::arch::is_x86_feature_detected!("f16c"));
-        #[cfg(not(target_arch = "x86_64"))]
-        let fast = cfg!(target_arch = "aarch64");
+        #[cfg(target_arch = "aarch64")]
+        let fast = std::arch::is_aarch64_feature_detected!("fp16")
+            && std::arch::is_aarch64_feature_detected!("fhm");
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        let fast = false;
         let on = fast && std::env::var("MISTRALRS_CPU_KV_F32").map_or(true, |v| v == "0");
         if on {
             tracing::info!("Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).");

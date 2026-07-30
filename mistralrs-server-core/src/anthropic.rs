@@ -449,6 +449,7 @@ impl AnthropicMessagesRequest {
         Ok(ChatCompletionRequest {
             messages: Either::Left(messages),
             model: self.model,
+            adapter: None,
             logit_bias: self.logit_bias,
             logprobs: self.logprobs,
             top_logprobs: self.top_logprobs,

@@ -29,6 +29,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
@@ -72,6 +73,7 @@ impl MultimodalModelBuilder {
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
+            max_model_len: None,
             loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -138,6 +140,14 @@ impl MultimodalModelBuilder {
         self
     }
 
+    /// Cap the model's runtime context length without changing the source configuration.
+    ///
+    /// This is currently supported by the Gemma 4 multimodal loader.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
     /// Load the multimodal model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) =
@@ -194,5 +204,19 @@ impl DerefMut for UqffMultimodalModelBuilder {
 impl From<UqffMultimodalModelBuilder> for MultimodalModelBuilder {
     fn from(value: UqffMultimodalModelBuilder) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MultimodalModelBuilder;
+
+    #[test]
+    fn max_model_len_is_configurable() {
+        let mut builder = MultimodalModelBuilder::new("model");
+        assert_eq!(builder.max_model_len, None);
+
+        builder = builder.with_max_model_len(8192);
+        assert_eq!(builder.max_model_len, Some(8192));
     }
 }
