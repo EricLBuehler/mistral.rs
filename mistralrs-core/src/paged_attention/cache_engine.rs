@@ -87,6 +87,23 @@ impl CacheEngine {
     ) -> Result<Vec<KVCache>> {
         let mut gpu_cache = Vec::new();
 
+        // No-KV (linear-attention) layers in hybrid models produce a 0-element KV cache
+        // tensor. Metal rejects newBufferWithLength:0 and these buffers are never read, so
+        // back them all with a single shared 1-element placeholder instead of allocating one
+        // per such layer.
+        let mut kv_placeholder = None;
+        let mut kv_block_buffer =
+            |dev: &candle_core::MetalDevice, elem_count: usize, name: &'static str| {
+                if elem_count == 0 {
+                    if kv_placeholder.is_none() {
+                        kv_placeholder = Some(dev.new_private_buffer(1, dtype, "kv_placeholder")?);
+                    }
+                    Ok(kv_placeholder.clone().unwrap())
+                } else {
+                    dev.new_private_buffer(elem_count, dtype, name)
+                }
+            };
+
         for (layer_idx, device) in layer_devices
             .iter()
             .take(model_config.num_layers())
@@ -126,7 +143,7 @@ impl CacheEngine {
                                 * key_block_shape.1
                                 * key_block_shape.2
                                 * key_block_shape.3;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = kv_block_buffer(dev, elem_count, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -174,7 +191,7 @@ impl CacheEngine {
                                 * value_block_shape.0
                                 * value_block_shape.1
                                 * value_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = kv_block_buffer(dev, elem_count, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -228,7 +245,7 @@ impl CacheEngine {
                                 * key_block_shape.0
                                 * key_block_shape.1
                                 * key_block_shape.2;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = kv_block_buffer(dev, elem_count, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -291,7 +308,7 @@ impl CacheEngine {
                             let elem_count = cache_config.num_gpu_blocks
                                 * cache_config.block_size
                                 * kv_lora_rank;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
+                            let buffer = kv_block_buffer(dev, elem_count, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
@@ -334,7 +351,7 @@ impl CacheEngine {
                             let elem_count = cache_config.num_gpu_blocks
                                 * cache_config.block_size
                                 * kpe_head_dim;
-                            let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
+                            let buffer = kv_block_buffer(dev, elem_count, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
                                 dev.clone(),
