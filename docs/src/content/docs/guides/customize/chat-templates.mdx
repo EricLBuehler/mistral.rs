@@ -13,7 +13,7 @@ mistralrs run -m <model> --chat-template my-template.jinja
 
 ## How the template is resolved
 
-Highest priority first: a multimodal `processor_config.json` template wins over everything; then `--jinja-explicit`; then `--chat-template`; then the model repo's own template; then GGUF metadata as a last resort.
+Highest priority first: `--jinja-explicit`; then a multimodal `processor_config.json` template; then `--chat-template`; then the model repo's own template; then GGUF metadata as a last resort.
 
 The base source (when no override flag is set) is picked in this order:
 
@@ -25,7 +25,8 @@ Overrides apply on top of that base (the precedence summary above lists them hig
 
 - `--chat-template <file>` replaces the base source. The file must end in `.json` or `.jinja`.
 - `--jinja-explicit <file.jinja>` overrides `--chat-template`. The value must be a path to a `.jinja` file.
-- For multimodal models, a `chat_template` in `processor_config.json` takes precedence over everything above.
+- For multimodal models, a `chat_template` in `processor_config.json` takes precedence unless
+  `--jinja-explicit` is set.
 
 GGUF models are a special case: the template embedded in GGUF metadata is used only when none of the sources above produced one.
 

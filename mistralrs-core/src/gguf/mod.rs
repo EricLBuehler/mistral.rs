@@ -1,9 +1,19 @@
 mod chat_template;
 mod content;
+pub(crate) mod gemma3_bindings;
+pub(crate) mod gemma3n_bindings;
 mod gguf_tokenizer;
+pub(crate) mod idefics3_bindings;
+mod lfm2_vl_bindings;
+pub(crate) mod llama4_bindings;
+mod mistral3_bindings;
+mod multimodal_binding_utils;
+pub(crate) mod multimodal_bindings;
+pub(crate) mod multimodal_vision_registry;
 pub(crate) mod normal_bindings;
 pub(crate) mod normal_config;
 pub(crate) mod normal_registry;
+pub(crate) mod qwen_multimodal_bindings;
 use strum::EnumString;
 
 use anyhow::{Context, Result};

@@ -21,7 +21,8 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
+| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -106,7 +107,8 @@ mistralrs run auto [OPTIONS] --model-id <MODEL_ID>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
+| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -156,7 +158,8 @@ mistralrs run text [OPTIONS] --model-id <MODEL_ID>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
+| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports text models. Qwen3.5/3.6 MoE requires automatic model selection; vision-tower adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Qwen3.5/3.6 MoE conditional-generation models require auto model selection; vision-tower adapters are unsupported |
@@ -203,7 +206,8 @@ mistralrs run multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
+| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
@@ -285,7 +289,8 @@ mistralrs run embedding [OPTIONS] --model-id <MODEL_ID>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Model format: plain (safetensors), gguf, or ggml Auto-detected if not specified Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | Quantized model filename(s) for GGUF/GGML (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID for tokenizer when using quantized format |
+| `--mmproj <MMPROJ>` |  | Multimodal projector filename(s) for GGUF (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration and tokenizer assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--quant <QUANT>` |  | Quantization front-door: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) This prefers prebuilt UQFF from `mistralrs-community/<model>-UQFF`, so use `--isq` if you do not want to switch to a prebuilt UQFF |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |

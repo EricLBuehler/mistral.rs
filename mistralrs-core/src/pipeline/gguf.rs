@@ -12,12 +12,15 @@ use crate::distributed::WorkerTransferData;
 use crate::gguf::{
     convert_gguf_metadata_to_hf_tokenizer, convert_gguf_to_hf_tokenizer, get_gguf_chat_template,
     get_gguf_chat_template_from_metadata,
+    multimodal_bindings::build_gemma4_bindings,
+    multimodal_vision_registry::resolve_native_multimodal_gguf,
     normal_bindings::build_normal_bindings,
     normal_config::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
         synthesize_normal_config,
     },
-    normal_registry::{resolve_native_adapter, GgufDescriptor},
+    normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
+    qwen_multimodal_bindings::{build_qwen_multimodal_bindings, qwen_multimodal_loader_type},
     GgufTokenizerConversion,
 };
 use crate::gguf::{Content, GGUFArchitecture};
@@ -25,6 +28,9 @@ use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::loaders::DeviceMappedModelLoader;
+use crate::pipeline::multimodal::{
+    MultimodalLoaderBuilder, MultimodalSpecificConfig, PreparedMultimodalSource,
+};
 use crate::pipeline::normal::{NormalLoaderBuilder, NormalSpecificConfig, PreparedNormalSource};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::ChatTemplate;
@@ -39,7 +45,7 @@ use crate::xlora_models::NonGranularState;
 use crate::xlora_models::{XLoraQLlama, XLoraQPhi3};
 use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
+    MultimodalLoaderType, PagedAttentionConfig, Pipeline, Topology, TryIntoDType,
 };
 use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
@@ -78,10 +84,12 @@ pub struct GGUFLoader {
     model_id: Option<String>,
     quantized_model_id: String,
     quantized_filenames: Vec<String>,
+    mmproj_filenames: Option<Vec<String>>,
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
+    tokenizer_json: Option<String>,
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
@@ -92,6 +100,17 @@ pub struct GGUFLoader {
 /// Config for a GGUF loader.
 pub struct GGUFSpecificConfig {
     pub topology: Option<Topology>,
+    pub max_edge: Option<u32>,
+}
+
+struct NativeMultimodalLoadArgs<'a> {
+    paths: &'a dyn ModelPaths,
+    mmproj_paths: &'a [PathBuf],
+    dtype: &'a dyn TryIntoDType,
+    device: &'a Device,
+    silent: bool,
+    mapper: DeviceMapSetting,
+    paged_attn_config: Option<PagedAttentionConfig>,
 }
 
 #[derive(Default)]
@@ -100,11 +119,13 @@ pub struct GGUFLoaderBuilder {
     model_id: Option<String>,
     quantized_model_id: String,
     quantized_filenames: Vec<String>,
+    mmproj_filenames: Option<Vec<String>>,
     xlora_model_id: Option<String>,
     kind: ModelKind,
     xlora_order: Option<Ordering>,
     no_kv_cache: bool,
     chat_template: Option<String>,
+    tokenizer_json: Option<String>,
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
@@ -138,6 +159,16 @@ impl GGUFLoaderBuilder {
             no_kv_cache,
             ..Default::default()
         }
+    }
+
+    pub fn with_mmproj_files(mut self, mmproj_filenames: Vec<String>) -> Self {
+        self.mmproj_filenames = Some(mmproj_filenames);
+        self
+    }
+
+    pub fn with_tokenizer_json(mut self, tokenizer_json: String) -> Self {
+        self.tokenizer_json = Some(tokenizer_json);
+        self
     }
 
     fn with_adapter(
@@ -194,8 +225,10 @@ impl GGUFLoaderBuilder {
             xlora_order: self.xlora_order,
             no_kv_cache: self.no_kv_cache,
             chat_template: self.chat_template,
+            tokenizer_json: self.tokenizer_json,
             tgt_non_granular_index: self.tgt_non_granular_index,
             quantized_filenames: self.quantized_filenames,
+            mmproj_filenames: self.mmproj_filenames,
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
@@ -233,10 +266,12 @@ impl GGUFLoader {
             model_id,
             quantized_model_id,
             quantized_filenames,
+            mmproj_filenames: None,
             xlora_model_id,
             xlora_order,
             no_kv_cache,
             chat_template,
+            tokenizer_json: None,
             kind,
             tgt_non_granular_index,
             config,
@@ -320,7 +355,14 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
 
-        let tokenizer = if paths.get_tokenizer_filename().as_os_str().is_empty() {
+        let tokenizer = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
+            crate::gguf::GgufTokenizerConversion {
+                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
+                bos: None,
+                eos: None,
+                unk: None,
+            }
+        } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
             convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?
         } else {
             crate::gguf::GgufTokenizerConversion {
@@ -348,10 +390,6 @@ impl GGUFLoader {
             rope_pairing: crate::gguf::normal_registry::schema_for(descriptor.architecture)
                 .rope_pairing,
         };
-        let model_id = self
-            .model_id
-            .clone()
-            .unwrap_or_else(|| self.quantized_model_id.clone());
         let loader = NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 topology: self.config.topology.clone(),
@@ -359,11 +397,147 @@ impl GGUFLoader {
             },
             None,
             None,
-            Some(model_id),
+            Some(self.quantized_model_id.clone()),
             self.no_kv_cache,
             self.jinja_explicit.clone(),
         )
         .build_with_source(loader_type, source, self.kind.clone())?;
+        loader.load_model_from_path(
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            None,
+            paged_attn_config,
+        )
+    }
+
+    fn load_native_multimodal(
+        &self,
+        args: NativeMultimodalLoadArgs<'_>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let NativeMultimodalLoadArgs {
+            paths,
+            mmproj_paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            paged_attn_config,
+        } = args;
+        if !matches!(self.kind, ModelKind::GgufQuantized { .. }) {
+            bail!("multimodal GGUF does not support legacy GGUF adapters");
+        }
+        let mut archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        let architecture = match archive.metadata_value("general.architecture") {
+            Some(candle_core::quantized::gguf_file::Value::String(value)) => value.clone(),
+            Some(value) => {
+                bail!("GGUF `general.architecture` must be a string, got {value:?}")
+            }
+            None => bail!("GGUF metadata is missing `general.architecture`"),
+        };
+        let mmproj = mistralrs_quant::GgufArchive::open(mmproj_paths)?;
+        archive.merge_component(mmproj)?;
+        let archive = Arc::new(archive);
+
+        let (loader_type, bindings, rope_pairing) = match architecture.as_str() {
+            "gemma4" => (
+                MultimodalLoaderType::Gemma4,
+                build_gemma4_bindings(&archive)?,
+                RopePairing::HalfSplit,
+            ),
+            "qwen2vl" | "qwen3vl" | "qwen3vlmoe" | "qwen35" | "qwen35moe" => (
+                qwen_multimodal_loader_type(&archive)?,
+                build_qwen_multimodal_bindings(&archive)?,
+                RopePairing::HalfSplit,
+            ),
+            architecture => {
+                let Some(resolved) = resolve_native_multimodal_gguf(&archive)? else {
+                    bail!(
+                        "multimodal GGUF architecture `{architecture}` is not supported by the native multimodal loader"
+                    );
+                };
+                (
+                    resolved.loader_type,
+                    resolved.bindings,
+                    resolved.rope_pairing,
+                )
+            }
+        };
+        if paths.get_config_filename().as_os_str().is_empty() {
+            bail!(
+                "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
+            );
+        }
+        let config = fs::read_to_string(paths.get_config_filename())?;
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
+        let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
+            archive.clone(),
+            &bindings,
+            internal_dtype,
+        )?);
+        let weights = source.sharded_var_builder(Device::Cpu);
+        let tokenizer = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
+            GgufTokenizerConversion {
+                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
+                bos: None,
+                eos: None,
+                unk: None,
+            }
+        } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
+            convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?
+        } else {
+            GgufTokenizerConversion {
+                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
+                bos: None,
+                eos: None,
+                unk: None,
+            }
+        };
+        let gguf_chat_template =
+            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
+                get_gguf_chat_template_from_metadata(archive.metadata())?
+            } else {
+                None
+            };
+        let processor_config = paths
+            .get_processor_config()
+            .as_ref()
+            .map(fs::read_to_string)
+            .transpose()?;
+        let preprocessor_config = paths
+            .get_preprocessor_config()
+            .as_ref()
+            .map(fs::read_to_string)
+            .transpose()?;
+        let mut source_weight_files = paths.get_weight_filenames().to_vec();
+        source_weight_files.extend_from_slice(mmproj_paths);
+        let source = PreparedMultimodalSource {
+            config,
+            weights,
+            tokenizer: tokenizer.tokenizer,
+            chat_template: gguf_chat_template,
+            bos_token: tokenizer.bos,
+            eos_token: tokenizer.eos,
+            unk_token: tokenizer.unk,
+            processor_config,
+            preprocessor_config,
+            source_weight_files,
+            rope_pairing,
+        };
+        let loader = MultimodalLoaderBuilder::new(
+            MultimodalSpecificConfig {
+                topology: self.config.topology.clone(),
+                max_edge: self.config.max_edge,
+                ..Default::default()
+            },
+            None,
+            None,
+            Some(self.quantized_model_id.clone()),
+            self.jinja_explicit.clone(),
+        )
+        .build_with_source(loader_type, source, self.kind.clone());
         loader.load_model_from_path(
             paths,
             dtype,
@@ -390,18 +564,49 @@ impl Loader for GGUFLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        let revision = revision.unwrap_or_else(|| "main".to_string());
+        if self.mmproj_filenames.as_ref().is_some_and(|filenames| {
+            filenames.is_empty() || filenames.iter().any(|filename| filename.trim().is_empty())
+        }) {
+            bail!("multimodal GGUF requires at least one nonempty projector filename");
+        }
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
             LocalModelPaths,
             &token_source,
-            revision,
+            Some(revision.clone()),
             self,
             self.quantized_model_id.clone(),
             self.quantized_filenames.clone(),
             silent
         );
+        let paths = paths?;
+        if let Some(mmproj_filenames) = self.mmproj_filenames.as_ref() {
+            if in_situ_quant.is_some() {
+                bail!("in-situ quantization is not supported for GGUF models");
+            }
+            let mmproj_paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
+                LocalModelPaths,
+                &token_source,
+                Some(revision),
+                self,
+                self.quantized_model_id.clone(),
+                mmproj_filenames.clone(),
+                silent
+            );
+            let mmproj_paths = mmproj_paths?;
+            return self.load_native_multimodal(NativeMultimodalLoadArgs {
+                paths: paths.as_ref(),
+                mmproj_paths: mmproj_paths.get_weight_filenames(),
+                dtype,
+                device,
+                silent,
+                mapper,
+                paged_attn_config,
+            });
+        }
 
         self.load_model_from_path(
-            paths?.as_ref(),
+            paths.as_ref(),
             dtype,
             device,
             silent,
@@ -523,7 +728,14 @@ impl Loader for GGUFLoader {
             bos,
             eos,
             unk,
-        } = if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
+        } = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
+            GgufTokenizerConversion {
+                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
+                bos: None,
+                eos: None,
+                unk: None,
+            }
+        } else if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
             convert_gguf_to_hf_tokenizer(&model)?
         } else {
             GgufTokenizerConversion {
@@ -615,10 +827,7 @@ impl Loader for GGUFLoader {
             tokenizer: tokenizer.into(),
             no_kv_cache: self.no_kv_cache,
             chat_template: Arc::new(chat_template),
-            model_id: self
-                .model_id
-                .clone()
-                .unwrap_or(self.quantized_model_id.clone()),
+            model_id: self.quantized_model_id.clone(),
             non_granular_state: self.tgt_non_granular_index.map(|tgt_non_granular_index| {
                 NonGranularState {
                     non_granular_index: Arc::new(Mutex::new(0)),

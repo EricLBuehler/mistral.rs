@@ -513,18 +513,16 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
+        let tokenizer_filename = if dir_list.contains(&"tokenizer.json".to_string()) {
             tracing::trace!("Loading `tokenizer.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
         } else {
             PathBuf::from_str("")?
         };
-        let config_filename = if $this.model_id.is_some()
-            && dir_list.contains(&"params.json".to_string())
-        {
+        let config_filename = if dir_list.contains(&"params.json".to_string()) {
             tracing::trace!("Loading `params.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "params.json", model_id, &revision)
-        } else if $this.model_id.is_some() && dir_list.contains(&"config.json".to_string()) {
+        } else if dir_list.contains(&"config.json".to_string()) {
             tracing::trace!("Loading `config.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "config.json", model_id, &revision)
         } else {
@@ -747,6 +745,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
         $multi_progress:expr,
         $matformer_config:expr,
         $uqff_reader:expr,
+        $rope_pairing:expr,
     ) => {{
         let vb = if let Some(reader) = $uqff_reader.clone() {
             $vb.with_uqff_reader(reader)
@@ -764,7 +763,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
-                rope_pairing: None,
+                rope_pairing: $rope_pairing,
             },
             $attention_mechanism,
         )?;

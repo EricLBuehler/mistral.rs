@@ -26,7 +26,7 @@ pub struct VisionConfig {
     pub hidden_act: Activation,
     pub mlp_ratio: f64,
     pub num_heads: usize,
-    #[serde(default = "default_in_channels")]
+    #[serde(default = "default_in_channels", alias = "in_chans")]
     pub in_channels: usize,
     pub patch_size: usize,
     pub spatial_merge_size: usize,
@@ -151,5 +151,24 @@ mod tests {
             Some(vec![AttentionType::SlidingAttention]),
         )
         .is_err());
+    }
+
+    #[test]
+    fn vision_config_accepts_transformers_in_chans() {
+        let config: VisionConfig = serde_json::from_str(
+            r#"{
+                "depth": 2,
+                "embed_dim": 8,
+                "hidden_size": 16,
+                "mlp_ratio": 4.0,
+                "num_heads": 2,
+                "in_chans": 5,
+                "patch_size": 14,
+                "spatial_merge_size": 2,
+                "temporal_patch_size": 2
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(config.in_channels, 5);
     }
 }

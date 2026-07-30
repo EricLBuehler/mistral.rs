@@ -372,9 +372,17 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
+
+        /// Path to a tokenizer JSON file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
+
+        /// Multimodal projector filename(s), separated by semicolons.
+        #[arg(long)]
+        mmproj_filename: Option<String>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -384,6 +392,11 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// Automatically resize and pad images to this maximum edge length.
+        #[arg(short = 'e', long)]
+        #[serde(default)]
+        max_edge: Option<u32>,
+
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
         max_seq_len: usize,
@@ -391,6 +404,16 @@ pub enum ModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
+
+        /// Maximum prompt number of images to expect for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_num_images: Option<usize>,
+
+        /// Maximum expected image edge length for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_image_length: Option<usize>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -407,7 +430,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -455,7 +478,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 

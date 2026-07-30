@@ -391,18 +391,26 @@ pub enum Which {
         quantized_model_id,
         quantized_filename,
         tok_model_id = None,
+        tokenizer_json = None,
+        mmproj_filename = None,
         topology = None,
+        max_edge = None,
         dtype = ModelDType::Auto,
         auto_map_params = None,
+        multimodal_auto_map_params = None,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
         quantized_model_id: String,
         quantized_filename: Either<String, Vec<String>>,
         tok_model_id: Option<String>,
+        tokenizer_json: Option<String>,
+        mmproj_filename: Option<Either<String, Vec<String>>>,
         topology: Option<String>,
+        max_edge: Option<u32>,
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
+        multimodal_auto_map_params: Option<MultimodalAutoMapParams>,
     },
 
     #[pyo3(constructor = (

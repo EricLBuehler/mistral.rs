@@ -8,11 +8,12 @@ use crate::Model;
 use std::sync::Arc;
 
 #[derive(Clone)]
-/// Configure a text GGUF model with the various parameters for loading, running, and other inference behaviors.
+/// Configure a GGUF model with the various parameters for loading, running, and other inference behaviors.
 pub struct GgufModelBuilder {
     // Loading model
     pub(crate) model_id: String,
     pub(crate) files: Vec<String>,
+    pub(crate) mmproj_files: Option<Vec<String>>,
     pub(crate) tok_model_id: Option<String>,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
@@ -29,6 +30,7 @@ pub struct GgufModelBuilder {
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
     pub(crate) topology_path: Option<String>,
+    pub(crate) max_edge: Option<u32>,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -52,6 +54,7 @@ impl GgufModelBuilder {
         Self {
             model_id: model_id.to_string(),
             files: files.into_iter().map(|f| f.to_string()).collect::<Vec<_>>(),
+            mmproj_files: None,
             chat_template: None,
             tokenizer_json: None,
             force_cpu: false,
@@ -64,6 +67,7 @@ impl GgufModelBuilder {
             with_logging: false,
             topology: None,
             topology_path: None,
+            max_edge: None,
             tok_model_id: None,
             device_mapping: None,
             jinja_explicit: None,
@@ -160,6 +164,18 @@ impl GgufModelBuilder {
     /// Override the GGUF configuration, tokenizer, and chat template with assets from this model ID.
     pub fn with_tok_model_id(mut self, tok_model_id: impl ToString) -> Self {
         self.tok_model_id = Some(tok_model_id.to_string());
+        self
+    }
+
+    /// Add GGUF multimodal projector files.
+    pub fn with_mmproj_files(mut self, files: Vec<impl ToString>) -> Self {
+        self.mmproj_files = Some(files.into_iter().map(|f| f.to_string()).collect());
+        self
+    }
+
+    /// Automatically resize and pad images to this maximum edge length.
+    pub fn with_max_edge(mut self, max_edge: u32) -> Self {
+        self.max_edge = Some(max_edge);
         self
     }
 

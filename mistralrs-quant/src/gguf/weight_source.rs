@@ -60,6 +60,9 @@ pub enum GgufTensorBinding {
     Log {
         input: Box<Self>,
     },
+    InverseSoftplus {
+        input: Box<Self>,
+    },
     Cast {
         input: Box<Self>,
         dtype: DType,
@@ -136,6 +139,12 @@ impl GgufTensorBinding {
         }
     }
 
+    pub fn inverse_softplus(self) -> Self {
+        Self::InverseSoftplus {
+            input: Box::new(self),
+        }
+    }
+
     pub fn cast(self, dtype: DType) -> Self {
         Self::Cast {
             input: Box::new(self),
@@ -147,6 +156,35 @@ impl GgufTensorBinding {
         match self {
             Self::Tensor(name) => Some(name),
             _ => None,
+        }
+    }
+
+    fn text_layer_index(&self) -> Option<usize> {
+        fn source_layer(name: &str) -> Option<usize> {
+            name.strip_prefix("blk.")?.split_once('.')?.0.parse().ok()
+        }
+
+        match self {
+            Self::Tensor(name) | Self::Mxfp4Blocks(name) | Self::Mxfp4Scales(name) => {
+                source_layer(name)
+            }
+            Self::Slice { input, .. }
+            | Self::Transpose { input, .. }
+            | Self::Permute { input, .. }
+            | Self::Reshape { input, .. }
+            | Self::Affine { input, .. }
+            | Self::Log { input }
+            | Self::InverseSoftplus { input }
+            | Self::Cast { input, .. } => input.text_layer_index(),
+            Self::Concat { inputs, .. }
+            | Self::Stack { inputs, .. }
+            | Self::Interleave { inputs, .. } => {
+                let layer = inputs.first()?.text_layer_index()?;
+                inputs
+                    .iter()
+                    .all(|input| input.text_layer_index() == Some(layer))
+                    .then_some(layer)
+            }
         }
     }
 }
@@ -260,7 +298,7 @@ impl GgufWeightSource {
         for shard in archive.shards() {
             if shard.endian() == GgufEndian::Big {
                 candle_core::bail!(
-                    "direct normal-model GGUF loading does not support big-endian shard `{}`",
+                    "direct GGUF loading does not support big-endian shard `{}`",
                     shard.path().display()
                 );
             }
@@ -411,6 +449,11 @@ impl GgufWeightSource {
                 self.materialize_binding(input, device)?.affine(*mul, *add)
             }
             GgufTensorBinding::Log { input } => self.materialize_binding(input, device)?.log(),
+            GgufTensorBinding::InverseSoftplus { input } => self
+                .materialize_binding(input, device)?
+                .exp()?
+                .affine(1.0, -1.0)?
+                .log(),
             GgufTensorBinding::Cast { input, dtype } => {
                 self.materialize_binding(input, device)?.to_dtype(*dtype)
             }
@@ -762,11 +805,7 @@ impl QuantizedWeightSource for GgufWeightSource {
             {
                 continue;
             }
-            let Some(layer) = native_name
-                .strip_prefix("model.layers.")
-                .and_then(|name| name.split_once('.'))
-                .and_then(|(layer, _)| layer.parse::<usize>().ok())
-            else {
+            let Some(layer) = binding.text_layer_index() else {
                 continue;
             };
             let shape = &self.shapes[native_name];
@@ -1013,7 +1052,7 @@ fn validate_binding_storage(
             if dtype.candle_dtype().is_err() {
                 candle_core::bail!(
                     "GGUF tensor `{name}` uses dtype {} ({}) for native binding `{native_name}`; \
-                     direct normal-model loading currently supports {DIRECT_GGUF_DTYPES}, while \
+                     direct GGUF loading currently supports {DIRECT_GGUF_DTYPES}, while \
                      MXFP4 is supported only through its explicit GPT-OSS binding",
                     dtype.name(),
                     dtype.raw()
@@ -1030,6 +1069,7 @@ fn validate_binding_storage(
         | GgufTensorBinding::Reshape { input, .. }
         | GgufTensorBinding::Affine { input, .. }
         | GgufTensorBinding::Log { input }
+        | GgufTensorBinding::InverseSoftplus { input }
         | GgufTensorBinding::Cast { input, .. } => {
             validate_binding_storage(archive, input, native_name)?;
         }
@@ -1185,6 +1225,7 @@ fn infer_binding_shape(archive: &GgufArchive, binding: &GgufTensorBinding) -> Re
         }
         GgufTensorBinding::Affine { input, .. } => infer_binding_shape(archive, input),
         GgufTensorBinding::Log { input } => infer_binding_shape(archive, input),
+        GgufTensorBinding::InverseSoftplus { input } => infer_binding_shape(archive, input),
         GgufTensorBinding::Cast { input, .. } => infer_binding_shape(archive, input),
     }
 }
@@ -1255,7 +1296,9 @@ fn infer_binding_dtype(
             }
             Ok(first)
         }
-        GgufTensorBinding::Affine { input, .. } | GgufTensorBinding::Log { input } => {
+        GgufTensorBinding::Affine { input, .. }
+        | GgufTensorBinding::Log { input }
+        | GgufTensorBinding::InverseSoftplus { input } => {
             let dtype = infer_binding_dtype(archive, input, source_dtype)?;
             if dtype == DType::U8 {
                 candle_core::bail!("cannot apply a floating-point transform to a U8 GGUF binding");
@@ -1534,6 +1577,10 @@ mod tests {
                 GgufTensorBinding::tensor("norm.weight").log(),
             )
             .with_binding(
+                "model.inverse_softplus.weight",
+                GgufTensorBinding::tensor("norm.weight").inverse_softplus(),
+            )
+            .with_binding(
                 "model.precise.weight",
                 GgufTensorBinding::tensor("norm.weight").affine(1.0, 0.001),
             )
@@ -1708,6 +1755,19 @@ mod tests {
         let uniform =
             GgufWeightSource::new(source.archive().clone(), &uniform_bindings, DType::F32)?;
         assert_eq!(uniform.pack_factor(DType::F32)?, 7);
+
+        let multimodal_bindings = GgufBindingMap::new()
+            .with_binding(
+                "model.language_model.layers.0.linear.weight",
+                GgufTensorBinding::tensor("blk.0.weight"),
+            )
+            .with_binding(
+                "model.vision_tower.encoder.layers.0.linear.weight",
+                GgufTensorBinding::tensor("blk.float.weight"),
+            );
+        let multimodal =
+            GgufWeightSource::new(source.archive().clone(), &multimodal_bindings, DType::F32)?;
+        assert_eq!(multimodal.pack_factor(DType::F32)?, 7);
         Ok(())
     }
 
@@ -1782,6 +1842,11 @@ mod tests {
             &source.materialize_tensor("model.log.weight", &Device::Cpu)?,
             &expected_log,
         )?;
+        let inverse_softplus =
+            source.materialize_tensor("model.inverse_softplus.weight", &Device::Cpu)?;
+        let reconstructed = inverse_softplus.exp()?.affine(1.0, 1.0)?.log()?;
+        let original = Tensor::from_vec(vec![1f32, 2.0, 3.0, 4.0], OUT_DIM, &Device::Cpu)?;
+        assert_close(&reconstructed, &original)?;
         let vb = source.sharded_var_builder(Device::Cpu);
         assert_eq!(
             vb.tensor_shape("model.norm.weight"),

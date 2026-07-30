@@ -27,13 +27,10 @@ use mistralrs::{GgufModelBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = GgufModelBuilder::new(
-        "unsloth/Qwen3-0.6B-GGUF",
-        vec!["Qwen3-0.6B-Q4_K_M.gguf"],
-    )
-    .with_logging()
-    .build()
-    .await?;
+    let model = GgufModelBuilder::new("unsloth/Qwen3-0.6B-GGUF", vec!["Qwen3-0.6B-Q4_K_M.gguf"])
+        .with_logging()
+        .build()
+        .await?;
 
     let messages = TextMessages::new()
         .add_message(

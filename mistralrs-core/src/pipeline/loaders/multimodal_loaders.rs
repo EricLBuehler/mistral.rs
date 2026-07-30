@@ -25,6 +25,7 @@ use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::block_diffusion::BlockDiffusionMixin;
 use crate::device_map::DeviceMapper;
+use crate::gguf::normal_registry::RopePairing;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
@@ -149,6 +150,13 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         Ok(Cow::Borrowed(config))
     }
     fn is_gptx(&self, config: &str) -> bool;
+    fn is_gptx_for(&self, config: &str, normal_loading_metadata: &NormalLoadingMetadata) -> bool {
+        match normal_loading_metadata.rope_pairing {
+            Some(RopePairing::Adjacent) => false,
+            Some(RopePairing::HalfSplit) => true,
+            None => self.is_gptx(config),
+        }
+    }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
         &self,
@@ -284,8 +292,7 @@ impl MultimodalLoaderType {
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
             "Qwen3_5MoeForConditionalGeneration" => Ok(Self::Qwen3_5Moe),
-            "VoxtralForConditionalGeneration"
-            | "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
+            "VoxtralRealtimeForConditionalGeneration" => Ok(Self::Voxtral),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -653,7 +660,7 @@ impl MultimodalModelLoader for Phi3VLoader {
         Ok(Box::new(Phi3::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -945,7 +952,7 @@ impl MultimodalModelLoader for Idefics2Loader {
         Ok(Box::new(Idefics2::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1312,7 +1319,7 @@ impl MultimodalModelLoader for LLaVANextLoader {
         Ok(Box::new(LLaVANext::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1602,7 +1609,7 @@ impl MultimodalModelLoader for LLaVALoader {
         Ok(Box::new(LLaVA::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1884,7 +1891,7 @@ impl MultimodalModelLoader for VLlamaLoader {
         Ok(Box::new(MLlamaModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2295,7 +2302,7 @@ impl MultimodalModelLoader for Qwen2VLLoader {
         Ok(Box::new(Qwen2VLModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2607,7 +2614,7 @@ impl MultimodalModelLoader for Idefics3Loader {
         Ok(Box::new(Idefics3Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2948,7 +2955,7 @@ impl MultimodalModelLoader for MiniCpmOLoader {
         Ok(Box::new(MiniCpmOModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3264,7 +3271,7 @@ impl MultimodalModelLoader for Phi4MMLoader {
         Ok(Box::new(Phi4MMModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3616,7 +3623,7 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
         Ok(Box::new(Qwen2_5VLModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3922,7 +3929,7 @@ impl MultimodalModelLoader for Gemma3Loader {
         Ok(Box::new(Gemma3Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4281,7 +4288,7 @@ impl MultimodalModelLoader for Mistral3Loader {
         Ok(Box::new(Mistral3Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4625,7 +4632,7 @@ impl MultimodalModelLoader for VLlama4Loader {
         Ok(Box::new(Llama4Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4645,7 +4652,7 @@ impl MultimodalModelLoader for VLlama4Loader {
         _preprocessor_config: PreProcessorConfig,
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
-        Arc::new(Llama4Processor::new(&processor_config.unwrap()))
+        Arc::new(Llama4Processor::new(&processor_config.unwrap_or_default()))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
         true
@@ -5045,7 +5052,7 @@ impl MultimodalModelLoader for Gemma3nLoader {
         Ok(Box::new(Gemma3nModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5934,7 +5941,7 @@ impl MultimodalModelLoader for Qwen3VLLoader {
         Ok(Box::new(Qwen3VLModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6275,7 +6282,7 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
         Ok(Box::new(Qwen3VLMoEModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6674,7 +6681,7 @@ impl MultimodalModelLoader for Qwen3_5Loader {
         Ok(Box::new(Qwen3_5Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -7046,7 +7053,7 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
         Ok(Box::new(Qwen3_5MoeModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -7487,7 +7494,7 @@ impl MultimodalModelLoader for VoxtralLoader {
         Ok(Box::new(VoxtralModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -7793,7 +7800,7 @@ impl MultimodalModelLoader for Gemma4Loader {
         Ok(Box::new(Gemma4Model::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -8204,7 +8211,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         Ok(text_elems * dtype.size_in_bytes()
             + vision_elems * vision_dtype.size_in_bytes()
-            + audio_elems * dtype.size_in_bytes())
+            + audio_elems * DType::F32.size_in_bytes())
     }
 
     fn layer_sizes_in_bytes(
@@ -8365,7 +8372,7 @@ impl MultimodalModelLoader for Lfm2VlLoader {
         Ok(Box::new(Lfm2VlModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -8696,7 +8703,7 @@ impl MultimodalModelLoader for DiffusionGemmaLoader {
         Ok(Box::new(DiffusionGemmaModel::new(
             &cfg,
             vb,
-            self.is_gptx(config),
+            self.is_gptx_for(config, &normal_loading_metadata),
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -9025,6 +9032,7 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
 mod tests {
     use super::super::AutoDeviceMapQuantization;
     use super::*;
+    use crate::device_map::DummyDeviceMapper;
     use mistralrs_quant::IsqType;
 
     fn matches_any(regexes: &[Regex], name: &str) -> bool {
@@ -9241,7 +9249,7 @@ mod tests {
             },
             PromotedIsqCase {
                 name: "voxtral",
-                architecture: "VoxtralForConditionalGeneration",
+                architecture: "VoxtralRealtimeForConditionalGeneration",
                 loader: Box::new(VoxtralLoader),
                 accepted: vec![
                     "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
@@ -9359,6 +9367,18 @@ mod tests {
     }
 
     #[test]
+    fn voxtral_detection_is_realtime_only() {
+        assert_eq!(
+            MultimodalLoaderType::from_causal_lm_name("VoxtralRealtimeForConditionalGeneration")
+                .unwrap(),
+            MultimodalLoaderType::Voxtral
+        );
+        assert!(
+            MultimodalLoaderType::from_causal_lm_name("VoxtralForConditionalGeneration").is_err()
+        );
+    }
+
+    #[test]
     fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
         let loader = Qwen3_5MoeLoader;
         let names = [
@@ -9383,6 +9403,36 @@ mod tests {
         let loader = VLlamaLoader;
         assert!(loader.supports_paged_attention(""));
         assert!(!loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn llama4_processor_uses_defaults_without_processor_config() {
+        let loader = VLlama4Loader;
+        let processor = loader.get_processor("", None, PreProcessorConfig::default(), None);
+
+        assert!(!processor.get_special_tokens().is_empty());
+    }
+
+    #[test]
+    fn direct_gguf_adjacent_rope_overrides_multimodal_defaults() {
+        let metadata = NormalLoadingMetadata {
+            mapper: Box::new(DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(crate::utils::progress::new_multi_progress()),
+            matformer_slicing_config: None,
+            rope_pairing: Some(RopePairing::Adjacent),
+        };
+
+        for loader in [
+            &Idefics3Loader as &dyn MultimodalModelLoader,
+            &Mistral3Loader as &dyn MultimodalModelLoader,
+        ] {
+            assert!(loader.is_gptx(""));
+            assert!(!loader.is_gptx_for("", &metadata));
+        }
     }
 
     #[test]
@@ -9528,6 +9578,28 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn gemma4_estimator_accounts_audio_as_f32() -> Result<()> {
+        let loader = Gemma4Loader;
+        let without_audio = gemma4_estimator_config(true);
+        let mut with_audio: serde_json::Value = serde_json::from_str(&without_audio)?;
+        with_audio
+            .as_object_mut()
+            .unwrap()
+            .insert("audio_config".to_string(), serde_json::json!({}));
+        let with_audio = serde_json::to_string(&with_audio)?;
+
+        let bf16_audio_bytes =
+            loader.non_mapped_size_in_bytes(&with_audio, DType::BF16, 1, None, None)?
+                - loader.non_mapped_size_in_bytes(&without_audio, DType::BF16, 1, None, None)?;
+        let f32_audio_bytes =
+            loader.non_mapped_size_in_bytes(&with_audio, DType::F32, 1, None, None)?
+                - loader.non_mapped_size_in_bytes(&without_audio, DType::F32, 1, None, None)?;
+
+        assert_eq!(bf16_audio_bytes, f32_audio_bytes);
         Ok(())
     }
 

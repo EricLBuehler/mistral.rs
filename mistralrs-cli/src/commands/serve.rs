@@ -298,6 +298,7 @@ pub(crate) fn convert_to_model_selected(
         } => {
             // If user explicitly specified a quantized format, handle it
             let format_type = format.format.unwrap_or(ModelFormat::Plain);
+            validate_mmproj_format(format)?;
             adapter.validate().map_err(anyhow::Error::msg)?;
             let has_lora = adapter.dynamic_lora_enabled();
             let has_legacy_lora = adapter.legacy_lora.is_some();
@@ -328,7 +329,7 @@ pub(crate) fn convert_to_model_selected(
                         quantization,
                         device,
                         matformer,
-                        None,
+                        Some(multimodal),
                     );
                 }
                 ModelFormat::Plain => {
@@ -394,13 +395,14 @@ pub(crate) fn convert_to_model_selected(
 
         ModelType::Multimodal {
             model,
-            format: _,
+            format,
             adapter,
             quantization,
             device,
             cache: _,
             multimodal,
         } => {
+            validate_mmproj_format(format)?;
             adapter.validate().map_err(anyhow::Error::msg)?;
             if adapter.dynamic_lora_enabled() {
                 anyhow::bail!(
@@ -412,32 +414,55 @@ pub(crate) fn convert_to_model_selected(
                     "Legacy LoRA and X-LoRA adapters are currently supported only for text models"
                 );
             }
-            Ok(ModelSelected::MultimodalPlain {
-                model_id: model.model_id.clone(),
-                tokenizer_json: model
-                    .tokenizer
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string()),
-                arch: None,
-                dtype: model.dtype,
-                topology: device
-                    .topology
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string()),
-                write_uqff: None,
-                from_uqff: quantization.from_uqff.clone(),
-                max_edge: multimodal.max_edge,
-                calibration_file: quantization.calibration_file.clone(),
-                imatrix: quantization.imatrix.clone(),
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
-                max_num_images: multimodal.max_num_images.unwrap_or(1),
-                max_image_length: multimodal.max_image_length.unwrap_or(1024),
-                hf_cache_path: device.hf_cache.clone(),
-                matformer_config_path: matformer.config_path.clone(),
-                matformer_slice_name: matformer.slice_name.clone(),
-                organization: quantization.isq_organization,
-            })
+            match format.format.unwrap_or(ModelFormat::Plain) {
+                ModelFormat::Gguf => {
+                    if format.mmproj.is_none() {
+                        anyhow::bail!(
+                            "Multimodal GGUF requires `--mmproj <filename>` to specify the projector file"
+                        );
+                    }
+                    convert_text_model(
+                        model,
+                        format,
+                        adapter,
+                        quantization,
+                        device,
+                        matformer,
+                        Some(multimodal),
+                    )
+                }
+                ModelFormat::Ggml => {
+                    anyhow::bail!(
+                        "GGML is not supported for multimodal models; use `--format gguf` with `--mmproj`, or use plain safetensors"
+                    )
+                }
+                ModelFormat::Plain => Ok(ModelSelected::MultimodalPlain {
+                    model_id: model.model_id.clone(),
+                    tokenizer_json: model
+                        .tokenizer
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string()),
+                    arch: None,
+                    dtype: model.dtype,
+                    topology: device
+                        .topology
+                        .as_ref()
+                        .map(|p| p.to_string_lossy().to_string()),
+                    write_uqff: None,
+                    from_uqff: quantization.from_uqff.clone(),
+                    max_edge: multimodal.max_edge,
+                    calibration_file: quantization.calibration_file.clone(),
+                    imatrix: quantization.imatrix.clone(),
+                    max_seq_len: device.max_seq_len,
+                    max_batch_size: device.max_batch_size,
+                    max_num_images: multimodal.max_num_images.unwrap_or(1),
+                    max_image_length: multimodal.max_image_length.unwrap_or(1024),
+                    hf_cache_path: device.hf_cache.clone(),
+                    matformer_config_path: matformer.config_path.clone(),
+                    matformer_slice_name: matformer.slice_name.clone(),
+                    organization: quantization.isq_organization,
+                }),
+            }
         }
 
         ModelType::Diffusion { model, device: _ } => Ok(ModelSelected::DiffusionPlain {
@@ -455,29 +480,42 @@ pub(crate) fn convert_to_model_selected(
 
         ModelType::Embedding {
             model,
-            format: _,
+            format,
             quantization,
             device,
             cache: _,
-        } => Ok(ModelSelected::Embedding {
-            model_id: model.model_id.clone(),
-            tokenizer_json: model
-                .tokenizer
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            arch: None,
-            dtype: model.dtype,
-            topology: device
-                .topology
-                .as_ref()
-                .map(|p| p.to_string_lossy().to_string()),
-            write_uqff: None,
-            from_uqff: quantization.from_uqff.clone(),
-            imatrix: quantization.imatrix.clone(),
-            calibration_file: quantization.calibration_file.clone(),
-            hf_cache_path: device.hf_cache.clone(),
-        }),
+        } => {
+            validate_mmproj_format(format)?;
+            if !matches!(format.format, None | Some(ModelFormat::Plain)) {
+                anyhow::bail!("Embedding models do not support GGUF or GGML format");
+            }
+            Ok(ModelSelected::Embedding {
+                model_id: model.model_id.clone(),
+                tokenizer_json: model
+                    .tokenizer
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                arch: None,
+                dtype: model.dtype,
+                topology: device
+                    .topology
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string()),
+                write_uqff: None,
+                from_uqff: quantization.from_uqff.clone(),
+                imatrix: quantization.imatrix.clone(),
+                calibration_file: quantization.calibration_file.clone(),
+                hf_cache_path: device.hf_cache.clone(),
+            })
+        }
     }
+}
+
+fn validate_mmproj_format(format_opts: &FormatOptions) -> Result<()> {
+    if format_opts.mmproj.is_some() && !matches!(format_opts.format, Some(ModelFormat::Gguf)) {
+        anyhow::bail!("`--mmproj` requires `--format gguf`");
+    }
+    Ok(())
 }
 
 /// Convert text model with orthogonal format/adapter flags
@@ -490,11 +528,15 @@ fn convert_text_model(
     matformer: &MatformerSelection,
     multimodal: Option<&MultimodalOptions>,
 ) -> Result<ModelSelected> {
+    validate_mmproj_format(format_opts)?;
     adapter.validate().map_err(anyhow::Error::msg)?;
     let format_type = format_opts.format.unwrap_or(ModelFormat::Plain);
     let has_lora = adapter.dynamic_lora_enabled();
     let has_legacy_lora = adapter.legacy_lora.is_some();
     let has_xlora = adapter.xlora.is_some();
+    if format_opts.mmproj.is_some() && (has_lora || has_legacy_lora || has_xlora) {
+        anyhow::bail!("Multimodal GGUF does not currently support LoRA or X-LoRA adapters");
+    }
 
     match (format_type, has_lora, has_legacy_lora, has_xlora) {
         // Plain format
@@ -584,14 +626,22 @@ fn convert_text_model(
             quantized_filename: format_opts
                 .quantized_file
                 .clone()
-                .context("GGUF model type requires `--quantized-filename`/`-f` to be specified")?,
+                .context("GGUF model type requires `--quantized-file`/`-f` to be specified")?,
+            tokenizer_json: model
+                .tokenizer
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_string()),
+            mmproj_filename: format_opts.mmproj.clone(),
             dtype: model.dtype,
             topology: device
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
+            max_edge: multimodal.and_then(|options| options.max_edge),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
+            max_num_images: multimodal.and_then(|options| options.max_num_images),
+            max_image_length: multimodal.and_then(|options| options.max_image_length),
         }),
 
         (ModelFormat::Gguf, false, true, false) => Ok(ModelSelected::LoraGGUF {
@@ -1200,6 +1250,18 @@ mod tests {
         }
     }
 
+    fn test_multimodal_model(format: FormatOptions) -> ModelType {
+        ModelType::Multimodal {
+            model: test_model(),
+            format,
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        }
+    }
+
     #[tokio::test]
     async fn accepted_connections_enable_tcp_nodelay() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1364,6 +1426,204 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("--legacy-lora"));
+    }
+
+    #[test]
+    fn auto_gguf_preserves_mmproj_files() {
+        let mut model = test_model();
+        model.tokenizer = Some(PathBuf::from("tokenizer.json"));
+        let model_type = ModelType::Auto {
+            model,
+            format: FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                mmproj: Some("mmproj-0.gguf;mmproj-1.gguf".to_string()),
+                tok_model_id: Some("org/tokenizer".to_string()),
+                ..FormatOptions::default()
+            },
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions {
+                max_seq_len: 8192,
+                max_batch_size: 3,
+                ..DeviceOptions::default()
+            },
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions {
+                max_edge: Some(1280),
+                max_num_images: Some(4),
+                max_image_length: Some(1152),
+            },
+        };
+        let selected =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap();
+
+        match mistralrs_core::get_auto_device_map_params(&selected).unwrap() {
+            AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                max_image_shape,
+                max_num_images,
+            } => {
+                assert_eq!(max_seq_len, 8192);
+                assert_eq!(max_batch_size, 3);
+                assert_eq!(max_image_shape, (1152, 1152));
+                assert_eq!(max_num_images, 4);
+            }
+            _ => panic!("expected multimodal device-map parameters"),
+        }
+        match selected {
+            ModelSelected::GGUF {
+                tok_model_id,
+                quantized_filename,
+                tokenizer_json,
+                mmproj_filename,
+                max_edge,
+                ..
+            } => {
+                assert_eq!(tok_model_id.as_deref(), Some("org/tokenizer"));
+                assert_eq!(quantized_filename, "model.gguf");
+                assert_eq!(tokenizer_json.as_deref(), Some("tokenizer.json"));
+                assert_eq!(
+                    mmproj_filename.as_deref(),
+                    Some("mmproj-0.gguf;mmproj-1.gguf")
+                );
+                assert_eq!(max_edge, Some(1280));
+            }
+            _ => panic!("expected GGUF model"),
+        }
+    }
+
+    #[test]
+    fn multimodal_gguf_rejects_adapters() {
+        let error = convert_text_model(
+            &test_model(),
+            &FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                mmproj: Some("mmproj.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            &AdapterOptions {
+                lora: vec![LoraAdapterSpec::new("code", "org/code-lora")],
+                ..AdapterOptions::default()
+            },
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            Some(&MultimodalOptions::default()),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Multimodal GGUF"));
+    }
+
+    #[test]
+    fn embedding_rejects_gguf_format() {
+        let model_type = ModelType::Embedding {
+            model: test_model(),
+            format: FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                mmproj: Some("mmproj.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            quantization: QuantizationOptions::default(),
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+        };
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("Embedding models"));
+    }
+
+    #[test]
+    fn text_gguf_keeps_text_device_map() {
+        let selected = convert_text_model(
+            &test_model(),
+            &FormatOptions {
+                format: Some(ModelFormat::Gguf),
+                quantized_file: Some("model.gguf".to_string()),
+                ..FormatOptions::default()
+            },
+            &AdapterOptions::default(),
+            &QuantizationOptions::default(),
+            &DeviceOptions::default(),
+            &MatformerSelection::default(),
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            mistralrs_core::get_auto_device_map_params(&selected).unwrap(),
+            AutoDeviceMapParams::Text { .. }
+        ));
+    }
+
+    #[test]
+    fn explicit_multimodal_gguf_routes_to_gguf() {
+        let model_type = test_multimodal_model(FormatOptions {
+            format: Some(ModelFormat::Gguf),
+            quantized_file: Some("model.gguf".to_string()),
+            mmproj: Some("mmproj.gguf".to_string()),
+            ..FormatOptions::default()
+        });
+        let selected =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap();
+
+        match selected {
+            ModelSelected::GGUF {
+                quantized_model_id,
+                quantized_filename,
+                mmproj_filename,
+                ..
+            } => {
+                assert_eq!(quantized_model_id, "org/base");
+                assert_eq!(quantized_filename, "model.gguf");
+                assert_eq!(mmproj_filename.as_deref(), Some("mmproj.gguf"));
+            }
+            _ => panic!("expected GGUF model"),
+        }
+    }
+
+    #[test]
+    fn explicit_multimodal_gguf_requires_model_file() {
+        let model_type = test_multimodal_model(FormatOptions {
+            format: Some(ModelFormat::Gguf),
+            mmproj: Some("mmproj.gguf".to_string()),
+            ..FormatOptions::default()
+        });
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("--quantized-file"));
+    }
+
+    #[test]
+    fn explicit_multimodal_gguf_requires_mmproj() {
+        let model_type = test_multimodal_model(FormatOptions {
+            format: Some(ModelFormat::Gguf),
+            quantized_file: Some("model.gguf".to_string()),
+            ..FormatOptions::default()
+        });
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("--mmproj"));
+    }
+
+    #[test]
+    fn explicit_multimodal_ggml_is_rejected() {
+        let model_type = test_multimodal_model(FormatOptions {
+            format: Some(ModelFormat::Ggml),
+            quantized_file: Some("model.ggml".to_string()),
+            ..FormatOptions::default()
+        });
+        let error =
+            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap_err();
+
+        assert!(error.to_string().contains("GGML is not supported"));
     }
 
     #[test]

@@ -301,7 +301,7 @@ impl MultimodalLoaderType {
             Self::Voxtral => ArchMetadata {
                 families: &["Voxtral"],
                 modalities: &[Text, Audio],
-                examples: &[ex!("mistralai/Voxtral-Mini-3B-2507")],
+                examples: &[ex!("mistralai/Voxtral-Mini-4B-Realtime-2602")],
             },
             Self::Gemma4 => ArchMetadata {
                 families: &["Gemma 4"],
@@ -424,7 +424,7 @@ impl MultimodalLoaderType {
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
-            Self::Voxtral => "VoxtralForConditionalGeneration",
+            Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
             Self::DiffusionGemma => "DiffusionGemmaForBlockDiffusion",
         }

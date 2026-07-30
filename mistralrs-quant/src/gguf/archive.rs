@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{hash_map::Entry, HashMap},
+    collections::{hash_map::Entry, HashMap, HashSet},
     fs::File,
     mem::{align_of, size_of},
     ops::Range,
@@ -31,6 +31,10 @@ const SPLIT_NO: &str = "split.no";
 const SPLIT_COUNT: &str = "split.count";
 const SPLIT_TENSORS_COUNT: &str = "split.tensors.count";
 const GENERAL_ALIGNMENT: &str = "general.alignment";
+const GENERAL_TYPE: &str = "general.type";
+const GENERAL_PREFIX: &str = "general.";
+const SPLIT_PREFIX: &str = "split.";
+const MMPROJ_TYPE: &str = "mmproj";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GgufEndian {
@@ -394,6 +398,64 @@ impl GgufArchive {
 
     pub fn open_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::open([path])
+    }
+
+    pub fn merge_component(&mut self, component: Self) -> Result<()> {
+        self.merge_components([component])
+    }
+
+    pub fn merge_components<I>(&mut self, components: I) -> Result<()>
+    where
+        I: IntoIterator<Item = Self>,
+    {
+        let components = components.into_iter().collect::<Vec<_>>();
+        let mut metadata = self.metadata.clone();
+        let mut tensor_names = self.tensors.keys().cloned().collect::<HashSet<_>>();
+
+        for component in &components {
+            validate_component_type(component)?;
+            for (key, value) in &component.metadata {
+                if key.starts_with(GENERAL_PREFIX) || key.starts_with(SPLIT_PREFIX) {
+                    continue;
+                }
+                match metadata.entry(key.clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(value.clone());
+                    }
+                    Entry::Occupied(entry) => {
+                        if !values_equal(entry.get(), value) {
+                            candle_core::bail!(
+                                "GGUF component metadata key `{}` conflicts with the main archive or another component",
+                                entry.key()
+                            );
+                        }
+                    }
+                }
+            }
+            for name in component.tensors.keys() {
+                if !tensor_names.insert(name.clone()) {
+                    candle_core::bail!("GGUF tensor `{name}` is duplicated across components");
+                }
+            }
+        }
+
+        self.metadata = metadata;
+        for component in components {
+            let shard_offset = self.shards.len();
+            let Self {
+                mappings,
+                shards,
+                tensors,
+                ..
+            } = component;
+            for (name, mut tensor) in tensors {
+                tensor.shard_index += shard_offset;
+                self.tensors.insert(name, tensor);
+            }
+            self.mappings.extend(mappings);
+            self.shards.extend(shards);
+        }
+        Ok(())
     }
 
     pub fn shards(&self) -> &[GgufShardInfo] {
@@ -1135,6 +1197,19 @@ fn values_equal(lhs: &Value, rhs: &Value) -> bool {
     }
 }
 
+fn validate_component_type(component: &GgufArchive) -> Result<()> {
+    match component.metadata_value(GENERAL_TYPE) {
+        Some(Value::String(value)) if value == MMPROJ_TYPE => Ok(()),
+        Some(Value::String(value)) => {
+            candle_core::bail!(
+                "GGUF component `{GENERAL_TYPE}` must be `{MMPROJ_TYPE}`, got `{value}`"
+            )
+        }
+        Some(_) => candle_core::bail!("GGUF component `{GENERAL_TYPE}` must be a string"),
+        None => candle_core::bail!("GGUF component is missing `{GENERAL_TYPE}`"),
+    }
+}
+
 fn metadata_usize(metadata: &HashMap<String, Value>, key: &str) -> Result<Option<usize>> {
     let Some(value) = metadata.get(key) else {
         return Ok(None);
@@ -1523,6 +1598,255 @@ mod tests {
             "qwen3"
         );
         Ok(())
+    }
+
+    #[test]
+    fn merges_split_mmproj_component() -> Result<()> {
+        let main_file = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("qwen3".to_string())),
+                (GENERAL_TYPE, Value::String("model".to_string())),
+                ("general.name", Value::String("text".to_string())),
+                ("shared.value", Value::U32(7)),
+            ],
+            &[TestTensor {
+                name: "token_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![1; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let component_first = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("clip".to_string())),
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                ("general.name", Value::String("vision".to_string())),
+                (SPLIT_NO, Value::U16(0)),
+                (SPLIT_COUNT, Value::U16(2)),
+                (SPLIT_TENSORS_COUNT, Value::U32(2)),
+                (
+                    "clip.projector_type",
+                    Value::String("qwen3vl_merger".to_string()),
+                ),
+                ("shared.value", Value::U32(7)),
+            ],
+            &[TestTensor {
+                name: "v.patch_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![2; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let component_second = write_test_gguf(
+            &[
+                (SPLIT_NO, Value::U16(1)),
+                (SPLIT_COUNT, Value::U16(2)),
+                (SPLIT_TENSORS_COUNT, Value::U32(2)),
+            ],
+            &[TestTensor {
+                name: "mm.0.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![3; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+
+        let mut archive = GgufArchive::open_file(main_file.path())?;
+        let component = GgufArchive::open([component_second.path(), component_first.path()])?;
+        archive.merge_component(component)?;
+
+        assert_eq!(archive.shards().len(), 3);
+        assert_eq!(archive.shards()[0].path(), main_file.path());
+        assert_eq!(archive.shards()[1].path(), component_first.path());
+        assert_eq!(archive.shards()[2].path(), component_second.path());
+        assert_eq!(archive.tensor_info("token_embd.weight")?.shard_index(), 0);
+        assert_eq!(archive.tensor_info("v.patch_embd.weight")?.shard_index(), 1);
+        assert_eq!(archive.tensor_info("mm.0.weight")?.shard_index(), 2);
+        assert_eq!(
+            archive.tensor_data("v.patch_embd.weight")?.bytes(),
+            vec![2; 32]
+        );
+        assert_eq!(archive.tensor_data("mm.0.weight")?.bytes(), vec![3; 32]);
+        assert_eq!(
+            archive
+                .metadata_value("general.architecture")
+                .unwrap()
+                .to_string()?,
+            "qwen3"
+        );
+        assert_eq!(
+            archive.metadata_value(GENERAL_TYPE).unwrap().to_string()?,
+            "model"
+        );
+        assert_eq!(
+            archive
+                .metadata_value("general.name")
+                .unwrap()
+                .to_string()?,
+            "text"
+        );
+        assert_eq!(
+            archive
+                .metadata_value("clip.projector_type")
+                .unwrap()
+                .to_string()?,
+            "qwen3vl_merger"
+        );
+        assert!(archive.metadata_value(SPLIT_COUNT).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn merges_multiple_mmproj_components() -> Result<()> {
+        let main_file = write_test_gguf(&base_metadata(), &[], DEFAULT_ALIGNMENT);
+        let vision_file = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("clip".to_string())),
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                ("clip.has_vision_encoder", Value::Bool(true)),
+            ],
+            &[TestTensor {
+                name: "v.patch_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![1; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let audio_file = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("clip".to_string())),
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                ("clip.has_audio_encoder", Value::Bool(true)),
+            ],
+            &[TestTensor {
+                name: "a.position_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![2; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+
+        let mut archive = GgufArchive::open_file(main_file.path())?;
+        archive.merge_components([
+            GgufArchive::open_file(vision_file.path())?,
+            GgufArchive::open_file(audio_file.path())?,
+        ])?;
+
+        assert_eq!(archive.tensor_info("v.patch_embd.weight")?.shard_index(), 1);
+        assert_eq!(
+            archive.tensor_info("a.position_embd.weight")?.shard_index(),
+            2
+        );
+        assert!(matches!(
+            archive.metadata_value("clip.has_vision_encoder"),
+            Some(Value::Bool(true))
+        ));
+        assert!(matches!(
+            archive.metadata_value("clip.has_audio_encoder"),
+            Some(Value::Bool(true))
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_or_duplicate_mmproj_components() {
+        let main_file = write_test_gguf(
+            &base_metadata(),
+            &[TestTensor {
+                name: "duplicate.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![0; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let wrong_type_file = write_test_gguf(
+            &[(GENERAL_TYPE, Value::String("model".to_string()))],
+            &[],
+            DEFAULT_ALIGNMENT,
+        );
+        let duplicate_file = write_test_gguf(
+            &[(GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string()))],
+            &[TestTensor {
+                name: "duplicate.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![1; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+
+        let mut archive = GgufArchive::open_file(main_file.path()).unwrap();
+        let error = archive
+            .merge_component(GgufArchive::open_file(wrong_type_file.path()).unwrap())
+            .unwrap_err();
+        assert!(error.to_string().contains("must be `mmproj`"));
+        let error = archive
+            .merge_component(GgufArchive::open_file(duplicate_file.path()).unwrap())
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicated across components"));
+        assert_eq!(archive.shards().len(), 1);
+    }
+
+    #[test]
+    fn rejects_conflicting_component_metadata_atomically() {
+        let main_file = write_test_gguf(&base_metadata(), &[], DEFAULT_ALIGNMENT);
+        let first_file = write_test_gguf(
+            &[
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                (
+                    "clip.projector_type",
+                    Value::String("qwen3vl_merger".to_string()),
+                ),
+            ],
+            &[TestTensor {
+                name: "first.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![1; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let second_file = write_test_gguf(
+            &[
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                ("clip.projector_type", Value::String("gemma3".to_string())),
+            ],
+            &[TestTensor {
+                name: "second.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![2; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+
+        let mut archive = GgufArchive::open_file(main_file.path()).unwrap();
+        let error = archive
+            .merge_components([
+                GgufArchive::open_file(first_file.path()).unwrap(),
+                GgufArchive::open_file(second_file.path()).unwrap(),
+            ])
+            .unwrap_err();
+        assert!(error.to_string().contains("component metadata key"));
+        assert_eq!(archive.shards().len(), 1);
+        assert!(!archive.contains_tensor("first.weight"));
+        assert!(!archive.contains_tensor("second.weight"));
+        assert!(archive.metadata_value("clip.projector_type").is_none());
     }
 
     #[test]

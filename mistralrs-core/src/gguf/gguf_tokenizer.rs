@@ -25,6 +25,9 @@ use tracing::info;
 
 use super::Content;
 
+type BpeVocab = AHashMap<String, u32>;
+type BpeMerges = Vec<(String, String)>;
+
 const GPT2_REGEX: &str =
     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)";
 const LLAMA3_REGEX: &str = "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
@@ -52,6 +55,9 @@ const DEEPSEEK_V3_REGEXES: &[&str] = &[
 ];
 const GPT4O_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
 const TEKKEN_REGEX: &str = "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+";
+const GGML_TOKEN_TYPE_NORMAL: i32 = 1;
+const GGML_TOKEN_TYPE_BYTE: i32 = 6;
+const SENTENCEPIECE_UNDERLINE: &str = "\u{2581}";
 
 pub(crate) struct GgufTokenizerConversion {
     pub tokenizer: Tokenizer,
@@ -70,6 +76,8 @@ struct PropsGGUF {
     unk: Option<u32>,
     bos: Option<u32>,
     eos: u32,
+    add_bos: bool,
+    add_space_prefix: bool,
 }
 
 impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
@@ -89,6 +97,8 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
             unk: c.get_value("unknown_token_id").ok(),
             eos: c.get_value("eos_token_id")?,
             bos: c.get_value("bos_token_id").ok(),
+            add_bos: c.get_option_value("add_bos_token")?.unwrap_or(false),
+            add_space_prefix: c.get_option_value("add_space_prefix")?.unwrap_or(false),
         };
 
         // Special token ids come from untrusted GGUF metadata; reject out-of-range ids
@@ -145,19 +155,20 @@ pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
     let props = PropsGGUF::try_from(metadata)?;
 
     let (mut tokenizer, kind) = match props.model.as_str() {
-        "llama" | "replit" => unigram_tokenizer(&props)?,
+        "llama" | "replit" | "gemma" => unigram_tokenizer(&props)?,
+        "gemma4" => gemma4_tokenizer(&props)?,
         "gpt2" => bpe_tokenizer(&props)?,
         other => {
             anyhow::bail!("Tokenizer model `{other}` not supported.");
         }
     };
 
-    // Token types other than `NORMAL` (1) are treated as special tokens.
+    // Byte fallback entries are model tokens, not AddedToken specials.
     // Batch them so `AddedVocabulary` refreshes its matchers once.
     let mut special = Vec::new();
     if token_types.len() == props.tokens.len() {
         for (i, ty) in token_types.iter().enumerate() {
-            if *ty != 1i32 {
+            if *ty != GGML_TOKEN_TYPE_NORMAL && *ty != GGML_TOKEN_TYPE_BYTE {
                 special.push(AddedToken::from(props.tokens[i].clone(), true));
             }
         }
@@ -380,33 +391,7 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         pre_tokenizer.kind
     );
 
-    // BPE merges have each string item as a space-delimited pair:
-    // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
-    let merges = p
-        .merges
-        .as_ref()
-        .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
-        .iter()
-        .map(|merge| {
-            let (left, right) = merge.split_once(' ').ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Invalid GGUF BPE merge `{merge}`; expected two space-delimited tokens"
-                )
-            })?;
-            anyhow::ensure!(
-                !left.is_empty() && !right.is_empty(),
-                "Invalid GGUF BPE merge `{merge}`; both tokens must be non-empty"
-            );
-            Ok((left.to_string(), right.to_string()))
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut vocab = AHashMap::new();
-    for (i, token) in p.tokens.iter().enumerate() {
-        #[allow(clippy::cast_possible_truncation)]
-        vocab.insert(token.clone(), i as u32);
-    }
-
+    let (vocab, merges) = bpe_vocab_and_merges(p)?;
     let PropsGGUF { bos, eos, unk, .. } = *p;
 
     let mut bpe = BpeBuilder::new()
@@ -455,6 +440,114 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
     )));
 
     for v in [bos, Some(eos), unk].iter().flatten() {
+        let tk = p.tokens[*v as usize].clone();
+        tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
+    }
+
+    Ok((tokenizer, TokenizerKind::Bpe))
+}
+
+fn bpe_vocab_and_merges(p: &PropsGGUF) -> Result<(BpeVocab, BpeMerges)> {
+    // BPE merges have each string item as a space-delimited pair:
+    // https://github.com/EricLBuehler/mistral.rs/pull/397#discussion_r1631988370
+    let merges = p
+        .merges
+        .as_ref()
+        .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
+        .iter()
+        .map(|merge| {
+            let (left, right) = merge.split_once(' ').ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Invalid GGUF BPE merge `{merge}`; expected two space-delimited tokens"
+                )
+            })?;
+            anyhow::ensure!(
+                !left.is_empty() && !right.is_empty(),
+                "Invalid GGUF BPE merge `{merge}`; both tokens must be non-empty"
+            );
+            Ok((left.to_string(), right.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut vocab = AHashMap::new();
+    for (i, token) in p.tokens.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        vocab.insert(token.clone(), i as u32);
+    }
+
+    Ok((vocab, merges))
+}
+
+fn gemma4_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
+    let unk = p.unk.ok_or_else(|| {
+        anyhow::anyhow!(
+            "`gemma4` BPE tokenizer is missing required metadata `tokenizer.ggml.unknown_token_id`"
+        )
+    })?;
+    let (vocab, merges) = bpe_vocab_and_merges(p)?;
+    let bpe = BpeBuilder::new()
+        .vocab_and_merges(vocab, merges)
+        .unk_token(p.tokens[unk as usize].clone())
+        .fuse_unk(true)
+        .byte_fallback(true)
+        .ignore_merges(false)
+        .build()
+        .map_err(anyhow::Error::msg)?;
+
+    let normalizer = if p.add_space_prefix {
+        Normalizer::Sequence(vec![
+            Normalizer::Prepend(SENTENCEPIECE_UNDERLINE),
+            Normalizer::Replace(" ", SENTENCEPIECE_UNDERLINE),
+        ])
+    } else {
+        Normalizer::Replace(" ", SENTENCEPIECE_UNDERLINE)
+    };
+
+    let mut tokenizer = TokenizerX::new(
+        ModelWrapper::BPE(bpe),
+        Some(Decoder::Sequence(vec![
+            Decoder::Replace(SENTENCEPIECE_UNDERLINE, " "),
+            Decoder::ByteFallback,
+            Decoder::Fuse,
+        ])),
+        Some(normalizer),
+    )?;
+
+    let pre_tokenizer = Split::new(
+        SplitPattern::String(" ".to_string()),
+        SplitDelimiterBehavior::MergedWithPrevious,
+        false,
+    )
+    .map_err(anyhow::Error::msg)?;
+    tokenizer.with_pre_tokenizer(Some(pre_tokenizer));
+
+    let post_processor = if p.add_bos {
+        let bos = p.bos.ok_or_else(|| {
+            anyhow::anyhow!(
+                "`gemma4` tokenizer enables `tokenizer.ggml.add_bos_token` but has no `tokenizer.ggml.bos_token_id`"
+            )
+        })?;
+        let bos_token = p.tokens[bos as usize].clone();
+        processors::template::TemplateProcessing::builder()
+            .try_single(format!("{bos_token}:0 $A:0"))
+            .map_err(anyhow::Error::msg)?
+            .try_pair(format!("{bos_token}:0 $A:0 $B:1"))
+            .map_err(anyhow::Error::msg)?
+            .special_tokens(vec![(bos_token, bos)])
+            .build()
+            .map_err(anyhow::Error::msg)?
+    } else {
+        processors::template::TemplateProcessing::builder()
+            .try_single("$A:0")
+            .map_err(anyhow::Error::msg)?
+            .try_pair("$A:0 $B:1")
+            .map_err(anyhow::Error::msg)?
+            .build()
+            .map_err(anyhow::Error::msg)?
+    };
+    tokenizer.with_post_processor(Some(post_processor));
+
+    for v in [p.bos, Some(p.eos), Some(unk)].iter().flatten() {
         let tk = p.tokens[*v as usize].clone();
         tokenizer.add_special_tokens(&[AddedToken::from(tk.to_string(), true)]);
     }
@@ -565,7 +658,10 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 
 #[cfg(test)]
 mod tests {
-    use super::{bpe_pre_tokenizer_spec, bpe_tokenizer, BpePreTokenizerKind, PropsGGUF};
+    use super::{
+        bpe_pre_tokenizer_spec, bpe_tokenizer, convert_gguf_metadata_to_hf_tokenizer,
+        gemma4_tokenizer, BpePreTokenizerKind, PropsGGUF, SENTENCEPIECE_UNDERLINE,
+    };
     use anyhow::Result;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use tokenizers::Tokenizer;
@@ -683,7 +779,213 @@ mod tests {
             unk: None,
             bos: None,
             eos: 0,
+            add_bos: false,
+            add_space_prefix: false,
         }
+    }
+
+    fn gemma4_props(add_bos: bool, add_space_prefix: bool) -> PropsGGUF {
+        PropsGGUF {
+            model: "gemma4".to_string(),
+            pre: None,
+            tokens: [
+                "<pad>",
+                "<eos>",
+                "<bos>",
+                "<unk>",
+                "h",
+                "e",
+                "l",
+                "o",
+                "\u{2581}",
+                "w",
+                "r",
+                "d",
+                "he",
+                "hel",
+                "hell",
+                "hello",
+                "\u{2581}w",
+                "\u{2581}wo",
+                "\u{2581}wor",
+                "\u{2581}worl",
+                "\u{2581}world",
+                "<0xF0>",
+                "<0x9F>",
+                "<0x9A>",
+                "<0x80>",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+            added_tokens: None,
+            scores: None,
+            merges: Some(
+                [
+                    "h e",
+                    "he l",
+                    "hel l",
+                    "hell o",
+                    "\u{2581} w",
+                    "\u{2581}w o",
+                    "\u{2581}wo r",
+                    "\u{2581}wor l",
+                    "\u{2581}worl d",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            unk: Some(3),
+            bos: Some(2),
+            eos: 1,
+            add_bos,
+            add_space_prefix,
+        }
+    }
+
+    #[test]
+    fn gemma4_pipeline_matches_reference_shape_and_roundtrips() -> Result<()> {
+        let (tokenizer, _) = gemma4_tokenizer(&gemma4_props(false, false))?;
+        let cases = [
+            ("hello", vec![15]),
+            (" hello", vec![8, 15]),
+            ("hello world", vec![15, 20]),
+            ("hello  world", vec![15, 8, 20]),
+            ("hello \u{1f680}", vec![15, 8, 21, 22, 23, 24]),
+        ];
+
+        for (text, expected_ids) in cases {
+            let encoding = tokenizer
+                .encode_fast(text, false)
+                .map_err(anyhow::Error::msg)?;
+            assert_eq!(encoding.get_ids(), expected_ids);
+            assert_eq!(
+                tokenizer
+                    .decode(encoding.get_ids(), false)
+                    .map_err(anyhow::Error::msg)?,
+                text
+            );
+        }
+
+        let config: serde_json::Value =
+            serde_json::from_str(&tokenizer.to_string(false).map_err(anyhow::Error::msg)?)?;
+        assert_eq!(config["normalizer"]["type"], "Replace");
+        assert_eq!(config["normalizer"]["pattern"]["String"], " ");
+        assert_eq!(config["normalizer"]["content"], SENTENCEPIECE_UNDERLINE);
+        assert_eq!(config["pre_tokenizer"]["type"], "Split");
+        assert_eq!(config["pre_tokenizer"]["behavior"], "MergedWithPrevious");
+        assert_eq!(config["model"]["type"], "BPE");
+        assert_eq!(config["model"]["unk_token"], "<unk>");
+        assert_eq!(config["model"]["fuse_unk"], true);
+        assert_eq!(config["model"]["byte_fallback"], true);
+        assert_eq!(config["model"]["ignore_merges"], false);
+        assert_eq!(config["decoder"]["type"], "Sequence");
+        assert_eq!(config["decoder"]["decoders"][0]["type"], "Replace");
+        assert_eq!(config["decoder"]["decoders"][1]["type"], "ByteFallback");
+        assert_eq!(config["decoder"]["decoders"][2]["type"], "Fuse");
+        assert_eq!(config["post_processor"]["type"], "TemplateProcessing");
+        assert_eq!(config["post_processor"]["single"][0]["Sequence"]["id"], "A");
+        Ok(())
+    }
+
+    #[test]
+    fn gemma4_honors_bos_and_space_prefix_metadata() -> Result<()> {
+        let (without_bos, _) = gemma4_tokenizer(&gemma4_props(false, false))?;
+        let encoding = without_bos
+            .encode_fast("hello", true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[15]);
+
+        let (with_bos, _) = gemma4_tokenizer(&gemma4_props(true, false))?;
+        let encoding = with_bos
+            .encode_fast("hello", false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[15]);
+        let encoding = with_bos
+            .encode_fast("hello", true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[2, 15]);
+
+        let pair = with_bos
+            .encode(("hello", "hello"), true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(pair.get_ids(), &[2, 15, 15]);
+        assert_eq!(pair.get_type_ids(), &[0, 0, 1]);
+
+        let (with_prefix, _) = gemma4_tokenizer(&gemma4_props(false, true))?;
+        let encoding = with_prefix
+            .encode_fast("hello", false)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(encoding.get_ids(), &[8, 15]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires local Gemma 4 tokenizer.json and GGUF paths"]
+    fn gemma4_local_gguf_matches_hf_tokenizer() -> Result<()> {
+        let hf_path = std::env::var("MISTRALRS_GEMMA4_TOKENIZER_JSON")
+            .map_err(|_| anyhow::anyhow!("MISTRALRS_GEMMA4_TOKENIZER_JSON is not set"))?;
+        let gguf_path = std::env::var("MISTRALRS_GEMMA4_GGUF")
+            .map_err(|_| anyhow::anyhow!("MISTRALRS_GEMMA4_GGUF is not set"))?;
+        let hf = Tokenizer::from_file(hf_path).map_err(anyhow::Error::msg)?;
+        let archive = mistralrs_quant::GgufArchive::open_file(gguf_path)?;
+        let gguf = convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?.tokenizer;
+        assert_eq!(
+            gguf.get_added_tokens_decoder(),
+            hf.get_added_tokens_decoder()
+        );
+
+        let passages = [
+            "",
+            "hello",
+            " hello",
+            "hello world",
+            "hello  world",
+            "Hello, world! \n\u{1f680} \u{1f636}\u{200d}\u{1f32b}\u{fe0f} \u{4f60}\u{597d}\u{4e16}\u{754c}\u{ff01}",
+            "\u{e9} e\u{301}",
+            "<bos>hello<eos>",
+        ];
+        for passage in passages {
+            for add_special_tokens in [false, true] {
+                let expected = hf
+                    .encode_fast(passage, add_special_tokens)
+                    .map_err(anyhow::Error::msg)?;
+                let actual = gguf
+                    .encode_fast(passage, add_special_tokens)
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(actual.get_ids(), expected.get_ids(), "{passage:?}");
+                assert_eq!(
+                    actual.get_type_ids(),
+                    expected.get_type_ids(),
+                    "{passage:?}"
+                );
+                assert_eq!(
+                    gguf.decode(actual.get_ids(), false)
+                        .map_err(anyhow::Error::msg)?,
+                    hf.decode(expected.get_ids(), false)
+                        .map_err(anyhow::Error::msg)?,
+                    "{passage:?}"
+                );
+                assert_eq!(
+                    gguf.decode(actual.get_ids(), true)
+                        .map_err(anyhow::Error::msg)?,
+                    hf.decode(expected.get_ids(), true)
+                        .map_err(anyhow::Error::msg)?,
+                    "{passage:?}"
+                );
+            }
+        }
+
+        let expected = hf
+            .encode(("hello", "world"), true)
+            .map_err(anyhow::Error::msg)?;
+        let actual = gguf
+            .encode(("hello", "world"), true)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(actual.get_ids(), expected.get_ids());
+        assert_eq!(actual.get_type_ids(), expected.get_type_ids());
+        Ok(())
     }
 
     #[test]

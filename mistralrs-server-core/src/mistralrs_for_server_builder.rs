@@ -827,6 +827,15 @@ impl MistralRsForServerBuilder {
         // Use the first model as the base configuration
         let first_model = &self.models[0];
         let model = first_model.model.clone();
+        let model_for_config = model.clone();
+        let first_chat_template = first_model
+            .chat_template
+            .clone()
+            .or(self.chat_template.clone());
+        let first_jinja_explicit = first_model
+            .jinja_explicit
+            .clone()
+            .or(self.jinja_explicit.clone());
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
         let dtype = get_model_dtype(&model)?;
@@ -845,18 +854,8 @@ impl MistralRsForServerBuilder {
         // Create the first model's pipeline
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
-            .with_chat_template(
-                first_model
-                    .chat_template
-                    .clone()
-                    .or(self.chat_template.clone()),
-            )
-            .with_jinja_explicit(
-                first_model
-                    .jinja_explicit
-                    .clone()
-                    .or(self.jinja_explicit.clone()),
-            )
+            .with_chat_template(first_chat_template.clone())
+            .with_jinja_explicit(first_jinja_explicit.clone())
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -868,6 +867,7 @@ impl MistralRsForServerBuilder {
                 .or(self.num_device_layers.clone()),
             &auto_device_map_params,
         );
+        let mapper_for_config = mapper.clone();
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
         let requested_cache_config = init_cache_config(
@@ -948,6 +948,21 @@ impl MistralRsForServerBuilder {
             init_scheduler_config(&first_cache_config, &pipeline, self.max_seqs).await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
+        let first_loader_config = ModelLoaderConfig {
+            model_selected: model_for_config,
+            token_source: self.token_source.clone(),
+            hf_revision: None,
+            dtype,
+            device: device.clone(),
+            device_map_setting: mapper_for_config,
+            isq,
+            paged_attn_config: first_cache_config,
+            silent: false,
+            chat_template: first_chat_template,
+            jinja_explicit: first_jinja_explicit,
+            max_model_len: None,
+            mtp_config: self.mtp_config.clone(),
+        };
 
         // Create the first MistralRs instance with the first model
         let mut builder = MistralRsBuilder::new(
@@ -960,7 +975,8 @@ impl MistralRsForServerBuilder {
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
-        .with_deferred_daemon_start(true);
+        .with_deferred_daemon_start(true)
+        .with_loader_config(first_loader_config);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }
@@ -995,23 +1011,22 @@ impl MistralRsForServerBuilder {
             );
 
             let model = model_config.model.clone();
+            let model_for_config = model.clone();
             let dtype = get_model_dtype(&model)?;
             let auto_device_map_params = get_auto_device_map_params(&model)?;
+            let chat_template = model_config
+                .chat_template
+                .clone()
+                .or(self.chat_template.clone());
+            let jinja_explicit = model_config
+                .jinja_explicit
+                .clone()
+                .or(self.jinja_explicit.clone());
 
             let loader: Box<dyn Loader> = LoaderBuilder::new(model)
                 .with_no_kv_cache(self.no_kv_cache)
-                .with_chat_template(
-                    model_config
-                        .chat_template
-                        .clone()
-                        .or(self.chat_template.clone()),
-                )
-                .with_jinja_explicit(
-                    model_config
-                        .jinja_explicit
-                        .clone()
-                        .or(self.jinja_explicit.clone()),
-                )
+                .with_chat_template(chat_template.clone())
+                .with_jinja_explicit(jinja_explicit.clone())
                 .build()?;
 
             let mapper = init_mapper(
@@ -1021,6 +1036,7 @@ impl MistralRsForServerBuilder {
                     .or(self.num_device_layers.clone()),
                 &auto_device_map_params,
             );
+            let mapper_for_config = mapper.clone();
 
             let isq = model_config
                 .in_situ_quant
@@ -1029,6 +1045,7 @@ impl MistralRsForServerBuilder {
                 .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
                 .transpose()?;
 
+            let paged_attn_config = paged_kv_plan.paged_attn[model_index];
             let pipeline: LoadedPipeline = loader.load_model_from_hf(
                 None,
                 self.token_source.clone(),
@@ -1037,7 +1054,7 @@ impl MistralRsForServerBuilder {
                 false,
                 mapper,
                 isq,
-                paged_kv_plan.paged_attn[model_index],
+                paged_attn_config,
             )?;
 
             // Each model gets its own scheduler
@@ -1075,7 +1092,23 @@ impl MistralRsForServerBuilder {
                 tool_callbacks: HashMap::new(),
             };
 
-            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);
+            let loader_config = ModelLoaderConfig {
+                model_selected: model_for_config,
+                token_source: self.token_source.clone(),
+                hf_revision: None,
+                dtype,
+                device: device.clone(),
+                device_map_setting: mapper_for_config,
+                isq,
+                paged_attn_config,
+                silent: false,
+                chat_template,
+                jinja_explicit,
+                max_model_len: None,
+                mtp_config: None,
+            };
+            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config)
+                .with_loader_config(loader_config);
             if let Some(mcp_config) = self.mcp_client_config.clone() {
                 add_model_config = add_model_config.with_mcp_config(mcp_config);
             }

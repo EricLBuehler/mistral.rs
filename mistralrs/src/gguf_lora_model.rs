@@ -30,14 +30,18 @@ impl GgufLoraModelBuilder {
 
     /// Load the GGUF LoRA model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
+        if self.gguf_model.mmproj_files.is_some() {
+            anyhow::bail!("Multimodal GGUF does not currently support LoRA adapters");
+        }
         let gguf_model = self.gguf_model.clone();
         let config = GGUFSpecificConfig {
             topology: self.gguf_model.topology,
+            max_edge: self.gguf_model.max_edge,
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);
 
-        let loader = GGUFLoaderBuilder::new(
+        let mut loader = GGUFLoaderBuilder::new(
             self.gguf_model.chat_template,
             self.gguf_model.tok_model_id,
             self.gguf_model.model_id,
@@ -46,8 +50,11 @@ impl GgufLoraModelBuilder {
             self.gguf_model.no_kv_cache,
             self.gguf_model.jinja_explicit,
         )
-        .with_lora(self.lora_model_id, self.ordering)
-        .build();
+        .with_lora(self.lora_model_id, self.ordering);
+        if let Some(tokenizer_json) = self.gguf_model.tokenizer_json {
+            loader = loader.with_tokenizer_json(tokenizer_json);
+        }
+        let loader = loader.build();
 
         let (pipeline, scheduler_config, add_model_config) =
             build_pipeline_from_gguf_loader(gguf_model, loader).await?;

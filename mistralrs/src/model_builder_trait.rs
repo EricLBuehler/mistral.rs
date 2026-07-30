@@ -426,7 +426,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         builder.prefix_cache_n,
     );
     let mcp_client_config = builder.mcp_client_config.clone();
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
     let device_map_setting =
         builder
@@ -483,7 +483,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.no_kv_cache,
         builder.prefix_cache_n,
     );
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
     let device_map_setting = builder
         .device_mapping
         .clone()
@@ -823,11 +823,12 @@ pub async fn build_gguf_pipeline(
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
+        max_edge: builder.max_edge,
     };
 
     maybe_initialize_logging(builder.with_logging);
 
-    let loader = GGUFLoaderBuilder::new(
+    let mut loader_builder = GGUFLoaderBuilder::new(
         builder.chat_template.clone(),
         builder.tok_model_id.clone(),
         builder.model_id.clone(),
@@ -835,20 +836,32 @@ pub async fn build_gguf_pipeline(
         config,
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
-    )
-    .build();
+    );
+    if let Some(mmproj_files) = builder.mmproj_files.clone() {
+        loader_builder = loader_builder.with_mmproj_files(mmproj_files);
+    }
+    if let Some(tokenizer_json) = builder.tokenizer_json.clone() {
+        loader_builder = loader_builder.with_tokenizer_json(tokenizer_json);
+    }
+    let loader = loader_builder.build();
 
-    let device = resolve_device(builder.force_cpu, None)?;
+    let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    let default_device_map = if builder.mmproj_files.is_some() {
+        AutoDeviceMapParams::default_multimodal()
+    } else {
+        AutoDeviceMapParams::default_text()
+    };
+    let device_map_setting = builder
+        .device_mapping
+        .clone()
+        .unwrap_or(DeviceMapSetting::Auto(default_device_map));
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
         &ModelDType::Auto,
         &device,
         !builder.with_logging,
-        builder
-            .device_mapping
-            .clone()
-            .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
+        device_map_setting.clone(),
         None,
         builder.paged_attn_cfg,
     )?;
@@ -870,20 +883,54 @@ pub async fn build_gguf_pipeline(
     );
 
     // Create loader config for unload/reload support
-    let device_map_setting = builder
-        .device_mapping
-        .clone()
-        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+    let (max_seq_len, max_batch_size, max_num_images, max_image_length) = match &device_map_setting
+    {
+        DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        }) => (*max_seq_len, *max_batch_size, None, None),
+        DeviceMapSetting::Auto(AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        }) => (
+            *max_seq_len,
+            *max_batch_size,
+            Some(*max_num_images),
+            Some(max_image_shape.0.max(max_image_shape.1)),
+        ),
+        _ => (
+            AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            builder
+                .mmproj_files
+                .as_ref()
+                .map(|_| AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES),
+            builder
+                .mmproj_files
+                .as_ref()
+                .map(|_| AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH),
+        ),
+    };
 
     let loader_config = ModelLoaderConfig {
         model_selected: ModelSelected::GGUF {
             tok_model_id: builder.tok_model_id.clone(),
             quantized_model_id: builder.model_id.clone(),
             quantized_filename: builder.files.join(GGUF_MULTI_FILE_DELIMITER),
+            tokenizer_json: builder.tokenizer_json.clone(),
+            mmproj_filename: builder
+                .mmproj_files
+                .as_ref()
+                .map(|files| files.join(GGUF_MULTI_FILE_DELIMITER)),
             dtype: ModelDType::Auto,
             topology: builder.topology_path.clone(),
-            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
-            max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
+            max_edge: builder.max_edge,
+            max_seq_len,
+            max_batch_size,
+            max_num_images,
+            max_image_length,
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),

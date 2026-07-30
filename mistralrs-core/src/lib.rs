@@ -2545,15 +2545,17 @@ impl MistralRs {
             .map_err(|_| MistralRsError::EnginePoisoned)?;
 
         let engine_instance = engines
-            .remove(&resolved_model_id)
+            .get(&resolved_model_id)
             .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
 
-        // Check if we have loader config for reloading
         let loader_config = engine_instance
             .reboot_state
             .loader_config
             .clone()
             .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
+        let engine_instance = engines
+            .remove(&resolved_model_id)
+            .expect("engine was present while holding the write lock");
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -2682,7 +2684,7 @@ impl MistralRs {
         // Load the model
         let pipeline = loader
             .load_model_from_hf(
-                None,
+                loader_config.hf_revision.clone(),
                 loader_config.token_source.clone(),
                 &loader_config.dtype,
                 &loader_config.device,

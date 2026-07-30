@@ -140,6 +140,79 @@ fallback:
 `--tok-model-id <hf-id>` on the CLI, `tok_model_id="<hf-id>"` in Python, or
 `.with_tok_model_id("<hf-id>")` in Rust.
 
+### Multimodal GGUF
+
+For a supported multimodal GGUF, pass the main model file with `-f` and its companion projector
+with `--mmproj`. mistral.rs selects the model architecture from the GGUF. Supported families
+include Gemma 3, Gemma 4, Qwen2-VL and Qwen2.5-VL, Qwen3-VL dense and MoE,
+Qwen3.5/Qwen3.6 dense and MoE, Idefics3/SmolVLM, Mistral 3/Pixtral, Llama 4, and LFM2-VL.
+
+Multimodal models also need their original configuration and processor assets. If the GGUF repo
+does not include suitable copies, point `--tok-model-id` at the original model repo while keeping
+`-m` pointed at the GGUF repo. This Gemma 4 example accepts image, audio, and video input:
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run \
+  -m unsloth/gemma-4-E4B-it-GGUF \
+  --format gguf \
+  -f gemma-4-E4B-it-Q4_K_M.gguf \
+  --mmproj mmproj-BF16.gguf \
+  --tok-model-id google/gemma-4-E4B-it \
+  --image photo.jpg \
+  --audio clip.wav \
+  -i "Describe the image, then summarize the audio."
+```
+
+Use the same model flags with `mistralrs serve` to expose the OpenAI-compatible API. See
+[multimodal input](/mistral.rs/guides/models/multimodal-input/) for image, audio, and video request
+formats.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="unsloth/gemma-4-E4B-it-GGUF",
+        quantized_filename="gemma-4-E4B-it-Q4_K_M.gguf",
+        mmproj_filename="mmproj-BF16.gguf",
+        tok_model_id="google/gemma-4-E4B-it",
+    )
+)
+```
+
+Send media through the same chat-completion request types used by `Which.MultimodalPlain`.
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::GgufModelBuilder;
+
+let model = GgufModelBuilder::new(
+    "unsloth/gemma-4-E4B-it-GGUF",
+    vec!["gemma-4-E4B-it-Q4_K_M.gguf"],
+)
+.with_mmproj_files(vec!["mmproj-BF16.gguf"])
+.with_tok_model_id("google/gemma-4-E4B-it")
+.build()
+.await?;
+```
+
+Send image, audio, and video requests through the same `MultimodalMessages` API used by
+`ModelBuilder`.
+
+</TabItem>
+</Tabs>
+
+Split main-model or projector files use semicolon-separated names on the CLI and multiple entries
+in the corresponding Rust vectors.
+
 ## Forcing an architecture
 
 Auto-detection covers normal checkpoints. For text models with a non-standard config, `--arch` (Python: `arch=Architecture...`) forces the loader; the accepted names are the lowercase forms in the [supported models reference](/mistral.rs/reference/supported-models/). Multimodal, speech, embedding, and diffusion architectures are always auto-detected on the CLI.

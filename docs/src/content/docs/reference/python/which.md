@@ -97,9 +97,13 @@ Usage:
 | `quantized_model_id` | `str` | required |
 | `quantized_filename` | `str \| list[str]` | required |
 | `tok_model_id` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None` |
+| `mmproj_filename` | `str \| list[str] \| None` | `None` |
 | `topology` | `str \| None` | `None` |
+| `max_edge` | `int \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
+| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
 
 ### `Which.XLoraGGUF`
 

@@ -49,6 +49,10 @@ pub struct FormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
+    /// Multimodal projector filename(s) for GGUF (semicolon-separated for multiple)
+    #[arg(long)]
+    pub mmproj: Option<String>,
+
     /// Optional model ID overriding configuration and tokenizer assets for a quantized model
     #[arg(long)]
     pub tok_model_id: Option<String>,

@@ -554,21 +554,35 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            tokenizer_json,
+            mmproj_filename,
             topology,
+            max_edge,
             dtype: _,
             auto_map_params: _,
-        } => GGUFLoaderBuilder::new(
-            chat_template,
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename.map_left(|f| vec![f]).into_inner(),
-            GGUFSpecificConfig {
-                topology: Topology::from_option_path(topology)?,
-            },
-            no_kv_cache,
-            jinja_explicit,
-        )
-        .build(),
+            multimodal_auto_map_params: _,
+        } => {
+            let mut builder = GGUFLoaderBuilder::new(
+                chat_template,
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename.map_left(|f| vec![f]).into_inner(),
+                GGUFSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    max_edge,
+                },
+                no_kv_cache,
+                jinja_explicit,
+            );
+            if let Some(mmproj_filename) = mmproj_filename {
+                builder = builder
+                    .with_mmproj_files(mmproj_filename.map_left(|file| vec![file]).into_inner());
+            }
+            if let Some(tokenizer_json) = tokenizer_json {
+                builder = builder.with_tokenizer_json(tokenizer_json);
+            }
+            builder.build()
+        }
         Which::XLoraGGUF {
             tok_model_id,
             quantized_model_id,
@@ -586,6 +600,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             no_kv_cache,
             jinja_explicit,
@@ -616,6 +631,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             no_kv_cache,
             jinja_explicit,
@@ -878,6 +894,24 @@ impl Runner {
                 "dynamic LoRA cannot be combined with AnyMoE in one Python Runner",
             ));
         }
+        if let Which::GGUF {
+            mmproj_filename,
+            auto_map_params,
+            multimodal_auto_map_params,
+            ..
+        } = &which
+        {
+            if auto_map_params.is_some() && multimodal_auto_map_params.is_some() {
+                return Err(PyApiErr::from(
+                    "GGUF accepts only one of auto_map_params and multimodal_auto_map_params",
+                ));
+            }
+            if mmproj_filename.is_none() && multimodal_auto_map_params.is_some() {
+                return Err(PyApiErr::from(
+                    "multimodal_auto_map_params requires mmproj_filename",
+                ));
+            }
+        }
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
@@ -924,9 +958,6 @@ impl Runner {
             | Which::Lora {
                 auto_map_params, ..
             }
-            | Which::GGUF {
-                auto_map_params, ..
-            }
             | Which::LoraGGUF {
                 auto_map_params, ..
             }
@@ -951,6 +982,45 @@ impl Runner {
                     max_batch_size: p.max_batch_size,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_text()),
+            Which::GGUF {
+                mmproj_filename,
+                auto_map_params,
+                multimodal_auto_map_params,
+                ..
+            } => {
+                if mmproj_filename.is_some() {
+                    multimodal_auto_map_params
+                        .clone()
+                        .map(|p| AutoDeviceMapParams::Multimodal {
+                            max_seq_len: p.max_seq_len,
+                            max_batch_size: p.max_batch_size,
+                            max_image_shape: (p.max_image_length, p.max_image_length),
+                            max_num_images: p.max_num_images,
+                        })
+                        .or_else(|| {
+                            auto_map_params
+                                .clone()
+                                .map(|p| AutoDeviceMapParams::Multimodal {
+                                    max_seq_len: p.max_seq_len,
+                                    max_batch_size: p.max_batch_size,
+                                    max_image_shape: (
+                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                                    ),
+                                    max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
+                                })
+                        })
+                        .unwrap_or(AutoDeviceMapParams::default_multimodal())
+                } else {
+                    auto_map_params
+                        .clone()
+                        .map(|p| AutoDeviceMapParams::Text {
+                            max_seq_len: p.max_seq_len,
+                            max_batch_size: p.max_batch_size,
+                        })
+                        .unwrap_or(AutoDeviceMapParams::default_text())
+                }
+            }
             Which::MultimodalPlain {
                 auto_map_params, ..
             } => auto_map_params
