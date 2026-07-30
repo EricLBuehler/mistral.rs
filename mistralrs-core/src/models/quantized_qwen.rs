@@ -486,6 +486,8 @@ impl ModelWeights {
             let x = (x + residual)?;
             layer_in = x;
         }
+        // Trailing layers may be device mapped to CPU; the norm weight is not.
+        let layer_in = layer_in.to_device(&self.device)?;
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)

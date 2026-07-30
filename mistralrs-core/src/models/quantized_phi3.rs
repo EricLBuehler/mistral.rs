@@ -409,7 +409,9 @@ impl ModelWeights {
             let ys = layer.mlp.forward(&ys)?;
             xs = (ys + residual)?
         }
+        // Trailing layers may be device mapped to CPU; the norm weight is not.
         let xs = xs
+            .to_device(&self.device)?
             .apply(&self.output_norm)?
             .i((.., seq_len - 1, ..))?
             .contiguous()?;
