@@ -17,11 +17,19 @@ serde_default_fn!(usize, default_patch_size, 14);
 serde_default_fn!(usize, default_spatial_merge_size, 2);
 serde_default_fn!(usize, default_temporal_patch_size, 2);
 serde_default_fn!(usize, default_window_size, 112);
+serde_default_fn!(usize, default_max_window_layers, 28);
 serde_default_fn!(
     Vec<usize>,
     default_fullatt_block_indexes,
     vec![7, 15, 23, 31]
 );
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttentionType {
+    FullAttention,
+    SlidingAttention,
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VisionConfig {
@@ -69,13 +77,105 @@ pub struct Config {
     pub rms_norm_eps: f64,
     pub tie_word_embeddings: bool,
     pub rope_theta: f64,
+    #[serde(default)]
     pub use_sliding_window: bool,
     pub sliding_window: Option<usize>,
+    #[serde(default = "default_max_window_layers")]
+    pub max_window_layers: usize,
+    #[serde(default)]
+    pub layer_types: Option<Vec<AttentionType>>,
     pub vision_config: VisionConfig,
     pub rope_scaling: MRopeScaling,
     pub quantization_config: Option<QuantizedConfig>,
     pub image_token_id: u32,
     pub video_token_id: u32,
-    // pub vision_start_token_id: usize,
-    // pub max_window_layers: usize,
+}
+
+fn resolve_layer_sliding_windows(
+    num_hidden_layers: usize,
+    use_sliding_window: bool,
+    sliding_window: Option<usize>,
+    max_window_layers: usize,
+    layer_types: Option<Vec<AttentionType>>,
+) -> candle_core::Result<Vec<Option<usize>>> {
+    let sliding_window = use_sliding_window.then_some(sliding_window).flatten();
+    let layer_types = layer_types.unwrap_or_else(|| {
+        (0..num_hidden_layers)
+            .map(|layer_idx| {
+                if sliding_window.is_some() && layer_idx >= max_window_layers {
+                    AttentionType::SlidingAttention
+                } else {
+                    AttentionType::FullAttention
+                }
+            })
+            .collect()
+    });
+    if layer_types.len() != num_hidden_layers {
+        candle_core::bail!(
+            "Qwen2.5-VL layer_types has {} entries for {} layers",
+            layer_types.len(),
+            num_hidden_layers
+        );
+    }
+    layer_types
+        .into_iter()
+        .map(|layer_type| match layer_type {
+            AttentionType::FullAttention => Ok(None),
+            AttentionType::SlidingAttention => sliding_window.map(Some).ok_or_else(|| {
+                candle_core::Error::msg(
+                    "Qwen2.5-VL sliding_attention requires use_sliding_window and sliding_window",
+                )
+            }),
+        })
+        .collect()
+}
+
+impl Config {
+    pub(super) fn layer_sliding_windows(&self) -> candle_core::Result<Vec<Option<usize>>> {
+        resolve_layer_sliding_windows(
+            self.num_hidden_layers,
+            self.use_sliding_window,
+            self.sliding_window,
+            self.max_window_layers,
+            self.layer_types.clone(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_layer_windows_match_transformers_semantics() -> candle_core::Result<()> {
+        assert_eq!(
+            resolve_layer_sliding_windows(5, true, Some(256), 3, None)?,
+            vec![None, None, None, Some(256), Some(256)]
+        );
+        assert_eq!(
+            resolve_layer_sliding_windows(5, false, Some(256), 3, None)?,
+            vec![None; 5]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_layer_types_are_validated() {
+        assert!(resolve_layer_sliding_windows(
+            2,
+            true,
+            Some(256),
+            2,
+            Some(vec![AttentionType::FullAttention]),
+        )
+        .is_err());
+        assert!(resolve_layer_sliding_windows(
+            1,
+            true,
+            None,
+            0,
+            Some(vec![AttentionType::SlidingAttention]),
+        )
+        .is_err());
+    }
 }

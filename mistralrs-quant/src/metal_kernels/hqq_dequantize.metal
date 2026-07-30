@@ -5,19 +5,22 @@
 //********************************/
 
 template <typename T>
-[[kernel]] void dequantize_8bit(const device char *weight [[buffer(0)]],
+[[kernel]] void dequantize_8bit(const device uchar *weight [[buffer(0)]],
                                 const device T *scale [[buffer(1)]],
                                 const device T *zero [[buffer(2)]],
                                 device T *output [[buffer(3)]],
                                 device const uint &h, device const uint &w,
                                 uint tid [[thread_position_in_grid]]) {
+  if (tid >= h * w) {
+    return;
+  }
   uint j = tid % w;
   output[tid] = ((T)(weight[tid]) - zero[j]) * scale[j];
 }
 
 #define instantiate_dequantize_8bit(type)                                      \
   template [[host_name("dequantize_8bit_" #type)]] [[kernel]] void             \
-  dequantize_8bit<type>(const device char *weight [[buffer(0)]],               \
+  dequantize_8bit<type>(const device uchar *weight [[buffer(0)]],               \
                         const device type *scale [[buffer(1)]],                \
                         const device type *zero [[buffer(2)]],                 \
                         device type *output [[buffer(3)]],                     \
@@ -35,13 +38,16 @@ instantiate_dequantize_8bit(float)
     //********************************/
 
     template <typename T>
-    [[kernel]] void dequantize_4bit(const device char *weight [[buffer(0)]],
+    [[kernel]] void dequantize_4bit(const device uchar *weight [[buffer(0)]],
                                     const device T *scale [[buffer(1)]],
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
                                     uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
+  if (tid >= n) {
+    return;
+  }
   uint j = tid % w;
   output[tid] =
       ((T)((weight[tid] & 0xF0) >> 4) - zero[j]) * scale[j]; // First chunk
@@ -51,7 +57,7 @@ instantiate_dequantize_8bit(float)
 
 #define instantiate_dequantize_4bit(type)                                      \
   template [[host_name("dequantize_4bit_" #type)]] [[kernel]] void             \
-  dequantize_4bit<type>(const device char *weight [[buffer(0)]],               \
+  dequantize_4bit<type>(const device uchar *weight [[buffer(0)]],               \
                         const device type *scale [[buffer(1)]],                \
                         const device type *zero [[buffer(2)]],                 \
                         device type *output [[buffer(3)]],                     \
@@ -69,13 +75,16 @@ instantiate_dequantize_4bit(float)
     //********************************/
 
     template <typename T>
-    [[kernel]] void dequantize_2bit(const device char *weight [[buffer(0)]],
+    [[kernel]] void dequantize_2bit(const device uchar *weight [[buffer(0)]],
                                     const device T *scale [[buffer(1)]],
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
                                     uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
+  if (tid >= n) {
+    return;
+  }
   uint j = tid % w;
   output[tid] =
       ((T)((weight[tid] & 0xC0) >> 6) - zero[j]) * scale[j]; // 1st chunk
@@ -89,7 +98,7 @@ instantiate_dequantize_4bit(float)
 
 #define instantiate_dequantize_2bit(type)                                      \
   template [[host_name("dequantize_2bit_" #type)]] [[kernel]] void             \
-  dequantize_2bit<type>(const device char *weight [[buffer(0)]],               \
+  dequantize_2bit<type>(const device uchar *weight [[buffer(0)]],               \
                         const device type *scale [[buffer(1)]],                \
                         const device type *zero [[buffer(2)]],                 \
                         device type *output [[buffer(3)]],                     \
@@ -107,13 +116,16 @@ instantiate_dequantize_2bit(float)
     //********************************/
 
     template <typename T>
-    [[kernel]] void dequantize_1bit(const device char *weight [[buffer(0)]],
+    [[kernel]] void dequantize_1bit(const device uchar *weight [[buffer(0)]],
                                     const device T *scale [[buffer(1)]],
                                     const device T *zero [[buffer(2)]],
                                     device T *output [[buffer(3)]],
                                     device const uint &h, device const uint &w,
                                     uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
+  if (tid >= n) {
+    return;
+  }
   uint j = tid % w;
   output[tid] =
       ((T)((weight[tid] & 0x80) >> 7) - zero[j]) * scale[j]; // 1st chunk
@@ -135,7 +147,7 @@ instantiate_dequantize_2bit(float)
 
 #define instantiate_dequantize_1bit(type)                                      \
   template [[host_name("dequantize_1bit_" #type)]] [[kernel]] void             \
-  dequantize_1bit<type>(const device char *weight [[buffer(0)]],               \
+  dequantize_1bit<type>(const device uchar *weight [[buffer(0)]],               \
                         const device type *scale [[buffer(1)]],                \
                         const device type *zero [[buffer(2)]],                 \
                         device type *output [[buffer(3)]],                     \
@@ -160,6 +172,9 @@ instantiate_dequantize_1bit(float)
                                     device const uint &h, device const uint &w,
                                     uint tid [[thread_position_in_grid]]) {
   uint n = h * w;
+  if (tid >= n) {
+    return;
+  }
   uint j = tid % w;
   output[tid] =
       ((T)((weight[tid] & 0x38000000) >> 27) - zero[j]) * scale[j]; // 1st chunk

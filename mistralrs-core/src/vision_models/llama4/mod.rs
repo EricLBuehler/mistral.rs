@@ -13,13 +13,19 @@ use vision::Llama4VisionModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::linear_no_bias,
-    paged_attention::encoder_cache::{cached_encode_images, CacheModality, EncoderCacheManager},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata},
+    paged_attention::{
+        block_hash::MultimodalKind,
+        encoder_cache::{CacheModality, EncoderCacheManager},
+        AttentionImplementation, ModelConfigMetadata,
+    },
     pipeline::{
         text_models_inputs_processor::FlashParams, EitherCache, IsqModel, ModelForwardContext,
         MultimodalModel, NormalLoadingMetadata, NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
 };
 
 mod config;
@@ -98,12 +104,16 @@ impl Llama4Model {
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        image_hashes: &[u64],
+        args: &Llama4ModelSpecificArgs,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        if args.packed_prefill && args.packed_layout.is_none() {
+            candle_core::bail!("packed Llama4 prefill is missing its multimodal layout");
+        }
         let mut input_embeds = self.language_model.get_input_embeddings(input_ids)?;
 
         if let Some(pixel_values) = pixel_values {
+            pixel_values.dims4()?;
             let special_image_mask = input_ids
                 .eq(self.image_token_index as f64)?
                 .unsqueeze(D::Minus1)?
@@ -114,27 +124,144 @@ impl Llama4Model {
             // Nonzero before vision model to allow async processing all the way through logits.
             let indices = mask_flat.nonzero()?.squeeze(1)?;
 
-            let image_features = cached_encode_images(
-                CacheModality::Image,
-                image_hashes,
-                &pixel_values,
-                &self.encoder_cache,
-                |pv| {
-                    let feats = self.vision_model.forward(pv)?;
+            let (image_features, encoder_outputs) = if args.image_hashes.is_empty() {
+                if args.packed_prefill {
+                    candle_core::bail!("packed Llama4 media input has no image hashes");
+                }
+                let feats = self.vision_model.forward(&pixel_values)?;
+                let flat = feats.reshape(((), feats.dim(D::Minus1)?))?;
+                (self.multi_modal_projector.forward(&flat)?, None)
+            } else {
+                if args.image_hashes.len() != args.tile_counts.len()
+                    || args.image_hashes.len() != args.image_token_counts.len()
+                {
+                    candle_core::bail!(
+                        "Llama4 has {} image hashes, {} tile counts, and {} token counts",
+                        args.image_hashes.len(),
+                        args.tile_counts.len(),
+                        args.image_token_counts.len()
+                    );
+                }
+                let mut offsets = Vec::with_capacity(args.tile_counts.len() + 1);
+                offsets.push(0usize);
+                for &count in &args.tile_counts {
+                    if count == 0 {
+                        candle_core::bail!("Llama4 image has no tiles");
+                    }
+                    offsets.push(
+                        offsets
+                            .last()
+                            .copied()
+                            .unwrap()
+                            .checked_add(count)
+                            .ok_or_else(|| candle_core::Error::msg("Llama4 tile count overflow"))?,
+                    );
+                }
+                if offsets.last().copied().unwrap_or_default() != pixel_values.dim(0)? {
+                    candle_core::bail!(
+                        "Llama4 has {} pixel tiles but tile counts total {}",
+                        pixel_values.dim(0)?,
+                        offsets.last().copied().unwrap_or_default()
+                    );
+                }
+                let mut per_image = vec![None; args.image_hashes.len()];
+                let mut miss_indices = Vec::new();
+                {
+                    let mut cache = self
+                        .encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned");
+                    for (index, &hash) in args.image_hashes.iter().enumerate() {
+                        if let Some(outputs) = cache.get(CacheModality::Image, hash) {
+                            let valid = outputs.len() == 1
+                                && outputs[0].rank() == 2
+                                && outputs[0].dim(0)? == args.image_token_counts[index];
+                            if valid {
+                                per_image[index] = Some(outputs);
+                            } else {
+                                miss_indices.push(index);
+                            }
+                        } else {
+                            miss_indices.push(index);
+                        }
+                    }
+                }
+                for &index in &miss_indices {
+                    let pv = pixel_values.narrow(0, offsets[index], args.tile_counts[index])?;
+                    let feats = self.vision_model.forward(&pv)?;
                     let flat = feats.reshape(((), feats.dim(D::Minus1)?))?;
-                    Ok(vec![self.multi_modal_projector.forward(&flat)?])
-                },
-            )?[0]
-                .clone();
+                    let output = self.multi_modal_projector.forward(&flat)?;
+                    if output.dim(0)? != args.image_token_counts[index] {
+                        candle_core::bail!(
+                            "Llama4 image encoder returned {} rows for {} placeholders",
+                            output.dim(0)?,
+                            args.image_token_counts[index]
+                        );
+                    }
+                    let outputs = vec![output];
+                    self.encoder_cache
+                        .lock()
+                        .expect("encoder cache lock poisoned")
+                        .insert(
+                            CacheModality::Image,
+                            args.image_hashes[index],
+                            outputs.clone(),
+                        );
+                    per_image[index] = Some(outputs);
+                }
+                let per_image = per_image
+                    .into_iter()
+                    .map(|outputs| outputs.expect("all Llama4 images should be resolved"))
+                    .collect::<Vec<_>>();
+                let image_features = Tensor::cat(
+                    &per_image
+                        .iter()
+                        .map(|outputs| outputs[0].clone())
+                        .collect::<Vec<_>>(),
+                    0,
+                )?;
+                let encoder_outputs = args
+                    .image_hashes
+                    .iter()
+                    .copied()
+                    .zip(per_image)
+                    .map(|(hash, outputs)| {
+                        (
+                            MultimodalEncoderKey {
+                                kind: MultimodalKind::Image,
+                                hash,
+                            },
+                            outputs,
+                        )
+                    })
+                    .collect::<MultimodalEncoderOutputs>();
+                (image_features, Some(encoder_outputs))
+            };
 
-            let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = image_features.flatten_all()?;
-
-            let current_vals = x_flat.gather(&indices, 0)?;
-            let diff = (src_flat - current_vals)?;
-            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-
-            input_embeds = x_flat.reshape(input_embeds.shape())?;
+            if let Some(layout) = &args.packed_layout {
+                input_embeds = layout.splice_embeddings(
+                    &input_embeds,
+                    &encoder_outputs.ok_or_else(|| {
+                        candle_core::Error::msg(
+                            "packed Llama4 input requires per-image encoder outputs",
+                        )
+                    })?,
+                )?;
+            } else {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = image_features.flatten_all()?;
+                if src_flat.dim(0)? != indices.dim(0)? {
+                    candle_core::bail!(
+                        "Llama4 has {} image embedding values but {} placeholder values",
+                        src_flat.dim(0)?,
+                        indices.dim(0)?
+                    );
+                }
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
         }
 
         self.language_model
@@ -160,6 +287,10 @@ impl IsqModel for Llama4Model {
 
 pub struct Llama4ModelSpecificArgs {
     pub image_hashes: Vec<u64>,
+    pub tile_counts: Vec<usize>,
+    pub image_token_counts: Vec<usize>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
+    pub packed_prefill: bool,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Llama4Model {}
@@ -170,7 +301,18 @@ impl NormalModel for Llama4Model {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
-        self.forward(input_ids, None, &[], ctx)
+        self.forward(
+            input_ids,
+            None,
+            &Llama4ModelSpecificArgs {
+                image_hashes: vec![],
+                tile_counts: vec![],
+                image_token_counts: vec![],
+                packed_layout: None,
+                packed_prefill: false,
+            },
+            ctx,
+        )
     }
     fn xlora_forward(
         &self,
@@ -202,15 +344,15 @@ impl NormalModel for Llama4Model {
     fn max_seq_len(&self) -> usize {
         self.language_model.max_seq_len()
     }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
-    }
 }
 
 impl crate::block_diffusion::BlockDiffusionMixin for Llama4Model {}
 
 impl MultimodalModel for Llama4Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -218,10 +360,10 @@ impl MultimodalModel for Llama4Model {
         model_specific_args: Box<dyn std::any::Any>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
-        let Llama4ModelSpecificArgs { image_hashes } = *model_specific_args
+        let args = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Llama4ModelSpecificArgs`");
-        self.forward(input_ids, pixel_values, &image_hashes, ctx)
+        self.forward(input_ids, pixel_values, &args, ctx)
     }
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
@@ -238,11 +380,11 @@ impl MultimodalModel for Llama4Model {
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Llama4ModelSpecificArgs {
             image_hashes: vec![],
+            tile_counts: vec![],
+            image_token_counts: vec![],
+            packed_layout: None,
+            packed_prefill: false,
         })
-    }
-    #[cfg(feature = "cuda")]
-    fn supports_cuda_decode_graphs(&self) -> bool {
-        true
     }
     fn encoder_cache_counters(
         &self,

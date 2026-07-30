@@ -20,8 +20,8 @@ use crate::{
 /// This corresponds to the model update made with the following commit:
 /// https://huggingface.co/microsoft/phi-2/commit/cb2f4533604d8b67de604e7df03bfe6f3ca22869
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, LayerNorm};
-use mistralrs_quant::ShardedVarBuilder;
+use candle_nn::LayerNorm;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -375,7 +375,7 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     final_layernorm: LayerNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -413,7 +413,7 @@ impl Model {
         let embed_tokens = embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let final_layernorm = layer_norm(
@@ -541,7 +541,7 @@ impl Model {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = input_ids.apply(&self.embed_tokens)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();

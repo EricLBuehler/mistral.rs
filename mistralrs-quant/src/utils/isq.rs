@@ -48,7 +48,12 @@ fn apply_immediate_isq_inner(
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
-    if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
+    if let Some(ImmediateIsqMatch {
+        ty,
+        device,
+        promote_default,
+    }) = crate::resolve_immediate_isq(&params, &prefix)
+    {
         let device = if params.capture == crate::IsqCaptureMode::CaptureAll {
             Device::Cpu
         } else {
@@ -66,6 +71,7 @@ fn apply_immediate_isq_inner(
             key: module_key,
             ct: layer.clone(),
             ty,
+            promote_default,
             shard,
         });
         Ok(layer)

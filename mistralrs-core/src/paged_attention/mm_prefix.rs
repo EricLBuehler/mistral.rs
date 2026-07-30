@@ -25,8 +25,7 @@ pub(crate) fn make_ranges_tensor(
         )
         .map(|(seq_id, (&window_start, (&window_len, &query_len)))| {
             let window_end = window_start + window_len;
-            // Bidirectional override only fires for query rows inside a range, so ranges that
-            // end before the query span (the last query_len positions of the window) are dead.
+            // Ignore ranges that cannot affect this chunk's query rows.
             let query_span_start = window_len.saturating_sub(query_len);
             ranges_by_seq_id
                 .get(seq_id)
@@ -61,4 +60,32 @@ pub(crate) fn make_ranges_tensor(
     Tensor::from_vec(flattened, (seq_ids.len(), max_ranges, 2), &Device::Cpu)
         .map(Some)
         .map_err(anyhow::Error::msg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_coordinates_follow_each_kv_view() {
+        let ranges = HashMap::from([(7, vec![(80, 95)])]);
+        let full = make_ranges_tensor(&[7], &ranges, &[0], &[100], &[20])
+            .unwrap()
+            .unwrap();
+        let sliding = make_ranges_tensor(&[7], &ranges, &[32], &[68], &[20])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(full.to_vec3::<i32>().unwrap(), vec![vec![vec![80, 95]]]);
+        assert_eq!(sliding.to_vec3::<i32>().unwrap(), vec![vec![vec![48, 63]]]);
+    }
+
+    #[test]
+    fn ranges_before_the_query_span_do_not_mark_later_chunks_noncausal() {
+        let ranges = HashMap::from([(7, vec![(20, 40)])]);
+
+        assert!(make_ranges_tensor(&[7], &ranges, &[0], &[100], &[20])
+            .unwrap()
+            .is_none());
+    }
 }

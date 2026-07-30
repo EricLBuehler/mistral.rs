@@ -299,4 +299,12 @@ impl MultimodalModel for Lfm2VlModel {
             spatial_shapes: None,
         })
     }
+
+    fn supports_packed_prefill(&self) -> bool {
+        self.language_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
 }

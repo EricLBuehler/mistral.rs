@@ -105,13 +105,7 @@ fn igpu_memory_fraction() -> f64 {
     std::env::var("MISTRALRS_IGPU_MEMORY_FRACTION")
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
-        .and_then(|f| {
-            if (0.0..=1.0).contains(&f) {
-                Some(f)
-            } else {
-                None
-            }
-        })
+        .filter(|&f| (0.0..=1.0).contains(&f))
         .unwrap_or(0.75)
 }
 

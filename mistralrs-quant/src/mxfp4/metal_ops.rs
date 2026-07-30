@@ -124,7 +124,7 @@ pub fn mxfp4_matmul(
         call_fn(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             input.dtype(),
             x,
             w,
@@ -144,7 +144,7 @@ pub fn mxfp4_matmul(
         call_fn(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             input.dtype(),
             x,
             w,
@@ -331,7 +331,7 @@ pub fn mxfp4_indexed_moe_gemm(
         crate::metal_kernels::call_mxfp4_moe_gemm(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             input.dtype(),
             x,
             w,
@@ -356,7 +356,7 @@ pub fn mxfp4_indexed_moe_gemm(
         crate::metal_kernels::call_mxfp4_moe_gemm(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             input.dtype(),
             x,
             w,

@@ -1,59 +1,81 @@
-from openai import OpenAI
-import httpx
-import textwrap
-import json
+"""Compare a base model and its preloaded LoRA adapters without mixing history.
+
+> This example targets the current source API. Published v0.9.0 packages do not
+> include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
+> until the next release.
+
+Install the client:
+
+~~~bash
+pip install openai
+~~~
+
+Start the server with a public adapter in one terminal:
+
+~~~bash
+mistralrs serve --host 127.0.0.1 -m Qwen/Qwen2.5-0.5B-Instruct --lora philosophy=closestfriend/brie-qwen2.5-0.5b
+~~~
+
+Run the client in another terminal:
+
+~~~bash
+python examples/server/adapter_chat.py
+~~~
+
+You can instead start the server with any compatible base model and aliases.
+For a supported text MoE model, the same example works with a routed expert
+adapter.
+The example discovers valid model IDs and keeps a separate conversation for each.
+"""
+
+from openai import APIStatusError, OpenAI
 
 
-def log_response(response: httpx.Response):
-    request = response.request
-    print(f"Request: {request.method} {request.url}")
-    print("  Headers:")
-    for key, value in request.headers.items():
-        if key.lower() == "authorization":
-            value = "[...]"
-        if key.lower() == "cookie":
-            value = value.split("=")[0] + "=..."
-        print(f"    {key}: {value}")
-    print("  Body:")
-    try:
-        request_body = json.loads(request.content)
-        print(textwrap.indent(json.dumps(request_body, indent=2), "    "))
-    except json.JSONDecodeError:
-        print(textwrap.indent(request.content.decode(), "    "))
-    print(f"Response: status_code={response.status_code}")
-    print("  Headers:")
-    for key, value in response.headers.items():
-        if key.lower() == "set-cookie":
-            value = value.split("=")[0] + "=..."
-        print(f"    {key}: {value}")
+client = OpenAI(api_key="unused", base_url="http://localhost:1234/v1/")
+cards = {card.id: card for card in client.models.list().data}
 
+print("Available base models and adapters:")
+for model_id, card in cards.items():
+    metadata = card.model_extra or {}
+    parent = metadata.get("parent")
+    generation = metadata.get("adapter_generation")
+    if generation is None:
+        print(f"  {model_id} (base model)")
+    else:
+        print(f"  {model_id} (adapter for {parent}, generation {generation})")
 
-client = OpenAI(api_key="foobar", base_url="http://localhost:1234/v1/")
-
-# Enable this to log requests and responses
-# client._client = httpx.Client(
-#     event_hooks={"request": [print], "response": [log_response]}
-# )
-
-messages = []
-prompt = input("Enter system prompt >>> ")
-if len(prompt) > 0:
-    messages.append({"role": "system", "content": prompt})
-
+system_prompt = input("System prompt (optional) >>> ").strip()
+histories = {}
 
 while True:
-    prompt = input(">>> ")
-    adapter = input("Active adapter >>> ")
-    messages.append({"role": "user", "content": prompt})
-    completion = client.chat.completions.create(
-        model="default",
-        messages=messages,
-        max_tokens=256,
-        frequency_penalty=1.0,
-        top_p=0.1,
-        temperature=0,
-        extra_body={"adapters": [adapter]},
+    model_id = input("Model ID (or 'quit') >>> ").strip()
+    if model_id == "quit":
+        break
+    if model_id not in cards:
+        print("Unknown model ID. Choose one of the IDs listed above.")
+        continue
+
+    prompt = input("User >>> ").strip()
+    history = histories.setdefault(model_id, [])
+    if not history and system_prompt:
+        history.append({"role": "system", "content": system_prompt})
+    history.append({"role": "user", "content": prompt})
+
+    try:
+        completion = client.chat.completions.create(
+            model=model_id,
+            messages=history,
+            max_tokens=256,
+            temperature=0.0,
+        )
+    except APIStatusError as error:
+        history.pop()
+        print(f"Request failed ({error.status_code}): {error.response.text}")
+        continue
+
+    response = completion.choices[0].message.content or ""
+    generation = (completion.model_extra or {}).get("adapter_generation")
+    print(
+        f"Assistant [model={completion.model}, generation={generation}] >>> {response}"
     )
-    resp = completion.choices[0].message.content
-    print(resp)
-    messages.append({"role": "assistant", "content": resp})
+    history.append({"role": "assistant", "content": response})

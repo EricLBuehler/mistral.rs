@@ -7,10 +7,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
-use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
+use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding, Phi4MMPackedInputs};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -26,6 +26,7 @@ use crate::{
         ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+    vision_models::multimodal_layout::PackedMultimodalLayout,
 };
 
 mod audio_embedding;
@@ -305,11 +306,12 @@ impl DecoderLayer {
 }
 
 pub struct Phi4MMModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     embed_tokens_extend: Phi4MMImageAudioEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -329,11 +331,15 @@ impl Phi4MMModel {
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -391,21 +397,13 @@ impl Phi4MMModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         let embed_tokens_extend = Phi4MMImageAudioEmbedding::new(
             cfg,
             embed_tokens.clone(),
+            dtype,
             mapper.set_nm_device(vb_m.pp("embed_tokens_extend"), false),
         )?;
 
@@ -413,6 +411,7 @@ impl Phi4MMModel {
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
@@ -448,11 +447,31 @@ impl Phi4MMModel {
         image_sizes: Option<Vec<(u32, u32)>>,
         input_audio_embeds: Option<Tensor>,
         audio_embed_sizes: Option<Vec<usize>>,
+        audio_feature_lens: Option<Vec<usize>>,
+        audio_vision_modes: Option<Vec<bool>>,
         audio_attention_mask: Option<Tensor>,
         ctx: &mut ModelForwardContext<'_>,
         image_hashes: &[u64],
+        audio_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
-        let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
+        let mut xs = if let Some(packed_layout) = packed_layout {
+            self.embed_tokens_extend.forward_packed(
+                input_ids,
+                Phi4MMPackedInputs {
+                    image_embeds: input_image_embeds.as_ref(),
+                    image_attention_mask: image_attention_mask.as_ref(),
+                    image_sizes: image_sizes.as_deref(),
+                    image_hashes,
+                    audio_embeds: input_audio_embeds.as_ref(),
+                    audio_feature_lens: audio_feature_lens.as_deref(),
+                    audio_embed_sizes: audio_embed_sizes.as_deref(),
+                    audio_hashes,
+                    layout: packed_layout,
+                },
+                &self.encoder_cache,
+            )?
+        } else if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
                 (Some(_), Some(_)) | (Some(_), None) => InputMode::Vision,
                 (None, Some(_)) => InputMode::Speech,
@@ -469,6 +488,7 @@ impl Phi4MMModel {
                 image_sizes,
                 input_audio_embeds.as_ref(),
                 audio_embed_sizes,
+                audio_vision_modes.as_deref(),
                 &match audio_attention_mask.as_ref() {
                     Some(t) => AttentionMask::Custom((*t).clone()),
                     None => AttentionMask::None,
@@ -478,7 +498,7 @@ impl Phi4MMModel {
                 &self.encoder_cache,
             )?
         } else {
-            self.embed_tokens.forward(input_ids)?
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?
         };
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
@@ -516,8 +536,12 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub image_attention_mask: Option<Tensor>,
     pub input_audio_embeds: Option<Tensor>,
     pub audio_embed_sizes: Option<Vec<usize>>,
+    pub audio_feature_lens: Option<Vec<usize>>,
+    pub audio_vision_modes: Option<Vec<bool>>,
     pub audio_attention_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
+    pub audio_hashes: Vec<u64>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Phi4MMModel {}
@@ -525,6 +549,14 @@ impl crate::speculative::SpeculativeTargetMixin for Phi4MMModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for Phi4MMModel {}
 
 impl MultimodalModel for Phi4MMModel {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -539,7 +571,11 @@ impl MultimodalModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
+            audio_feature_lens,
+            audio_vision_modes,
             image_hashes,
+            audio_hashes,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
@@ -551,9 +587,13 @@ impl MultimodalModel for Phi4MMModel {
             image_sizes,
             input_audio_embeds,
             audio_embed_sizes,
+            audio_feature_lens,
+            audio_vision_modes,
             audio_attention_mask,
             ctx,
             &image_hashes,
+            &audio_hashes,
+            packed_layout.as_ref(),
         )
     }
     fn cache(&self) -> &EitherCache {

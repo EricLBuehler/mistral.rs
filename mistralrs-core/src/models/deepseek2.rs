@@ -4,7 +4,7 @@ use crate::layers_masker::CausalMaskConfig;
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use candle_nn::{Embedding, Module};
+use candle_nn::Module;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -16,8 +16,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, Activation, CausalMasker, DeepSeekV2RopeConfig, DeepSeekV2RopeScaling,
-        DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, DeepSeekV2RopeConfig,
+        DeepSeekV2RopeScaling, DeepSeekV2RotaryEmbedding, Mlp, RmsNorm, Sdpa,
     },
     layers_masker::masked_fill,
     mla::{
@@ -304,6 +304,7 @@ impl Attention {
             self.paged_attn.is_some(),
             q_nope.device(),
             &metadata,
+            self.kv_b_proj.as_ref(),
         );
 
         let mut attn_out = if use_mla_decode {
@@ -347,7 +348,11 @@ impl Attention {
             )?
             .contiguous()?;
 
-            let use_mla_cache = should_use_mla_cache(self.paged_attn.is_some(), q.device());
+            let use_mla_cache = should_use_mla_cache(
+                self.paged_attn.is_some(),
+                q.device(),
+                self.kv_b_proj.as_ref(),
+            );
 
             if use_mla_cache {
                 mla_cache_forward(
@@ -400,7 +405,7 @@ impl Attention {
                             // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
                             let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
                             // Sanity check.
-                            assert!(attention_mask.is_custom());
+                            assert!(!attention_mask.is_none());
                             let v = v
                                 .pad_with_zeros(
                                     D::Minus1,
@@ -439,7 +444,7 @@ impl Attention {
             }
         };
 
-        attn_out = if attention_mask.is_custom() {
+        attn_out = if !matches!(attention_mask, AttentionMask::None) {
             attn_out.transpose(1, 2)?.reshape((bs, seq_len, ()))?
         } else {
             attn_out.reshape((bs, seq_len, ()))?
@@ -451,6 +456,7 @@ impl Attention {
 
 struct MoeGate {
     weight: Tensor,
+    lora_site: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     cfg: DeepSeekV2Config,
     top_k: usize,
     n_routed_experts: usize,
@@ -459,8 +465,13 @@ struct MoeGate {
 impl MoeGate {
     fn new(cfg: &DeepSeekV2Config, vb: ShardedVarBuilder, n_routed_experts: usize) -> Result<Self> {
         let weight = vb.get((n_routed_experts, cfg.hidden_size), "weight")?;
+        let lora_site = mistralrs_quant::register_dynamic_lora_site(
+            &vb.set_dtype(DType::F32),
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, n_routed_experts),
+        )?;
         Ok(Self {
             weight,
+            lora_site,
             cfg: cfg.clone(),
             top_k: cfg.num_experts_per_tok.unwrap(),
             n_routed_experts,
@@ -471,10 +482,12 @@ impl MoeGate {
     fn forward(&self, xs: &Tensor) -> Result<(Tensor, Tensor)> {
         let (bs, seq_len, h) = xs.dims3()?;
         // Compute gating score
-        let xs = xs.reshape(((), h))?;
-        let logits = xs
-            .to_dtype(DType::F32)?
-            .broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let xs = xs.reshape(((), h))?.to_dtype(DType::F32)?;
+        let logits = xs.broadcast_matmul(&self.weight.t()?.to_dtype(DType::F32)?)?;
+        let logits = match &self.lora_site {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs, logits)?,
+            None => logits,
+        };
         if matches!(self.cfg.topk_method, TopkMethod::Greedy) {
             let renormalize = self.top_k > 1 && self.cfg.norm_topk_prob;
             let topk = crate::ops::moe_router_topk(
@@ -575,6 +588,7 @@ impl Moe {
             num_experts_per_tok: cfg.num_experts_per_tok.unwrap(),
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         // Use the optimized MoEExperts with automatic backend selection
@@ -744,7 +758,8 @@ impl DecoderLayer {
 
 pub struct DeepSeekV2 {
     lm_head: Arc<dyn QuantMethod>,
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    dtype: DType,
     norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     cache: EitherCache,
@@ -765,11 +780,15 @@ impl DeepSeekV2 {
         let vb_m = vb.pp("model");
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
@@ -781,16 +800,7 @@ impl DeepSeekV2 {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         let norm = RmsNorm::new(
             cfg.hidden_size,
@@ -857,6 +867,7 @@ impl DeepSeekV2 {
         Ok(Self {
             lm_head,
             embed_tokens,
+            dtype,
             norm,
             layers,
             cache: EitherCache::Normal(NormalCache::new(
@@ -903,7 +914,7 @@ impl DeepSeekV2 {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
@@ -1064,6 +1075,9 @@ impl NormalModel for DeepSeekV2 {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
 }
 

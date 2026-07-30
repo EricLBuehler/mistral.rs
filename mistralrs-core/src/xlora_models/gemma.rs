@@ -15,7 +15,7 @@ use crate::{
     utils::progress::NiceProgressBar,
 };
 use candle_core::{DType, Device, Module, Result, Tensor};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use tqdm::Iter;
 use tracing::info;
 
@@ -397,7 +397,7 @@ impl DecoderLayer {
 }
 
 pub struct XLoraModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -436,7 +436,7 @@ impl XLoraModel {
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
@@ -520,8 +520,8 @@ impl XLoraModel {
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
         let lm_head = linear(
-            embed_tokens.embeddings().dim(1)?,
-            embed_tokens.embeddings().dim(0)?,
+            cfg.hidden_size,
+            cfg.vocab_size,
             false,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
@@ -587,7 +587,7 @@ impl XLoraModel {
         } else {
             self.cache.full().lock()
         };
-        let xs = self.embed_tokens.forward(input_ids)?;
+        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
