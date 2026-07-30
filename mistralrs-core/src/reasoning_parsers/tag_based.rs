@@ -27,6 +27,12 @@ pub const CHANNEL_OPEN_TAG: &str = "<|channel>";
 /// Channel close delimiter (same as `CHANNEL_CLOSE_TOKEN`).
 pub const CHANNEL_CLOSE_TAG: &str = "<channel|>";
 
+// Gemma-family thinking convention (MedGemma 1.5 etc): reasoning is wrapped in
+// repurposed unused tokens with a literal "thought\n" header, documented only in
+// the model card, never in the template or tokenizer metadata.
+pub const GEMMA_THOUGHT_OPEN_TAG: &str = "<unused94>";
+pub const GEMMA_THOUGHT_CLOSE_TAG: &str = "<unused95>";
+
 /// Context for tracking tag-delimited reasoning parsing state within a sequence.
 ///
 /// This provides incremental parsing of token streams containing reasoning tags,
@@ -86,6 +92,14 @@ impl TagReasoningContext {
         let mut ctx = Self::new_gemma_channel();
         ctx.implicit_leading_reasoning_prefix = Some("thought\n".to_string());
         ctx.allow_implicit_leading_reasoning_prefix = true;
+        ctx
+    }
+
+    /// Create a parser for the Gemma thinking convention: `<unused94>thought\n...<unused95>`.
+    /// Pass-through for models that never emit the tokens, so it is safe to attach family-wide.
+    pub fn new_gemma_thought() -> Self {
+        let mut ctx = Self::with_tags(GEMMA_THOUGHT_OPEN_TAG, GEMMA_THOUGHT_CLOSE_TAG);
+        ctx.reasoning_strip_prefix = Some("thought\n".to_string());
         ctx
     }
 
@@ -226,8 +240,18 @@ impl TagReasoningContext {
                     }
                 }
 
+                let open_pos = self.buffer.find(&*self.open_tag);
+                let close_pos = self.buffer.find(&*self.close_tag);
+                // A bare close tag outside any reasoning block is a special-token artifact
+                // (e.g. a dangling `<channel|>` right before EOS) - swallow it.
+                if let Some(close_pos) = close_pos.filter(|&c| open_pos.is_none_or(|o| c < o)) {
+                    let content = self.buffer[..close_pos].to_string();
+                    self.accumulated_content.push_str(&content);
+                    self.buffer = self.buffer[close_pos + self.close_tag.len()..].to_string();
+                    continue;
+                }
                 // Looking for open tag
-                if let Some(start_pos) = self.buffer.find(&*self.open_tag) {
+                if let Some(start_pos) = open_pos {
                     // Found opening tag - extract content before it
                     let content = self.buffer[..start_pos].to_string();
                     self.accumulated_content.push_str(&content);
@@ -240,9 +264,11 @@ impl TagReasoningContext {
                         self.pending_strip = true;
                     }
                 } else {
-                    // No complete opening tag found
-                    // Check if buffer might contain a partial opening tag at the end
-                    let partial_len = self.potential_partial_tag_len_for(&self.open_tag);
+                    // No complete opening tag found; hold back anything that could be the
+                    // start of an opening OR closing tag split across token boundaries.
+                    let partial_len = self
+                        .potential_partial_tag_len_for(&self.open_tag)
+                        .max(self.potential_partial_tag_len_for(&self.close_tag));
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
@@ -403,6 +429,12 @@ impl super::ReasoningParser for TagReasoningContext {
 /// Check if a chat template uses `<think>...</think>` tags.
 ///
 /// Returns true if the template contains both `<think>` and `</think>` markers.
+/// Gemma-family turn marker; the thinking convention is keyed to the family since the
+/// templates carry no reasoning signal at all.
+pub fn is_gemma_turn_template(template: &str) -> bool {
+    template.contains("<start_of_turn>")
+}
+
 pub fn is_think_tag_template(template: &str) -> bool {
     template.contains(THINK_OPEN_TAG) && template.contains(THINK_CLOSE_TAG)
 }
@@ -416,6 +448,38 @@ pub fn is_channel_tag_template(template: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn gemma_thought_convention_splits_and_strips() {
+        let mut ctx = TagReasoningContext::new_gemma_thought();
+        for chunk in [
+            "<unused94>thought\n",
+            "The user greeted me.",
+            " Respond warmly.",
+            "<unused95>",
+            "Hello there!",
+        ] {
+            ctx.process_bytes(chunk.as_bytes());
+        }
+        ctx.finalize();
+        assert_eq!(
+            ctx.reasoning_content().as_deref(),
+            Some("The user greeted me. Respond warmly.")
+        );
+        assert_eq!(ctx.content().as_deref(), Some("Hello there!"));
+    }
+
+    #[test]
+    fn gemma_thought_passthrough_for_plain_models() {
+        let mut ctx = TagReasoningContext::new_gemma_thought();
+        ctx.process_bytes(b"Hello there! How can I help?");
+        ctx.finalize();
+        assert_eq!(ctx.reasoning_content(), None);
+        assert_eq!(
+            ctx.content().as_deref(),
+            Some("Hello there! How can I help?")
+        );
+    }
+
     use super::*;
 
     // === Think Tag Tests ===

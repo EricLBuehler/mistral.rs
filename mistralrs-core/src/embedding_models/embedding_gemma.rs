@@ -2,16 +2,16 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
-use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder};
+use candle_core::{DType, Device, Module, Result, Tensor};
+use mistralrs_quant::{
+    softcap, ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder,
+};
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
-    layers::{
-        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
-    },
+    layers::{embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, Sdpa},
     layers_masker::BidirectionalMasker,
     paged_attention::AttentionImplementation,
     pipeline::{
@@ -126,7 +126,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -185,7 +185,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: cfg.attn_logit_softcapping.map(|x| x as f32),
                 softmax_scale: 1.0 / (cfg.query_pre_attn_scalar as f32).sqrt(),
                 sliding_window,
@@ -223,9 +223,11 @@ impl Attention {
         q = q.apply(&self.q_norm)?;
         k = k.apply(&self.k_norm)?;
 
+        let positions =
+            crate::pipeline::text_positions_tensor(seqlen_offsets, q.dim(2)?, q.device())?;
         (q, k) = match self.use_sliding_window {
-            true => self.rotary_emb_local.forward(&q, &k, seqlen_offsets)?,
-            false => self.rotary_emb_global.forward(&q, &k, seqlen_offsets)?,
+            true => self.rotary_emb_local.forward(&q, &k, &positions)?,
+            false => self.rotary_emb_global.forward(&q, &k, &positions)?,
         };
 
         let mask = if self.use_sliding_window {
@@ -349,7 +351,9 @@ impl DecoderLayer {
 }
 
 pub struct EmbeddingGemma {
-    embed_tokens: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
+    dtype: DType,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     device: Device,
@@ -379,16 +383,15 @@ impl EmbeddingGemma {
         }
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb.dtype();
+        let embed_tokens_scale = (cfg.hidden_size as f64).sqrt();
 
-        let embed_tokens = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
-            embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                mapper.set_nm_device(vb.pp("embed_tokens"), false),
-                &cfg.quantization_config,
-            )?,
-        );
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            &cfg.quantization_config,
+        )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -462,6 +465,8 @@ impl EmbeddingGemma {
 
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale,
+            dtype,
             layers,
             norm,
             device: normal_loading_metadata.real_device,
@@ -472,7 +477,7 @@ impl EmbeddingGemma {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     pub fn forward_embeds(
@@ -502,9 +507,8 @@ impl EmbeddingGemma {
         let mut xs = xs.apply(&self.norm)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
-            xs = (xs / final_logit_softcapping)?;
-            xs = xs.tanh()?;
-            xs = (xs * final_logit_softcapping)?;
+            let dtype = xs.dtype();
+            xs = softcap(&xs, final_logit_softcapping as f32)?.to_dtype(dtype)?;
         }
 
         Ok(xs)
@@ -512,30 +516,6 @@ impl EmbeddingGemma {
 }
 
 impl IsqModel for EmbeddingGemma {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -565,23 +545,6 @@ impl IsqModel for EmbeddingGemma {
         }
 
         uvb.to_safetensors()
-    }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
     }
 }
 

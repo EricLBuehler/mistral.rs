@@ -23,6 +23,7 @@ TOOL_SERVER_PORT = 8787
 
 # --- Tool implementations ---
 
+
 def get_weather(city: str, units: str = "celsius") -> str:
     """Simulated weather lookup."""
     weather_data = {
@@ -42,6 +43,7 @@ TOOLS = {
 
 
 # --- Lightweight HTTP tool server ---
+
 
 class ToolHandler(BaseHTTPRequestHandler):
     """Handles POST requests from mistral.rs tool dispatch.
@@ -81,6 +83,7 @@ def start_tool_server():
 
 
 # --- Main ---
+
 
 def main():
     # Start the tool dispatch server in a background thread

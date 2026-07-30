@@ -652,8 +652,7 @@ cudaError_t MergeStates(DTypeIn* v, float* s, DTypeO* v_merged, float* s_merged,
       void* args[] = {&v, &s, &v_merged, &s_merged, &num_index_sets, &num_heads};
       uint32_t smem_size =
           num_smem_stages * bdy * head_dim * sizeof(DTypeIn) + num_threads * sizeof(float);
-      FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
       FLASHINFER_CUDA_CALL(cudaLaunchKernel((void*)kernel, nblks, nthrs, args, smem_size, stream));
     } else {
       uint32_t bdy = num_heads;
@@ -711,8 +710,7 @@ cudaError_t VariableLengthMergeStates(DTypeIn* v, float* s, IdType* indptr, DTyp
     dim3 nblks(num_sms * num_blocks_per_sm);
     dim3 nthrs(bdx, bdy);
     void* args[] = {&v, &s, &indptr, &v_merged, &s_merged, &max_seq_len, &seq_len, &num_heads};
-    FLASHINFER_CUDA_CALL(
-        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+    FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
 
     // PDL launch
     if (enable_pdl) {
@@ -762,8 +760,7 @@ cudaError_t VariableLengthAttentionSum(DTypeIn* v, IdType* indptr, DTypeO* v_sum
     dim3 nblks(num_sms * num_blocks_per_sm);
     dim3 nthrs(bdx, bdy);
     void* args[] = {&v, &indptr, &v_sum, &max_seq_len, &seq_len, &num_heads};
-    FLASHINFER_CUDA_CALL(
-        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+    FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
 
     if (enable_pdl) {
       // PDL launch

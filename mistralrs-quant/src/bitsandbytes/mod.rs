@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{Context, DType, Device, Result, Shape, Tensor};
 use serde::Deserialize;
@@ -257,6 +254,23 @@ impl QuantMethod for BnbLinear {
         (self.params.dtype.into(), self.weight.device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let shape = self
+            .params
+            .shape
+            .as_ref()
+            .unwrap_or_else(|| self.weight.shape())
+            .dims()
+            .to_vec();
+        Ok(crate::plan_weight_isq(
+            self.params.dtype.into(),
+            self.weight.device().clone(),
+            shape,
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,
@@ -275,20 +289,5 @@ impl QuantizedSerde for BnbLinear {
     }
     fn name(&self) -> &'static str {
         "bnb-linear"
-    }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF serialization")
-    }
-
-    fn deserialize(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _comm: &Arc<crate::Comm>,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        candle_core::bail!("BitsAndBytes quantization does not support UQFF deserialization")
     }
 }

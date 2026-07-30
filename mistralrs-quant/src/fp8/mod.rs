@@ -1,23 +1,18 @@
-use std::{
-    borrow::Cow,
-    io::Cursor,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::{Linear, Module};
 use quantize::QuantizationResult;
+use safetensors::tensor::Dtype;
 
 mod quantize;
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
     cublaslt::{maybe_init_cublas_lt_wrapper, CUBLASLT_CONTROLLER},
-    utils::{
-        deserialize_tensor, read_dtype, serialize_tensor, version_is_compatible, write_dtype,
-        UQFF_VERSION,
-    },
+    utils::{dtype_to_uqff_code, uqff_code_to_dtype},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    Shard, UqffReader, UqffTensor,
 };
 
 #[derive(Debug)]
@@ -28,6 +23,100 @@ pub struct FP8Linear {
     quant_scale: Tensor,
     /// Quantized type
     dtype: DType,
+}
+
+impl FP8Linear {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.dequant_w_scale",
+            "weight.dequant_x_scale",
+            "weight.quant_scale",
+            "weight.dtype",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.dtype", Dtype::U32)
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Fp8,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        _tensors: &[UqffTensor],
+        _prefix: &str,
+    ) -> Result<String> {
+        Ok("fp8".to_string())
+    }
+
+    pub fn from_parts(
+        weight: Tensor,
+        bias: Option<Tensor>,
+        dequant_w_scale: Tensor,
+        dequant_x_scale: Tensor,
+        quant_scale: Tensor,
+        dtype: DType,
+    ) -> Self {
+        Self {
+            lin: Linear::new(weight, bias),
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        }
+    }
+
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
+        let dims = reader.tensor_dims(&format!("{key}.weight"))?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        let weight = reader.load_tensor_sharded(&format!("{key}.weight"), device, range)?;
+        let dequant_w_scale =
+            reader.load_tensor(&format!("{key}.weight.dequant_w_scale"), device)?;
+        let dequant_x_scale =
+            reader.load_tensor(&format!("{key}.weight.dequant_x_scale"), device)?;
+        let quant_scale = reader.load_tensor(&format!("{key}.weight.quant_scale"), device)?;
+        let dtype = uqff_code_to_dtype(reader.load_u32_scalar(&format!("{key}.weight.dtype"))?)?;
+        let bias = reader.load_bias(key, device, range, dims.len())?;
+        Ok(Self::from_parts(
+            weight,
+            bias,
+            dequant_w_scale,
+            dequant_x_scale,
+            quant_scale,
+            dtype,
+        ))
+    }
+
+    fn gather_quantized_rows(&self, ids: &Tensor) -> Result<Tensor> {
+        let weight = self.lin.weight();
+        let ids = ids.flatten_all()?;
+        if !weight.device().is_metal() {
+            return weight.index_select(&ids.to_device(weight.device())?, 0);
+        }
+
+        let ids = ids
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+
+        let row_count = weight.dim(0)?;
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = id as usize;
+            if id >= row_count {
+                candle_core::bail!("embedding index {id} is out of bounds for {row_count} rows");
+            }
+            let row = weight.narrow(0, id, 1)?.force_contiguous()?;
+            rows.push(crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?);
+        }
+        let rows = rows.iter().collect::<Vec<_>>();
+        Tensor::cat(&rows, 0)
+    }
 }
 
 impl QuantMethod for FP8Linear {
@@ -64,6 +153,21 @@ impl QuantMethod for FP8Linear {
     }
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
         Ok(self.dequantize(DType::F32)?.weight().clone())
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(self.lin.weight().dim(D::Minus1)?);
+        if ids.elem_count() == 0 && self.lin.weight().device().is_metal() {
+            let row = self.lin.weight().narrow(0, 0, 1)?.force_contiguous()?;
+            let row = crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?
+                .broadcast_mul(&self.dequant_w_scale)?;
+            return row.narrow(0, 0, 0)?.reshape(output_shape);
+        }
+        self.gather_quantized_rows(ids)?
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&self.dequant_w_scale)?
+            .reshape(output_shape)
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
@@ -148,6 +252,16 @@ impl QuantMethod for FP8Linear {
         (DType::F8E4M3, self.lin.weight().device().clone())
     }
 
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.dtype,
+            self.lin.weight().device().clone(),
+            self.lin.weight().dims().to_vec(),
+            request,
+            true,
+        ))
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         dtype: Option<IsqType>,
@@ -169,28 +283,6 @@ impl QuantMethod for FP8Linear {
     }
 }
 
-// Serialization structure:
-//
-// -----------------------
-// UQFF version, u32, little endian
-// -----------------------
-// ISQ type (3 for fp8), u8, little endian
-// -----------------------
-// Whether bias data is included, u8 boolean
-// -----------------------
-// Weight tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-// Dequant W scalar, f32, little endian
-// -----------------------
-// Dequant X scalar, f32, little endian
-// -----------------------
-// Quant scalar, f32, little endian
-// -----------------------
-// Quantization type, u32, little endian
-// -----------------------
-// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-
 impl QuantizedSerde for FP8Linear {
     fn isq_serde_supported(&self) -> bool {
         true
@@ -198,142 +290,45 @@ impl QuantizedSerde for FP8Linear {
     fn name(&self) -> &'static str {
         "fp8-linear"
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.lin.bias().cloned())
-    }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = Vec::new();
-
-        // Version is always first!
-        buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-        // ISQ type for fp8 is 3
-        buffer.push(QuantizedSerdeType::Fp8 as u8);
-
-        // Has bias
-        buffer.push(bias.is_some() as u8);
-
-        // Weight
-        serialize_tensor(&mut buffer, self.lin.weight())?;
-
-        // Dequant a scale
-        buffer.extend(self.dequant_w_scale.to_scalar::<f32>()?.to_le_bytes());
-        // Dequant b scale
-        buffer.extend(self.dequant_x_scale.to_scalar::<f32>()?.to_le_bytes());
-        // Quant scale
-        buffer.extend(self.quant_scale.to_scalar::<f32>()?.to_le_bytes());
-
-        // DType
-        write_dtype(self.dtype, &mut buffer);
-
-        if let Some(bias) = &bias {
-            // Bias
-            serialize_tensor(&mut buffer, bias)?;
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        if ty != IsqType::F8E4M3 {
+            candle_core::bail!("Cannot serialize FP8 layer as {ty}; actual type is F8E4M3.");
         }
 
-        Ok(Cow::from(buffer))
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Fp8 as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), self.lin.weight())?,
+            UqffTensor::from_tensor(
+                format!("{prefix}.weight.dequant_w_scale"),
+                &self.dequant_w_scale,
+            )?,
+            UqffTensor::from_tensor(
+                format!("{prefix}.weight.dequant_x_scale"),
+                &self.dequant_x_scale,
+            )?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.quant_scale"), &self.quant_scale)?,
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.dtype"),
+                dtype_to_uqff_code(self.dtype)?,
+            ),
+        ];
+        if let Some(bias) = self.lin.bias() {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
+        }
+        Ok(data)
     }
-
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_uqff(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data.to_vec());
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Fp8 as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Fp8 as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let w = deserialize_tensor(&mut buffer, device)?;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-
-        // DType
-        let dtype = read_dtype(&mut buffer)?;
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(Self {
-            lin: Linear::new(w, b),
-            dequant_w_scale,
-            dequant_x_scale,
-            quant_scale,
-            dtype,
-        }))
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data.to_vec());
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Fp8 as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Fp8 as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let w = deserialize_tensor(&mut buffer, device)?;
-
-        let dequant_w_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let dequant_x_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-        let quant_scale = Tensor::new(buffer.read_f32::<LittleEndian>()?, device)?;
-
-        // DType
-        let dtype = read_dtype(&mut buffer)?;
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok((
-            Arc::new(Self {
-                lin: Linear::new(w, None),
-                dequant_w_scale,
-                dequant_x_scale,
-                quant_scale,
-                dtype,
-            }),
-            b,
-        ))
+    fn isq_type_from_uqff(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
+        Ok(IsqType::F8E4M3)
     }
 }

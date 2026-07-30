@@ -8,8 +8,7 @@ use crate::{
     lora::{linear_no_bias, LinearLayerLike, LoraConfig, Ordering},
     paged_attention::ModelConfigMetadata,
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, NormalLoadingMetadata,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, NormalLoadingMetadata,
     },
     utils::progress::NiceProgressBar,
 };
@@ -172,7 +171,14 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let positions = seqlen_offsets
+            .iter()
+            .copied()
+            .map(u32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(candle_core::Error::wrap)?;
+        let positions = Tensor::from_vec(positions, seqlen_offsets.len(), q.device())?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, &positions)?;
 
         let (k, v, attn_mask) = Cache::update_kv_cache_sliding_window(
             kv_cache,
@@ -359,35 +365,36 @@ impl SparseMoeBlock {
             global_scaling_weight,
             is_scaling_pass,
         )?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: true,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let selected_experts = topk.indices.to_vec2::<u32>()?;
+        let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
 
-        // In order to extract topk, we extract the data from the tensor and manipulate it
-        // directly. Maybe we will want to use some custom ops instead at some point.
-        let routing_weights = routing_weights.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-
-        // routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        // top_x contains the row indexes to evaluate for each expert.
         let mut top_x = vec![vec![]; self.experts.len()];
         let mut selected_rws = vec![vec![]; self.experts.len()];
-        for (row_idx, rw) in routing_weights.iter().enumerate() {
-            let mut dst = (0..rw.len() as u32).collect::<Vec<u32>>();
-            dst.sort_by(|&i, &j| rw[j as usize].total_cmp(&rw[i as usize]));
-            let mut sum_routing_weights = 0f32;
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
+        for (row_idx, (experts, weights)) in selected_experts
+            .iter()
+            .zip(routing_weights.iter())
+            .enumerate()
+        {
+            for (&expert_idx, &routing_weight) in experts.iter().zip(weights.iter()) {
                 let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                sum_routing_weights += routing_weight;
                 top_x[expert_idx].push(row_idx as u32);
-            }
-            for &expert_idx in dst.iter().take(self.num_experts_per_tok) {
-                let expert_idx = expert_idx as usize;
-                let routing_weight = rw[expert_idx];
-                selected_rws[expert_idx].push(routing_weight / sum_routing_weights)
+                selected_rws[expert_idx].push(routing_weight)
             }
         }
-
-        // routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        // expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
 
         let mut ys = xs.zeros_like()?;
         for (expert_idx, expert_layer) in self.experts.iter().enumerate() {
@@ -520,7 +527,7 @@ impl DecoderLayer {
 }
 
 pub struct XLoraModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn LinearLayerLike + Send + Sync>,
@@ -559,7 +566,7 @@ impl XLoraModel {
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -708,7 +715,7 @@ impl XLoraModel {
         } else {
             self.cache.full().lock()
         };
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,
@@ -814,68 +821,18 @@ impl XLoraModel {
 }
 
 impl IsqModel for XLoraModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((Arc::get_mut(&mut self.lm_head).unwrap().quant_inner(), None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.q_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.k_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.v_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.self_attn.o_proj)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            tensors.push((
-                Arc::get_mut(&mut layer.block_sparse_moe.gate)
-                    .unwrap()
-                    .quant_inner(),
-                Some(i),
-            ));
-            for expert in &mut layer.block_sparse_moe.experts {
-                tensors.push((Arc::get_mut(&mut expert.w1).unwrap().quant_inner(), Some(i)));
-                tensors.push((Arc::get_mut(&mut expert.w2).unwrap().quant_inner(), Some(i)));
-                tensors.push((Arc::get_mut(&mut expert.w3).unwrap().quant_inner(), Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         panic!("Cannot generate UQFF for an adapter model.")
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for XLoraModel {}
+
 impl NormalModel for XLoraModel {
     fn forward(
         &self,
         _input_ids: &Tensor,
-        _seqlen_offsets: &[usize],
-        _context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        _metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        _flash_params: &FlashParams,
+        _ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         unreachable!()
     }
@@ -906,9 +863,6 @@ impl NormalModel for XLoraModel {
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device

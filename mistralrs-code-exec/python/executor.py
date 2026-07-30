@@ -66,6 +66,7 @@ _animation_frames = []
 
 try:
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as _plt
     import matplotlib.animation as _animation
@@ -165,7 +166,10 @@ def detect_pil_image(obj):
             buf = io.BytesIO()
             obj.save(buf, format="PNG")
             buf.seek(0)
-            return {"format": "png", "data_base64": base64.b64encode(buf.read()).decode()}
+            return {
+                "format": "png",
+                "data_base64": base64.b64encode(buf.read()).decode(),
+            }
     except ImportError:
         pass
     except Exception:
@@ -187,32 +191,72 @@ def detect_dataframe(obj):
 
 # Formats we read as utf-8 text. Anything else is treated as binary and
 # base64-encoded.
-_TEXT_FORMATS = frozenset({
-    "csv", "tsv", "json", "geojson", "xml", "yaml", "yml", "toml",
-    "md", "markdown", "html", "htm", "svg", "latex", "tex", "sql",
-    "python", "py", "rust", "rs", "txt", "text", "log", "vega",
-    "vega-lite",
-})
+_TEXT_FORMATS = frozenset(
+    {
+        "csv",
+        "tsv",
+        "json",
+        "geojson",
+        "xml",
+        "yaml",
+        "yml",
+        "toml",
+        "md",
+        "markdown",
+        "html",
+        "htm",
+        "svg",
+        "latex",
+        "tex",
+        "sql",
+        "python",
+        "py",
+        "rust",
+        "rs",
+        "txt",
+        "text",
+        "log",
+        "vega",
+        "vega-lite",
+    }
+)
 
 # Format → mime hints so the Rust side can classify without sniffing.
 _FORMAT_MIME = {
-    "csv": "text/csv", "tsv": "text/tab-separated-values",
-    "json": "application/json", "geojson": "application/json",
-    "xml": "application/xml", "yaml": "application/yaml", "yml": "application/yaml",
+    "csv": "text/csv",
+    "tsv": "text/tab-separated-values",
+    "json": "application/json",
+    "geojson": "application/json",
+    "xml": "application/xml",
+    "yaml": "application/yaml",
+    "yml": "application/yaml",
     "toml": "application/toml",
-    "md": "text/markdown", "markdown": "text/markdown",
-    "html": "text/html", "htm": "text/html",
+    "md": "text/markdown",
+    "markdown": "text/markdown",
+    "html": "text/html",
+    "htm": "text/html",
     "svg": "image/svg+xml",
-    "latex": "application/x-tex", "tex": "application/x-tex",
+    "latex": "application/x-tex",
+    "tex": "application/x-tex",
     "sql": "application/sql",
-    "python": "text/x-python", "py": "text/x-python",
-    "rust": "text/x-rust", "rs": "text/x-rust",
-    "txt": "text/plain", "text": "text/plain", "log": "text/plain",
-    "vega": "application/json", "vega-lite": "application/json",
-    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
-    "gif": "image/gif", "webp": "image/webp",
-    "mp4": "video/mp4", "webm": "video/webm",
-    "mp3": "audio/mpeg", "wav": "audio/wav",
+    "python": "text/x-python",
+    "py": "text/x-python",
+    "rust": "text/x-rust",
+    "rs": "text/x-rust",
+    "txt": "text/plain",
+    "text": "text/plain",
+    "log": "text/plain",
+    "vega": "application/json",
+    "vega-lite": "application/json",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
     "pdf": "application/pdf",
     "parquet": "application/x-parquet",
     "zip": "application/zip",
@@ -246,10 +290,8 @@ def _read_output_file(entry):
         size = os.path.getsize(path)
         out["size_bytes"] = size
         if size > MAX_OUTPUT_BYTES:
-            out["error"] = (
-                "exceeds max output size ({} bytes; cap is {} bytes)".format(
-                    size, MAX_OUTPUT_BYTES
-                )
+            out["error"] = "exceeds max output size ({} bytes; cap is {} bytes)".format(
+                size, MAX_OUTPUT_BYTES
             )
             return out
         if fmt in _TEXT_FORMATS:
@@ -375,15 +417,17 @@ def send(obj):
 
 def send_error(msg):
     """Send an error response for protocol-level failures."""
-    send({
-        "stdout": "",
-        "stderr": "",
-        "exception": msg,
-        "last_expr_repr": None,
-        "last_expr_type": None,
-        "images": [],
-        "execution_time_ms": 0,
-    })
+    send(
+        {
+            "stdout": "",
+            "stderr": "",
+            "exception": msg,
+            "last_expr_repr": None,
+            "last_expr_type": None,
+            "images": [],
+            "execution_time_ms": 0,
+        }
+    )
 
 
 # KeyboardInterrupt should propagate inside execute_code but not kill the main loop.
@@ -428,7 +472,8 @@ for line in iter(sys.stdin.readline, ""):
             files = [
                 {
                     "name": (o or {}).get("name") if isinstance(o, dict) else None,
-                    "format": ((o or {}).get("format") if isinstance(o, dict) else "") or "",
+                    "format": ((o or {}).get("format") if isinstance(o, dict) else "")
+                    or "",
                     "size_bytes": 0,
                     "error": "output scan failed: {}".format(e),
                 }

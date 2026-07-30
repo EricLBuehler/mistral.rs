@@ -1,15 +1,17 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use either::Either;
 use image::DynamicImage;
 use indexmap::IndexMap;
+use num_traits::ToPrimitive;
 
 use serde_json::Value;
 
 use crate::{
     files::{
-        compose_tool_response_with_files, merge_required_outputs_into_args,
-        required_files_tool_addendum, tool_file_to_file, File, RequestedFile,
+        compose_tool_response_with_files, file_to_tool_input_file, input_files_message,
+        merge_required_outputs_into_args, required_files_tool_addendum, tool_file_to_file, File,
+        RequestedFile,
     },
     get_mut_arcmutex,
     pipeline::SupportedModality,
@@ -17,7 +19,7 @@ use crate::{
     search, AgentPermission, AgentToolApproval, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata,
     AgentToolSource, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
-    ToolChoice, WebSearchOptions,
+    ToolChoice, Usage, WebSearchOptions,
 };
 
 use super::file_tools::{do_list_files, do_read_file};
@@ -28,6 +30,8 @@ pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 256;
 
 /// Set on inner probe requests so `handle_request` doesn't re-enter the loop. Distinct from `None` (unset).
 pub const AGENTIC_LOOP_REENTRY_SENTINEL: Option<usize> = Some(0);
+const MAX_SKILL_TREE_ENTRIES: usize = 80;
+const MAX_SKILL_TREE_DEPTH: usize = 4;
 
 /// Turn = number of completed user messages.
 fn count_user_messages(request: &NormalRequest) -> usize {
@@ -61,6 +65,117 @@ pub(super) fn get_messages_mut(
         }
         _ => unreachable!(),
     }
+}
+
+fn shell_skill_dir_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn append_skill_tree(content: &mut String, source_path: &Path, mounted_dir: &str) {
+    content.push_str("  File tree:\n");
+    let mut entries = 0;
+    append_skill_tree_entries(content, source_path, mounted_dir, 2, &mut entries);
+    if entries >= MAX_SKILL_TREE_ENTRIES {
+        content.push_str("    ...\n");
+    }
+}
+
+fn append_skill_tree_entries(
+    content: &mut String,
+    source_path: &Path,
+    mounted_path: &str,
+    depth: usize,
+    entries: &mut usize,
+) {
+    if depth > MAX_SKILL_TREE_DEPTH || *entries >= MAX_SKILL_TREE_ENTRIES {
+        return;
+    }
+
+    let Ok(read_dir) = std::fs::read_dir(source_path) else {
+        content.push_str(&format!("    - {mounted_path}/ (unavailable)\n"));
+        *entries += 1;
+        return;
+    };
+    let mut children = read_dir.filter_map(Result::ok).collect::<Vec<_>>();
+    children.sort_by_key(|entry| entry.file_name());
+
+    for child in children {
+        if *entries >= MAX_SKILL_TREE_ENTRIES {
+            return;
+        }
+        let file_name = child.file_name().to_string_lossy().to_string();
+        let child_mounted_path = format!("{mounted_path}/{file_name}");
+        let Ok(file_type) = child.file_type() else {
+            continue;
+        };
+        let indent = "  ".repeat(depth);
+        if file_type.is_dir() {
+            content.push_str(&format!("{indent}- {child_mounted_path}/\n"));
+            *entries += 1;
+            append_skill_tree_entries(
+                content,
+                &child.path(),
+                &child_mounted_path,
+                depth + 1,
+                entries,
+            );
+        } else if file_type.is_file() {
+            content.push_str(&format!("{indent}- {child_mounted_path}\n"));
+            *entries += 1;
+        }
+    }
+}
+
+fn inject_shell_skills_message(request: &mut NormalRequest) {
+    let Some(shell_options) = &request.shell_options else {
+        return;
+    };
+    if shell_options.skills.is_empty() {
+        return;
+    }
+
+    let mut content = String::from(
+        "Uploaded skills are folders available to the shell tool in the session working directory.\n\
+         Skills are not shell commands and are not installed on PATH. Do not invent commands named \
+         after a skill.\n\
+         Before running any command from a skill, you must read that skill's SKILL.md file. This is \
+         required.\n\
+         After reading SKILL.md, follow its workflow. If the skill uses bundled scripts, run them by \
+         path under the skill folder, for example `python skills/<skill-name>/scripts/<script>.py ...`.\n",
+    );
+    for skill in &shell_options.skills {
+        let mounted_dir = format!("skills/{}", shell_skill_dir_name(&skill.name));
+        content.push_str(&format!("- {}: {}\n", skill.name, skill.description));
+        content.push_str(&format!(
+            "  Required first command: `cat {mounted_dir}/SKILL.md`\n"
+        ));
+        append_skill_tree(&mut content, &skill.source_path, &mounted_dir);
+    }
+
+    let messages = get_messages_mut(request);
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("system".to_string()));
+    message.insert("content".to_string(), Either::Left(content));
+    messages.insert(0, message);
+}
+
+pub(super) fn inject_input_files_message(request: &mut NormalRequest) {
+    let Some(content) = input_files_message(&request.input_files) else {
+        return;
+    };
+    let messages = get_messages_mut(request);
+    let mut message: IndexMap<String, MessageContent> = IndexMap::new();
+    message.insert("role".to_string(), Either::Left("system".to_string()));
+    message.insert("content".to_string(), Either::Left(content));
+    messages.insert(0, message);
 }
 
 /// Structured `tool_calls` field for the assistant message. Required by templates (Gemma 4 etc.) that render from `message.tool_calls`.
@@ -221,6 +336,53 @@ async fn forward_passthrough(
     }
 }
 
+#[derive(Default)]
+struct AgenticUsageAccumulator {
+    prompt_tokens: usize,
+    completion_tokens: usize,
+    total_prompt_time_sec: f32,
+    total_completion_time_sec: f32,
+    saw_usage: bool,
+}
+
+impl AgenticUsageAccumulator {
+    fn add(&mut self, usage: &Usage) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(usage.completion_tokens);
+        self.total_prompt_time_sec += usage.total_prompt_time_sec;
+        self.total_completion_time_sec += usage.total_completion_time_sec;
+        self.saw_usage = true;
+    }
+
+    fn aggregate(&self) -> Option<Usage> {
+        self.saw_usage.then(|| {
+            let total_tokens = self.prompt_tokens.saturating_add(self.completion_tokens);
+            let total_time_sec = self.total_prompt_time_sec + self.total_completion_time_sec;
+            Usage {
+                completion_tokens: self.completion_tokens,
+                prompt_tokens: self.prompt_tokens,
+                total_tokens,
+                avg_tok_per_sec: tps(total_tokens, total_time_sec),
+                avg_prompt_tok_per_sec: tps(self.prompt_tokens, self.total_prompt_time_sec),
+                avg_compl_tok_per_sec: tps(self.completion_tokens, self.total_completion_time_sec),
+                total_time_sec,
+                total_prompt_time_sec: self.total_prompt_time_sec,
+                total_completion_time_sec: self.total_completion_time_sec,
+            }
+        })
+    }
+}
+
+fn tps(tokens: usize, seconds: f32) -> f32 {
+    if seconds > 0.0 {
+        tokens.to_f32().unwrap_or(f32::MAX) / seconds
+    } else {
+        0.0
+    }
+}
+
 /// Persist the conversation as-is. Refreshes file TTLs.
 fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
     let messages = get_messages(visible_req).clone();
@@ -266,6 +428,40 @@ fn is_list_files_tool(_name: &str) -> bool {
     false
 }
 
+#[cfg(feature = "code-execution")]
+fn is_surface_outputs_tool(name: &str) -> bool {
+    mistralrs_code_exec::surface_outputs_tool_called(name)
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_surface_outputs_tool(_name: &str) -> bool {
+    false
+}
+
+#[cfg(feature = "code-execution")]
+fn is_shell_tool(name: &str) -> bool {
+    mistralrs_code_exec::shell_tool_called(name)
+}
+#[cfg(not(feature = "code-execution"))]
+fn is_shell_tool(_name: &str) -> bool {
+    false
+}
+
+fn shell_commands_from_args(arguments: &str) -> Vec<String> {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|v| {
+            v.get("commands").and_then(|commands| {
+                commands.as_array().map(|commands| {
+                    commands
+                        .iter()
+                        .filter_map(|command| command.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
     if search::search_tool_called(&tc.function.name) {
         let query = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
@@ -279,6 +475,14 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             query,
             results_count: None,
             sources: Vec::new(),
+        }
+    } else if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: String::new(),
         }
     } else if is_code_exec_tool(&tc.function.name) {
         let code = serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
@@ -299,6 +503,16 @@ fn calling_data_for_tool(tc: &ToolCallResponse) -> AgenticToolCallData {
             working_directory: None,
             execution_time_ms: None,
         }
+    } else if is_shell_tool(&tc.function.name) {
+        AgenticToolCallData::Shell {
+            commands: shell_commands_from_args(&tc.function.arguments),
+            stdout: None,
+            stderr: None,
+            exit_code: None,
+            status: None,
+            working_directory: None,
+            timed_out: None,
+        }
     } else {
         AgenticToolCallData::Custom {
             arguments: tc.function.arguments.clone(),
@@ -314,7 +528,19 @@ fn tool_arguments(tc: &ToolCallResponse) -> Value {
 
 fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolMetadata {
     let name = &tc.function.name;
-    if is_code_exec_tool(name) {
+    if is_read_file_tool(name) || is_list_files_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File access".to_string(),
+        }
+    } else if is_surface_outputs_tool(name) {
+        AgentToolMetadata {
+            source: AgentToolSource::BuiltIn,
+            kind: AgentToolKind::File,
+            label: "File outputs".to_string(),
+        }
+    } else if is_code_exec_tool(name) {
         AgentToolMetadata {
             source: AgentToolSource::BuiltIn,
             kind: AgentToolKind::CodeExecution,
@@ -330,11 +556,11 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
                 "Web page extraction".to_string()
             },
         }
-    } else if is_read_file_tool(name) || is_list_files_tool(name) {
+    } else if is_shell_tool(name) {
         AgentToolMetadata {
             source: AgentToolSource::BuiltIn,
-            kind: AgentToolKind::File,
-            label: "File access".to_string(),
+            kind: AgentToolKind::Shell,
+            label: "Shell command".to_string(),
         }
     } else if ctx.engine.tool_callbacks.contains_key(name) {
         AgentToolMetadata {
@@ -457,7 +683,15 @@ fn denied_tool_result(
     append_tool_response(messages, &tc.function.name, content.clone());
     request.tool_choice = Some(ToolChoice::Auto);
 
-    let data = if is_code_exec_tool(&tc.function.name) {
+    let data = if is_read_file_tool(&tc.function.name)
+        || is_list_files_tool(&tc.function.name)
+        || is_surface_outputs_tool(&tc.function.name)
+    {
+        AgenticToolCallData::Custom {
+            arguments: String::new(),
+            content,
+        }
+    } else if is_code_exec_tool(&tc.function.name) {
         AgenticToolCallData::CodeExecution {
             code: None,
             stdout: None,
@@ -469,6 +703,16 @@ fn denied_tool_result(
             working_directory: None,
             execution_time_ms: None,
         }
+    } else if is_shell_tool(&tc.function.name) {
+        AgenticToolCallData::Shell {
+            commands: shell_commands_from_args(&tc.function.arguments),
+            stdout: None,
+            stderr: Some(message),
+            exit_code: None,
+            status: Some("denied".to_string()),
+            working_directory: None,
+            timed_out: Some(false),
+        }
     } else {
         AgenticToolCallData::Custom {
             arguments: String::new(),
@@ -477,6 +721,69 @@ fn denied_tool_result(
     };
 
     (request, data, Vec::new())
+}
+
+pub(super) fn registered_tool_active_for_request(
+    name: &str,
+    enable_code_execution: bool,
+    enable_shell: bool,
+) -> bool {
+    if is_shell_tool(name) {
+        enable_shell
+    } else if is_code_exec_tool(name) {
+        enable_code_execution
+    } else {
+        true
+    }
+}
+
+fn shell_completion_data(arguments: &str, content: &str) -> AgenticToolCallData {
+    let val = serde_json::from_str::<serde_json::Value>(content).ok();
+    AgenticToolCallData::Shell {
+        commands: val
+            .as_ref()
+            .and_then(|v| v.get("commands"))
+            .and_then(|commands| {
+                commands.as_array().map(|commands| {
+                    commands
+                        .iter()
+                        .filter_map(|command| command.as_str().map(str::to_string))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .filter(|commands| !commands.is_empty())
+            .unwrap_or_else(|| shell_commands_from_args(arguments)),
+        stdout: val
+            .as_ref()
+            .and_then(|v| v.get("stdout"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        stderr: val
+            .as_ref()
+            .and_then(|v| v.get("stderr"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
+        exit_code: val
+            .as_ref()
+            .and_then(|v| v.get("exit_code"))
+            .and_then(|v| v.as_i64()),
+        status: val
+            .as_ref()
+            .and_then(|v| v.get("status"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        working_directory: val
+            .as_ref()
+            .and_then(|v| v.get("working_directory"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        timed_out: val
+            .as_ref()
+            .and_then(|v| v.get("timed_out"))
+            .and_then(|v| v.as_bool()),
+    }
 }
 
 /// Per-loop dispatch context. Borrows data owned by the loop's task; round/tc/visible_req are passed alongside.
@@ -602,25 +909,28 @@ async fn do_custom_tool(
     let messages = get_messages_mut(&mut request);
     append_assistant_tool_call(messages, tc);
 
-    // For code-exec, merge required files into `outputs` so the executor reads them even if the model omitted them.
+    // Merge required files into `outputs` so the tool surfaces them even if the model omitted them.
     let dispatched_tc;
-    let dispatched_ref: &ToolCallResponse =
-        if is_code_exec_tool(&tc.function.name) && !ctx.required_files.is_empty() {
-            dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
-            &dispatched_tc
-        } else {
-            tc
-        };
+    let dispatched_ref: &ToolCallResponse = if (is_code_exec_tool(&tc.function.name)
+        || is_shell_tool(&tc.function.name))
+        && !ctx.required_files.is_empty()
+    {
+        dispatched_tc = merge_required_outputs_into_args(tc, ctx.required_files);
+        &dispatched_tc
+    } else {
+        tc
+    };
 
     let mut tool_call_ctx;
-    let dispatch_tool_ctx = if is_code_exec_tool(&tc.function.name) {
-        tool_call_ctx = ctx.tool_call_ctx.clone();
-        tool_call_ctx.round = Some(round);
-        tool_call_ctx.tool_name = Some(tc.function.name.clone());
-        &tool_call_ctx
-    } else {
-        ctx.tool_call_ctx
-    };
+    let dispatch_tool_ctx =
+        if is_code_exec_tool(&tc.function.name) || is_shell_tool(&tc.function.name) {
+            tool_call_ctx = ctx.tool_call_ctx.clone();
+            tool_call_ctx.round = Some(round);
+            tool_call_ctx.tool_name = Some(tc.function.name.clone());
+            &tool_call_ctx
+        } else {
+            ctx.tool_call_ctx
+        };
 
     let result = tool_dispatch::execute_custom_tool(ctx.engine, dispatched_ref, dispatch_tool_ctx);
 
@@ -670,6 +980,13 @@ async fn do_custom_tool(
                 .and_then(|v| v.get("execution_time_ms"))
                 .and_then(|v| v.as_u64()),
         }
+    } else if is_surface_outputs_tool(&tc.function.name) {
+        AgenticToolCallData::Custom {
+            arguments: tc.function.arguments.clone(),
+            content: result.content.clone(),
+        }
+    } else if is_shell_tool(&tc.function.name) {
+        shell_completion_data(&tc.function.arguments, &result.content)
     } else {
         AgenticToolCallData::Custom {
             arguments: String::new(), // already sent in Calling phase
@@ -771,6 +1088,7 @@ async fn emit_files(
 /// Drive tool-use rounds (search, code exec, custom tools) without recursion. Forwards every reply except the first probe.
 pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) {
     let web_search_options = request.web_search_options.clone();
+    let shell_options = request.shell_options.clone();
     let dispatch_url = request.tool_dispatch_url.clone();
     let code_execution_permission = request.code_execution_permission;
     let code_execution_approval_notifier = request.code_execution_approval_notifier.clone();
@@ -778,6 +1096,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     let agent_approval_handler = request.agent_approval_handler.clone();
     let agent_approval_notifier = request.agent_approval_notifier.clone();
     let required_files: Vec<RequestedFile> = request.files.clone().unwrap_or_default();
+    let input_files = request.input_files.clone();
 
     let run_id: String = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
 
@@ -800,9 +1119,15 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
+    for file in &input_files {
+        this.file_store
+            .insert(file.clone(), Some(session_id.clone()));
+    }
     this.file_store.touch_session(&session_id);
 
     let turn = count_user_messages(&request);
+    inject_shell_skills_message(&mut request);
+    inject_input_files_message(&mut request);
 
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
@@ -842,20 +1167,45 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 
     if !this.tool_callbacks.is_empty() {
         let tools = probe.tools.get_or_insert_with(Vec::new);
-        let existing_tool_names: Vec<String> =
-            tools.iter().map(|t| t.function.name.clone()).collect();
 
         for (name, callback_with_tool) in &this.tool_callbacks {
-            if !existing_tool_names.contains(name) {
+            if is_shell_tool(name) && !probe.enable_shell {
+                continue;
+            }
+            if is_code_exec_tool(name)
+                && !is_read_file_tool(name)
+                && !is_list_files_tool(name)
+                && !probe.enable_code_execution
+            {
+                continue;
+            }
+            if !tools.iter().any(|t| t.function.name == *name) {
                 tools.push(callback_with_tool.tool.clone());
             }
+        }
+    }
+
+    #[cfg(feature = "code-execution")]
+    if !input_files.is_empty() {
+        let tools = probe.tools.get_or_insert_with(Vec::new);
+        if !tools
+            .iter()
+            .any(|t| t.function.name == mistralrs_code_exec::READ_FILE_TOOL_NAME)
+        {
+            tools.push(mistralrs_code_exec::build_read_file_tool());
+        }
+        if !tools
+            .iter()
+            .any(|t| t.function.name == mistralrs_code_exec::LIST_FILES_TOOL_NAME)
+        {
+            tools.push(mistralrs_code_exec::build_list_files_tool());
         }
     }
 
     if let Some(addendum) = required_files_tool_addendum(&required_files) {
         if let Some(tools) = probe.tools.as_mut() {
             for t in tools.iter_mut() {
-                if is_code_exec_tool(&t.function.name) {
+                if is_code_exec_tool(&t.function.name) || is_shell_tool(&t.function.name) {
                     let desc = t.function.description.get_or_insert_with(String::new);
                     desc.push_str(&addendum);
                 }
@@ -863,7 +1213,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         }
     }
 
-    probe.tool_choice = Some(ToolChoice::Auto);
+    if probe.tool_choice.is_none() {
+        probe.tool_choice = Some(ToolChoice::Auto);
+    }
     probe.web_search_options = None;
 
     let mut visible_req = probe.clone();
@@ -879,6 +1231,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             agent_approval_notifier,
             code_execution_permission,
             code_execution_approval_notifier,
+            shell_options,
+            input_files: input_files.iter().map(file_to_tool_input_file).collect(),
         };
         let dispatch_ctx = DispatchCtx {
             engine: &this_clone,
@@ -898,6 +1252,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         let mut current = probe;
         let max_rounds = current.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
         let mut round = 0;
+        let mut usage_accumulator = AgenticUsageAccumulator::default();
 
         loop {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -907,9 +1262,12 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
             // by the files-without-agentic-surface guard in `add_request`.
             current.web_search_options = None;
             current.enable_code_execution = false;
+            current.enable_shell = false;
+            current.shell_options = None;
             current.max_tool_rounds = AGENTIC_LOOP_REENTRY_SENTINEL;
             current.tool_dispatch_url = None;
             current.files = None;
+            current.input_files = Vec::new();
             let _ = this_clone
                 .tx
                 .send(crate::request::Request::Normal(Box::new(current)))
@@ -930,6 +1288,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         return;
                     }
                 };
+                usage_accumulator.add(&done.usage);
 
                 let tc_opt = match &done.choices[0].message.tool_calls {
                     Some(calls) if !calls.is_empty() => {
@@ -947,6 +1306,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 if tc_opt.is_none() || round >= max_rounds {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
+                    if let Some(usage) = usage_accumulator.aggregate() {
+                        final_resp.usage = usage;
+                    }
                     final_resp.session_id = Some(session_id.clone());
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
@@ -978,6 +1340,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 let Some((next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
+                    if let Some(usage) = usage_accumulator.aggregate() {
+                        final_resp.usage = usage;
+                    }
                     final_resp.session_id = Some(session_id.clone());
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
@@ -1012,6 +1377,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                             // Suppress tool-call chunks. Forwarding them would surface a premature finish_reason before the tool loop continues.
                             let first_choice = &chunk.choices[0];
                             let is_final = first_choice.finish_reason.is_some();
+                            if is_final {
+                                if let Some(usage) = &chunk.usage {
+                                    usage_accumulator.add(usage);
+                                }
+                            }
                             if first_choice.delta.tool_calls.is_none() {
                                 if is_final {
                                     held_final_chunk = Some(chunk.clone());
@@ -1054,6 +1424,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 if tc_opt.is_none() || round >= max_rounds {
                     save_session(&this_clone, &session_id, &visible_req);
                     if let Some(mut final_chunk) = held_final_chunk {
+                        if let Some(usage) = usage_accumulator.aggregate() {
+                            final_chunk.usage = Some(usage);
+                        }
                         final_chunk.session_id = Some(session_id.clone());
                         let _ = user_sender.send(Response::Chunk(final_chunk)).await;
                     }

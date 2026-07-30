@@ -1,8 +1,6 @@
 ---
 title: Troubleshooting
 description: Verified causes and fixes.
-sidebar:
-  order: 14
 ---
 
 Before debugging setup issues, run `mistralrs doctor`. It reports detected hardware, compiled accelerator features, and Hugging Face connectivity.
@@ -13,11 +11,14 @@ For unlisted issues, file an issue on [GitHub](https://github.com/EricLBuehler/m
 
 ### `mistralrs: command not found` after install
 
-The binary is at `~/.cargo/bin/mistralrs`. The directory is added to `PATH` by `rustup`, but the change does not apply to the current shell. Open a new shell or run `source "$HOME/.cargo/env"`.
+Installer-managed binaries are exposed at `~/.local/bin/mistralrs`, backed by `~/.mistralrs/mistralrs`. Open a new shell or run `source "$HOME/.mistralrs/env"`. Manual Cargo installs use `~/.cargo/bin/mistralrs` and may require `source "$HOME/.cargo/env"`.
 
 ### Build fails with `flash-attn` feature enabled
 
-Flash attention requires compute capability 8.0+. On older GPUs, drop `flash-attn` from features and rebuild with `cuda cudnn`.
+Flash attention requires compute capability 8.0+ (see [hardware support](/mistral.rs/reference/hardware-support/)). On older GPUs, drop `flash-attn` and rebuild:
+
+- `cuda nccl cudnn` on Linux with NCCL installed.
+- `cuda cudnn` otherwise.
 
 ### `mistralrs login` rejects the token
 
@@ -31,7 +32,7 @@ Accept the license on the model's Hugging Face page, then save a token with `mis
 
 ### `Out of memory` on load
 
-Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`.
+Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).
 
 ## Runtime
 
@@ -39,9 +40,20 @@ Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `
 
 Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
 
+For CUDA decode throughput, also check whether [paged attention](/mistral.rs/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+
+### CUDA graphs do not appear to help
+
+CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
+
+If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs).
+
 ### Response cut off
 
-`max_tokens` is most likely too low. Check `finish_reason`, `length` means the token limit; `stop` means a stop sequence matched.
+`max_tokens` is most likely too low. Check `finish_reason`:
+
+- `length` - token limit reached.
+- `stop` - generation ended naturally (EOS token) or a configured stop token/string matched.
 
 ## HTTP server
 
@@ -65,13 +77,13 @@ The UI is on by default. Check that `--no-ui` was not passed at startup, and tha
 
 ### Sessions disappear between requests
 
-The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`.
+The session expired (30-minute idle TTL) or was evicted (128-session cap, LRU). Long-lived sessions need explicit export/import via `/v1/sessions/{id}`. See [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
 
 ## Python SDK
 
 ### `from mistralrs import Runner` fails with `ImportError`
 
-The wrong wheel was installed. Reinstall with the matching variant: `mistralrs-cuda` for NVIDIA, `mistralrs-metal` for Apple Silicon, `mistralrs` for CPU/MKL.
+The wrong wheel was installed. `pip install mistralrs` gives the CPU (Linux/Windows) or Metal (macOS) wheel; for NVIDIA, install a CUDA wheel from the release with `--find-links` and the `+cudaNNN.smNN` matching your driver and GPU. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing).
 
 ## Rust SDK
 

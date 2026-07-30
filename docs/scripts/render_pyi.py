@@ -12,7 +12,9 @@ Run from the repo root or the docs directory.
 
 from __future__ import annotations
 
+import argparse
 import ast
+import difflib
 import re
 import sys
 from pathlib import Path
@@ -31,19 +33,31 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner"],
+        [
+            "Runner",
+            "CalibrationStatus",
+            "LoraAdapterError",
+            "LoraAdapterInfo",
+            "LoraResidentGenerationInfo",
+            "LoraRuntimeStatus",
+        ],
     ),
     (
         "Which",
         "which",
         "Variants that select which kind of model to load.",
-        ["Which"],
+        ["LoraAdapter", "Which"],
     ),
     (
         "Requests",
         "requests",
         "Request dataclasses passed to Runner methods.",
-        ["ChatCompletionRequest", "CompletionRequest", "EmbeddingRequest"],
+        [
+            "LoraAdapterGeneration",
+            "ChatCompletionRequest",
+            "CompletionRequest",
+            "EmbeddingRequest",
+        ],
     ),
     (
         "Responses",
@@ -108,10 +122,10 @@ GROUPS = [
         ["AnyMoeExpertType", "AnyMoeConfig"],
     ),
     (
-        "Code execution",
+        "Code and shell execution",
         "code-execution",
-        "Configuration for the built-in Python code executor.",
-        ["SandboxPolicy", "CodeExecutionConfig"],
+        "Configuration for the built-in Python and shell executors.",
+        ["SandboxPolicy", "CodeExecutionConfig", "ShellConfig", "ShellSkillMount"],
     ),
     (
         "Agent approvals",
@@ -122,8 +136,8 @@ GROUPS = [
     (
         "Files",
         "files",
-        "First-class output files surfaced from agentic runs.",
-        ["RequestedFile", "FileSource", "File"],
+        "Input files and first-class output files surfaced from agentic runs.",
+        ["RequestedFile", "InputFile", "FileSource", "File"],
     ),
     (
         "MCP",
@@ -149,6 +163,26 @@ def _unparse(node) -> str:
         return ast.unparse(node)
     except Exception:
         return ""
+
+
+def _field_default(node: ast.expr | None) -> str:
+    if not isinstance(node, ast.Call):
+        return _unparse(node) if node is not None else ""
+    if not isinstance(node.func, ast.Name) or node.func.id != "field":
+        return _unparse(node)
+
+    values = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+    default = values.get("default")
+    if default is None and "default_factory" in values:
+        rendered = f"factory: {_unparse(values['default_factory'])}"
+    else:
+        rendered = _unparse(default)
+    if (
+        isinstance(values.get("kw_only"), ast.Constant)
+        and values["kw_only"].value is True
+    ):
+        return f"{rendered} (keyword-only)"
+    return rendered
 
 
 def _is_enum(cls: ast.ClassDef) -> bool:
@@ -423,7 +457,7 @@ def _render_class(
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             name = item.target.id
             ftype = _unparse(item.annotation)
-            value = _unparse(item.value) if item.value is not None else ""
+            value = _field_default(item.value)
             fields.append((name, ftype, value))
         elif isinstance(item, ast.Assign):
             for t in item.targets:
@@ -506,17 +540,20 @@ def _render_index() -> str:
         "",
         "The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.",
         "",
+        ":::note[Release and current-source APIs]",
+        "This reference is generated from the current source tree. Dynamic LoRA lifecycle entries are newer than the published v0.9.0 package; use a [current source build](/mistral.rs/developer/from-source/) until the next release.",
+        ":::",
+        "",
         "## Install",
         "",
-        "One wheel per accelerator. All wheels expose the same `mistralrs` module.",
+        "`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.",
         "",
-        "| Accelerator | Package |",
-        "| --- | --- |",
-        "| CPU (or Intel CPU with MKL) | `pip install mistralrs` |",
-        "| NVIDIA GPU | `pip install mistralrs-cuda` |",
-        "| Apple Silicon | `pip install mistralrs-metal` |",
-        "| Intel MKL (pinned) | `pip install mistralrs-mkl` |",
-        "| macOS Accelerate | `pip install mistralrs-accelerate` |",
+        "```bash",
+        "pip install mistralrs                                   # CPU / Metal (PyPI)",
+        "# NVIDIA (replace version, CUDA level, and SM)",
+        'pip install "mistralrs==0.9.0+cuda128.sm89" \\',
+        "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.0",
+        "```",
         "",
         "## Pages",
         "",
@@ -527,7 +564,7 @@ def _render_index() -> str:
         lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
-        "See [Tutorial 3](/mistral.rs/tutorials/03-python-sdk/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
+        "See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
     )
     lines.append("")
     lines.append("---")
@@ -547,27 +584,59 @@ def _collect_classes(tree: ast.Module) -> dict[str, ast.ClassDef]:
     return out
 
 
+def _render_pages(classes_by_name: dict[str, ast.ClassDef]) -> dict[str, str]:
+    pages = {"index.md": _render_index()}
+    for i, (title, slug, desc, names) in enumerate(GROUPS, start=2):
+        pages[f"{slug}.md"] = _render_page(title, desc, names, classes_by_name, i)
+    return pages
+
+
+def _check(pages: dict[str, str]) -> int:
+    committed = {p.name: p.read_text() for p in OUT_DIR.glob("*.md")}
+    drift = False
+    for name in sorted(set(pages) - set(committed)):
+        print(f"missing: {OUT_DIR / name}", file=sys.stderr)
+        drift = True
+    for name in sorted(set(committed) - set(pages)):
+        print(f"stale: {OUT_DIR / name} (no longer generated)", file=sys.stderr)
+        drift = True
+    for name in sorted(set(pages) & set(committed)):
+        if pages[name] != committed[name]:
+            drift = True
+            diff = difflib.unified_diff(
+                committed[name].splitlines(keepends=True),
+                pages[name].splitlines(keepends=True),
+                fromfile=f"committed/{name}",
+                tofile=f"generated/{name}",
+            )
+            sys.stderr.writelines(diff)
+    if drift:
+        print(
+            f"error: generated Python reference is out of date with {STUB_REL}; "
+            "run `python docs/scripts/render_pyi.py` and commit the result",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"ok: {OUT_DIR} is up to date with {STUB_REL}")
+    return 0
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify committed pages match the .pyi instead of writing",
+    )
+    opts = parser.parse_args()
+
     if not PYI_PATH.exists():
         print(f"error: {PYI_PATH} does not exist", file=sys.stderr)
         return 1
     source = PYI_PATH.read_text()
     tree = ast.parse(source)
     classes_by_name = _collect_classes(tree)
-
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    # Clean previous output so removed classes do not linger.
-    for existing in OUT_DIR.glob("*.md"):
-        existing.unlink()
-
-    (OUT_DIR / "index.md").write_text(_render_index())
-    print(f"wrote {OUT_DIR / 'index.md'}")
-
-    for i, (title, slug, desc, names) in enumerate(GROUPS, start=2):
-        page = _render_page(title, desc, names, classes_by_name, i)
-        path = OUT_DIR / f"{slug}.md"
-        path.write_text(page)
-        print(f"wrote {path}")
+    pages = _render_pages(classes_by_name)
 
     documented = {n for _, _, _, names in GROUPS for n in names}
     uncovered = sorted(set(classes_by_name) - documented)
@@ -577,6 +646,18 @@ def main() -> int:
             + ", ".join(uncovered),
             file=sys.stderr,
         )
+
+    if opts.check:
+        return _check(pages)
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Clean previous output so removed classes do not linger.
+    for existing in OUT_DIR.glob("*.md"):
+        existing.unlink()
+    for name, content in pages.items():
+        path = OUT_DIR / name
+        path.write_text(content)
+        print(f"wrote {path}")
 
     return 0
 

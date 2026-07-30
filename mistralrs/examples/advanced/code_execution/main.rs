@@ -34,7 +34,9 @@ async fn main() -> Result<()> {
         TextMessageRole::User,
         "Use Python to calculate the first 20 prime numbers and their sum.",
     );
-    let request = RequestBuilder::from(messages);
+    let request = RequestBuilder::from(messages)
+        .with_code_execution()
+        .with_max_tool_rounds(4);
 
     let response = model.send_chat_request(request).await?;
 

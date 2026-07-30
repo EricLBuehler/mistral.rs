@@ -261,6 +261,8 @@ async fn fetch_embedding(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -269,9 +271,11 @@ async fn fetch_embedding(
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
+        adapter: None,
         truncate_sequence,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -304,6 +308,8 @@ async fn fetch_embedding_tokens(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -312,9 +318,11 @@ async fn fetch_embedding_tokens(
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: model_id.map(|m| m.to_string()),
+        adapter: None,
         truncate_sequence,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     send_request_with_model(&state, request, model_id)
@@ -352,6 +360,7 @@ async fn process_embedding_response(
             | Response::Speech { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
+            | Response::BlockDenoisingProgress(_)
             | Response::AgenticToolApprovalRequired { .. }
             | Response::File(_) => Err(anyhow!(
                 "Received unexpected response type from embedding request."

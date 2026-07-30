@@ -99,9 +99,17 @@ pub fn run_doctor(json: bool) -> Result<()> {
 
         // CUDA version info
         if cfg!(feature = "cuda") {
+            let build_cuda = system
+                .build
+                .cuda_toolkit_version
+                .as_deref()
+                .unwrap_or("unknown");
             let nvcc = nvcc_version().unwrap_or_else(|| "unknown".to_string());
             let driver = nvidia_driver_version().unwrap_or_else(|| "unknown".to_string());
-            println!("[INFO] CUDA: nvcc {nvcc}, driver {driver}");
+            let driver_cuda = nvidia_driver_cuda_version().unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "[INFO] CUDA: build {build_cuda}, local nvcc {nvcc}, driver {driver} (supports CUDA {driver_cuda})"
+            );
         }
         // Metal/Xcode version info
         if cfg!(feature = "metal") {
@@ -114,6 +122,7 @@ pub fn run_doctor(json: bool) -> Result<()> {
     println!();
     println!("Mistral.rs Installation");
     println!("-----------------------");
+    println!("[INFO] Version: {}", system.build.version);
     println!("[INFO] Git revision: {}", system.build.git_revision);
 
     let mut features = Vec::new();
@@ -131,6 +140,9 @@ pub fn run_doctor(json: bool) -> Result<()> {
     }
     if system.build.flash_attn_v3 {
         features.push("flash-attn-v3");
+    }
+    if system.build.cutile {
+        features.push("cutile");
     }
     if system.build.accelerate {
         features.push("accelerate");
@@ -257,6 +269,19 @@ fn nvidia_driver_version() -> Option<String> {
         return None;
     }
     Some(versions.join(", "))
+}
+
+fn nvidia_driver_cuda_version() -> Option<String> {
+    let output = command_stdout_any(&["nvidia-smi", "nvidia-smi.exe"], &[])?;
+    let version = output.split("CUDA Version:").nth(1)?.trim_start();
+    let version = version
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .next()?;
+    if version.is_empty() {
+        None
+    } else {
+        Some(version.to_string())
+    }
 }
 
 fn xcode_version() -> Option<String> {

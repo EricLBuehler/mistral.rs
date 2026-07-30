@@ -102,12 +102,12 @@ impl VisionMlp {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let lhs = self
-            .gate_proj
-            .forward(&xs.unsqueeze(0)?)?
-            .apply(&self.act)?;
-        let rhs = self.up_proj.forward(&xs.unsqueeze(0)?)?;
-        let res = self.down_proj.forward(&(lhs * rhs)?)?;
+        let xs = xs.unsqueeze(0)?;
+        let lhs = self.gate_proj.forward(&xs)?;
+        let rhs = self.up_proj.forward(&xs)?;
+        let res = self
+            .down_proj
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
         res.squeeze(0)
     }
 }

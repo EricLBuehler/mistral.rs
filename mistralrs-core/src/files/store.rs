@@ -1,7 +1,7 @@
 //! In-process file store keyed by id, with per-entry TTL.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
@@ -19,8 +19,7 @@ const CLEANUP_INTERVAL: Duration = Duration::from_secs(120);
 struct StoredFile {
     file: Arc<File>,
     expires_at: Instant,
-    /// `None` for runs without a session.
-    session_id: Option<String>,
+    session_ids: HashSet<String>,
     /// Insertion order. `list_for_session` returns oldest first.
     seq: u64,
 }
@@ -55,14 +54,23 @@ impl FileStore {
     pub fn insert(&self, file: File, session_id: Option<String>) {
         let id = file.id.clone();
         let mut guard = self.inner.write().unwrap();
+        if let Some(existing) = guard.by_id.get_mut(&id) {
+            existing.file = Arc::new(file);
+            existing.expires_at = Instant::now() + self.ttl;
+            if let Some(session_id) = session_id {
+                existing.session_ids.insert(session_id);
+            }
+            return;
+        }
         let seq = guard.next_seq;
         guard.next_seq += 1;
+        let session_ids = session_id.into_iter().collect();
         guard.by_id.insert(
             id,
             StoredFile {
                 file: Arc::new(file),
                 expires_at: Instant::now() + self.ttl,
-                session_id,
+                session_ids,
                 seq,
             },
         );
@@ -105,10 +113,20 @@ impl FileStore {
         let new_expiry = std::time::Instant::now() + self.ttl;
         let mut guard = self.inner.write().unwrap();
         for entry in guard.by_id.values_mut() {
-            if entry.session_id.as_deref() == Some(session_id) {
+            if entry.session_ids.contains(session_id) {
                 entry.expires_at = new_expiry;
             }
         }
+    }
+
+    pub fn attach_to_session(&self, id: &str, session_id: impl Into<String>) -> bool {
+        let mut guard = self.inner.write().unwrap();
+        let Some(entry) = guard.by_id.get_mut(id) else {
+            return false;
+        };
+        entry.session_ids.insert(session_id.into());
+        entry.expires_at = Instant::now() + self.ttl;
+        true
     }
 
     /// Non-expired files tagged with `session_id`, oldest first.
@@ -118,7 +136,7 @@ impl FileStore {
         let mut hits: Vec<&StoredFile> = guard
             .by_id
             .values()
-            .filter(|s| s.expires_at >= now && s.session_id.as_deref() == Some(session_id))
+            .filter(|s| s.expires_at >= now && s.session_ids.contains(session_id))
             .collect();
         hits.sort_by_key(|s| s.seq);
         hits.into_iter().map(|s| Arc::clone(&s.file)).collect()
@@ -194,6 +212,7 @@ mod tests {
             mime_type: Some("text/plain".into()),
             bytes: 2,
             created_at: 0,
+            purpose: crate::files::FILE_PURPOSE_AGENT_OUTPUT.to_string(),
             source: FileSource {
                 tool: "execute_python".into(),
                 round: 0,
@@ -232,6 +251,16 @@ mod tests {
             .map(|f| f.id.clone())
             .collect();
         assert_eq!(list2, vec!["file_c".to_string()]);
+    }
+
+    #[test]
+    fn attach_existing_file_to_multiple_sessions() {
+        let s = FileStore::new();
+        s.insert(make("file_a"), None);
+        assert!(s.attach_to_session("file_a", "sess1"));
+        assert!(s.attach_to_session("file_a", "sess2"));
+        assert_eq!(s.list_for_session("sess1")[0].id, "file_a");
+        assert_eq!(s.list_for_session("sess2")[0].id, "file_a");
     }
 
     #[test]

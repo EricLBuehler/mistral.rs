@@ -170,10 +170,20 @@ pub fn get_search_tools(web_search_options: &WebSearchOptions) -> Result<Vec<Too
 
         let location_details = match &web_search_options.user_location {
             Some(WebSearchUserLocation::Approximate { approximate }) => {
-                format!(
-                    "\nThe user's location is: {}, {}, {}, {}.",
-                    approximate.city, approximate.region, approximate.country, approximate.timezone
-                )
+                let parts = [
+                    approximate.city.as_deref(),
+                    approximate.region.as_deref(),
+                    approximate.country.as_deref(),
+                    approximate.timezone.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                if parts.is_empty() {
+                    String::new()
+                } else {
+                    format!("\nThe user's location is: {}.", parts.join(", "))
+                }
             }
             None => "".to_string(),
         };

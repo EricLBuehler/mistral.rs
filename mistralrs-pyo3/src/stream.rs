@@ -36,6 +36,7 @@ impl ChatCompletionStreamer {
                 Some(resp) => match resp {
                     Response::AgenticToolCallProgress { .. } => continue,
                     Response::AgenticToolApprovalRequired { .. } => continue,
+                    Response::BlockDenoisingProgress(_) => continue,
                     Response::File(_) => continue,
                     Response::ModelError(msg, _) => {
                         return Some(Err(PyValueError::new_err(msg.to_string())));

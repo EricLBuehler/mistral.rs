@@ -31,19 +31,10 @@ macro_rules! get_paths {
         $quantized_model_id:expr,
         $quantized_filename:expr,
         $silent:expr,
-        $loading_uqff:expr
+        $loading_uqff:expr,
+        $adapter_options:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
             $this.model_id.clone(),
@@ -87,13 +78,11 @@ macro_rules! get_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_xlora_paths(
+        let adapter_paths = $crate::pipeline::get_adapter_paths(
             $this.model_id.clone(),
-            $this.xlora_model_id.as_ref(),
-            $this.lora_adapter_ids.as_ref(),
+            $adapter_options,
             &$token_source,
             revision.clone(),
-            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
@@ -134,6 +123,10 @@ macro_rules! get_paths {
             Some(PathBuf::from_str(p)?)
         } else if dir_list.contains(&"chat_template.jinja".to_string()) {
             tracing::trace!("Loading `chat_template.jinja` at `{}`", $this.model_id);
+            // The .jinja template renders bos/eos tokens which live in `tokenizer_config.json`, not the template; fetch it so `get_chat_template` finds it alongside the template.
+            if dir_list.contains(&"tokenizer_config.json".to_string()) {
+                let _ = $crate::api_get_file!(api, "tokenizer_config.json", model_id, &revision);
+            }
             Some($crate::api_get_file!(
                 api,
                 "chat_template.jinja",
@@ -193,17 +186,7 @@ macro_rules! get_embedding_paths {
         $silent:expr,
         $loading_uqff:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let api = api.repo(Repo::with_revision(
             $this.model_id.clone(),
@@ -248,14 +231,7 @@ macro_rules! get_embedding_paths {
             &model_id,
             $loading_uqff,
         )?;
-        let adapter_paths = get_xlora_paths(
-            $this.model_id.clone(),
-            None, // no xlora
-            $this.lora_adapter_ids.as_ref(),
-            &$token_source,
-            revision.clone(),
-            None, // no xlora
-        )?;
+        let adapter_paths = $crate::pipeline::AdapterPaths::None;
 
         let mut parsed_modules = Vec::new();
         let is_local = std::path::Path::new(&$this.model_id).exists();
@@ -326,24 +302,13 @@ macro_rules! get_embedding_paths {
 #[macro_export]
 macro_rules! get_uqff_paths {
     ($from_uqff:expr, $this:expr, $silent:expr) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token(
-                    &$this
-                        .token_source
-                        .read()
-                        .expect("Failed to read token source")
-                        .clone()
-                        .unwrap_or(TokenSource::None),
-                )?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api_token_source = $this
+            .token_source
+            .read()
+            .expect("Failed to read token source")
+            .clone()
+            .unwrap_or(TokenSource::None);
+        let api = $crate::pipeline::hf::build_api(&api_token_source, !$silent)?;
         let revision = $this
             .revision
             .read()
@@ -438,17 +403,7 @@ macro_rules! get_paths_gguf {
         $quantized_filenames:expr,
         $silent:expr
     ) => {{
-        let api = {
-            use $crate::GLOBAL_HF_CACHE;
-            let cache = GLOBAL_HF_CACHE.get().cloned().unwrap_or_default();
-            let mut api = ApiBuilder::from_cache(cache)
-                .with_progress(!$silent)
-                .with_token(get_token($token_source)?);
-            if let Some(cache_dir) = $crate::hf_hub_cache_dir() {
-                api = api.with_cache_dir(cache_dir);
-            }
-            api.build()?
-        };
+        let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
         let this_model_id = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
         let api = api.repo(Repo::with_revision(
@@ -473,6 +428,10 @@ macro_rules! get_paths_gguf {
                 None
             } else if dir_list.contains(&"chat_template.jinja".to_string()) {
                 tracing::trace!("Loading `chat_template.jinja` at `{}`", this_model_id);
+                // The .jinja template renders bos/eos tokens which live in `tokenizer_config.json`, not the template; fetch it so `get_chat_template` finds it alongside the template.
+                if dir_list.contains(&"tokenizer_config.json".to_string()) {
+                    let _ = $crate::api_get_file!(api, "tokenizer_config.json", model_id, &revision);
+                }
                 Some($crate::api_get_file!(
                     api,
                     "chat_template.jinja",
@@ -505,13 +464,16 @@ macro_rules! get_paths_gguf {
         )?;
 
         tracing::debug!("GGUF file(s) {:?}", filenames);
-        let adapter_paths = get_xlora_paths(
+        let adapter_paths = $crate::pipeline::get_adapter_paths(
             this_model_id.clone(),
-            $this.xlora_model_id.as_ref(),
-            $this.lora_adapter_ids.as_ref(),
+            $crate::pipeline::AdapterPathOptions {
+                xlora_model_id: $this.xlora_model_id.as_ref(),
+                lora_adapters: None,
+                xlora_order: $this.xlora_order.as_ref(),
+                xlora_preload: $crate::pipeline::XLoraPreload::Load,
+            },
             &$token_source,
             revision.clone(),
-            $this.xlora_order.as_ref(),
         )?;
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
@@ -603,6 +565,7 @@ macro_rules! normal_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -628,8 +591,15 @@ macro_rules! normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -640,7 +610,9 @@ macro_rules! normal_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -658,7 +630,9 @@ macro_rules! normal_model_loader_sharded {
         $multi_progress:expr,
         $matformer_config:expr,
     ) => {{
-        $loader.load(
+        let tracker = $vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             $vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -669,7 +643,9 @@ macro_rules! normal_model_loader_sharded {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -692,6 +668,7 @@ macro_rules! multimodal_normal_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -717,8 +694,15 @@ macro_rules! multimodal_normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -729,7 +713,9 @@ macro_rules! multimodal_normal_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -746,10 +732,18 @@ macro_rules! multimodal_normal_model_loader_sharded {
         $attention_mechanism:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
-        $loader.load(
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            $vb.with_uqff_reader(reader)
+        } else {
+            $vb
+        };
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
-            $vb,
+            vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
@@ -758,7 +752,9 @@ macro_rules! multimodal_normal_model_loader_sharded {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -779,6 +775,7 @@ macro_rules! embedding_normal_model_loader {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $uqff_reader:expr,
     ) => {{
         let regexes = if $loading_isq && $loading_uqff {
             // Dummy weights for the layers which will be overwritten...
@@ -800,8 +797,15 @@ macro_rules! embedding_normal_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -812,7 +816,9 @@ macro_rules! embedding_normal_model_loader {
                 matformer_slicing_config: None,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -828,10 +834,18 @@ macro_rules! embedding_normal_model_loader_sharded {
         $real_device:expr,
         $attention_mechanism:expr,
         $multi_progress:expr,
+        $uqff_reader:expr,
     ) => {{
-        $loader.load(
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            $vb.with_uqff_reader(reader)
+        } else {
+            $vb
+        };
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load(
             &$config,
-            $vb,
+            vb,
             $crate::pipeline::NormalLoadingMetadata {
                 mapper: $mapper,
                 loading_isq: $loading_isq,
@@ -840,7 +854,9 @@ macro_rules! embedding_normal_model_loader_sharded {
                 matformer_slicing_config: None,
             },
             $attention_mechanism,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -860,15 +876,15 @@ macro_rules! xlora_model_loader {
         $real_device:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
     ) => {{
-        // TODO: remove lora_preload_adapter_info
         let $crate::pipeline::AdapterPaths::XLora {
             adapter_configs,
             adapter_safetensors,
             classifier_path,
             xlora_order,
             xlora_config,
-            lora_preload_adapter_info: _,
+            ..
         } = $paths.get_adapter_paths()
         else {
             unreachable!()
@@ -898,8 +914,15 @@ macro_rules! xlora_model_loader {
             |_| true,
             get_device_for_tensor,
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
 
-        $loader.load_xlora(
+        let tracker = vb.tracker().clone();
+
+        let model = $loader.load_xlora(
             &$config,
             vb,
             adapter_configs.as_ref().unwrap(),
@@ -913,7 +936,9 @@ macro_rules! xlora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             &None,
-        )?
+        )?;
+
+        (model, tracker)
     }};
 }
 
@@ -936,6 +961,9 @@ macro_rules! lora_model_loader {
         $is_moqe:expr,
         $multi_progress:expr,
         $matformer_config:expr,
+        $uqff_reader:expr,
+        $runtime_config:expr,
+        $live_updates:expr,
     ) => {{
         let $crate::pipeline::AdapterPaths::Lora(lora_adapter_paths) = $paths.get_adapter_paths()
         else {
@@ -966,31 +994,17 @@ macro_rules! lora_model_loader {
             |_| true, // Will be overwritten...
             get_device_for_tensor.clone(),
         )?;
+        let vb = if let Some(reader) = $uqff_reader.clone() {
+            vb.with_uqff_reader(reader)
+        } else {
+            vb
+        };
+        let lora_layers = std::sync::Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let vb = vb.with_lora_registry(lora_layers.clone());
 
-        for $crate::pipeline::LoraAdapterPaths {
-            adapter_path,
-            lora_config,
-        } in lora_adapter_paths
-        {
-            let lora_vb = from_mmaped_safetensors(
-                vec![adapter_path.clone()],
-                Vec::new(),
-                $dtype,
-                $device,
-                $layer_devices,
-                $silent,
-                None,
-                |_| true,
-                get_device_for_tensor.clone(),
-            )?;
+        let tracker = vb.tracker().clone();
 
-            mistralrs_quant::push_applied_lora(mistralrs_quant::LoraAdapter {
-                config: lora_config.clone(),
-                weights: lora_vb,
-            });
-        }
-
-        $loader.load(
+        let model = $loader.load(
             &$config,
             vb,
             $crate::pipeline::NormalLoadingMetadata {
@@ -1001,6 +1015,38 @@ macro_rules! lora_model_loader {
                 matformer_slicing_config: $matformer_config,
             },
             $attention_mechanism,
-        )?
+        )?;
+        lora_layers.finalize()?;
+
+        let dynamic_lora = std::sync::Arc::new($crate::DynamicLoraRuntime::new(
+            lora_layers,
+            $runtime_config,
+            $live_updates,
+        )?);
+        for $crate::pipeline::ResolvedLoraAdapter {
+            alias,
+            source,
+            revision,
+            config_path,
+            weights_path,
+        } in lora_adapter_paths
+        {
+            let info = dynamic_lora.load_from_safetensors(
+                alias.clone(),
+                source.clone(),
+                revision.clone(),
+                config_path,
+                weights_path,
+            )?;
+            tracing::info!(
+                alias = %info.alias,
+                generation = %info.generation,
+                rank = info.rank,
+                bytes = info.bytes,
+                "LoRA adapter preloaded"
+            );
+        }
+
+        (model, tracker, Some(dynamic_lora))
     }};
 }

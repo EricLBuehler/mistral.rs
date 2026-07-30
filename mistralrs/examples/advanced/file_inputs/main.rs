@@ -1,0 +1,37 @@
+//! User-provided input files with the Rust SDK.
+//!
+//! The request attaches a CSV as an input file. Text-like files are previewed in
+//! the prompt and can be paginated with the built-in file tools when the agentic
+//! runtime is active.
+//!
+//! Run with: `cargo run --release --features code-execution --example file_inputs -p mistralrs`
+
+use anyhow::Result;
+use mistralrs::{InputFile, IsqBits, ModelBuilder, RequestBuilder, TextMessageRole, TextMessages};
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four)
+        .with_logging()
+        .build()
+        .await?;
+
+    let sales = InputFile::from_text_with_mime(
+        "sales.csv",
+        "text/csv",
+        "region,revenue\nnorth,120\nsouth,95\nwest,180\n",
+    );
+    let messages = TextMessages::new().add_message(
+        TextMessageRole::User,
+        "Which region has the highest revenue? Use the attached CSV.",
+    );
+    let request = RequestBuilder::from(messages).with_input_file(sales);
+
+    let response = model.send_chat_request(request).await?;
+    if let Some(choice) = response.choices.first() {
+        println!("{}", choice.message.content.as_deref().unwrap_or(""));
+    }
+
+    Ok(())
+}

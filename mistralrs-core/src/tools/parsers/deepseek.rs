@@ -1,13 +1,13 @@
 //! DeepSeek tool call parser.
 //!
 //! Format:
-//! ```text
+//! ~~~text
 //! <｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME
 //! ```json
 //! {"key": "value"}
 //! ```
 //! <｜tool▁call▁end｜>
-//! ```
+//! ~~~
 
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
 use regex::Regex;
@@ -49,6 +49,53 @@ impl ToolFormatParser for DeepSeekParser {
         };
         TopLevelGrammar {
             grammars: vec![top, json_body],
+            max_tokens: None,
+        }
+    }
+
+    fn required_tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar {
+        let mut branches = Vec::new();
+        let mut rules = Vec::new();
+        let mut grammars = Vec::new();
+
+        for (idx, tool) in tools.iter().enumerate() {
+            let branch = format!("deepseek_tool_{idx}");
+            let json_body = format!("json_body_{idx}");
+            let tool_name = format!("{:?}", tool.function.name);
+            rules.push(format!(
+                r#"{branch}: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> {tool_name} "\n```json\n" @{json_body} "\n```\n" <｜tool▁call▁end｜>"#
+            ));
+            branches.push(branch);
+            grammars.push(GrammarWithLexer {
+                name: Some(json_body),
+                json_schema: Some(
+                    tool.function
+                        .strict_parameters_schema()
+                        .unwrap_or_else(|| json!({"type": "object"})),
+                ),
+                ..Default::default()
+            });
+        }
+
+        if branches.is_empty() {
+            branches.push("deepseek_tool".to_string());
+            rules.push(
+                r#"deepseek_tool: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> /[a-zA-Z_][a-zA-Z0-9_]*/ "\n```json\n" @json_body "\n```\n" <｜tool▁call▁end｜>"#
+                    .to_string(),
+            );
+            grammars.push(GrammarWithLexer {
+                name: Some("json_body".to_string()),
+                json_schema: Some(json!({"type": "object"})),
+                ..Default::default()
+            });
+        }
+
+        let lark = format!("start: {}\n{}", branches.join(" | "), rules.join("\n"));
+        let top = GrammarWithLexer::from_lark(lark);
+        let mut all_grammars = vec![top];
+        all_grammars.extend(grammars);
+        TopLevelGrammar {
+            grammars: all_grammars,
             max_tokens: None,
         }
     }

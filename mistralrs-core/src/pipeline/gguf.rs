@@ -1,8 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
-    TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -44,13 +43,12 @@ use crate::{
     models::quantized_qwen3::ModelWeights as QQwen3,
     models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
     models::quantized_starcoder2::ModelWeights as QStarcoder2,
-    utils::tokens::get_token,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use anyhow::{bail, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -99,7 +97,6 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -213,7 +210,6 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
         })
     }
 }
@@ -256,7 +252,6 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
-            lora_adapter_ids: None,
         }
     }
 }
@@ -347,7 +342,7 @@ impl Loader for GGUFLoader {
             let layer_sizes_in_bytes =
                 model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1, None)?;
             let non_mapped_size_in_bytes =
-                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1, None)?;
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1, None, None)?;
             let total_model_size_in_bytes =
                 layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
 
@@ -374,7 +369,7 @@ impl Loader for GGUFLoader {
         let use_nccl = mistralrs_quant::distributed::use_nccl();
         let available_devices = if let Ok(payload) = env::var(distributed::IS_DAEMON_FLAG) {
             let payload: WorkerTransferData = serde_json::from_str(&payload)?;
-            let WorkerTransferData::Init { id: _, worker_rank } = payload;
+            let WorkerTransferData::Init { worker_rank, .. } = payload;
             vec![candle_core::Device::new_cuda(worker_rank + 1)?]
         } else if use_nccl {
             vec![candle_core::Device::new_cuda(0)?]
@@ -616,6 +611,7 @@ impl Loader for GGUFLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
             mapper: pipeline_mapper,
@@ -741,6 +737,14 @@ impl MetadataMixin for GGUFPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        true
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -756,6 +760,8 @@ impl Pipeline for GGUFPipeline {
             paged_attn_meta,
             flash_meta,
             flash_meta_full,
+            recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {

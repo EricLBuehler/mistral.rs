@@ -41,6 +41,19 @@ pub mod paged_attention {
             candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
 
+        #[allow(unused_variables)]
+        pub fn gather_canvas_kv(
+            &self,
+            _key_cache: &Tensor,
+            _value_cache: &Tensor,
+            _input_metadata: &PagedAttentionInputMetadata,
+            _seq_idx: usize,
+            _kv_len: usize,
+            _dtype: candle_core::DType,
+        ) -> Result<(Tensor, Tensor)> {
+            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
         #[allow(clippy::too_many_arguments)]
         #[allow(unused_variables)]
         pub fn forward_donor_cache(

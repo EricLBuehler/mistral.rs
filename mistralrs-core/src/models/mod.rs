@@ -1,6 +1,5 @@
 pub(crate) mod deepseek2;
 pub(crate) mod deepseek3;
-pub(crate) mod gdn;
 pub(crate) mod gemma;
 pub(crate) mod gemma2;
 pub(crate) mod glm4;
@@ -8,6 +7,10 @@ pub(crate) mod glm4_moe;
 pub(crate) mod glm4_moe_lite;
 pub(crate) mod gpt_oss;
 pub(crate) mod granite;
+mod hunyuan_rope;
+pub(crate) mod hunyuan_v1_dense;
+pub(crate) mod hunyuan_v1_moe;
+pub(crate) mod lfm2;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;

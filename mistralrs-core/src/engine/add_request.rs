@@ -3,7 +3,7 @@ use crate::{
     prefix_cacher::MatchingCache,
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
-    tools::{ToolCallingMatcher, ToolChoice},
+    tools::{ToolCallFormat, ToolCallState, ToolChoice},
     ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
@@ -28,24 +28,29 @@ use super::{agentic_loop, Engine, TERMINATE_ALL_NEXT_STEP};
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
-            Request::Normal(request) => {
+            Request::Normal(mut request) => {
                 let is_chat = matches!(
                     &request.messages,
                     RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
                 );
                 let in_agentic_loop =
                     request.max_tool_rounds == agentic_loop::AGENTIC_LOOP_REENTRY_SENTINEL;
-                let has_tooling = !self.tool_callbacks.is_empty()
-                    && request.tools.as_ref().is_some_and(|t| !t.is_empty());
+                let has_tooling = self.tool_callbacks.keys().any(|name| {
+                    agentic_loop::registered_tool_active_for_request(
+                        name,
+                        request.enable_code_execution,
+                        request.enable_shell,
+                    )
+                });
                 let has_search = request.web_search_options.is_some();
-                let has_code_exec =
-                    request.enable_code_execution && !self.tool_callbacks.is_empty();
                 let has_agentic =
                     request.max_tool_rounds.is_some() || request.tool_dispatch_url.is_some();
+                let has_input_files =
+                    cfg!(feature = "code-execution") && is_chat && !request.input_files.is_empty();
 
                 if is_chat
                     && !in_agentic_loop
-                    && (has_search || has_tooling || has_code_exec || has_agentic)
+                    && (has_search || has_tooling || has_agentic || has_input_files)
                 {
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {
@@ -55,12 +60,15 @@ impl Engine {
                         .send(crate::Response::ValidationError(
                             "request.files is set but no agentic surface is enabled \
                              (enable_code_execution / tools / web_search / \
-                             max_tool_rounds / tool_dispatch_url). Files cannot be \
+                             enable_shell / max_tool_rounds / tool_dispatch_url). Files cannot be \
                              produced without one of these."
                                 .into(),
                         ))
                         .await;
                 } else {
+                    if is_chat && !request.input_files.is_empty() {
+                        agentic_loop::inject_input_files_message(&mut request);
+                    }
                     self.add_request(*request).await;
                 }
             }
@@ -68,6 +76,24 @@ impl Engine {
                 if let Err(e) = get_mut_arcmutex!(self.pipeline).re_isq_model(level) {
                     warn!("ISQ requantization failed: {e:?}");
                 }
+            }
+            Request::Calibration(req) => {
+                let result = {
+                    let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                    match &req.action {
+                        crate::CalibrationAction::Start => pipeline
+                            .begin_calibration()
+                            .and_then(|()| pipeline.calibration_status()),
+                        crate::CalibrationAction::Status => pipeline.calibration_status(),
+                        crate::CalibrationAction::Apply { save_cimatrix } => {
+                            pipeline.apply_calibration(save_cimatrix.clone())
+                        }
+                    }
+                };
+                if let Err(e) = &result {
+                    warn!("Calibration request failed: {e:?}");
+                }
+                let _ = req.response.send(result).await;
             }
             Request::Tokenize(req) => self.tokenize_text(req).await,
             Request::Detokenize(req) => self.detokenize_text(req).await,
@@ -79,6 +105,22 @@ impl Engine {
     }
 
     pub(super) async fn add_request(&self, request: NormalRequest) {
+        let adapter_lease = match request.adapter.as_ref() {
+            Some(selection) => match selection.lease() {
+                Some(lease) => Some(lease.clone()),
+                None => {
+                    request
+                        .response
+                        .send(Response::ValidationError(
+                            "request adapter selection was not pinned before admission".into(),
+                        ))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
+            },
+            None => None,
+        };
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
@@ -90,6 +132,24 @@ impl Engine {
                 ..
             }
         );
+
+        let is_text_generation = matches!(
+            &request.messages,
+            RequestMessage::Chat { .. }
+                | RequestMessage::Completion { .. }
+                | RequestMessage::CompletionTokens(_)
+                | RequestMessage::MultimodalChat { .. }
+        );
+        if is_text_generation && request.sampling_params.max_len == Some(0) {
+            request
+                .response
+                .send(Response::ValidationError(
+                    "max_tokens must be at least 1.".into(),
+                ))
+                .await
+                .unwrap_or_else(|_| warn!("Receiver disconnected"));
+            return;
+        }
 
         let best_of = match request.messages {
             RequestMessage::Completion { best_of, .. } => best_of,
@@ -162,14 +222,30 @@ impl Engine {
             _ => None,
         };
         let has_tools = request.tools.as_ref().is_some_and(|t| !t.is_empty());
-        let matcher = Arc::new(handle_seq_error!(
-            ToolCallingMatcher::new(
-                request.tool_choice.unwrap_or(ToolChoice::Auto),
-                request.tools.as_deref(),
-            ),
-            request.response
-        ));
-
+        let preferred_tool_call_format = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline
+                .get_chat_template()
+                .and_then(|chat_template| chat_template.tool_call_format())
+        };
+        let uses_harmony_tool_call_strategy =
+            preferred_tool_call_format == Some(ToolCallFormat::Harmony);
+        let validates_forced_tool_choice = request
+            .tool_choice
+            .as_ref()
+            .is_some_and(|choice| choice.forced_function_name().is_some());
+        let needs_tool_call_state =
+            has_tools || uses_harmony_tool_call_strategy || validates_forced_tool_choice;
+        if uses_harmony_tool_call_strategy
+            && !crate::reasoning_parsers::harmony::is_harmony_encoding_ready()
+        {
+            if let Err(e) = tokio::task::block_in_place(|| {
+                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
+                Ok::<(), anyhow::Error>(())
+            }) {
+                warn!("Failed to initialize Harmony encoding: {e}");
+            }
+        }
         let image_generation_format = match &request.messages {
             RequestMessage::ImageGeneration { format, .. } => Some(*format),
             _ => None,
@@ -211,7 +287,7 @@ impl Engine {
                 reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let tools = request.tools.unwrap_or_default();
+                let tools = request.tools.clone().unwrap_or_default();
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -432,6 +508,7 @@ impl Engine {
             topk,
             topp,
             minp,
+            request.sampling_params.logits_bias.unwrap_or_default(),
             request.logits_processors.unwrap_or_default(),
         );
         let sampler = handle_seq_error!(sampler, request.response);
@@ -507,7 +584,14 @@ impl Engine {
                 let n_tokens = prompt_tokens.len();
                 let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
                 let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let dtype = metadata.activation_dtype;
+                let mut dtype = metadata.activation_dtype;
+                // matches the f16 conversion KvCache::append applies on CPU
+                if device.is_cpu()
+                    && dtype == candle_core::DType::F32
+                    && crate::kv_cache::cpu_kv_f16()
+                {
+                    dtype = candle_core::DType::F16;
+                }
                 let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
                 for layer_idx in 0..model_metadata.num_layers() {
                     if !needs_preallocated_cache
@@ -577,6 +661,25 @@ impl Engine {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("Time travel has occurred!");
+            let tool_call_state = if needs_tool_call_state {
+                let requested_tool_choice = request.tool_choice.clone().unwrap_or(ToolChoice::Auto);
+                let tool_choice =
+                    if has_tools || requested_tool_choice.forced_function_name().is_some() {
+                        requested_tool_choice
+                    } else {
+                        ToolChoice::None
+                    };
+                Some(handle_seq_error!(
+                    ToolCallState::new(
+                        tool_choice,
+                        request.tools.as_deref(),
+                        preferred_tool_call_format,
+                    ),
+                    request.response
+                ))
+            } else {
+                None
+            };
             let mut seq = Sequence::new_waiting(
                 prompt_tokens.clone(),
                 prompt_text.clone(),
@@ -604,11 +707,7 @@ impl Engine {
                 audios.clone(),
                 videos.clone(),
                 block_size,
-                if has_tools {
-                    Some(matcher.clone())
-                } else {
-                    None
-                },
+                tool_call_state,
                 image_generation_format,
                 seq_step_type,
                 diffusion_params.clone(),
@@ -617,36 +716,14 @@ impl Engine {
                 request.return_raw_logits,
                 eos_toks,
             );
-
-            // Only "track" a new sequence if it is a traditional one
-            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
-                self.logger.add_new_sequence();
+            if let Some(adapter_lease) = &adapter_lease {
+                seq.bind_adapter(adapter_lease.clone());
             }
 
-            // Enable Harmony mode if the chat template uses Harmony format
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if let Some(chat_template) = pipeline.get_chat_template() {
-                    if chat_template.is_harmony_format() {
-                        // Pre-warm the Harmony encoding if not already done.
-                        // This must be done in a blocking context because openai-harmony
-                        // uses reqwest::blocking which creates its own tokio runtime.
-                        if !crate::reasoning_parsers::harmony::is_harmony_encoding_ready() {
-                            if let Err(e) = tokio::task::block_in_place(|| {
-                                crate::reasoning_parsers::harmony::prewarm_harmony_encoding();
-                                Ok::<(), anyhow::Error>(())
-                            }) {
-                                warn!("Failed to initialize Harmony encoding: {e}");
-                            }
-                        }
-                        match crate::reasoning_parsers::HarmonyContext::new() {
-                            Ok(ctx) => seq.enable_reasoning(
-                                crate::reasoning_parsers::ReasoningMode::Harmony,
-                                Box::new(ctx),
-                            ),
-                            Err(e) => warn!("Failed to enable Harmony mode: {e}"),
-                        }
-                    } else if chat_template.uses_channel_tags() {
+                    if chat_template.uses_channel_tags() && !chat_template.is_harmony_format() {
                         // Gemma 4: <|channel>thought\n...<channel|>
                         let prompt_activates_thinking =
                             seq.get_initial_prompt().contains("<|think|>");
@@ -673,17 +750,16 @@ impl Engine {
                             crate::reasoning_parsers::ReasoningMode::TagBased,
                             Box::new(ctx),
                         );
-                    }
-                }
-            }
-
-            // Allocate recurrent state pool slot for hybrid models
-            {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
-                    let mut hybrid_cache = pipeline.cache().hybrid();
-                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
-                        seq.set_recurrent_state_idx(Some(slot_idx));
+                    } else if chat_template.uses_gemma_turns() {
+                        // Gemma-family thinking convention (MedGemma 1.5 etc):
+                        // <unused94>thought\n...<unused95>. Pass-through for models
+                        // that never emit the tokens.
+                        seq.enable_reasoning(
+                            crate::reasoning_parsers::ReasoningMode::TagBased,
+                            Box::new(
+                                crate::reasoning_parsers::TagReasoningContext::new_gemma_thought(),
+                            ),
+                        );
                     }
                 }
             }
@@ -694,43 +770,80 @@ impl Engine {
             // still get their prompt rewrite and mm-feature setup before cache matching.
             if seq.has_images() || seq.has_audios() || seq.has_videos() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                let _ = pipeline.get_processor().inputs_processor().process_inputs(
-                    pipeline.tokenizer(),
-                    &mut [&mut seq],
-                    true,
-                    pipeline.get_metadata().is_xlora,
-                    &pipeline.device(),
-                    pipeline.get_metadata().no_kv_cache,
-                    None,
-                    false,
-                    pipeline.get_metadata().sliding_window,
-                    pipeline.get_input_processor_config(),
-                    None,
-                    pipeline.device_mapper(),
+                handle_seq_error!(
+                    pipeline
+                        .get_processor()
+                        .inputs_processor()
+                        .prepare_for_paged_prompt_planning(
+                            pipeline.tokenizer(),
+                            &mut [&mut seq],
+                            &pipeline.device(),
+                            pipeline.get_input_processor_config(),
+                            None,
+                        ),
+                    request.response
                 );
             }
 
-            let prefill_cache = handle_seq_error!(
-                get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                    seq.get_toks(),
-                    seq.image_hashes(),
-                    seq.audio_hashes(),
-                    seq.video_hashes(),
-                ),
-                request.response
-            );
+            let prefill_cache = if seq.return_raw_logits {
+                None
+            } else {
+                handle_seq_error!(
+                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                        seq.get_toks(),
+                        seq.adapter_generation(),
+                        seq.mm_features(),
+                        seq.image_hashes(),
+                        seq.audio_hashes(),
+                        seq.video_hashes(),
+                    ),
+                    request.response
+                )
+            };
 
+            let recurrent_slot_allocation_failed = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                    let mut hybrid_cache = pipeline.cache().hybrid();
+                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                        seq.set_recurrent_state_idx(Some(slot_idx));
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                }
+            };
+            if recurrent_slot_allocation_failed {
+                request
+                    .response
+                    .send(Response::InternalError(
+                        "Failed to allocate recurrent state for request."
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+
+            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
+                self.logger.add_new_sequence();
+            }
             seq = match prefill_cache.clone() {
                 Some(MatchingCache::Normal {
                     normal,
                     recurrent_snapshots,
                     images_to_keep,
                     audios_to_keep,
-                    videos_to_keep,
+                    video_frames_to_keep,
                     toks,
                     offset,
                 }) => {
-                    self.logger.add_prefix_cache_hit();
+                    if seq.record_prefix_cache_hit() {
+                        self.logger.add_prefix_cache_hit();
+                    }
 
                     // Restore recurrent state for hybrid models
                     if let Some(snapshots) = recurrent_snapshots {
@@ -749,9 +862,15 @@ impl Engine {
                         }
                     }
 
-                    seq.keep_num_images(images_to_keep);
+                    let retain_prefix_cached_images = {
+                        let pipeline = get_mut_arcmutex!(self.pipeline);
+                        pipeline.get_processor().retain_prefix_cached_images()
+                    };
+                    if !retain_prefix_cached_images {
+                        seq.keep_num_images(images_to_keep);
+                    }
                     seq.keep_num_audios(audios_to_keep);
-                    seq.keep_num_videos(videos_to_keep);
+                    seq.keep_num_video_frames(video_frames_to_keep);
                     seq.prefill_v2_normal(normal, toks, offset)
                 }
                 None => seq,

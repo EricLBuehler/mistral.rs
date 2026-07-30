@@ -1,0 +1,172 @@
+---
+title: Get structured output
+description: Constrain generation to a JSON schema with response_format, pydantic models, or typed Rust structs, plus regex, Lark, and llguidance grammars.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+mistral.rs constrains generation server-side with [llguidance](https://github.com/guidance-ai/llguidance), so the output is guaranteed to match your schema -- no retry loops or post-hoc validation. The common case is a JSON schema; regex, Lark, and raw llguidance grammars cover everything else.
+
+<Tabs>
+<TabItem label="HTTP">
+
+OpenAI's `response_format` with `type: "json_schema"`:
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "Gimme a sample address."}],
+    "response_format": {
+      "type": "json_schema",
+      "json_schema": {
+        "name": "Address",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "street": {"type": "string"},
+            "city": {"type": "string"},
+            "state": {"type": "string", "pattern": "^[A-Z]{2}$"},
+            "zip": {"type": "integer", "minimum": 10000, "maximum": 99999}
+          },
+          "required": ["street", "city", "state", "zip"],
+          "additionalProperties": false
+        }
+      }
+    }
+  }'
+```
+
+With the OpenAI Python client, `client.beta.chat.completions.parse` accepts a pydantic model directly and returns parsed objects:
+
+```python
+from openai import OpenAI
+from pydantic import BaseModel
+
+client = OpenAI(api_key="not-used", base_url="http://localhost:1234/v1/")
+
+class Address(BaseModel):
+    street: str
+    city: str
+    state: str
+    zip: int
+
+completion = client.beta.chat.completions.parse(
+    model="default",
+    messages=[{"role": "user", "content": "Gimme a sample address."}],
+    response_format=Address,
+)
+print(completion.choices[0].message.parsed)
+```
+
+Full examples: [openai_response_format](/mistral.rs/examples/server/openai-response-format/), [json_schema](/mistral.rs/examples/server/json-schema/).
+
+</TabItem>
+<TabItem label="Python">
+
+The Python SDK takes the schema as a JSON string via `grammar` / `grammar_type`. Derive it from a pydantic model with `model_json_schema()`:
+
+```python
+import json
+from pydantic import BaseModel
+from mistralrs import Runner, Which, ChatCompletionRequest
+
+class Address(BaseModel):
+    street: str
+    city: str
+    state: str
+    zip: int
+
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "Gimme a sample address."}],
+        grammar_type="json_schema",
+        grammar=json.dumps(Address.model_json_schema()),
+    )
+)
+print(res.choices[0].message.content)
+```
+
+Full examples: [pydantic_schema](/mistral.rs/examples/python/pydantic-schema/), [json_schema](/mistral.rs/examples/python/json-schema/).
+
+</TabItem>
+<TabItem label="Rust">
+
+`Model::generate_structured::<T>()` derives the schema from a Rust type with [`schemars::JsonSchema`](https://docs.rs/schemars), constrains generation to it, and deserializes the result:
+
+```rust
+use mistralrs::{IsqBits, ModelBuilder, TextMessageRole, TextMessages};
+use schemars::JsonSchema;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct Address {
+    street: String,
+    city: String,
+    state: String,
+    zip: u32,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Four) // optional: 4-bit ISQ, see /reference/quantization-types/
+        .build()
+        .await?;
+
+    let messages = TextMessages::new()
+        .add_message(TextMessageRole::User, "Give me a sample US address.");
+
+    let address: Address = model.generate_structured::<Address>(messages).await?;
+    println!("{address:?}");
+    Ok(())
+}
+```
+
+Full examples: [cookbook/structured](/mistral.rs/examples/rust/cookbook/structured/), [advanced/json_schema](/mistral.rs/examples/rust/advanced/json-schema/).
+
+</TabItem>
+</Tabs>
+
+For JSON-Schema-constrained *tool arguments* (rather than the whole response), set `strict: true` on the function tool; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+
+## Grammar constraints
+
+Beyond JSON schemas, the `grammar` request field accepts regex, Lark, and raw llguidance constraints. `grammar` and `response_format` are mutually exclusive in one request.
+
+Over HTTP, `grammar` is a tagged object (on Chat Completions, Responses, legacy Completions, and the Anthropic Messages endpoint):
+
+```json
+{"grammar": {"type": "regex", "value": "(- [^\\n]*\\n)+(- [^\\n]*)"}}
+```
+
+| `type` | `value` | Use for |
+|---|---|---|
+| `regex` | regex string | Fixed-shape text: lists, IDs, dates. |
+| `json_schema` | JSON schema object | Same constraint as `response_format`, without the wrapper. |
+| `lark` | Lark grammar string | Context-free syntax: expressions, DSLs. |
+| `llguidance` | llguidance grammar object | Composed grammars; full control. |
+
+In the Python SDK the same four constraints are selected by `grammar_type` (`"regex"`, `"json_schema"`, `"lark"`, `"llguidance"`) with `grammar` as a string; JSON-encode the `json_schema` and `llguidance` object forms. In Rust, pass a `Constraint` to `RequestBuilder::set_constraint`:
+
+```rust
+let request = RequestBuilder::new()
+    .set_constraint(mistralrs::Constraint::Regex(
+        "(- [^\n]*\n)+(- [^\n]*)(\n\n)?".to_string(),
+    ))
+    .add_message(TextMessageRole::User, "Please write a few jokes.");
+```
+
+`Constraint::Regex`, `Constraint::Lark`, `Constraint::JsonSchema`, and `Constraint::Llguidance` mirror the HTTP variants.
+
+Full examples: [regex](/mistral.rs/examples/server/regex/), [lark](/mistral.rs/examples/server/lark/), [llguidance](/mistral.rs/examples/server/llguidance/) (HTTP); [regex](/mistral.rs/examples/python/regex/), [lark_llg](/mistral.rs/examples/python/lark-llg/) (Python); [grammar](/mistral.rs/examples/rust/advanced/grammar/), [llguidance](/mistral.rs/examples/rust/advanced/llguidance/) (Rust).
+
+## Notes
+
+- `response_format` accepts `{"type": "text"}` (no constraint) and `{"type": "json_schema", ...}`. OpenAI's `json_object` mode is not accepted; supply a schema instead. See [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/) for field-level deviations.
+- Constrained decoding restricts which tokens can be sampled; it does not change what the model wants to say. Prompting for the data you expect still matters, and a low temperature helps on extraction tasks.
+- Schema output shape may differ from OpenAI's behavior on ambiguous schemas (llguidance enforces the schema literally).

@@ -1,7 +1,9 @@
-/// Metal selective scan kernel for Mamba SSM.
-///
-/// Replaces the per-timestep Rust loop in `MambaLayer::forward_full` with a
-/// single GPU kernel dispatch on Metal devices.
+//! Metal selective scan kernel for Mamba SSM.
+//!
+//! Replaces the per-timestep Rust loop in `MambaLayer::forward_full` with a
+//! single GPU kernel dispatch on Metal devices.
+
+#![allow(clippy::cast_possible_truncation)]
 
 #[cfg(feature = "metal")]
 use candle_core::backend::BackendStorage;
@@ -109,6 +111,7 @@ fn metal_buffer_and_offset(tensor: &Tensor) -> Result<(Buffer, usize)> {
 /// Returns:
 /// - `y`:       (batch, seq_len, n_heads, head_dim) - output, f32
 #[cfg(feature = "metal")]
+#[allow(clippy::too_many_arguments)]
 pub fn selective_scan_metal(
     x: &Tensor,
     dt: &Tensor,
@@ -142,7 +145,7 @@ pub fn selective_scan_metal(
     };
 
     // Select kernel based on c_factor = ceil(d_state / 32)
-    let c_factor = (d_state + 31) / 32;
+    let c_factor = d_state.div_ceil(32);
     let kernel_name = match c_factor {
         1 => "ssm_scan_c1",
         2 => "ssm_scan_c2",

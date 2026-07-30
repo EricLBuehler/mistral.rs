@@ -19,10 +19,12 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+mimalloc = { workspace = true }
 mistralrs-core = { workspace = true }
 mistralrs-server-core = { workspace = true }
 mistralrs = { workspace = true }
 mistralrs-sandbox = { workspace = true }
+mistralrs-quant = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }
@@ -51,10 +53,13 @@ image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
+crossterm = "0.28"
+fuzzy-matcher = "0.3"
 
 [features]
 default = ["code-execution"]
 cuda = ["mistralrs-core/cuda", "mistralrs-server-core/cuda"]
+cutile = ["cuda", "mistralrs-core/cutile"]
 nccl = ["mistralrs-core/nccl", "mistralrs-server-core/nccl"]
 cudnn = ["mistralrs-core/cudnn", "mistralrs-server-core/cudnn"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn", "mistralrs-server-core/flash-attn"]

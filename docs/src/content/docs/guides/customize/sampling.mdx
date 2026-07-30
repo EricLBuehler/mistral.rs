@@ -1,0 +1,130 @@
+---
+title: Sampling parameters
+description: Temperature, top-k, top-p, min-p, penalties, DRY, and the order the engine applies them.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Sampling parameters control how the engine selects the next token from the model's probability distribution. They are set per request on every surface:
+
+```bash
+curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/json" -d '{
+  "model": "default",
+  "messages": [{"role": "user", "content": "Write a haiku."}],
+  "temperature": 0.7,
+  "top_p": 0.9
+}'
+```
+
+If a request sets no `temperature`, decoding is greedy: the most likely token is always picked and the probability filters below never run.
+
+## Application order
+
+When a request is sampled, the engine applies filters in this order:
+
+1. Penalties, on the raw logits: DRY first, then frequency/presence/repetition in one pass, then logit bias.
+2. Custom logits processors (Rust SDK only).
+3. Temperature scaling and softmax. Temperature absent or `0.0` means greedy argmax, skipping step 4.
+4. On the resulting probabilities: top-k, then top-p, then min-p.
+
+Penalties therefore act before temperature, and the top-k/top-p/min-p trio act after it, on probabilities rather than logits.
+
+## Temperature, top-p, top-k, min-p
+
+**Temperature** scales the logit distribution before sampling. Higher temperature flattens it; lower temperature sharpens it. `0.0` (or unset) is greedy; `1.0` matches the model's training distribution. Values below `1e-7` are treated as greedy.
+
+**Top-k** keeps only the `k` most likely tokens. `top_k <= 0` disables it.
+
+**Top-p (nucleus sampling)** keeps the smallest set of tokens whose cumulative probability exceeds `p`. Values outside `(0.0, 1.0)` disable it.
+
+**Min-p** scales with the model's confidence: tokens below `min_p` times the top token's probability are dropped. When the model is confident, min-p filters more tokens; when uncertain, fewer. Values outside `(0.0, 1.0)` disable it.
+
+## Penalties
+
+Three distinct parameters discourage repetition; all see the full token context so far:
+
+- `presence_penalty`: flat logit subtraction for any token that has appeared at all (OpenAI-compatible).
+- `frequency_penalty`: logit subtraction proportional to a token's occurrence count (OpenAI-compatible).
+- `repetition_penalty`: llama.cpp-style multiplicative penalty on seen tokens; positive logits are divided by it, negative logits multiplied. `1.0` disables it. This is a separate parameter, not another name for `presence_penalty`.
+
+## DRY (Don't Repeat Yourself)
+
+DRY penalizes continuing token sequences that would reproduce spans from the preceding text. Off by default (`dry_multiplier: 0`).
+
+- `dry_multiplier`: penalty strength; nonzero enables DRY.
+- `dry_base`: exponent base for penalty growth with match length. Default `1.75`.
+- `dry_allowed_length`: match length tolerated before the penalty applies. Default `2`.
+- `dry_sequence_breakers`: strings that reset matching. Default `["\n", ":", "\"", "*"]`.
+
+## Setting parameters
+
+<Tabs>
+<TabItem label="CLI">
+
+Interactive mode (`mistralrs run`) exposes slash commands that persist for the rest of the session:
+
+```text
+/temperature 0.7    set sampling temperature, range [0.0, 2.0]; 0 means greedy
+/topk 40            set top-k, a positive integer
+/topp 0.9           set top-p, in (0.0, 1.0]
+```
+
+Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` when present, else temperature 0.1, top-k 32, top-p 0.1, min-p 0.05.
+
+</TabItem>
+<TabItem label="HTTP">
+
+All parameters are top-level JSON fields on `/v1/chat/completions` and `/v1/completions`:
+
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "Write a haiku."}],
+  "temperature": 0.7,
+  "top_k": 40,
+  "top_p": 0.9,
+  "min_p": 0.05,
+  "presence_penalty": 0.5,
+  "repetition_penalty": 1.1,
+  "dry_multiplier": 0.8
+}
+```
+
+</TabItem>
+<TabItem label="Python">
+
+The same names are fields on `ChatCompletionRequest`:
+
+```python
+request = ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": "Write a haiku."}],
+    temperature=0.7,
+    top_k=40,
+    top_p=0.9,
+    min_p=0.05,
+    presence_penalty=0.5,
+    repetition_penalty=1.1,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+`RequestBuilder` has per-parameter setters, or pass a whole `SamplingParams`:
+
+```rust
+let request = RequestBuilder::new()
+    .add_message(TextMessageRole::User, "Write a haiku.")
+    .set_sampler_temperature(0.7)
+    .set_sampler_topk(40)
+    .set_sampler_topp(0.9)
+    .set_sampler_presence_penalty(0.5);
+```
+
+</TabItem>
+</Tabs>
+
+## Seeds
+
+The random seed is set at engine startup, not per request: `--seed` on the CLI, `seed=` on the Python `Runner`. With the same seed, prompt, and parameters, output is reproducible.

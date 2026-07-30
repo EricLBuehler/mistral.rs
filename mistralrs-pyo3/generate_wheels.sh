@@ -3,35 +3,33 @@
 # Uses scripts/build_wheels.py which auto-detects platform and builds appropriate wheels.
 #
 # Build method:
-# - Docker manylinux: ONLY for CPU-only builds on Linux (no features)
-# - Native maturin: For CUDA, MKL, Metal, Accelerate builds
+# - Docker manylinux: Linux CPU wheels
+# - Native maturin: Windows CPU and macOS Metal wheels
+# - CUDA wheels are built by .github/workflows/release.yml because they vary by CUDA toolkit and SM.
 
 ###############################################################################
-# BOX 1: Linux aarch64 + CUDA
+# BOX 1: Linux aarch64
 ###############################################################################
 
 # mistralrs: CPU-only, uses Docker manylinux with RUSTFLAGS="-C target-cpu=generic"
-# mistralrs-cuda: uses native maturin (not Docker)
-python scripts/build_wheels.py -p mistralrs mistralrs-cuda
+python scripts/build_wheels.py -p mistralrs
 
 ###############################################################################
-# BOX 2: Linux x86_64 + CUDA + MKL
+# BOX 2: Linux x86_64
 ###############################################################################
 
-# mistralrs: has MKL, uses native maturin (not Docker, because MKL feature)
-# mistralrs-cuda: uses native maturin
-# mistralrs-mkl: uses native maturin
-python scripts/build_wheels.py -p mistralrs mistralrs-cuda mistralrs-mkl
+# mistralrs: CPU wheel; CUDA wheels are release assets
+python scripts/build_wheels.py -p mistralrs
 
 ###############################################################################
-# BOX 2: Windows x86_64 + CUDA + MKL
+# BOX 3: Windows x86_64
 ###############################################################################
 
 # All use native maturin (no Docker on Windows)
-python scripts/build_wheels.py -p mistralrs mistralrs-cuda mistralrs-mkl
+python scripts/build_wheels.py -p mistralrs
 
 ###############################################################################
-# BOX 3: macOS aarch64 + Metal
+# BOX 4: macOS aarch64 + Metal
 ###############################################################################
 
 # All use native maturin with MACOSX_DEPLOYMENT_TARGET=15.0 for Metal
@@ -58,12 +56,8 @@ python scripts/build_wheels.py --all
 #
 # Package              | Features    | Platforms                      | Build Method
 # ---------------------|-------------|--------------------------------|------------------
-# mistralrs            | (none)      | Linux aarch64                  | Docker manylinux
-# mistralrs            | mkl         | Linux/Windows x86_64           | Native maturin
+# mistralrs            | (none)      | Linux/Windows                  | Docker/native maturin
 # mistralrs            | metal       | macOS aarch64                  | Native maturin
-# mistralrs-cuda       | cuda        | Linux + Windows (x86_64/arm64) | Native maturin
-# mistralrs-metal      | metal       | macOS aarch64                  | Native maturin
-# mistralrs-accelerate | accelerate  | macOS aarch64                  | Native maturin
-# mistralrs-mkl        | mkl         | Linux + Windows x86_64         | Native maturin
+# mistralrs            | cuda        | Linux release assets           | Release workflow
 #
 # Python version: 3.10 only (abi3 provides forward compatibility to 3.11+)

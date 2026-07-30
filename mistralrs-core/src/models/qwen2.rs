@@ -14,21 +14,31 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
-    layers_masker::PastKvLenCache,
+    layers::{
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
+        RotaryEmbedding, Sdpa,
+    },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata, NormalModel,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
+        NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, word_emb_default, false);
+serde_default_fn!(usize, max_window_layers_default, 28);
 
-#[derive(Debug, Clone, serde::Deserialize, Default, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Qwen2AttentionType {
+    FullAttention,
+    SlidingAttention,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Config {
     pub vocab_size: usize,
     pub hidden_size: usize,
@@ -38,12 +48,96 @@ pub struct Config {
     pub num_key_value_heads: usize,
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,
+    #[serde(default)]
+    pub use_sliding_window: bool,
+    #[serde(default = "max_window_layers_default")]
+    pub max_window_layers: usize,
+    #[serde(default)]
+    pub layer_types: Option<Vec<Qwen2AttentionType>>,
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
     pub hidden_act: Activation,
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
     pub tie_word_embeddings: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            vocab_size: 0,
+            hidden_size: 0,
+            intermediate_size: 0,
+            num_hidden_layers: 0,
+            num_attention_heads: 0,
+            num_key_value_heads: 0,
+            max_position_embeddings: 0,
+            sliding_window: None,
+            use_sliding_window: false,
+            max_window_layers: max_window_layers_default(),
+            layer_types: None,
+            rope_theta: 0.0,
+            rms_norm_eps: 0.0,
+            hidden_act: Activation::default(),
+            quantization_config: None,
+            tie_word_embeddings: word_emb_default(),
+        }
+    }
+}
+
+impl Config {
+    fn layer_sliding_windows(&self) -> Result<Vec<Option<usize>>> {
+        let sliding_window = self
+            .use_sliding_window
+            .then_some(self.sliding_window)
+            .flatten();
+        let layer_types = self.layer_types.clone().unwrap_or_else(|| {
+            (0..self.num_hidden_layers)
+                .map(|layer_idx| {
+                    if sliding_window.is_some() && layer_idx >= self.max_window_layers {
+                        Qwen2AttentionType::SlidingAttention
+                    } else {
+                        Qwen2AttentionType::FullAttention
+                    }
+                })
+                .collect()
+        });
+        if layer_types.len() != self.num_hidden_layers {
+            candle_core::bail!(
+                "Qwen2 layer_types has {} entries for {} layers",
+                layer_types.len(),
+                self.num_hidden_layers
+            );
+        }
+        layer_types
+            .into_iter()
+            .map(|layer_type| match layer_type {
+                Qwen2AttentionType::FullAttention => Ok(None),
+                Qwen2AttentionType::SlidingAttention => {
+                    sliding_window.map(Some).ok_or_else(|| {
+                        candle_core::Error::msg(
+                            "Qwen2 sliding_attention layer requires use_sliding_window and sliding_window",
+                        )
+                    })
+                }
+            })
+            .collect()
+    }
+}
+
+fn cache_types(
+    layer_sliding_windows: &[Option<usize>],
+    max_position_embeddings: usize,
+) -> Vec<NormalCacheType> {
+    layer_sliding_windows
+        .iter()
+        .map(|sliding_window| match sliding_window {
+            Some(window) => NormalCacheType::SlidingWindow { window: *window },
+            None => NormalCacheType::Normal {
+                max_seq_len: max_position_embeddings,
+            },
+        })
+        .collect()
 }
 
 struct Attention {
@@ -63,6 +157,7 @@ impl Attention {
     fn new(
         rotary_emb: Arc<RotaryEmbedding>,
         cfg: &Config,
+        sliding_window: Option<usize>,
         vb: ShardedVarBuilder,
         paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
@@ -83,7 +178,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * head_dim,
@@ -125,30 +220,28 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: cfg.sliding_window,
+                sliding_window,
                 sinks: None,
             },
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        sliding_attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let q = self.q_proj.forward(xs)?;
-        let k = self.k_proj.forward(xs)?;
-        let v = self.v_proj.forward(xs)?;
+        let (q, k, v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         let (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -167,7 +260,16 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self.rotary_emb.forward(&q, &k, seqlen_offsets)?;
+        let rope_positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, rope_positions)?;
+        let metadata = ctx.paged_layer(layer_idx);
+        let attention_mask = if self.sdpa_params.sliding_window.is_some() {
+            sliding_attention_mask
+        } else {
+            attention_mask
+        };
 
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
@@ -180,7 +282,7 @@ impl Attention {
                     Some(value_cache),
                     input_metadata,
                     &self.sdpa_params,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                 )?,
                 None => {
                     // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
@@ -197,7 +299,7 @@ impl Attention {
                         None,
                         &input_metadata,
                         &self.sdpa_params,
-                        Some(flash_params),
+                        Some(ctx.flash_params()),
                     )?
                 }
             },
@@ -209,7 +311,7 @@ impl Attention {
                     &k,
                     &v,
                     attention_mask,
-                    Some(flash_params),
+                    Some(ctx.flash_params()),
                     &self.sdpa_params,
                 )?
             }
@@ -242,11 +344,13 @@ impl DecoderLayer {
         layer_idx: usize,
         loading_isq: bool,
         paged_attn: Option<PagedAttention>,
+        sliding_window: Option<usize>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
             rotary_emb,
             cfg,
+            sliding_window,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
             paged_attn,
             comm,
@@ -277,25 +381,24 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
+        sliding_attention_mask: &AttentionMask,
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
         let xs = self.self_attn.forward(
             &xs,
             attention_mask,
-            seqlen_offsets,
+            sliding_attention_mask,
             kv_cache,
-            metadata,
-            flash_params,
+            ctx,
+            layer_idx,
         )?;
         let xs = (xs + residual)?;
         let residual = &xs;
@@ -307,10 +410,11 @@ impl DecoderLayer {
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
@@ -336,11 +440,15 @@ impl Model {
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -364,6 +472,7 @@ impl Model {
         }
 
         let vb_l = vb_m.pp("layers");
+        let layer_sliding_windows = cfg.layer_sliding_windows()?;
         let layers: Vec<DecoderLayer> = NiceProgressBar::<_, 'b'>(
             0..cfg.num_hidden_layers,
             "Loading repeating layers",
@@ -392,6 +501,7 @@ impl Model {
                 layer_idx,
                 normal_loading_metadata.loading_isq,
                 paged_attn,
+                layer_sliding_windows[layer_idx],
                 &comm,
             )
         })?;
@@ -409,25 +519,19 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            embed_tokens.clone()
         };
+        let sliding_window = layer_sliding_windows.iter().flatten().next().copied();
+        let cache_types = cache_types(&layer_sliding_windows, cfg.max_position_embeddings);
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
-            sliding_window: cfg.sliding_window,
+            dtype,
+            sliding_window,
             device: normal_loading_metadata.real_device,
-            cache: EitherCache::Normal(NormalCache::new(
-                cfg.num_hidden_layers,
-                cfg.max_position_embeddings,
-            )),
+            cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
@@ -436,7 +540,7 @@ impl Model {
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
-                sliding_window: cfg.sliding_window,
+                sliding_window,
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
@@ -446,111 +550,76 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.forward(input_ids)?;
-        self.forward_embed(
-            input_ids,
-            xs,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        self.forward_embed(input_ids, xs, ctx)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn forward_embed(
         &self,
         input_ids: &Tensor,
         mut xs: Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(cache as &dyn PastKvLenCache),
+            &mask_cache,
+            xs.dtype(),
+            &CausalMaskConfig::default(),
+        )?;
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            attention_mask
+        } else {
+            AttentionMask::None
+        };
+        let sliding_attention_mask = CausalMasker.make_causal_mask(
+            input_ids,
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
                 ..Default::default()
             },
         )?;
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
-            attention_mask
+        let sliding_attention_mask = if ctx.is_first_prompt_chunk() {
+            sliding_attention_mask
         } else {
             AttentionMask::None
         };
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
+        let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
             xs = layer.forward(
                 &xs,
                 &attention_mask.get(xs.device()),
-                seqlen_offsets,
+                &sliding_attention_mask.get(xs.device()),
                 &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
+                ctx,
+                i,
             )?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 
     pub fn embed_dtype(&self) -> DType {
-        self.embed_tokens.embeddings().dtype()
+        self.dtype
     }
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.extend(
-                layer
-                    .mlp
-                    .get_isq_layers()
-                    .into_iter()
-                    .map(|m| (m, Some(i)))
-                    .collect::<Vec<_>>(),
-            );
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -568,42 +637,17 @@ impl IsqModel for Model {
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        // NOTE: dependant on the exact implementation in get_layers!
-        let mut names = Vec::new();
-        // lm_head
-        names.push(None);
-        for i in 0..self.layers.len() {
-            names.push(Some(format!("blk.{i}.attn_q.weight")));
-            names.push(Some(format!("blk.{i}.attn_k.weight")));
-            names.push(Some(format!("blk.{i}.attn_v.weight")));
-            names.push(Some(format!("blk.{i}.attn_output.weight")));
-            names.push(Some(format!("blk.{i}.ffn_gate.weight")));
-            names.push(Some(format!("blk.{i}.ffn_up.weight")));
-            names.push(Some(format!("blk.{i}.ffn_down.weight")));
-        }
-        Ok(names)
-    }
 }
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
 
 impl NormalModel for Model {
     fn forward(
         &self,
         input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward(
-            input_ids,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
-        )
+        self.forward(input_ids, ctx)
     }
     fn xlora_forward(
         &self,
@@ -623,9 +667,6 @@ impl NormalModel for Model {
     fn cache(&self) -> &EitherCache {
         &self.cache
     }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
-    }
     fn device(&self) -> &Device {
         &self.device
     }
@@ -637,6 +678,13 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        true
     }
 }
 
@@ -757,5 +805,79 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rust_default_matches_the_serde_window_default() {
+        assert_eq!(
+            Config::default().max_window_layers,
+            max_window_layers_default()
+        );
+    }
+
+    #[test]
+    fn serialized_sliding_window_is_disabled_without_use_flag() -> Result<()> {
+        let config = Config {
+            num_hidden_layers: 4,
+            sliding_window: Some(128),
+            max_window_layers: 2,
+            ..Default::default()
+        };
+
+        assert_eq!(config.layer_sliding_windows()?, vec![None; 4]);
+        Ok(())
+    }
+
+    #[test]
+    fn generated_layer_types_match_transformers_normalization() -> Result<()> {
+        let config = Config {
+            num_hidden_layers: 4,
+            sliding_window: Some(128),
+            use_sliding_window: true,
+            max_window_layers: 2,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.layer_sliding_windows()?,
+            vec![None, None, Some(128), Some(128)]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_layer_types_are_validated() {
+        let config = Config {
+            num_hidden_layers: 2,
+            sliding_window: Some(128),
+            use_sliding_window: true,
+            layer_types: Some(vec![Qwen2AttentionType::SlidingAttention]),
+            ..Default::default()
+        };
+
+        assert!(config.layer_sliding_windows().is_err());
+    }
+
+    #[test]
+    fn eager_cache_layout_matches_attention_types() {
+        let types = cache_types(&[None, Some(128), None], 4096);
+
+        assert!(matches!(
+            &types[0],
+            NormalCacheType::Normal { max_seq_len: 4096 }
+        ));
+        assert!(matches!(
+            &types[1],
+            NormalCacheType::SlidingWindow { window: 128 }
+        ));
+        assert!(matches!(
+            &types[2],
+            NormalCacheType::Normal { max_seq_len: 4096 }
+        ));
     }
 }

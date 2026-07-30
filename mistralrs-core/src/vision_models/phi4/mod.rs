@@ -7,27 +7,26 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
-use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding};
+use mm_embedding::{InputMode, Phi4MMImageAudioEmbedding, Phi4MMPackedInputs};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{self, Activation, CausalMasker, Phi4MMRotaryEmbedding, RmsNorm, Sdpa},
-    layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::EncoderCacheManager, AttentionImplementation, ModelConfigMetadata,
         PagedAttention,
     },
     pipeline::{
-        extract_logits,
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, MultimodalModel, NormalCache, NormalLoadingMetadata,
+        text_models_inputs_processor::PagedAttentionInputMetadata, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, MultimodalModel, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+    vision_models::multimodal_layout::PackedMultimodalLayout,
 };
 
 mod audio_embedding;
@@ -95,16 +94,13 @@ impl Attention {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
-        position_ids: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
@@ -136,10 +132,14 @@ impl Attention {
             (q, k, v)
         };
 
-        let (q, k) = self
-            .rotary_emb
-            .forward(&q, &k, seqlen_offsets, position_ids)?;
+        let position_ids = ctx.position_ids_vec();
+        let positions = ctx
+            .text_positions(q.device(), q.dim(2)?)?
+            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
+        let (q, k) = self.rotary_emb.forward(&q, &k, positions, &position_ids)?;
 
+        let metadata = ctx.paged_layer(layer_idx);
+        let flash_params = ctx.flash_params();
         let mut attn_output = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -234,9 +234,7 @@ impl Mlp {
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let up_states = self.gate_up_proj.forward(xs)?;
-        let gate = up_states.narrow(D::Minus1, 0, self.i_size)?;
-        let up_states = up_states.narrow(D::Minus1, self.i_size, self.i_size)?;
-        let up_states = (up_states * gate.apply(&self.act_fn))?;
+        let up_states = crate::ops::split_mul_and_act(&up_states, self.i_size, self.act_fn)?;
         let res = self.down_proj.forward(&up_states)?;
         Ok(res)
     }
@@ -285,28 +283,19 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        seqlen_offsets: &[usize],
-        position_ids: &[usize],
         kv_cache: &mut KvCache,
-        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
+        layer_idx: usize,
     ) -> Result<Tensor> {
         let residual = xs;
         let xs = self.input_layernorm.forward(xs)?;
-        let xs = self.self_attn.forward(
-            &xs,
-            attention_mask,
-            seqlen_offsets,
-            position_ids,
-            kv_cache,
-            metadata,
-            flash_params,
-        )?;
+        let xs = self
+            .self_attn
+            .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
         let xs = (xs + residual)?;
         let residual = &xs;
         let xs = self
@@ -317,11 +306,12 @@ impl DecoderLayer {
 }
 
 pub struct Phi4MMModel {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     embed_tokens_extend: Phi4MMImageAudioEmbedding,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -341,11 +331,15 @@ impl Phi4MMModel {
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -403,18 +397,13 @@ impl Phi4MMModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            embed_tokens.clone()
         };
 
         let embed_tokens_extend = Phi4MMImageAudioEmbedding::new(
             cfg,
             embed_tokens.clone(),
+            dtype,
             mapper.set_nm_device(vb_m.pp("embed_tokens_extend"), false),
         )?;
 
@@ -422,6 +411,7 @@ impl Phi4MMModel {
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
@@ -457,15 +447,31 @@ impl Phi4MMModel {
         image_sizes: Option<Vec<(u32, u32)>>,
         input_audio_embeds: Option<Tensor>,
         audio_embed_sizes: Option<Vec<usize>>,
+        audio_feature_lens: Option<Vec<usize>>,
+        audio_vision_modes: Option<Vec<bool>>,
         audio_attention_mask: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        position_ids: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         image_hashes: &[u64],
+        audio_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
-        let mut xs = if input_image_embeds.is_some() || input_audio_embeds.is_some() {
+        let mut xs = if let Some(packed_layout) = packed_layout {
+            self.embed_tokens_extend.forward_packed(
+                input_ids,
+                Phi4MMPackedInputs {
+                    image_embeds: input_image_embeds.as_ref(),
+                    image_attention_mask: image_attention_mask.as_ref(),
+                    image_sizes: image_sizes.as_deref(),
+                    image_hashes,
+                    audio_embeds: input_audio_embeds.as_ref(),
+                    audio_feature_lens: audio_feature_lens.as_deref(),
+                    audio_embed_sizes: audio_embed_sizes.as_deref(),
+                    audio_hashes,
+                    layout: packed_layout,
+                },
+                &self.encoder_cache,
+            )?
+        } else if input_image_embeds.is_some() || input_audio_embeds.is_some() {
             let projection_mode = match (&input_image_embeds, &input_audio_embeds) {
                 (Some(_), Some(_)) | (Some(_), None) => InputMode::Vision,
                 (None, Some(_)) => InputMode::Speech,
@@ -482,6 +488,7 @@ impl Phi4MMModel {
                 image_sizes,
                 input_audio_embeds.as_ref(),
                 audio_embed_sizes,
+                audio_vision_modes.as_deref(),
                 &match audio_attention_mask.as_ref() {
                     Some(t) => AttentionMask::Custom((*t).clone()),
                     None => AttentionMask::None,
@@ -491,26 +498,20 @@ impl Phi4MMModel {
                 &self.encoder_cache,
             )?
         } else {
-            self.embed_tokens.forward(input_ids)?
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?
         };
         let cache = &mut self.cache.normal().0;
+        let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
-            metadata
-                .as_ref()
-                .map(|(_, _)| &seqlen_offsets as &dyn PastKvLenCache)
-                .unwrap_or(&*cache as &dyn PastKvLenCache),
+            &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window: self.sliding_window,
                 ..Default::default()
             },
         )?;
-        let attention_mask = if metadata
-            .as_ref()
-            .map(|(_, meta)| meta.is_first_prompt_chunk)
-            .unwrap_or(true)
-        {
+        let attention_mask = if ctx.is_first_prompt_chunk() {
             attention_mask
         } else {
             AttentionMask::None
@@ -519,21 +520,11 @@ impl Phi4MMModel {
 
         for (i, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, i)?;
-            xs = layer.forward(
-                &xs,
-                &attention_mask.get(xs.device()),
-                seqlen_offsets,
-                position_ids,
-                &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, metadata)| (kv_cache[i].clone(), *metadata)),
-                flash_params,
-            )?
+            xs = layer.forward(&xs, &attention_mask.get(xs.device()), &mut cache[i], ctx, i)?
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 }
@@ -545,21 +536,33 @@ pub(crate) struct Phi4MMVisionSpecificArgs {
     pub image_attention_mask: Option<Tensor>,
     pub input_audio_embeds: Option<Tensor>,
     pub audio_embed_sizes: Option<Vec<usize>>,
+    pub audio_feature_lens: Option<Vec<usize>>,
+    pub audio_vision_modes: Option<Vec<bool>>,
     pub audio_attention_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
+    pub audio_hashes: Vec<u64>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Phi4MMModel {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Phi4MMModel {}
+
 impl MultimodalModel for Phi4MMModel {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
         _pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let Phi4MMVisionSpecificArgs {
             input_image_embeds,
@@ -568,7 +571,11 @@ impl MultimodalModel for Phi4MMModel {
             input_audio_embeds,
             audio_attention_mask,
             audio_embed_sizes,
+            audio_feature_lens,
+            audio_vision_modes,
             image_hashes,
+            audio_hashes,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi4MMVisionSpecificArgs`");
@@ -580,20 +587,17 @@ impl MultimodalModel for Phi4MMModel {
             image_sizes,
             input_audio_embeds,
             audio_embed_sizes,
+            audio_feature_lens,
+            audio_vision_modes,
             audio_attention_mask,
-            seqlen_offsets,
-            &position_ids,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             &image_hashes,
+            &audio_hashes,
+            packed_layout.as_ref(),
         )
     }
     fn cache(&self) -> &EitherCache {
         &self.cache
-    }
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        &mut self.cache
     }
     fn device(&self) -> &Device {
         &self.device
@@ -623,23 +627,6 @@ impl MultimodalModel for Phi4MMModel {
 }
 
 impl IsqModel for Phi4MMModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.qkv_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

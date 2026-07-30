@@ -109,16 +109,16 @@ impl GenerationParams {
             params.temperature = Some(0.0);
             params.top_k = Some(1);
             params.top_p = Some(1.0);
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            params.temperature = Some(temperature);
-        }
-        if let Some(top_p) = defaults.top_p {
-            params.top_p = Some(top_p);
-        }
-        if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
-            params.top_k = Some(top_k);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                params.temperature = Some(temperature);
+            }
+            if let Some(top_p) = defaults.top_p {
+                params.top_p = Some(top_p);
+            }
+            if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
+                params.top_k = Some(top_k);
+            }
         }
         if let Some(max_tokens) = defaults.max_new_tokens {
             params.max_tokens = Some(max_tokens);
@@ -148,6 +148,8 @@ pub struct AppState {
     pub search_embedding_model: Option<SearchEmbeddingModel>,
     /// Whether code execution is enabled
     pub code_execution_enabled: bool,
+    /// Whether shell execution is enabled
+    pub shell_enabled: bool,
     /// Tool dispatch URL (if configured)
     pub tool_dispatch_url: Option<String>,
 }
@@ -177,4 +179,24 @@ pub struct LoadChatRequest {
 pub struct RenameChatRequest {
     pub id: String,
     pub title: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn do_sample_false_overrides_sampling_defaults() {
+        let params = GenerationParams::from_model_defaults(Some(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.6),
+            top_k: Some(20),
+            top_p: Some(0.9),
+            ..Default::default()
+        }));
+
+        assert_eq!(params.temperature, Some(0.0));
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, Some(1.0));
+    }
 }

@@ -114,6 +114,11 @@ impl MlaWeights {
         qk_nope_head_dim: usize,
         v_head_dim: usize,
     ) -> Result<(Tensor, Tensor)> {
+        if kv_b_proj.is_dynamic_lora_active() {
+            candle_core::bail!(
+                "cached MLA weights cannot be used with an active dynamic LoRA projection"
+            );
+        }
         let Some(mla_weights) = &self.weights else {
             candle_core::bail!("MLA weights are not initialized on this device");
         };

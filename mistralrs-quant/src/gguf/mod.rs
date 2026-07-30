@@ -1,5 +1,4 @@
-#[cfg(not(feature = "cuda"))]
-mod cpu;
+pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 #[cfg(feature = "cuda")]
@@ -8,33 +7,285 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+mod packed_affine;
 
-use std::{
-    borrow::Cow,
-    io::{Cursor, Read},
-    sync::{atomic::AtomicUsize, Arc},
-};
-
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{
     quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
 };
 use candle_nn::Module;
+use safetensors::tensor::Dtype;
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+use std::sync::OnceLock;
+use std::sync::{atomic::AtomicUsize, Arc};
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
-    generate_isq, generate_isq_imatrix,
-    utils::{deserialize_tensor, serialize_tensor, version_is_compatible, UQFF_VERSION},
-    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
+    generate_isq, generate_isq_imatrix, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedSerde, QuantizedSerdeType, Shard, UqffReader, UqffTensor,
 };
+
+#[cfg(feature = "cuda")]
+pub(crate) const GGUF_AFFINE_MIN_BATCH: usize = 8;
+
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+pub(crate) fn gguf_affine_adjust_cache_bytes(
+    device: &Device,
+    dtype: DType,
+    available_bytes: usize,
+    requested_cache_bytes: usize,
+    minimum_cache_bytes: usize,
+    may_reduce_cache: bool,
+) -> Result<usize> {
+    packed_affine::adjust_cache_bytes(
+        device,
+        dtype,
+        available_bytes,
+        requested_cache_bytes,
+        minimum_cache_bytes,
+        may_reduce_cache,
+    )
+}
 
 #[derive(Debug)]
 pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
+    stats: crate::ImatrixLayerStats,
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    packed_affine: OnceLock<Option<Arc<packed_affine::PackedAffine>>>,
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    _gguf_affine_reservation: Option<packed_affine::Reservation>,
+}
+
+fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
+    match dtype {
+        GgmlDType::F32 => 0,
+        GgmlDType::F16 => 1,
+        GgmlDType::Q4_0 => 2,
+        GgmlDType::Q4_1 => 3,
+        GgmlDType::Q5_0 => 6,
+        GgmlDType::Q5_1 => 7,
+        GgmlDType::Q8_0 => 8,
+        GgmlDType::Q8_1 => 9,
+        GgmlDType::Q2K => 10,
+        GgmlDType::Q3K => 11,
+        GgmlDType::Q4K => 12,
+        GgmlDType::Q5K => 13,
+        GgmlDType::Q6K => 14,
+        GgmlDType::Q8K => 15,
+        GgmlDType::BF16 => 30,
+    }
+}
+
+fn ggml_dtype_from_uqff_code(dtype: u32) -> Result<GgmlDType> {
+    match dtype {
+        0 => Ok(GgmlDType::F32),
+        1 => Ok(GgmlDType::F16),
+        2 => Ok(GgmlDType::Q4_0),
+        3 => Ok(GgmlDType::Q4_1),
+        6 => Ok(GgmlDType::Q5_0),
+        7 => Ok(GgmlDType::Q5_1),
+        8 => Ok(GgmlDType::Q8_0),
+        9 => Ok(GgmlDType::Q8_1),
+        10 => Ok(GgmlDType::Q2K),
+        11 => Ok(GgmlDType::Q3K),
+        12 => Ok(GgmlDType::Q4K),
+        13 => Ok(GgmlDType::Q5K),
+        14 => Ok(GgmlDType::Q6K),
+        15 => Ok(GgmlDType::Q8K),
+        30 => Ok(GgmlDType::BF16),
+        _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
+    }
+}
+
+fn gguf_dtype_label(dtype: u32) -> String {
+    match dtype {
+        0 => "f32",
+        1 => "f16",
+        2 => "q4_0",
+        3 => "q4_1",
+        6 => "q5_0",
+        7 => "q5_1",
+        8 => "q8_0",
+        9 => "q8_1",
+        10 => "q2k",
+        11 => "q3k",
+        12 => "q4k",
+        13 => "q5k",
+        14 => "q6k",
+        15 => "q8k",
+        30 => "bf16",
+        _ => "unknown",
+    }
+    .to_string()
 }
 
 impl GgufMatMul {
+    fn from_parts(w: QMatMul, b: Option<Tensor>, stats: crate::ImatrixLayerStats) -> Self {
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        let reservation = packed_affine::Reservation::new(&w);
+        Self {
+            w,
+            b,
+            stats,
+            #[cfg(all(feature = "cuda", has_marlin_kernels))]
+            packed_affine: OnceLock::new(),
+            #[cfg(all(feature = "cuda", has_marlin_kernels))]
+            _gguf_affine_reservation: reservation,
+        }
+    }
+
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] =
+            &["weight", "weight.format", "weight.dtype", "weight.shape"];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.tensor_dtype("weight", Dtype::U8)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.dtype", Dtype::U32)
+            && layer.u32_vector("weight.shape")
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Gguf,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        tensors: &[UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        let dtype = crate::uqff::u32_scalar_with_suffix(tensors, prefix, "weight.dtype")?;
+        Ok(gguf_dtype_label(dtype))
+    }
+
+    pub fn isq_type_from_uqff_dtype(dtype: u32) -> Result<IsqType> {
+        IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
+    }
+
+    pub(crate) fn is_float_uqff_dtype(dtype: u32) -> Result<bool> {
+        Ok(matches!(
+            ggml_dtype_from_uqff_code(dtype)?,
+            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16
+        ))
+    }
+
+    pub(crate) fn block_size_from_uqff_dtype(dtype: u32) -> Result<usize> {
+        Ok(ggml_dtype_from_uqff_code(dtype)?.block_size())
+    }
+
+    pub fn from_raw_uqff(
+        dtype: u32,
+        tensor_data: Vec<u8>,
+        dims: Vec<usize>,
+        b: Option<Tensor>,
+        device: &Device,
+    ) -> Result<Self> {
+        let dtype = ggml_dtype_from_uqff_code(dtype)?;
+        let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
+        // from_arc densifies float fallback entries, matching what ISQ produces at load
+        Ok(Self::from_parts(
+            QMatMul::from_arc(w.into())?,
+            b,
+            crate::ImatrixLayerStats::empty(),
+        ))
+    }
+
+    /// Construct without `QMatMul::from_arc`: densifying would bypass the gather kernels
+    /// expert stacks rely on.
+    pub(crate) fn from_qtensor(w: QTensor, b: Option<Tensor>) -> Self {
+        Self::from_parts(
+            QMatMul::QTensor(Arc::new(w)),
+            b,
+            crate::ImatrixLayerStats::empty(),
+        )
+    }
+
+    /// Quantize a stacked `[E, out, in]` expert tensor slab-by-slab; `imatrix` is `[in]` shared
+    /// or `[E, in]` flattened. Row-block formats never cross expert boundaries, so the
+    /// byte-concat equals quantizing the whole stack.
+    pub(crate) fn quantize_expert_stack(
+        stack: &Tensor,
+        ty: IsqType,
+        imatrix: Option<&[f32]>,
+        device: &Device,
+        guard: QuantizeOntoGuard,
+    ) -> Result<QTensor> {
+        use crate::utils::isq::QuantizationBehavior;
+
+        let (num_experts, out_dim, in_dim) = stack.dims3()?;
+        // device-resident byte extraction races in-flight work; quantize from a CPU copy
+        let stack = stack.to_device(&Device::Cpu)?;
+        let requested: GgmlDType = ty.try_into()?;
+        let slab0 = stack.get(0)?;
+        let dtype = match crate::utils::isq::get_quantization_behaviour(&slab0, requested) {
+            QuantizationBehavior::Quantize(dtype) => dtype,
+            QuantizationBehavior::Skip => GgmlDType::F32,
+        };
+        let imatrix_capable = matches!(
+            dtype,
+            GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
+        );
+        if let Some(v) = imatrix {
+            if v.len() != in_dim && v.len() != num_experts * in_dim {
+                crate::log::once_log_warn(format!(
+                    "Expert stack imatrix length {} matches neither in_dim {in_dim} nor {num_experts}x{in_dim}; quantizing without it.",
+                    v.len()
+                ));
+            }
+        }
+
+        let mut bytes = Vec::new();
+        for e in 0..num_experts {
+            // expert views share storage with an offset; quantize reads raw storage
+            let slab = stack.get(e)?.force_contiguous()?;
+            let vector = imatrix.and_then(|v| {
+                if v.len() == in_dim {
+                    Some(v)
+                } else if v.len() == num_experts * in_dim {
+                    Some(&v[e * in_dim..(e + 1) * in_dim])
+                } else {
+                    None
+                }
+            });
+            let qt = match vector {
+                Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
+                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                }
+                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+            };
+            bytes.extend_from_slice(&qt.data()?);
+        }
+
+        let _acquired_quantize_guard = guard.acquire(device);
+        qtensor_from_ggml(dtype, &bytes, vec![num_experts, out_dim, in_dim], device)
+    }
+
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
+        let dtype = reader.load_u32_scalar(&format!("{key}.weight.dtype"))?;
+        let mut dims = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
+        let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
+        let range = crate::uqff::shard_range(shard, &dims)?;
+        if let Some((dim, start, len)) = range {
+            let ggml = ggml_dtype_from_uqff_code(dtype)?;
+            weight = crate::uqff::slice_blocked_data(
+                &weight,
+                &dims,
+                ggml.block_size(),
+                ggml.type_size(),
+                dim,
+                start,
+                len,
+            )?;
+            dims[dim] = len;
+        }
+        let bias = reader.load_bias(key, device, range, dims.len())?;
+        Self::from_raw_uqff(dtype, weight, dims, bias, device)
+    }
+
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
         if let Some(ref b) = self.b {
             x.broadcast_add(b)
@@ -77,6 +328,83 @@ impl GgufMatMul {
 
         Ok(None)
     }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn packed_affine_for(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Option<&Arc<packed_affine::PackedAffine>>> {
+        if !packed_affine::enabled() {
+            return Ok(None);
+        }
+        let QMatMul::QTensor(weight) = &self.w else {
+            return Ok(None);
+        };
+        if packed_affine::minimum_batch(weight.dtype()).is_none_or(|min| flat_batch < min) {
+            return Ok(None);
+        }
+        let Some(reservation) = self._gguf_affine_reservation.as_ref() else {
+            return Ok(None);
+        };
+        if !packed_affine::PackedAffine::supports(weight, dtype)
+            || !weight.device().same_device(device)
+        {
+            return Ok(None);
+        }
+        let packed = self.packed_affine.get_or_init(|| {
+            match packed_affine::PackedAffine::new(weight, dtype, Some(reservation)) {
+                Ok(packed) => Some(Arc::new(packed)),
+                Err(error) => {
+                    tracing::debug!("Packed GGUF affine initialization failed: {error}");
+                    crate::log::once_log_warn(
+                        "Packed GGUF affine acceleration is unavailable for one or more layers; using canonical kernels where needed.",
+                    );
+                    None
+                }
+            }
+        });
+        reservation.consume();
+        let Some(packed) = packed else {
+            return Ok(None);
+        };
+        Ok(Some(packed))
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn packed_affine(&self, a: &Tensor) -> Result<Option<&Arc<packed_affine::PackedAffine>>> {
+        let Some((&_, batch_dims)) = a.dims().split_last() else {
+            return Ok(None);
+        };
+        let flat_batch = batch_dims.iter().product::<usize>();
+        let QMatMul::QTensor(weight) = &self.w else {
+            return Ok(None);
+        };
+        let Some(dtype) = packed_affine::PackedAffine::dtype_for_input(weight, a) else {
+            return Ok(None);
+        };
+        self.packed_affine_for(flat_batch, dtype, a.device())
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn packed_affine_forward(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        let Some(packed) = self.packed_affine(a)? else {
+            return Ok(None);
+        };
+        let dtype = a.dtype();
+        let a = if dtype == packed.dtype() {
+            a.clone()
+        } else {
+            a.to_dtype(packed.dtype())?
+        };
+        let output = packed.forward(&a)?;
+        Ok(Some(if output.dtype() == dtype {
+            output
+        } else {
+            output.to_dtype(dtype)?
+        }))
+    }
 }
 
 impl QuantMethod for GgufMatMul {
@@ -85,10 +413,11 @@ impl QuantMethod for GgufMatMul {
         Self: Sized,
     {
         match method {
-            QuantMethodConfig::Gguf { q_weight, b } => Ok(Self {
-                w: QMatMul::from_arc(q_weight)?,
+            QuantMethodConfig::Gguf { q_weight, b } => Ok(Self::from_parts(
+                QMatMul::from_arc(q_weight)?,
                 b,
-            }),
+                crate::ImatrixLayerStats::empty(),
+            )),
             QuantMethodConfig::GptqAwq { .. }
             | QuantMethodConfig::Unquantized(_)
             | QuantMethodConfig::Hqq { .. }
@@ -103,14 +432,40 @@ impl QuantMethod for GgufMatMul {
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
-        self.w.dequantize_f16()?.to_dtype(DType::F32)
+        match &self.w {
+            QMatMul::QTensor(weight) if weight.dtype() == GgmlDType::Q8_1 => {
+                weight.dequantize(&weight.device())
+            }
+            _ => self.w.dequantize_f16()?.to_dtype(DType::F32),
+        }
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.w.embedding(ids)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        self.stats.process(a)?;
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        {
+            if let Some(out) = self.packed_affine_forward(a)? {
+                return self.add_bias(out);
+            }
+        }
         #[cfg(feature = "cuda")]
         {
             if let Some(out) = self.try_fast_forward(a)? {
                 return self.add_bias(out);
+            }
+            if let QMatMul::QTensor(weight) = &self.w {
+                if weight.device().is_cuda()
+                    && matches!(weight.dtype(), GgmlDType::Q8_1 | GgmlDType::Q8K)
+                {
+                    candle_core::bail!(
+                        "CUDA {:?} weights require the packed GGUF affine backend with a tile-compatible shape",
+                        weight.dtype()
+                    );
+                }
             }
         }
 
@@ -140,10 +495,14 @@ impl QuantMethod for GgufMatMul {
         // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
-        #[cfg(feature = "cuda")]
-        let res = cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?;
-
         // For CPU and Metal: use dequantize-then-matmul approach
+        #[cfg(feature = "cuda")]
+        let res = if x.device().is_cuda() {
+            cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
+        } else {
+            cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
+        };
+
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
@@ -154,12 +513,29 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         match &self.w {
-            candle_core::quantized::QMatMul::QTensor(qt) => Some(qt),
+            candle_core::quantized::QMatMul::QTensor(qt) => Some(qt.clone()),
             _ => None,
         }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        Ok(self.packed_affine_for(flat_batch, dtype, device)?.is_some())
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        let Some(out) = self.packed_affine_forward(a)? else {
+            return Ok(None);
+        };
+        Ok(Some(self.add_bias(out)?))
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -169,7 +545,27 @@ impl QuantMethod for GgufMatMul {
                 return None;
             }
         }
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        if matches!(
+            &self.w,
+            QMatMul::QTensor(q)
+                if q.device().is_cuda()
+                    && q.shape().rank() == 2
+                    && packed_affine::minimum_batch(q.dtype()).is_some()
+        ) {
+            return None;
+        }
+        // cpu handles bf16 activations natively (widened once inside the packed matmul)
+        if let QMatMul::QTensor(qt) = &self.w {
+            if qt.device().is_cpu() {
+                return None;
+            }
+        }
         Some(DType::F32)
+    }
+
+    fn has_bias(&self) -> bool {
+        self.b.is_some()
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -177,26 +573,34 @@ impl QuantMethod for GgufMatMul {
             Self {
                 w: QMatMul::Tensor(w),
                 b,
-            } => Ok(Arc::new(Self {
-                w: QMatMul::Tensor((w + delta)?),
-                b: b.clone(),
-            })),
+                stats,
+                ..
+            } => Ok(Arc::new(Self::from_parts(
+                QMatMul::Tensor((w + delta)?),
+                b.clone(),
+                stats.clone(),
+            ))),
             Self {
                 w: QMatMul::TensorF16(w),
                 b,
-            } => Ok(Arc::new(Self {
-                w: QMatMul::TensorF16((w + delta)?),
-                b: b.clone(),
-            })),
+                stats,
+                ..
+            } => Ok(Arc::new(Self::from_parts(
+                QMatMul::TensorF16((w + delta)?),
+                b.clone(),
+                stats.clone(),
+            ))),
             Self {
                 w: QMatMul::QTensor(w),
                 b,
+                stats,
+                ..
             } => {
                 let (w, dtype) = (w.dequantize(&w.device())?, w.dtype());
                 let w = QMatMul::QTensor(std::sync::Arc::new(
                     candle_core::quantized::QTensor::quantize(&(w + delta)?, dtype)?,
                 ));
-                Ok(Arc::new(Self { w, b: b.clone() }))
+                Ok(Arc::new(Self::from_parts(w, b.clone(), stats.clone())))
             }
         }
     }
@@ -206,6 +610,16 @@ impl QuantMethod for GgufMatMul {
             QMatMul::QTensor(q) => (DType::F32, q.device()),
             QMatMul::Tensor(t) | QMatMul::TensorF16(t) => (t.dtype(), t.device().clone()),
         }
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        let (dtype, device, shape) = match &self.w {
+            QMatMul::QTensor(q) => (DType::F32, q.device(), q.shape().dims().to_vec()),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
+                (t.dtype(), t.device().clone(), t.dims().to_vec())
+            }
+        };
+        Ok(crate::plan_weight_isq(dtype, device, shape, request, true))
     }
 
     fn apply_isq(
@@ -234,10 +648,23 @@ impl QuantMethod for GgufMatMul {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
-            let dtype = dtype.try_into()?;
             let res = if let Some(imatrix_weight) = imatrix_weight {
+                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
+                if t.rank() == 3 {
+                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let w = Self::quantize_expert_stack(
+                        &t,
+                        dtype,
+                        Some(&imatrix_weight),
+                        &device,
+                        guard,
+                    )?;
+                    return Ok(Arc::new(Self::from_qtensor(w, self.b.clone())));
+                }
+                let dtype = dtype.try_into()?;
                 generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized, guard)
             } else {
+                let dtype = dtype.try_into()?;
                 generate_isq!(t, device, dtype, n_quantized, guard)
             };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
@@ -258,36 +685,41 @@ impl QuantMethod for GgufMatMul {
             } else {
                 None
             };
-            Ok(Arc::new(GgufMatMul { w, b }))
+            Ok(Arc::new(GgufMatMul::from_parts(w, b, self.stats.clone())))
+        }
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        let dims = match &self.w {
+            QMatMul::QTensor(q) => q.shape().dims().to_vec(),
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.dims().to_vec(),
+        };
+        let device = self.dtype_and_device().1;
+        // Stacked [E, out, in] expert weights collect per expert via the routed path.
+        if dims.len() == 3 {
+            self.stats.enable_routed(dims[0], dims[2], &device)
+        } else {
+            self.stats.enable(*dims.last().unwrap(), &device)
+        }
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.stats.process_routed(x, ids)
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.stats.snapshot()
+    }
+    fn end_track_stats(&self) -> Result<Tensor> {
+        if self.stats.is_enabled() {
+            let imatrix = self.stats.compute_imatrix();
+            self.stats.clear()?;
+            imatrix
+        } else {
+            candle_core::bail!("`{}` is not tracking stats.", self.name())
         }
     }
 }
-
-// Serialization structure:
-//
-// -----------------------
-// UQFF version, u32, little endian
-// -----------------------
-// ISQ type (0 for GGUF), u8, little endian
-// -----------------------
-// Tensor data length in bytes, u32, little endian
-// -----------------------
-// Whether bias data is included, u8 boolean
-// -----------------------
-// Quantized dtype, u32, little endian
-// -----------------------
-// Num shape dims, u32, little endian
-// -----------------------
-// ...
-// Array (in original order): quantized weight shape dims, u32, little endian
-// ...
-// -----------------------
-// ...
-// Array: quantized weight data, u8s
-// ...
-// -----------------------
-// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
 
 impl QuantizedSerde for GgufMatMul {
     fn isq_serde_supported(&self) -> bool {
@@ -296,261 +728,105 @@ impl QuantizedSerde for GgufMatMul {
     fn name(&self) -> &'static str {
         "gguf"
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.b.clone())
-    }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = match &self.w {
-            QMatMul::QTensor(qw) => {
-                let w = qw.data()?.to_vec();
-                let w_shape = qw.shape().dims();
-                let dtype: u32 = match qw.dtype() {
-                    GgmlDType::F32 => 0,
-                    GgmlDType::F16 => 1,
-                    GgmlDType::Q4_0 => 2,
-                    GgmlDType::Q4_1 => 3,
-                    GgmlDType::Q5_0 => 6,
-                    GgmlDType::Q5_1 => 7,
-                    GgmlDType::Q8_0 => 8,
-                    GgmlDType::Q8_1 => 9,
-                    GgmlDType::Q2K => 10,
-                    GgmlDType::Q3K => 11,
-                    GgmlDType::Q4K => 12,
-                    GgmlDType::Q5K => 13,
-                    GgmlDType::Q6K => 14,
-                    GgmlDType::Q8K => 15,
-                    // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-                    GgmlDType::BF16 => 30,
+    fn serialize_uqff(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
+        // float fallbacks densify at construction; requantize losslessly so they serialize like the rest
+        let densified;
+        let qw = match &self.w {
+            QMatMul::QTensor(qw) => qw,
+            QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
+                let ggml = match t.dtype() {
+                    DType::F16 => GgmlDType::F16,
+                    DType::BF16 => GgmlDType::BF16,
+                    _ => GgmlDType::F32,
                 };
-
-                let mut buffer = Vec::new();
-
-                // Version is always first!
-                buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-                // ISQ type for GGUF is 0
-                buffer.push(QuantizedSerdeType::Gguf as u8);
-
-                // Length
-                buffer.extend(&(w.len() as u32).to_le_bytes());
-
-                // Has bias
-                buffer.push(bias.is_some() as u8);
-
-                // Dtype (u32)
-                buffer.extend(&dtype.to_le_bytes());
-
-                // Shape
-                buffer.extend((w_shape.len() as u32).to_le_bytes());
-                for dim in w_shape {
-                    buffer.extend((*dim as u32).to_le_bytes());
-                }
-
-                // Quantized W Vec<u8> (just append it)
-                buffer.extend(&w);
-
-                buffer
-            }
-            QMatMul::TensorF16(_) | QMatMul::Tensor(_) => {
-                candle_core::bail!("Cannot serialize non-quantized")
+                densified = Arc::new(QTensor::quantize(&t.to_dtype(DType::F32)?, ggml)?);
+                &densified
             }
         };
 
-        if let Some(b) = bias.as_ref() {
-            serialize_tensor(&mut buffer, b)?;
+        // The dtype tag self-describes each layer, so fallback-quantized layers serialize as-is.
+        let w = qw.data()?.into_owned();
+        let w_len = w.len();
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), w, vec![w_len]),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.dtype"),
+                ggml_dtype_to_uqff_code(qw.dtype()),
+            ),
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                qw.shape().dims().iter().map(|dim| *dim as u32).collect(),
+                vec![qw.shape().dims().len()],
+            ),
+        ];
+        if let Some(bias) = &self.b {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
-
-        Ok(Cow::from(buffer))
+        Ok(data)
     }
-
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_uqff(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
+        shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Gguf as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Gguf as usize
-            );
-        }
-
-        let data_len = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
-        let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
-
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
-        }
-
-        let mut tensor_data = vec![0; data_len];
-        buffer.read_exact(&mut tensor_data)?;
-
-        let _acquired_load_guard = guard.acquire(device);
-        // If we have bias
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
-        Ok(Arc::new(Self {
-            w: QMatMul::QTensor(w.into()),
-            b,
-        }))
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)> {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Gguf as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Gguf as usize
-            );
-        }
-
-        let data_len = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
-        let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
-
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
-        }
-
-        let mut tensor_data = vec![0; data_len];
-        buffer.read_exact(&mut tensor_data)?;
-
-        let _acquired_load_guard = guard.acquire(device);
-        // If we have bias
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
-        Ok((
-            Arc::new(Self {
-                w: QMatMul::QTensor(w.into()),
-                b: None,
-            }),
-            b,
-        ))
+    fn isq_type_from_uqff(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+        Self::isq_type_from_uqff_dtype(reader.load_u32_scalar(&format!("{prefix}.weight.dtype"))?)
     }
 }
 
-impl GgufMatMul {
-    pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
-        let mut buffer = Cursor::new(data);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
+    const TEST_EMBEDDING_DIM: usize = 256;
+    const TEST_VOCAB_SIZE: usize = 8;
+
+    fn assert_embedding_matches_dequantized_gather(
+        device: &Device,
+        dtype: GgmlDType,
+    ) -> Result<()> {
+        let values = (0..TEST_VOCAB_SIZE * TEST_EMBEDDING_DIM)
+            .map(|index| ((index % 37) as f32 - 18.0) / 7.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (TEST_VOCAB_SIZE, TEST_EMBEDDING_DIM), device)?;
+        let weight = QTensor::quantize(&weight, dtype)?;
+        let ids = Tensor::from_vec(vec![7u32, 1, 7, 3, 0, 4], (2, 3), device)?;
+        let expected = weight
+            .dequantize(device)?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 3, TEST_EMBEDDING_DIM))?;
+        let layer = GgufMatMul::from_qtensor(weight, None);
+        let actual = layer.embedding_forward_raw(&ids)?;
+
+        assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(actual.dtype(), DType::F32);
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_diff <= 1e-6, "{dtype:?}: max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn q_sensitive_targets_support_embedding_gather() -> Result<()> {
+        for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
+            assert_embedding_matches_dequantized_gather(&Device::Cpu, dtype)?;
         }
+        Ok(())
+    }
 
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Gguf as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Gguf as usize
-            );
+    #[cfg(feature = "metal")]
+    #[test]
+    fn q_sensitive_targets_support_metal_embedding_gather() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
+            assert_embedding_matches_dequantized_gather(&device, dtype)?;
         }
-
-        let _ = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let _ = buffer.read_u8()? != 0;
-
-        let dtype = buffer.read_u32::<LittleEndian>()?;
-        let dtype = match dtype {
-            0 => GgmlDType::F32,
-            1 => GgmlDType::F16,
-            2 => GgmlDType::Q4_0,
-            3 => GgmlDType::Q4_1,
-            6 => GgmlDType::Q5_0,
-            7 => GgmlDType::Q5_1,
-            8 => GgmlDType::Q8_0,
-            9 => GgmlDType::Q8_1,
-            10 => GgmlDType::Q2K,
-            11 => GgmlDType::Q3K,
-            12 => GgmlDType::Q4K,
-            13 => GgmlDType::Q5K,
-            14 => GgmlDType::Q6K,
-            15 => GgmlDType::Q8K,
-            // https://github.com/ggerganov/ggml/blob/29d87fc6676e7ed0cdfdec0804b06001d9c2bb44/include/ggml.h#L389
-            30 => GgmlDType::BF16,
-            _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
-        };
-
-        IsqType::try_from(dtype)
+        Ok(())
     }
 }

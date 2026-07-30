@@ -8,7 +8,6 @@ use crate::device_map::{DeviceMappedMask, DeviceMapper};
 use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
-use crate::ops::{TopKLastDimOp, TopKOutput};
 use crate::paged_attention::{AttentionImplementation, PagedAttention};
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::{extract_logits, EitherCache, KvCache, NormalCache};
@@ -27,6 +26,20 @@ struct Mlp {
     feed_forward_w1: Arc<dyn QuantMethod>,
     feed_forward_w2: Arc<dyn QuantMethod>,
     feed_forward_w3: Arc<dyn QuantMethod>,
+}
+
+// candle's QTensor::indexed_moe_forward is cuda-only; other devices take the
+// dequantize-and-gather fallback
+fn experts_moe_forward(
+    w: &QMatMul,
+    xs: &candle_core::Tensor,
+    indices: &candle_core::Tensor,
+) -> candle_core::Result<candle_core::Tensor> {
+    if xs.device().is_cuda() {
+        w.indexed_moe_forward(xs, indices)
+    } else {
+        mistralrs_quant::cpu_indexed_moe_forward(w, xs, indices)
+    }
 }
 
 impl Mlp {
@@ -54,24 +67,28 @@ impl FusedMoe {
         let original_dtype = xs.dtype();
         let (num_tokens, hidden_dim) = xs.dims2()?;
         let router_logits = self.gate.forward(&xs.to_dtype(DType::F32)?)?;
-        let routing_weights = candle_nn::ops::softmax_last_dim(&router_logits)?;
-
-        let TopKOutput {
-            values: mut scores,
-            indices,
-        } = routing_weights.topk(self.num_experts_per_tok)?;
-
-        if self.norm_topk_prob {
-            scores = scores.broadcast_div(&scores.sum_keepdim(D::Minus1)?)?;
-        }
+        let topk = crate::ops::moe_router_topk(
+            &router_logits,
+            crate::ops::MoeRouterTopKConfig {
+                top_k: self.num_experts_per_tok,
+                score_function: crate::ops::MoeRouterScoreFunction::Softmax,
+                selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
+                renormalize: self.norm_topk_prob,
+                norm_min: 0.0,
+                output_scale: 1.0,
+                logit_clip: None,
+            },
+            None,
+            None,
+        )?;
+        let (scores, indices) = (topk.values, topk.indices);
 
         let ys = {
             let xs = xs.reshape((num_tokens, 1, hidden_dim))?;
-            let gate = self.gate_experts.indexed_moe_forward(&xs, &indices)?;
-            let up = self.up_experts.indexed_moe_forward(&xs, &indices)?;
+            let gate = experts_moe_forward(&self.gate_experts, &xs, &indices)?;
+            let up = experts_moe_forward(&self.up_experts, &xs, &indices)?;
             let activated = crate::ops::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
-            self.down_experts
-                .indexed_moe_forward(&activated, &indices)?
+            experts_moe_forward(&self.down_experts, &activated, &indices)?
         };
         ys.broadcast_mul(&scores.unsqueeze(D::Minus1)?)?
             .sum(D::Minus2)?
@@ -146,15 +163,17 @@ impl LayerWeights {
             (q, k, v)
         };
 
-        // Per-head RMSNorm in Qwen3
-        let q_flat = q.flatten(0, 2)?;
-        let k_flat = k.flatten(0, 2)?;
-        let q_flat = self.q_norm.forward(&q_flat)?;
-        let k_flat = self.k_norm.forward(&k_flat)?;
-        let q = q_flat.reshape((b_sz, self.n_head, seq_len, self.head_dim))?;
-        let k = k_flat.reshape((b_sz, self.n_kv_head, seq_len, self.head_dim))?;
-
-        let (q, k) = self.rotary.forward(&q, &k, start_offsets)?;
+        let positions =
+            crate::pipeline::text_positions_tensor(start_offsets, q.dim(2)?, q.device())?;
+        let (q, k) = self.rotary.forward_qk_norm(
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+            &positions,
+        )?;
 
         let (q, k, v) = (
             q.to_dtype(self.dtype)?,

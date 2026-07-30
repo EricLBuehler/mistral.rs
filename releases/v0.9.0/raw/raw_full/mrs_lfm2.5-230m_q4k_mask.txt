@@ -1,0 +1,65 @@
+# cmd: /home/ericbuehler/mistral.rs/target/release/mistralrs bench --cpu --prompt-len 128,512,2048,4096,8192 --depth 128,512,2048,4096,8192 --gen-len 256 --iterations 2 --warmup 1 -m LiquidAI/LFM2.5-230M --from-uqff /home/ericbuehler/hf_models/bench_v090/lfm25-uqff-q4k/q4k-0.uqff
+# env: {'CANDLE_CPU_MASK': '5-9,15-19'}
+# wall_s: 59.6
+# rc: 0
+=== stdout ===
+[2m2026-07-05T08:53:57.840572Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-07-05T08:53:58.419353Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is F32.
+[2m2026-07-05T08:53:58.560514Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: text[max_seq_len: 4096, max_batch_size: 1].
+[2m2026-07-05T08:53:58.560535Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 14 repeating layers.
+[2m2026-07-05T08:53:58.560537Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-07-05T08:53:58.588840Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-13: cpu (122 GB)
+[2m2026-07-05T08:53:58.616760Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::normal[0m[2m:[0m Loading UQFF model weights.
+[2m2026-07-05T08:53:59.180833Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:53:59.180859Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m mistral.rs version: 0.8.23
+[2m2026-07-05T08:53:59.180861Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: 568059fe620c05ab4f1eb9633d25f6b3742b1e1e
+[2m2026-07-05T08:53:59.180959Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text]
+[2m2026-07-05T08:53:59.180965Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-07-05T08:53:59.182657Z[0m [32m INFO[0m [2mmistralrs_core::kv_cache[0m[2m:[0m Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).
+[2m2026-07-05T08:53:59.271429Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:53:59.271455Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-07-05T08:53:59.338508Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-07-05T08:53:59.338527Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 2 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192]...
+[2m2026-07-05T08:53:59.338530Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/2...
+[2m2026-07-05T08:54:04.181496Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1358.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:14.183494Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1869.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:19.183691Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1331.20, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:28.282113Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/2...
+[2m2026-07-05T08:54:29.184693Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1818.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:34.185420Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1229.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:44.186424Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 2303.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:54:49.186816Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 896.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: LiquidAI/LFM2.5-230M
+Iterations: 2
+
+┌─────────────────────────────┬───────────────┬──────────────────────┐
+│ Test                        ┆ T/s           ┆ Latency              │
+╞═════════════════════════════╪═══════════════╪══════════════════════╡
+│ Prefill (128 tokens)        ┆ 1328.2 ± 48.2 ┆ 96.50 ms (prefill)   │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)        ┆ 1796.5 ± 0.0  ┆ 285.00 ms (prefill)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)       ┆ 1721.8 ± 9.4  ┆ 1189.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)       ┆ 1427.3 ± 13.9 ┆ 2870.00 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)       ┆ 1013.0 ± 6.4  ┆ 8087.00 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)  ┆ 375.7 ± 3.6   ┆ 2.66 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)  ┆ 450.6 ± 18.2  ┆ 2.22 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048) ┆ 444.6 ± 7.7   ┆ 2.25 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096) ┆ 417.6 ± 20.0  ┆ 2.39 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192) ┆ 269.7 ± 3.6   ┆ 3.71 ms/T            │
+└─────────────────────────────┴───────────────┴──────────────────────┘
+
+
+=== stderr ===
+

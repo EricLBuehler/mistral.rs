@@ -99,6 +99,8 @@ pub(super) fn do_list_files(
                 "name": f.name,
                 "format": f.format,
                 "bytes": f.bytes,
+                "purpose": f.purpose,
+                "source": f.source.tool,
                 "round": f.source.round,
                 "turn": f.source.turn,
             })

@@ -1,0 +1,88 @@
+---
+title: Speculative decoding (MTP)
+description: Use MTP assistant models to draft multiple tokens per target verification pass.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint and the engine drafts several tokens per target step.
+
+Output stays exact: every accepted token is verified by the target model before it is emitted.
+
+:::caution
+The target must run with [paged attention](/mistral.rs/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
+:::
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+  --mtp-model google/gemma-4-E4B-it-assistant \
+  --mtp-n-predict 6
+```
+
+`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve`. See [run](/mistral.rs/reference/cli/run/) and [serve](/mistral.rs/reference/cli/serve/) flag references.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="google/gemma-4-E4B-it"),
+    in_situ_quant="8",
+    mtp_model="google/gemma-4-E4B-it-assistant",
+    mtp_n_predict=6,
+)
+```
+
+Gemma 4 loads via `Which.MultimodalPlain`; it is currently the only model family with MTP assistant checkpoints.
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_mtp_model("google/gemma-4-E4B-it-assistant", Some(6))
+    .build()
+    .await?;
+```
+
+For full control, `with_mtp_config(MtpConfig { model, n_predict })` is equivalent. The MTP builder methods exist on the text, multimodal, and auto-detecting model builders.
+
+</TabItem>
+</Tabs>
+
+`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant's `generation_config.json` and falls back to 6.
+
+## Supported models
+
+| Mode | Target models | Assistant model | Status |
+|---|---|---|---|
+| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with paged attention |
+
+Legacy target/draft speculative decoding has been removed. New speculative decoding features use the MTP proposer/target path.
+
+## Gemma 4
+
+Gemma 4 assistant checkpoints are MTP drafters for Gemma 4 target models. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint. A downloaded checkout works too:
+
+```bash
+mistralrs run -m google/gemma-4-E4B-it --quant 8 \
+  --mtp-model ./gemma-4-E4B-it-assistant \
+  --mtp-n-predict 6
+```
+
+Non-paged KV-cache MTP is intentionally disabled for now, which is why paged attention is required (see the note at the top).
+
+The target and assistant configs must match where the implementation requires it, including vocabulary size and target hidden size. Mismatches fail at load, before generation starts.
+
+## Notes
+
+MTP remains exact: accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
+
+MTP supports batched generation and constrained decoding.
+
+MTP is configured at launch time only (CLI flags, `Runner(...)`, or the model builder). There is no per-request HTTP field to toggle it; load the server with the assistant attached and every request uses it.

@@ -52,6 +52,10 @@ impl QuantMethod for GptqLayer {
         todo!()
     }
 
+    fn plan_isq(&self, _request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        candle_core::bail!("GPTQ CPU quantization does not support ISQ planning.")
+    }
+
     fn apply_isq(
         self: Arc<Self>,
         _dtype: Option<IsqType>,

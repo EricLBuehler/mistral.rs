@@ -7,7 +7,7 @@
 //! The key insight is that recurrent state is accessed via `state_indices` which map
 //! each sequence in the current batch to its slot in the pool.
 
-use candle_core::{Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -27,8 +27,6 @@ pub struct RecurrentStatePool {
     /// For Mamba: (capacity, n_heads, head_dim, d_state)
     /// For GDN: (capacity, n_v_heads, key_dim, value_dim)
     pub recurrent_state: Tensor,
-    /// Per-slot sequence length offsets (for tracking generation position)
-    seqlen_offsets: Vec<usize>,
     /// Stack of free slot indices (for allocation)
     free_slots: Vec<usize>,
     /// Current capacity (grows dynamically)
@@ -37,7 +35,8 @@ pub struct RecurrentStatePool {
     conv_dim: usize,
     conv_width: usize,
     state_dims: Vec<usize>,
-    dtype: candle_core::DType,
+    conv_dtype: DType,
+    recurrent_dtype: DType,
     device: Device,
 }
 
@@ -54,30 +53,30 @@ impl RecurrentStatePool {
         conv_dim: usize,
         conv_width: usize,
         state_dims: Vec<usize>,
-        dtype: candle_core::DType,
+        conv_dtype: DType,
+        recurrent_dtype: DType,
         device: &Device,
     ) -> Result<Self> {
         let capacity = INITIAL_POOL_CAPACITY;
 
-        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), dtype, device)?;
+        let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), conv_dtype, device)?;
 
         let mut recurrent_shape = vec![capacity];
         recurrent_shape.extend_from_slice(&state_dims);
-        let recurrent_state = Tensor::zeros(recurrent_shape, dtype, device)?;
+        let recurrent_state = Tensor::zeros(recurrent_shape, recurrent_dtype, device)?;
 
         let free_slots: Vec<usize> = (0..capacity).rev().collect();
-        let seqlen_offsets = vec![0; capacity];
 
         Ok(Self {
             conv_state,
             recurrent_state,
-            seqlen_offsets,
             free_slots,
             capacity,
             conv_dim,
             conv_width,
             state_dims,
-            dtype,
+            conv_dtype,
+            recurrent_dtype,
             device: device.clone(),
         })
     }
@@ -89,7 +88,7 @@ impl RecurrentStatePool {
         // Allocate new larger conv_state and copy existing data
         let new_conv = Tensor::zeros(
             (new_capacity, self.conv_dim, self.conv_width),
-            self.dtype,
+            self.conv_dtype,
             &self.device,
         )?;
         new_conv.slice_set(&self.conv_state, 0, 0)?;
@@ -97,12 +96,11 @@ impl RecurrentStatePool {
         // Allocate new larger recurrent_state and copy existing data
         let mut recurrent_shape = vec![new_capacity];
         recurrent_shape.extend_from_slice(&self.state_dims);
-        let new_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+        let new_recurrent = Tensor::zeros(recurrent_shape, self.recurrent_dtype, &self.device)?;
         new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
 
         // Add new slots to free list
         self.free_slots.extend((self.capacity..new_capacity).rev());
-        self.seqlen_offsets.resize(new_capacity, 0);
 
         self.conv_state = new_conv;
         self.recurrent_state = new_recurrent;
@@ -132,23 +130,7 @@ impl RecurrentStatePool {
     /// Free a state slot when a sequence completes.
     pub fn free(&mut self, slot_idx: usize) {
         debug_assert!(slot_idx < self.capacity);
-        self.seqlen_offsets[slot_idx] = 0;
         self.free_slots.push(slot_idx);
-    }
-
-    /// Get the seqlen offset for a slot
-    pub fn get_seqlen_offset(&self, slot_idx: usize) -> usize {
-        self.seqlen_offsets[slot_idx]
-    }
-
-    /// Set the seqlen offset for a slot
-    pub fn set_seqlen_offset(&mut self, slot_idx: usize, offset: usize) {
-        self.seqlen_offsets[slot_idx] = offset;
-    }
-
-    /// Increment seqlen offset for a slot
-    pub fn increment_seqlen_offset(&mut self, slot_idx: usize, delta: usize) {
-        self.seqlen_offsets[slot_idx] += delta;
     }
 
     /// Gather conv states for the given slot indices
@@ -164,11 +146,32 @@ impl RecurrentStatePool {
     /// Scatter conv states back to the pool for the given slot indices
     pub fn scatter_conv_state(&mut self, state_indices: &Tensor, values: &Tensor) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        self.scatter_conv_state_for_indices(&indices, values)
+    }
+
+    pub fn scatter_conv_state_for_indices(
+        &mut self,
+        indices: &[u32],
+        values: &Tensor,
+    ) -> Result<()> {
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
             let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
             self.conv_state.slice_set(&value, 0, slot_idx as usize)?;
         }
         Ok(())
+    }
+
+    pub fn scatter_conv_state_with_host_indices(
+        &mut self,
+        state_indices: &Tensor,
+        host_indices: Option<&[u32]>,
+        values: &Tensor,
+    ) -> Result<()> {
+        if let Some(indices) = host_indices {
+            self.scatter_conv_state_for_indices(indices, values)
+        } else {
+            self.scatter_conv_state(state_indices, values)
+        }
     }
 
     /// Scatter recurrent states back to the pool for the given slot indices
@@ -178,6 +181,14 @@ impl RecurrentStatePool {
         values: &Tensor,
     ) -> Result<()> {
         let indices: Vec<u32> = state_indices.to_vec1()?;
+        self.scatter_recurrent_state_for_indices(&indices, values)
+    }
+
+    pub fn scatter_recurrent_state_for_indices(
+        &mut self,
+        indices: &[u32],
+        values: &Tensor,
+    ) -> Result<()> {
         for (batch_idx, &slot_idx) in indices.iter().enumerate() {
             let value = values.i(batch_idx)?.unsqueeze(0)?.contiguous()?;
             self.recurrent_state
@@ -186,22 +197,34 @@ impl RecurrentStatePool {
         Ok(())
     }
 
+    pub fn scatter_recurrent_state_with_host_indices(
+        &mut self,
+        state_indices: &Tensor,
+        host_indices: Option<&[u32]>,
+        values: &Tensor,
+    ) -> Result<()> {
+        if let Some(indices) = host_indices {
+            self.scatter_recurrent_state_for_indices(indices, values)
+        } else {
+            self.scatter_recurrent_state(state_indices, values)
+        }
+    }
+
     /// Reset a specific slot's state to zeros
     pub fn reset_slot(&mut self, slot_idx: usize) -> Result<()> {
         let zero_conv = Tensor::zeros(
             (1, self.conv_dim, self.conv_width),
-            self.dtype,
+            self.conv_dtype,
             &self.device,
         )?;
 
         let mut recurrent_shape = vec![1usize];
         recurrent_shape.extend_from_slice(&self.state_dims);
-        let zero_recurrent = Tensor::zeros(recurrent_shape, self.dtype, &self.device)?;
+        let zero_recurrent = Tensor::zeros(recurrent_shape, self.recurrent_dtype, &self.device)?;
 
         self.conv_state.slice_set(&zero_conv, 0, slot_idx)?;
         self.recurrent_state
             .slice_set(&zero_recurrent, 0, slot_idx)?;
-        self.seqlen_offsets[slot_idx] = 0;
         Ok(())
     }
 
@@ -209,7 +232,6 @@ impl RecurrentStatePool {
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
         self.recurrent_state = self.recurrent_state.zeros_like()?;
-        self.seqlen_offsets.fill(0);
         self.free_slots = (0..self.capacity).rev().collect();
         Ok(())
     }
@@ -226,8 +248,12 @@ impl RecurrentStatePool {
         &self.device
     }
 
-    pub fn dtype(&self) -> candle_core::DType {
-        self.dtype
+    pub fn conv_dtype(&self) -> DType {
+        self.conv_dtype
+    }
+
+    pub fn recurrent_dtype(&self) -> DType {
+        self.recurrent_dtype
     }
 }
 
@@ -236,13 +262,13 @@ impl Clone for RecurrentStatePool {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
-            seqlen_offsets: self.seqlen_offsets.clone(),
             free_slots: self.free_slots.clone(),
             capacity: self.capacity,
             conv_dim: self.conv_dim,
             conv_width: self.conv_width,
             state_dims: self.state_dims.clone(),
-            dtype: self.dtype,
+            conv_dtype: self.conv_dtype,
+            recurrent_dtype: self.recurrent_dtype,
             device: self.device.clone(),
         }
     }
@@ -312,6 +338,7 @@ pub struct RecurrentLayerConfig {
     /// For Mamba: [n_heads, head_dim, d_state]
     /// For GDN: [n_v_heads, key_dim, value_dim]
     pub state_dims: Vec<usize>,
+    pub recurrent_dtype: Option<DType>,
 }
 
 /// Configuration for creating a hybrid cache
@@ -335,6 +362,8 @@ pub struct HybridCache {
     /// Set by clone_in_cache before forward, used by model during forward.
     /// Shape: (batch_size,) containing pool slot indices.
     state_indices: Option<Tensor>,
+    state_indices_host: Option<Vec<u32>>,
+    device_state_indices: Vec<(Device, Tensor)>,
 }
 
 impl HybridCache {
@@ -343,11 +372,18 @@ impl HybridCache {
     pub fn new(
         config: HybridCacheConfig,
         dtype: candle_core::DType,
-        device: &Device,
+        layer_devices: &[Device],
     ) -> Result<Self> {
+        if layer_devices.len() != config.layer_types.len() {
+            candle_core::bail!(
+                "Hybrid cache has {} layers but {} layer devices",
+                config.layer_types.len(),
+                layer_devices.len()
+            );
+        }
         let mut caches = Vec::with_capacity(config.layer_types.len());
 
-        for layer_type in &config.layer_types {
+        for (layer_type, device) in config.layer_types.iter().zip(layer_devices) {
             let cache = match layer_type {
                 HybridLayerType::Attention => HybridLayerCache::Attention(KvCache::new_normal(
                     2,
@@ -359,6 +395,7 @@ impl HybridCache {
                     config.recurrent.conv_width,
                     config.recurrent.state_dims.clone(),
                     dtype,
+                    config.recurrent.recurrent_dtype.unwrap_or(dtype),
                     device,
                 )?),
             };
@@ -369,6 +406,8 @@ impl HybridCache {
             caches,
             config,
             state_indices: None,
+            state_indices_host: None,
+            device_state_indices: Vec::new(),
         })
     }
 
@@ -463,6 +502,9 @@ impl HybridCache {
         for cache in &mut self.caches {
             cache.reset();
         }
+        self.state_indices = None;
+        self.state_indices_host = None;
+        self.device_state_indices.clear();
     }
 
     pub fn num_layers(&self) -> usize {
@@ -491,12 +533,159 @@ impl HybridCache {
     /// Called by HybridCacheManager::clone_in_cache before forward.
     pub fn set_state_indices(&mut self, indices: Option<Tensor>) {
         self.state_indices = indices;
+        self.state_indices_host = None;
+        self.cache_device_state_indices();
+    }
+
+    pub fn set_state_indices_with_host(
+        &mut self,
+        indices: Option<Tensor>,
+        host_indices: Option<Vec<u32>>,
+    ) {
+        self.state_indices = indices;
+        self.state_indices_host = host_indices;
+        self.cache_device_state_indices();
+    }
+
+    fn cache_device_state_indices(&mut self) {
+        self.device_state_indices.clear();
+        let devices = self
+            .caches
+            .iter()
+            .filter_map(|cache| match cache {
+                HybridLayerCache::Recurrent(pool) => Some(pool.device().clone()),
+                HybridLayerCache::Attention(_) => None,
+            })
+            .fold(Vec::<Device>::new(), |mut devices, device| {
+                if !devices
+                    .iter()
+                    .any(|cached_device| cached_device.same_device(&device))
+                {
+                    devices.push(device);
+                }
+                devices
+            });
+        for device in devices {
+            if self
+                .state_indices
+                .as_ref()
+                .is_some_and(|indices| indices.device().same_device(&device))
+            {
+                continue;
+            }
+            let indices = if let Some(host_indices) = &self.state_indices_host {
+                Tensor::from_vec(host_indices.clone(), (host_indices.len(),), &device)
+            } else if let Some(indices) = &self.state_indices {
+                indices.to_device(&device)
+            } else {
+                continue;
+            };
+            if let Ok(indices) = indices {
+                self.device_state_indices.push((device, indices));
+            }
+        }
     }
 
     /// Get the state indices for the current batch.
     /// Used by the model during forward to access recurrent state pool.
     pub fn state_indices(&self) -> Option<&Tensor> {
         self.state_indices.as_ref()
+    }
+
+    pub fn state_indices_host(&self) -> Option<&[u32]> {
+        self.state_indices_host.as_deref()
+    }
+
+    pub fn state_index_tensors(&self) -> Vec<Tensor> {
+        self.state_indices
+            .iter()
+            .chain(self.device_state_indices.iter().map(|(_, indices)| indices))
+            .cloned()
+            .collect()
+    }
+
+    pub fn state_indices_for_layer(&mut self, layer: usize) -> Result<Option<Tensor>> {
+        let device = match self.caches.get(layer) {
+            Some(HybridLayerCache::Recurrent(pool)) => pool.device().clone(),
+            _ => return Ok(None),
+        };
+        if let Some(indices) = &self.state_indices {
+            if indices.device().same_device(&device) {
+                return Ok(Some(indices.clone()));
+            }
+        }
+        if let Some((_, indices)) = self
+            .device_state_indices
+            .iter()
+            .find(|(cached_device, _)| cached_device.same_device(&device))
+        {
+            return Ok(Some(indices.clone()));
+        }
+        let indices = if let Some(host_indices) = &self.state_indices_host {
+            Tensor::from_vec(host_indices.clone(), (host_indices.len(),), &device)?
+        } else if let Some(indices) = &self.state_indices {
+            indices.to_device(&device)?
+        } else {
+            return Ok(None);
+        };
+        self.device_state_indices.push((device, indices.clone()));
+        Ok(Some(indices))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(layer_types: Vec<HybridLayerType>) -> HybridCacheConfig {
+        HybridCacheConfig {
+            layer_types,
+            max_seq_len: 32,
+            recurrent: RecurrentLayerConfig {
+                conv_dim: 2,
+                conv_width: 3,
+                state_dims: vec![2, 2],
+                recurrent_dtype: None,
+            },
+        }
+    }
+
+    #[test]
+    fn requires_one_device_per_layer() {
+        let error = HybridCache::new(
+            config(vec![HybridLayerType::Attention, HybridLayerType::Recurrent]),
+            DType::F32,
+            &[Device::Cpu],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("1 layer devices"));
+    }
+
+    #[test]
+    fn recurrent_indices_are_local_to_the_layer_pool() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![
+                HybridLayerType::Recurrent,
+                HybridLayerType::Attention,
+                HybridLayerType::Recurrent,
+            ]),
+            DType::F32,
+            &devices,
+        )?;
+        let state_indices = Tensor::from_vec(vec![1u32, 3], (2,), &Device::Cpu)?;
+        cache.set_state_indices_with_host(Some(state_indices), Some(vec![1, 3]));
+
+        assert!(cache.state_indices_for_layer(1)?.is_none());
+        for layer in [0, 2] {
+            let indices = cache.state_indices_for_layer(layer)?.unwrap();
+            let HybridLayerCache::Recurrent(pool) = cache.get(layer).unwrap() else {
+                unreachable!()
+            };
+            assert!(indices.device().same_device(pool.device()));
+            assert_eq!(indices.to_vec1::<u32>()?, vec![1, 3]);
+        }
+        Ok(())
     }
 }
 
@@ -529,7 +718,6 @@ impl HybridCache {
 pub struct RecurrentStateSnapshot {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
-    pub seqlen_offset: usize,
 }
 
 impl HybridCache {
@@ -546,7 +734,6 @@ impl HybridCache {
                 snapshots.push(RecurrentStateSnapshot {
                     conv_state: conv,
                     recurrent_state: recurrent,
-                    seqlen_offset: pool.get_seqlen_offset(slot_idx),
                 });
             }
         }
@@ -570,7 +757,6 @@ impl HybridCache {
                     let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
                     pool.scatter_conv_state(&idx_tensor, &conv)?;
                     pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
-                    pool.set_seqlen_offset(slot_idx, snap.seqlen_offset);
                 }
             }
         }

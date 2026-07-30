@@ -20,7 +20,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) model_id: String,
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
-    pub(crate) write_uqff: Option<PathBuf>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
     pub(crate) from_uqff: Option<Vec<PathBuf>>,
     pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) imatrix: Option<PathBuf>,
@@ -29,10 +29,13 @@ pub struct MultimodalModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
+    pub(crate) mtp_config: Option<MtpConfig>,
     pub(crate) device: Option<Device>,
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
@@ -70,6 +73,7 @@ impl MultimodalModelBuilder {
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
+            max_model_len: None,
             loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
@@ -88,6 +92,8 @@ impl MultimodalModelBuilder {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            shell_config: None,
+            mtp_config: None,
             device: None,
             matformer_config_path: None,
             matformer_slice_name: None,
@@ -98,6 +104,12 @@ impl MultimodalModelBuilder {
 
     // Shared methods from builder_macros.rs
     common_builder_methods!();
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
+        self
+    }
 
     /// Manually set the model loader type. Otherwise, it will attempt to automatically
     /// determine the loader type.
@@ -125,6 +137,14 @@ impl MultimodalModelBuilder {
     /// This is only supported on the Qwen2-VL and Idefics 2 models. Others handle this internally.
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
+        self
+    }
+
+    /// Cap the model's runtime context length without changing the source configuration.
+    ///
+    /// This is currently supported by the Gemma 4 multimodal loader.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        self.max_model_len = Some(max_model_len);
         self
     }
 
@@ -184,5 +204,19 @@ impl DerefMut for UqffMultimodalModelBuilder {
 impl From<UqffMultimodalModelBuilder> for MultimodalModelBuilder {
     fn from(value: UqffMultimodalModelBuilder) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MultimodalModelBuilder;
+
+    #[test]
+    fn max_model_len_is_configurable() {
+        let mut builder = MultimodalModelBuilder::new("model");
+        assert_eq!(builder.max_model_len, None);
+
+        builder = builder.with_max_model_len(8192);
+        assert_eq!(builder.max_model_len, Some(8192));
     }
 }

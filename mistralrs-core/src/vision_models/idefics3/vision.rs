@@ -5,7 +5,7 @@ use std::{ops::Mul, sync::Arc};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{self, conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
+    layers::{self, conv2d, dense_embedding, layer_norm, Activation, CausalMasker, Sdpa},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -127,7 +127,7 @@ impl VisionEmbeddings {
             patch_size: config.patch_size,
             patch_embedding,
             num_patches_per_side,
-            position_embedding: embedding(
+            position_embedding: dense_embedding(
                 num_patches,
                 config.hidden_size,
                 vb.pp("position_embedding"),
@@ -271,9 +271,8 @@ impl Attention {
     fn forward(&self, xs: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
 
         q = q
             .reshape((b_sz, q_len, self.num_heads, self.head_dim))?

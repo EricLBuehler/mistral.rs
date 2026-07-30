@@ -161,9 +161,8 @@ impl Llama4VisionAttention {
     }
 
     fn forward(&self, hidden_state: &Tensor, attention_mask: &AttentionMask) -> Result<Tensor> {
-        let mut q = self.q_proj.forward(hidden_state)?;
-        let mut k = self.k_proj.forward(hidden_state)?;
-        let mut v = self.v_proj.forward(hidden_state)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(hidden_state, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Should be same, no caching...
         let (bs, q_sq, _) = q.dims3()?;
         let (_, k_sq, _) = k.dims3()?;
@@ -181,11 +180,15 @@ impl Llama4VisionAttention {
             .transpose(1, 2)?
             .contiguous()?;
 
-        // Apply rope
-        {
-            q = candle_nn::rotary_emb::rope_i(&q, &self.freqs.cos, &self.freqs.sin)?;
-            k = candle_nn::rotary_emb::rope_i(&k, &self.freqs.cos, &self.freqs.sin)?;
-        }
+        let qk = crate::layers::apply_rotary_preselected_qk(
+            &q,
+            &k,
+            &self.freqs.cos,
+            &self.freqs.sin,
+            false,
+        )?;
+        q = qk.0;
+        k = qk.1;
 
         let flash_params = FlashParams::empty(false);
 
@@ -645,36 +648,9 @@ impl Llama4VisionModel {
 
         self.vision_adapter.forward(&hidden_state)
     }
-
-    pub fn get_isq_layers(&mut self) -> Vec<&mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>> {
-        let mut layers = Vec::new();
-        for layer in &mut self.model.layers {
-            layers.push(&mut layer.self_attn.q_proj);
-            layers.push(&mut layer.self_attn.k_proj);
-            layers.push(&mut layer.self_attn.v_proj);
-            layers.push(&mut layer.self_attn.o_proj);
-
-            layers.push(&mut layer.mlp.fc1);
-            layers.push(&mut layer.mlp.fc2);
-        }
-        layers.push(&mut self.vision_adapter.mlp.fc1);
-        layers.push(&mut self.vision_adapter.mlp.fc2);
-        layers
-    }
 }
 
 impl IsqModel for Llama4VisionModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn crate::device_map::DeviceMapper,
-    ) {
-        unreachable!("Llama4Vision model cannot be quantized.");
-    }
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

@@ -30,8 +30,8 @@ __global__ void afq_dequantize_kernel(const uint32_t *__restrict__ w_q,
   const int packed_cols = cols * bits / 32;
   const int groups_per_row = cols / group_size;
 
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int total_elements = rows * cols;
+  int64_t tid = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t total_elements = (int64_t)rows * cols;
 
   if (tid >= total_elements)
     return;
@@ -44,15 +44,16 @@ __global__ void afq_dequantize_kernel(const uint32_t *__restrict__ w_q,
   int value_idx = col % values_per_u32;
 
   // Load packed value
-  uint32_t packed = w_q[row * packed_cols + packed_col];
+  uint32_t packed = w_q[(int64_t)row * packed_cols + packed_col];
 
   // Extract quantized value
   uint32_t q = extract_bits<bits>(packed, value_idx);
 
   // Get scale and bias for this group
   int group_idx = col / group_size;
-  T scale = scales[row * groups_per_row + group_idx];
-  T bias = biases[row * groups_per_row + group_idx];
+  int64_t group_offset = (int64_t)row * groups_per_row + group_idx;
+  T scale = scales[group_offset];
+  T bias = biases[group_offset];
 
   // Dequantize: w = q * scale + bias
   output[tid] = dequant_value<T>(q, scale, bias);
@@ -70,8 +71,8 @@ __global__ void afq_dequantize_3bit_kernel(const uint8_t *__restrict__ w_q,
   // 8 values per 3 bytes
   const int packed_cols = (cols * 3 + 7) / 8;
 
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int total_elements = rows * cols;
+  int64_t tid = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t total_elements = (int64_t)rows * cols;
 
   if (tid >= total_elements)
     return;
@@ -80,13 +81,14 @@ __global__ void afq_dequantize_3bit_kernel(const uint8_t *__restrict__ w_q,
   int col = tid % cols;
 
   // Calculate byte position for 3-bit extraction
-  const uint8_t *row_data = w_q + row * packed_cols;
+  const uint8_t *row_data = w_q + (int64_t)row * packed_cols;
   uint32_t q = extract_3bit(row_data, col);
 
   // Get scale and bias
   int group_idx = col / group_size;
-  T scale = scales[row * groups_per_row + group_idx];
-  T bias = biases[row * groups_per_row + group_idx];
+  int64_t group_offset = (int64_t)row * groups_per_row + group_idx;
+  T scale = scales[group_offset];
+  T bias = biases[group_offset];
 
   output[tid] = dequant_value<T>(q, scale, bias);
 }
@@ -103,8 +105,8 @@ __global__ void afq_dequantize_6bit_kernel(const uint8_t *__restrict__ w_q,
   // 4 values per 3 bytes
   const int packed_cols = (cols * 6 + 7) / 8;
 
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int total_elements = rows * cols;
+  int64_t tid = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t total_elements = (int64_t)rows * cols;
 
   if (tid >= total_elements)
     return;
@@ -113,15 +115,68 @@ __global__ void afq_dequantize_6bit_kernel(const uint8_t *__restrict__ w_q,
   int col = tid % cols;
 
   // Calculate byte position for 6-bit extraction
-  const uint8_t *row_data = w_q + row * packed_cols;
+  const uint8_t *row_data = w_q + (int64_t)row * packed_cols;
   uint32_t q = extract_6bit(row_data, col);
 
   // Get scale and bias
   int group_idx = col / group_size;
-  T scale = scales[row * groups_per_row + group_idx];
-  T bias = biases[row * groups_per_row + group_idx];
+  int64_t group_offset = (int64_t)row * groups_per_row + group_idx;
+  T scale = scales[group_offset];
+  T bias = biases[group_offset];
 
   output[tid] = dequant_value<T>(q, scale, bias);
+}
+
+template <typename T, int bits, int group_size>
+__global__ void afq_embedding_kernel(const uint8_t *__restrict__ w_q,
+                                     const T *__restrict__ scales,
+                                     const T *__restrict__ biases,
+                                     const uint32_t *__restrict__ indices,
+                                     T *__restrict__ output, int num_indices,
+                                     int hidden) {
+  constexpr int packs_per_thread = bits == 3 ? 8 : bits == 6 ? 4 : 8 / bits;
+  constexpr int bytes_per_pack = (bits == 3 || bits == 6) ? 3 : 1;
+  const int packs_per_row = hidden / packs_per_thread;
+  const int groups_per_row = hidden / group_size;
+
+  int64_t tid = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t total_packs = (int64_t)num_indices * packs_per_row;
+  if (tid >= total_packs)
+    return;
+
+  int out_row = tid / packs_per_row;
+  int pack = tid - (int64_t)out_row * packs_per_row;
+  int col = pack * packs_per_thread;
+  uint32_t source_row = indices[out_row];
+  int group_idx = col / group_size;
+
+  const uint8_t *row_w = w_q + (int64_t)source_row * packs_per_row * bytes_per_pack +
+                         (int64_t)pack * bytes_per_pack;
+  const T *row_scales = scales + (int64_t)source_row * groups_per_row;
+  const T *row_biases = biases + (int64_t)source_row * groups_per_row;
+  T scale = row_scales[group_idx];
+  T bias = row_biases[group_idx];
+  T *row_output = output + (int64_t)out_row * hidden + col;
+
+  if constexpr (bits == 3) {
+#pragma unroll
+    for (int i = 0; i < 8; i++) {
+      row_output[i] = dequant_value<T>(extract_3bit(row_w, i), scale, bias);
+    }
+  } else if constexpr (bits == 6) {
+#pragma unroll
+    for (int i = 0; i < 4; i++) {
+      row_output[i] = dequant_value<T>(extract_6bit(row_w, i), scale, bias);
+    }
+  } else {
+    uint32_t packed = row_w[0];
+    constexpr uint32_t mask = (1u << bits) - 1;
+#pragma unroll
+    for (int i = 0; i < packs_per_thread; i++) {
+      uint32_t q = (packed >> (i * bits)) & mask;
+      row_output[i] = dequant_value<T>(q, scale, bias);
+    }
+  }
 }
 
 // ============================================================================
@@ -181,10 +236,11 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   const int groups_per_row = cols / group_size;
 
   // Each warp processes one group
-  int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / AFQ_WARP_SIZE;
+  int64_t global_thread = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+  int64_t warp_id = global_thread / AFQ_WARP_SIZE;
   int lane = threadIdx.x % AFQ_WARP_SIZE;
 
-  int total_groups = rows * groups_per_row;
+  int64_t total_groups = (int64_t)rows * groups_per_row;
   if (warp_id >= total_groups)
     return;
 
@@ -192,7 +248,7 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   int group_idx = warp_id % groups_per_row;
   int group_start = group_idx * group_size;
 
-  const T *row_w = w + row * cols;
+  const T *row_w = w + (int64_t)row * cols;
 
   // Compute scale and bias
   float scale, bias;
@@ -202,16 +258,17 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   if (lane == 0) {
     float n_bins = (float)max_q;
     float final_scale = scale / n_bins;
+    int64_t group_offset = (int64_t)row * groups_per_row + group_idx;
 
     if constexpr (std::is_same_v<T, float>) {
-      scales[row * groups_per_row + group_idx] = final_scale;
-      biases[row * groups_per_row + group_idx] = bias;
+      scales[group_offset] = final_scale;
+      biases[group_offset] = bias;
     } else if constexpr (std::is_same_v<T, __half>) {
-      scales[row * groups_per_row + group_idx] = __float2half(final_scale);
-      biases[row * groups_per_row + group_idx] = __float2half(bias);
+      scales[group_offset] = __float2half(final_scale);
+      biases[group_offset] = __float2half(bias);
     } else if constexpr (std::is_same_v<T, __nv_bfloat16>) {
-      scales[row * groups_per_row + group_idx] = __float2bfloat16(final_scale);
-      biases[row * groups_per_row + group_idx] = __float2bfloat16(bias);
+      scales[group_offset] = __float2bfloat16(final_scale);
+      biases[group_offset] = __float2bfloat16(bias);
     }
   }
 
@@ -239,7 +296,7 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
     // Pack into u32 using atomic OR
     int packed_col = col / values_per_u32;
     int shift = (col % values_per_u32) * bits;
-    atomicOr(&w_q[row * packed_cols + packed_col], q << shift);
+    atomicOr(&w_q[(int64_t)row * packed_cols + packed_col], q << shift);
   }
 }
 
@@ -251,8 +308,8 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   extern "C" void afq_dequantize_##bits##bit_gs##gs##_##dtype_name(            \
       const uint32_t *w_q, const dtype *scales, const dtype *biases,           \
       dtype *output, int rows, int cols) {                                     \
-    int total = rows * cols;                                                   \
-    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    uint64_t total = (uint64_t)rows * cols;                                    \
+    unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_kernel<dtype, bits, gs>                                     \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
   }
@@ -261,8 +318,8 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   extern "C" void afq_dequantize_3bit_gs##gs##_##dtype_name(                   \
       const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
       dtype *output, int rows, int cols) {                                     \
-    int total = rows * cols;                                                   \
-    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    uint64_t total = (uint64_t)rows * cols;                                    \
+    unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_3bit_kernel<dtype, gs>                                      \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
   }
@@ -271,8 +328,8 @@ afq_quantize_kernel(const T *__restrict__ w, uint32_t *__restrict__ w_q,
   extern "C" void afq_dequantize_6bit_gs##gs##_##dtype_name(                   \
       const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
       dtype *output, int rows, int cols) {                                     \
-    int total = rows * cols;                                                   \
-    int blocks = cdiv(total, AFQ_BLOCK_SIZE);                                  \
+    uint64_t total = (uint64_t)rows * cols;                                    \
+    unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
     afq_dequantize_6bit_kernel<dtype, gs>                                      \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w_q, scales, biases, output, rows, cols); \
   }
@@ -335,6 +392,74 @@ DEFINE_DEQUANT_LAUNCHER(8, 64, __nv_bfloat16, bf16)
 DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
 
 // ============================================================================
+// Extern "C" Launch Functions - Embedding
+// ============================================================================
+
+#define DEFINE_EMBEDDING_LAUNCHER(bits, gs, dtype, dtype_name)                 \
+  extern "C" void afq_embedding_##bits##bit_gs##gs##_##dtype_name(             \
+      const uint8_t *w_q, const dtype *scales, const dtype *biases,            \
+      const uint32_t *indices, dtype *output, int num_indices, int hidden) {   \
+    constexpr int packs_per_thread =                                           \
+        bits == 3 ? 8 : bits == 6 ? 4 : 8 / bits;                              \
+    uint64_t total = (uint64_t)num_indices * hidden / packs_per_thread;        \
+    if (total == 0)                                                            \
+      return;                                                                  \
+    unsigned int blocks = (unsigned int)cdiv_u64(total, AFQ_BLOCK_SIZE);       \
+    afq_embedding_kernel<dtype, bits, gs><<<blocks, AFQ_BLOCK_SIZE>>>(         \
+        w_q, scales, biases, indices, output, num_indices, hidden);            \
+  }
+
+DEFINE_EMBEDDING_LAUNCHER(2, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(2, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(2, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(2, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(2, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(3, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(3, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(3, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(3, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(3, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(4, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(4, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(4, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(4, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(4, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(6, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(6, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(6, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(6, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(6, 128, __nv_bfloat16, bf16)
+
+DEFINE_EMBEDDING_LAUNCHER(8, 32, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, float, f32)
+DEFINE_EMBEDDING_LAUNCHER(8, 32, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, __half, f16)
+DEFINE_EMBEDDING_LAUNCHER(8, 32, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(8, 64, __nv_bfloat16, bf16)
+DEFINE_EMBEDDING_LAUNCHER(8, 128, __nv_bfloat16, bf16)
+
+// ============================================================================
 // Extern "C" Launch Functions - Quantize
 // ============================================================================
 
@@ -342,14 +467,14 @@ DEFINE_DEQUANT_LAUNCHER(8, 128, __nv_bfloat16, bf16)
   extern "C" void afq_quantize_##bits##bit_gs##gs##_##dtype_name(              \
       const dtype *w, uint32_t *w_q, dtype *scales, dtype *biases, int rows,   \
       int cols) {                                                              \
-    int groups_per_row = cols / gs;                                            \
-    int total_groups = rows * groups_per_row;                                  \
-    int warps_needed = total_groups;                                           \
-    int threads = warps_needed * AFQ_WARP_SIZE;                                \
-    int blocks = cdiv(threads, AFQ_BLOCK_SIZE);                                \
+    uint64_t groups_per_row = cols / gs;                                       \
+    uint64_t total_groups = (uint64_t)rows * groups_per_row;                   \
+    uint64_t warps_per_block = AFQ_BLOCK_SIZE / AFQ_WARP_SIZE;                 \
+    unsigned int blocks =                                                      \
+        (unsigned int)cdiv_u64(total_groups, warps_per_block);                 \
     /* Zero out w_q first */                                                   \
-    int packed_cols = cols * bits / 32;                                        \
-    cudaMemset(w_q, 0, rows * packed_cols * sizeof(uint32_t));                 \
+    uint64_t packed_cols = (uint64_t)cols * bits / 32;                         \
+    cudaMemset(w_q, 0, (uint64_t)rows * packed_cols * sizeof(uint32_t));       \
     afq_quantize_kernel<dtype, bits, gs>                                       \
         <<<blocks, AFQ_BLOCK_SIZE>>>(w, w_q, scales, biases, rows, cols);      \
   }

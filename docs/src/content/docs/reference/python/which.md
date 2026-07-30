@@ -4,6 +4,15 @@ description: "Variants that select which kind of model to load."
 sidebar:
   order: 3
 ---
+## `LoraAdapter`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `alias` | `str` | required |
+| `source` | `str` | required |
+| `revision` | `str \| None` | `None` |
+
+
 ## `Which`
 
 Which model to select. See the docs for the `Which` enum in API.md for more details.
@@ -43,6 +52,8 @@ Usage:
 | `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `hf_cache_path` | `str \| None` | `None` |
+| `imatrix` | `str \| None` | `None` |
+| `calibration_file` | `str \| None` | `None` |
 
 ### `Which.XLora`
 
@@ -65,9 +76,9 @@ Usage:
 
 | Field | Type | Default |
 | --- | --- | --- |
-| `adapter_model_ids` | `list[str]` | required |
+| `model_id` | `str` | required |
+| `adapters` | `list[LoraAdapter] \| None` | `None` |
 | `arch` | `Architecture \| None` | `None` |
-| `model_id` | `str \| None` | `None` |
 | `tokenizer_json` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `write_uqff` | `str \| None` | `None` |
@@ -75,6 +86,9 @@ Usage:
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
+| `max_adapters` | `int` | `16` |
+| `max_rank` | `int` | `256` |
+| `max_bytes` | `int` | `8589934592` |
 
 ### `Which.GGUF`
 

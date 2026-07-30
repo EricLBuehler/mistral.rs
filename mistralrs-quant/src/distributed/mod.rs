@@ -6,6 +6,14 @@ pub mod socket;
 
 use serde::{Deserialize, Serialize};
 
+const MISTRALRS_NO_NCCL: &str = "MISTRALRS_NO_NCCL";
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+const MIN_NCCL_WORLD_SIZE: usize = 2;
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+const MISTRALRS_MN_GLOBAL_WORLD_SIZE: &str = "MISTRALRS_MN_GLOBAL_WORLD_SIZE";
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+const MISTRALRS_MN_LOCAL_WORLD_SIZE: &str = "MISTRALRS_MN_LOCAL_WORLD_SIZE";
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RingConfig {
     master_ip: Option<String>,
@@ -71,7 +79,7 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
     #[cfg(all(feature = "cuda", feature = "nccl"))]
     {
         // In case we have manual set of TP size
-        if let Ok(x) = std::env::var("MISTRALRS_MN_LOCAL_WORLD_SIZE") {
+        if let Ok(x) = std::env::var(MISTRALRS_MN_LOCAL_WORLD_SIZE) {
             use std::str::FromStr;
             Ok(usize::from_str(&x).expect("Not a number for MISTRALRS_MN_LOCAL_WORLD_SIZE!"))
         } else {
@@ -87,9 +95,39 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
 }
 
 pub fn use_nccl() -> bool {
-    (std::env::var("MISTRALRS_NO_NCCL").is_err()
-        || std::env::var("MISTRALRS_NO_NCCL").is_ok_and(|x| x != "1"))
-        && (cfg!(feature = "nccl") && cfg!(feature = "cuda"))
+    if std::env::var(MISTRALRS_NO_NCCL).is_ok_and(|x| x == "1") {
+        return false;
+    }
+
+    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    {
+        nccl_world_size().is_some_and(|world_size| world_size >= MIN_NCCL_WORLD_SIZE)
+    }
+
+    #[cfg(not(all(feature = "cuda", feature = "nccl")))]
+    false
+}
+
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+fn nccl_world_size() -> Option<usize> {
+    if let Some(global_world_size) = parse_env_usize(MISTRALRS_MN_GLOBAL_WORLD_SIZE) {
+        return Some(global_world_size);
+    }
+    if let Some(local_world_size) = parse_env_usize(MISTRALRS_MN_LOCAL_WORLD_SIZE) {
+        return Some(local_world_size);
+    }
+    candle_core::cuda::cudarc::driver::result::device::get_count()
+        .ok()
+        .map(|count| count as usize)
+}
+
+#[cfg(all(feature = "cuda", feature = "nccl"))]
+fn parse_env_usize(name: &str) -> Option<usize> {
+    std::env::var(name).ok().map(|value| {
+        value
+            .parse()
+            .unwrap_or_else(|_| panic!("Not a number for {name}!"))
+    })
 }
 
 pub fn use_ring() -> bool {
@@ -220,12 +258,6 @@ mod nccl {
         ) -> Result<Self> {
             if !super::use_nccl() {
                 candle_core::bail!("NCCL is disabled but NCCL Comm was requested");
-            }
-            if !world_size.is_power_of_two() {
-                candle_core::bail!(
-                    "NCCL backend requires world_size to be a power of 2, got {}",
-                    world_size
-                );
             }
             let stream = dev.as_cuda_device()?.cuda_stream();
             let device_ordinal = stream.context().ordinal();
@@ -361,10 +393,12 @@ pub struct SumAllReduce {
     #[cfg(feature = "ring")]
     ring: Option<ring_ops::SumAllReduce>,
     dummy: Option<dummy_ops::SumAllReduce>,
+    world_size: usize,
 }
 
 impl SumAllReduce {
     pub fn new(comm: &std::sync::Arc<Comm>) -> Self {
+        let world_size = comm.world_size();
         match &**comm {
             #[cfg(all(feature = "cuda", feature = "nccl"))]
             Comm::Nccl(_) => Self {
@@ -373,6 +407,7 @@ impl SumAllReduce {
                 #[cfg(feature = "ring")]
                 ring: None,
                 dummy: None,
+                world_size,
             },
             #[cfg(feature = "ring")]
             Comm::Ring(_) => Self {
@@ -381,6 +416,7 @@ impl SumAllReduce {
                 #[cfg(feature = "ring")]
                 ring: Some(ring_ops::SumAllReduce::new(comm)),
                 dummy: None,
+                world_size,
             },
             Comm::Dummy(_) => Self {
                 #[cfg(all(feature = "cuda", feature = "nccl"))]
@@ -388,11 +424,19 @@ impl SumAllReduce {
                 #[cfg(feature = "ring")]
                 ring: None,
                 dummy: Some(dummy_ops::SumAllReduce::new(comm)),
+                world_size,
             },
         }
     }
 
+    pub fn is_noop(&self) -> bool {
+        self.world_size == 1
+    }
+
     pub fn sum_all_reduce(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
+        if self.is_noop() {
+            return Ok(xs.clone());
+        }
         #[cfg(all(feature = "cuda", feature = "nccl"))]
         if let Some(ref nccl) = self.nccl {
             return nccl.sum_all_reduce(xs);
@@ -652,7 +696,7 @@ mod nccl_ops {
             use half::{bf16, f16};
 
             let mut out_shape = l.shape().dims().to_vec();
-            out_shape[self.dim] = out_shape[self.dim] * self.comm.world_size();
+            out_shape[self.dim] *= self.comm.world_size();
             let out_shape = Shape::from(out_shape);
 
             let elem_count = out_shape.elem_count();

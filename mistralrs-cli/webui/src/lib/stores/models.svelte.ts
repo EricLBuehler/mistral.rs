@@ -9,6 +9,7 @@ class ModelStore {
   capabilities = $state<Capabilities>({
     search_enabled: false,
     code_execution_enabled: false,
+    shell_enabled: false,
     tool_dispatch_url: null,
   });
 

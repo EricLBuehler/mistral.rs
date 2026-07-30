@@ -1,15 +1,15 @@
 use std::collections::HashMap;
 
 use either::Either;
-use mistralrs_core::WebSearchOptions;
+use mistralrs_core::{AdapterGenerationId, AdapterSelection, WebSearchOptions};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     pyclass, pymethods,
     types::{PyAnyMethods, PyList, PyString},
-    Bound, Py, PyAny, PyErr, PyResult, Python,
+    Bound, Py, PyAny, PyErr, PyRef, PyResult, Python,
 };
 
-use crate::code_execution::{parse_agent_permission, parse_permission};
+use crate::code_execution::{parse_agent_permission, parse_permission, ShellSkillMount};
 
 #[pyclass(eq, eq_int)]
 #[derive(PartialEq, Debug, Clone)]
@@ -18,11 +18,65 @@ pub enum ToolChoice {
     Auto,
 }
 
+#[pyclass(frozen)]
+#[derive(Debug, Clone)]
+/// Selects one exact immutable LoRA adapter generation.
+pub struct LoraAdapterGeneration {
+    generation: AdapterGenerationId,
+}
+
+impl LoraAdapterGeneration {
+    pub(crate) fn parse(
+        generation: &str,
+    ) -> Result<Self, mistralrs_core::AdapterGenerationParseError> {
+        Ok(Self {
+            generation: generation.parse()?,
+        })
+    }
+
+    fn selection(&self) -> AdapterSelection {
+        AdapterSelection::generation(self.generation)
+    }
+}
+
+#[pymethods]
+impl LoraAdapterGeneration {
+    #[new]
+    fn new(generation: String) -> PyResult<Self> {
+        Self::parse(&generation).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    #[getter]
+    fn generation(&self) -> String {
+        self.generation.to_string()
+    }
+}
+
+fn parse_adapter_selection(adapter: Option<Py<PyAny>>) -> PyResult<Option<AdapterSelection>> {
+    Python::with_gil(|py| {
+        adapter
+            .map(|adapter| {
+                let adapter = adapter.bind(py);
+                if let Ok(alias) = adapter.extract::<String>() {
+                    return Ok(AdapterSelection::alias(alias));
+                }
+                if let Ok(generation) = adapter.extract::<PyRef<'_, LoraAdapterGeneration>>() {
+                    return Ok(generation.selection());
+                }
+                Err(PyTypeError::new_err(
+                    "adapter must be a string alias or LoraAdapterGeneration",
+                ))
+            })
+            .transpose()
+    })
+}
+
 #[pyclass]
 #[derive(Debug)]
 /// An OpenAI API compatible completion request.
 pub struct CompletionRequest {
     pub(crate) _model: String,
+    pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) prompt: String,
     pub(crate) best_of: Option<usize>,
     pub(crate) echo_prompt: bool,
@@ -78,6 +132,8 @@ impl CompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         truncate_sequence=false,
+        *,
+        adapter=None,
     ))]
     fn new(
         prompt: String,
@@ -105,6 +161,7 @@ impl CompletionRequest {
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
         truncate_sequence: Option<bool>,
+        adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -112,6 +169,7 @@ impl CompletionRequest {
             echo_prompt,
             suffix,
             _model: model,
+            adapter: parse_adapter_selection(adapter)?,
             logit_bias,
             max_tokens,
             n_choices,
@@ -237,6 +295,7 @@ pub struct ChatCompletionRequest {
         String,
     >,
     pub(crate) _model: String,
+    pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) logit_bias: Option<HashMap<u32, f32>>,
     pub(crate) logprobs: bool,
     pub(crate) top_logprobs: Option<usize>,
@@ -270,6 +329,9 @@ pub struct ChatCompletionRequest {
     pub(crate) tool_dispatch_url: Option<String>,
     /// Requires the `Runner` to have been built with `code_execution_config`.
     pub(crate) enable_code_execution: bool,
+    /// Requires the `Runner` to have been built with `shell_config`.
+    pub(crate) enable_shell: bool,
+    pub(crate) shell_skills: Option<Vec<ShellSkillMount>>,
     pub(crate) code_execution_permission: Option<mistralrs_core::CodeExecutionPermission>,
     pub(crate) agent_permission: Option<mistralrs_core::AgentPermission>,
     pub(crate) agent_approval_callback: Option<Py<PyAny>>,
@@ -277,6 +339,8 @@ pub struct ChatCompletionRequest {
     pub(crate) session_id: Option<String>,
     /// Required output files; surfaced as `ChatCompletionResponse.files`.
     pub(crate) files: Option<Vec<crate::files::RequestedFile>>,
+    /// User-provided input files for this request.
+    pub(crate) input_files: Option<Vec<crate::files::InputFile>>,
 }
 
 #[pymethods]
@@ -314,11 +378,16 @@ impl ChatCompletionRequest {
         max_tool_rounds=None,
         tool_dispatch_url=None,
         enable_code_execution=false,
+        enable_shell=false,
+        shell_skills=None,
         agent_permission=None,
         agent_approval_callback=None,
         code_execution_permission=None,
         session_id=None,
         files=None,
+        input_files=None,
+        *,
+        adapter=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -352,11 +421,15 @@ impl ChatCompletionRequest {
         max_tool_rounds: Option<usize>,
         tool_dispatch_url: Option<String>,
         enable_code_execution: bool,
+        enable_shell: bool,
+        shell_skills: Option<Vec<ShellSkillMount>>,
         agent_permission: Option<Py<PyAny>>,
         agent_approval_callback: Option<Py<PyAny>>,
         code_execution_permission: Option<Py<PyAny>>,
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
+        input_files: Option<Vec<crate::files::InputFile>>,
+        adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -413,6 +486,7 @@ impl ChatCompletionRequest {
         Ok(Self {
             messages,
             _model: model,
+            adapter: parse_adapter_selection(adapter)?,
             logit_bias,
             logprobs,
             top_logprobs,
@@ -442,11 +516,67 @@ impl ChatCompletionRequest {
             max_tool_rounds,
             tool_dispatch_url,
             enable_code_execution,
+            enable_shell: enable_shell
+                || shell_skills
+                    .as_ref()
+                    .is_some_and(|skills| !skills.is_empty()),
+            shell_skills,
             agent_permission,
             agent_approval_callback,
             code_execution_permission,
             session_id,
             files,
+            input_files,
         })
+    }
+}
+
+impl ChatCompletionRequest {
+    pub(crate) fn shell_options(&self) -> Option<mistralrs_core::ShellOptions> {
+        self.shell_skills
+            .as_ref()
+            .map(|skills| mistralrs_core::ShellOptions {
+                skills: skills.iter().cloned().map(Into::into).collect(),
+            })
+    }
+
+    pub(crate) fn input_files(&self) -> Vec<mistralrs_core::File> {
+        self.input_files
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::impl_::pyclass::{PyClassImplCollector, PyClassNewTextSignature};
+
+    #[test]
+    fn exact_adapter_generation_is_validated_and_converted() {
+        let generation = AdapterGenerationId::from_bytes([0x5a; 32]);
+        let selector = LoraAdapterGeneration::parse(&generation.to_string()).unwrap();
+
+        assert_eq!(selector.generation(), generation.to_string());
+        assert_eq!(selector.selection().resolved_generation(), Some(generation));
+        assert!(LoraAdapterGeneration::parse("not-a-generation").is_err());
+    }
+
+    #[test]
+    fn adapter_selection_is_keyword_only_after_existing_request_arguments() {
+        let completion = PyClassImplCollector::<CompletionRequest>::new()
+            .new_text_signature()
+            .unwrap();
+        assert!(completion.starts_with("(prompt, model, best_of=1"));
+        assert!(completion.ends_with("*, adapter=None)"));
+
+        let chat = PyClassImplCollector::<ChatCompletionRequest>::new()
+            .new_text_signature()
+            .unwrap();
+        assert!(chat.starts_with("(messages, model, logprobs=False"));
+        assert!(chat.ends_with("*, adapter=None)"));
     }
 }

@@ -37,6 +37,7 @@
         modelStore.capabilities = caps;
         if (caps.search_enabled) settingsStore.enableSearch = true;
         if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
+        if (caps.shell_enabled) settingsStore.enableShell = true;
       } catch {
         // Capabilities endpoint might not exist on older servers
       }

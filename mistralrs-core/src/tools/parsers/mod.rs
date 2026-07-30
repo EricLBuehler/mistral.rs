@@ -7,6 +7,8 @@ mod deepseek;
 mod gemma4;
 mod gemma4_strict;
 pub(crate) mod harmony;
+mod hunyuan;
+mod liquid;
 mod llama;
 mod mistral_nemo;
 mod qwen;
@@ -24,12 +26,18 @@ pub enum ToolCallFormat {
     Qwen,
     /// `<|python_tag|>{"name":"...","parameters":{...}}`
     Llama,
+    /// `<|tool_call_start|>[name(arg="value")]<|tool_call_end|>`
+    Liquid,
     /// `[TOOL_CALLS][{"name":"...","arguments":{...}}]`
     MistralNemo,
+    /// `<tool_calls>[{"name":"...","arguments":{...}}]</tool_calls>`
+    Hunyuan,
     /// Multi-line with ` ```json` fence and `<｜tool▁call▁end｜>` delimiter
     DeepSeek,
     /// `<|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>` (non-JSON)
     Gemma4,
+    /// Harmony commentary channel tool call with `to=...` recipient.
+    Harmony,
 }
 
 /// A parser that can detect and extract tool calls from model output.
@@ -63,6 +71,9 @@ pub trait ToolFormatParser: Send + Sync {
     /// activation — parsers like DeepSeek can use it to extract the tool
     /// name from the prefix.
     fn tool_call_grammar(&self, tools: &[Tool], text: &str) -> TopLevelGrammar;
+
+    /// Build an llguidance grammar for a complete tool call in this format.
+    fn required_tool_call_grammar(&self, tools: &[Tool]) -> TopLevelGrammar;
 }
 
 /// Static registry of all supported tool-call format parsers, tried in order.
@@ -73,8 +84,10 @@ static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
     std::sync::LazyLock::new(|| {
         vec![
             Box::new(gemma4::Gemma4Parser),
+            Box::new(liquid::LiquidParser),
             Box::new(llama::LlamaParser),
             Box::new(qwen::QwenParser),
+            Box::new(hunyuan::HunyuanParser),
             Box::new(mistral_nemo::MistralNemoParser),
             Box::new(deepseek::DeepSeekParser),
         ]
@@ -103,6 +116,25 @@ pub fn build_tool_call_grammar(text: &str, tools: &[Tool]) -> Option<TopLevelGra
     None
 }
 
+pub fn build_required_tool_call_grammar(
+    format: Option<ToolCallFormat>,
+    tools: &[Tool],
+) -> TopLevelGrammar {
+    if format == Some(ToolCallFormat::Harmony) {
+        return harmony::required_tool_call_grammar(tools, false);
+    }
+
+    if let Some(format) = format {
+        for parser in PARSERS.iter() {
+            if parser.format() == format {
+                return parser.required_tool_call_grammar(tools);
+            }
+        }
+    }
+
+    qwen::QwenParser.required_tool_call_grammar(tools)
+}
+
 /// Try each parser in order to extract tool calls from `message`.
 /// Returns the original message unchanged if no parser matches.
 pub fn process_model_specific_message(message: &str) -> Result<String> {
@@ -112,4 +144,54 @@ pub fn process_model_specific_message(message: &str) -> Result<String> {
         }
     }
     Ok(message.to_string())
+}
+
+pub fn extract_model_specific_message(message: &str) -> Result<Option<(String, String)>> {
+    for parser in PARSERS.iter() {
+        if let Some(json) = parser.parse(message)? {
+            let text = strip_tool_call_segments(message, parser.format());
+            return Ok(Some((json, text)));
+        }
+    }
+    Ok(None)
+}
+
+fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
+    match format {
+        ToolCallFormat::Qwen => strip_delimited_segments(message, "<tool_call>", "</tool_call>"),
+        ToolCallFormat::Gemma4 => strip_delimited_segments(message, "<|tool_call>", "<tool_call|>"),
+        ToolCallFormat::DeepSeek => {
+            strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
+        }
+        ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
+        ToolCallFormat::Hunyuan => {
+            strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
+        }
+        ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
+        ToolCallFormat::Liquid => {
+            strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
+        }
+        ToolCallFormat::Harmony => message.to_string(),
+    }
+}
+
+fn strip_from_first(message: &str, start: &str) -> String {
+    message
+        .find(start)
+        .map_or_else(|| message.to_string(), |pos| message[..pos].to_string())
+}
+
+fn strip_delimited_segments(message: &str, start: &str, end: &str) -> String {
+    let mut rest = message;
+    let mut out = String::new();
+    while let Some(start_pos) = rest.find(start) {
+        out.push_str(&rest[..start_pos]);
+        let after_start = &rest[start_pos + start.len()..];
+        let Some(end_pos) = after_start.find(end) else {
+            return out;
+        };
+        rest = &after_start[end_pos + end.len()..];
+    }
+    out.push_str(rest);
+    out
 }

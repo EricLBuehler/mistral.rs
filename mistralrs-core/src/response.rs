@@ -167,6 +167,9 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Ordered record of all tool calls made during the agentic loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
@@ -192,6 +195,9 @@ pub struct ChatCompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Option<Usage>,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Set on the final chunk so streaming clients can read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -224,6 +230,9 @@ pub struct CompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionResponse);
@@ -239,6 +248,9 @@ pub struct CompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionChunkResponse);
@@ -284,6 +296,16 @@ pub enum AgenticToolCallData {
         results_count: Option<usize>,
         sources: Vec<String>,
     },
+    /// Shell command execution.
+    Shell {
+        commands: Vec<String>,
+        stdout: Option<String>,
+        stderr: Option<String>,
+        exit_code: Option<i64>,
+        status: Option<String>,
+        working_directory: Option<String>,
+        timed_out: Option<bool>,
+    },
     /// User callback, MCP, or HTTP dispatch. Opaque to the engine.
     Custom { arguments: String, content: String },
 }
@@ -295,6 +317,17 @@ pub enum AgenticToolCallPhase {
     Calling(AgenticToolCallData),
     /// Execution complete.
     Complete(AgenticToolCallData),
+}
+
+#[derive(Debug, Clone)]
+pub struct BlockDenoisingProgress {
+    pub index: usize,
+    pub step: usize,
+    pub total_steps: usize,
+    pub tokens: Vec<u32>,
+    pub text: String,
+    pub finished: bool,
+    pub final_block: bool,
 }
 
 /// The response enum contains 3 types of variants:
@@ -336,6 +369,7 @@ pub enum Response {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     AgenticToolApprovalRequired {
         approval_id: String,
         session_id: String,
@@ -380,6 +414,7 @@ pub enum ResponseOk {
         tool_name: String,
         phase: AgenticToolCallPhase,
     },
+    BlockDenoisingProgress(BlockDenoisingProgress),
     AgenticToolApprovalRequired {
         approval_id: String,
         session_id: String,
@@ -484,6 +519,9 @@ impl Response {
                 tool_name,
                 phase,
             }),
+            Self::BlockDenoisingProgress(progress) => {
+                Ok(ResponseOk::BlockDenoisingProgress(progress))
+            }
             Self::AgenticToolApprovalRequired {
                 approval_id,
                 session_id,

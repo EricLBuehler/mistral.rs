@@ -1,11 +1,12 @@
 use std::{
-    borrow::Cow,
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{atomic::AtomicUsize, Arc, Condvar, Mutex, MutexGuard},
+    sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
 use blockwise_fp8::blockwise_fp8_linear_b;
+#[cfg(feature = "metal")]
+use candle_core::D;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -13,12 +14,17 @@ use candle_core::{
 use pertensor_fp8::pertensor_fp8_linear_b;
 
 #[cfg(feature = "metal")]
-mod metal_kernels;
+pub mod metal_kernels;
 
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(test)]
+#[path = "build_support/cuda_headers.rs"]
+mod cuda_headers;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub mod cutile;
 pub mod distributed;
 mod dummy;
 pub mod f8q8;
@@ -28,7 +34,10 @@ mod gguf;
 mod gptq;
 mod hqq;
 mod imatrix;
+mod isq_executor;
 mod lora;
+#[cfg(feature = "cuda")]
+pub mod moe;
 mod mxfp4;
 mod pending_layer;
 mod pertensor_fp8;
@@ -36,23 +45,71 @@ pub mod rotary;
 pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
+mod uqff;
 mod utils;
 mod vector_fp8;
 
 use gptq::gptq_linear;
-use lora::merge_lora_weights;
 use regex::Regex;
-pub use safetensors::{Shard, ShardedSafeTensors, ShardedVarBuilder};
+pub use safetensors::{Shard, ShardedSafeTensors};
+pub use uqff::{
+    build_output_report_from_layers, build_uqff_report, build_uqff_report_from_artifacts,
+    inspect_uqff_artifacts, inspect_uqff_path, stored_type_from_tensors, uqff_version_tensors,
+    verify_uqff_artifacts, verify_uqff_path, write_uqff_report, QuantizationIssue,
+    QuantizationReport, ShardedVarBuilder, TrackedModule, Tracker, UqffArtifactFile,
+    UqffArtifactGroup, UqffArtifacts, UqffExpertKeys, UqffFallbackReport, UqffGeneratedBy,
+    UqffInspection, UqffLayerReport, UqffMetadataSummary, UqffOutputReport, UqffReader, UqffReport,
+    UqffReportOptions, UqffTensor, UqffTensorSummary, UqffVerifyOptions, UqffVerifyResult,
+    UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
+};
 
-pub use afq::{AfqBits, AfqGroupSize, AfqLayer};
+#[doc(hidden)]
+pub fn gguf_affine_adjust_cache_bytes(
+    device: &Device,
+    dtype: DType,
+    available_bytes: usize,
+    requested_cache_bytes: usize,
+    minimum_cache_bytes: usize,
+    may_reduce_cache: bool,
+) -> Result<usize> {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_adjust_cache_bytes(
+            device,
+            dtype,
+            available_bytes,
+            requested_cache_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        )
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (
+            device,
+            dtype,
+            available_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        );
+        Ok(requested_cache_bytes)
+    }
+}
+
+#[cfg(feature = "metal")]
+pub use afq::ops::{
+    afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
+    metal_moe_weighted_reduce_flat,
+};
+pub use afq::{AfqBits, AfqGroupSize, AfqInner, AfqLayer};
 pub use bitsandbytes::{BnbLinear, BnbQuantParams, BnbQuantType};
 pub use blockwise_fp8::{
     blockwise_fp8_moe, fp8_blockwise_dequantize, fp8_blockwise_quantize, BlockwiseFP8Linear,
 };
 pub use distributed::{
     layers::{
-        compute_kv_shard, compute_n_kv_groups, ColumnParallelLayer, FusedExperts, PackedExperts,
-        ReplicatedLayer, RowParallelLayer,
+        compute_kv_shard, compute_n_kv_groups, validate_tp_head_layout, ColumnParallelLayer,
+        PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
@@ -63,21 +120,52 @@ pub use fp8::FP8Linear;
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
 pub use gemv::{should_use_gemv, GEMV_CONTROLLER};
+pub use gguf::cpu::cpu_indexed_moe_forward;
 #[cfg(feature = "cuda")]
 pub use gguf::cuda::{
     grouped_moe_gemm_prequantized, indexed_moe_fused_decode, moe_dispatch_build,
-    quantize_input_q8_1, ACT_GELU_PYTORCH_TANH, ACT_SILU,
+    moe_weighted_reduce_flat, moe_weighted_reduce_flat_bf16, moe_weighted_reduce_flat_same_dtype,
+    quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
+    ACT_GELU_PYTORCH_TANH, ACT_SILU,
+};
+#[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
+#[cfg(feature = "cuda")]
+pub use gguf::fast_mmq::{
+    grouped as grouped_moe_mmq, grouped_from_glu_packed as grouped_moe_mmq_from_glu_packed,
+    grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
+    grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
 pub use gguf::GgufMatMul;
 pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
+pub use isq_executor::{
+    conservative_plan, elem_count, estimate_output_bytes, ggml_output_bytes, plan_weight_isq,
+    tensor_bytes, IsqConsumer, IsqExecutor, IsqExecutorConfig, IsqJobOutput, IsqKernelKind,
+    IsqPlanParams, IsqRequest, IsqResourceEstimate,
+};
 pub use lora::{
-    clear_applied_loras, get_applied_loras, linear_no_bias_static_lora, push_applied_lora,
-    LoraAdapter, LoraConfig, StaticLoraConfig, MULTI_LORA_DELIMITER,
+    add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
+    load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
+    register_dynamic_lora_site, with_lora_execution, with_lora_execution_repeated_row,
+    with_lora_execution_row_range, DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights,
+    LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraExpertDelta,
+    LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection, LoraExpertProjectionNames,
+    LoraExpertProjectionWeights, LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights,
+    LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey,
+    LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, RoutedLoraAdapterWeight,
+    RoutedLoraInputMode, RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, StaticLoraConfig,
+    ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+};
+#[cfg(feature = "cuda")]
+pub use lora::{
+    launch_routed_lora_direct, launch_routed_lora_grouped, RoutedLoraCudaMetadata,
+    RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
-pub use pending_layer::PendingIsqLayer;
+pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::PerTensorFP8Linear;
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
@@ -86,128 +174,161 @@ pub use utils::flash_attn_sinks_varlen_metal;
 pub use utils::gptoss_swiglu_fused;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_interleaved;
-pub use utils::isq::apply_immediate_isq;
+pub use utils::isq::{
+    apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
+    quantize_expert_stack, requantize_tracked, RequantizeHandles,
+};
+pub use utils::softcap;
 pub use utils::softmax_with_sinks;
-pub use utils::{fused_glu, GluActivationType};
-pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp, UQFF_QUANT_TYPE_OFFSET};
+pub use utils::{fused_glu, fused_split_glu, GluActivationType};
+pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
 pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
-
-/// Limits outstanding async ISQ jobs to prevent unbounded memory growth.
-///
-/// Without backpressure, MoE models (e.g. Gemma4 with 128 experts × 30 layers)
-/// queue BF16 tensor data in the rayon pool faster than the pool can quantize,
-/// causing OOM on memory-constrained systems like macOS Metal with unified memory.
-pub struct IsqBackpressure {
-    count: Mutex<usize>,
-    cvar: Condvar,
-    max: usize,
-}
-
-impl IsqBackpressure {
-    pub fn new(max: usize) -> Self {
-        Self {
-            count: Mutex::new(0),
-            cvar: Condvar::new(),
-            max,
-        }
-    }
-
-    /// Block until a slot is available, then increment the outstanding count.
-    pub fn acquire(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        while *count >= self.max {
-            count = self
-                .cvar
-                .wait(count)
-                .expect("ISQ backpressure lock poisoned");
-        }
-        *count += 1;
-    }
-
-    /// Decrement the outstanding count and wake a blocked loader thread.
-    pub fn release(&self) {
-        let mut count = self.count.lock().expect("ISQ backpressure lock poisoned");
-        *count = count.saturating_sub(1);
-        self.cvar.notify_one();
-    }
-}
-
-impl Debug for IsqBackpressure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let count = self.count.lock().map(|c| *c).unwrap_or(0);
-        f.debug_struct("IsqBackpressure")
-            .field("outstanding", &count)
-            .field("max", &self.max)
-            .finish()
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqParams {
     pub guard: QuantizeOntoGuard,
     pub ty: Option<IsqType>,
     pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
     pub overrides: Vec<ImmediateIsqOverride>,
-    /// Thread pool for parallel immediate ISQ on discrete GPUs.
-    /// When `Some`, `apply_immediate_isq` will spawn quantization tasks
-    /// on this pool and return `PendingIsqLayer` wrappers.
-    pub pool: Option<Arc<rayon::ThreadPool>>,
-    /// Backpressure to limit outstanding async ISQ jobs.
-    pub backpressure: Arc<IsqBackpressure>,
+    pub executor: IsqExecutor,
+    pub capture: IsqCaptureMode,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImmediateIsqConfig {
+    pub ty: Option<IsqType>,
+    pub predicates: Vec<Regex>,
+    pub promoted_predicates: Vec<Regex>,
+    pub overrides: Vec<ImmediateIsqOverride>,
+    pub capture: IsqCaptureMode,
+}
+
+impl ImmediateIsqConfig {
+    pub fn new(ty: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) -> Self {
+        Self {
+            ty,
+            predicates,
+            promoted_predicates: Vec::new(),
+            overrides: Vec::new(),
+            capture,
+        }
+    }
+
+    pub fn with_promoted_predicates(mut self, promoted_predicates: Vec<Regex>) -> Self {
+        self.promoted_predicates = promoted_predicates;
+        self
+    }
+
+    pub fn with_overrides(mut self, overrides: Vec<ImmediateIsqOverride>) -> Self {
+        self.overrides = overrides;
+        self
+    }
+}
+
+/// Whether load-time ISQ quantizes layers or captures them unquantized for later quantization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum IsqCaptureMode {
+    /// Quantize matching layers as they load.
+    #[default]
+    Immediate,
+    /// Capture every layer unquantized (UQFF serialization needs all of them).
+    CaptureAll,
+    /// Capture matching layers unquantized for deferred quantization (e.g. calibration).
+    CaptureMatches,
 }
 
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqOverride {
-    pub predicate: Regex,
+    pub predicate: Option<Regex>,
+    /// Decoder layer index range, matched via the `layers.N` segment of the weight prefix.
+    pub layer_range: Option<std::ops::Range<usize>>,
     pub ty: Option<IsqType>,
     pub device: Option<Device>,
 }
 
+impl ImmediateIsqOverride {
+    fn matches(&self, prefix: &str) -> bool {
+        if let Some(predicate) = &self.predicate {
+            if predicate.is_match(prefix) {
+                return true;
+            }
+        }
+        if let Some(range) = &self.layer_range {
+            if let Some(index) = layer_index_from_prefix(prefix) {
+                return range.contains(&index);
+            }
+        }
+        false
+    }
+}
+
+static LAYER_INDEX_REGEX: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+
+/// Extract the decoder layer index from a weight prefix like `model.layers.12.self_attn.q_proj`.
+pub fn layer_index_from_prefix(prefix: &str) -> Option<usize> {
+    let regex = LAYER_INDEX_REGEX
+        .get_or_init(|| Regex::new(r"(?:^|\.)(?:layers|h)\.(\d+)(?:\.|$)").expect("valid regex"));
+    regex.captures(prefix)?.get(1)?.as_str().parse().ok()
+}
+
 #[derive(Clone, Debug)]
 pub struct ImmediateIsqMatch {
-    pub ty: IsqType,
+    pub ty: Option<IsqType>,
     pub device: Option<Device>,
+    pub promote_default: bool,
 }
 
 thread_local! {
     static ENGINE_IMMEDIATE_ISQ: std::cell::RefCell<Option<ImmediateIsqParams>> = const { std::cell::RefCell::new(None) } ;
 }
 
-pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>) {
-    let (pool, _) = create_isq_thread_pool(isq);
-    set_immediate_isq_with_pool(isq, predicates, Vec::new(), pool);
+pub fn set_immediate_isq(isq: Option<IsqType>, predicates: Vec<Regex>, capture: IsqCaptureMode) {
+    let (executor, _) = create_isq_executor(IsqExecutorConfig::new(isq));
+    set_immediate_isq_with_executor(isq, predicates, Vec::new(), capture, executor);
 }
 
-pub fn set_immediate_isq_with_pool(
+pub fn set_immediate_isq_with_executor(
     isq: Option<IsqType>,
     predicates: Vec<Regex>,
     overrides: Vec<ImmediateIsqOverride>,
-    pool: rayon::ThreadPool,
+    capture: IsqCaptureMode,
+    executor: IsqExecutor,
 ) {
-    // Allow pool threads + 1 outstanding jobs: enough for pipeline overlap
-    // (load next tensor while pool quantizes current) without unbounded growth.
-    let max_outstanding = pool.current_num_threads() + 1;
+    set_immediate_isq_config(
+        ImmediateIsqConfig::new(isq, predicates, capture).with_overrides(overrides),
+        executor,
+    );
+}
+
+pub fn set_immediate_isq_config(config: ImmediateIsqConfig, executor: IsqExecutor) {
     ENGINE_IMMEDIATE_ISQ.with(|cell| {
         *cell.borrow_mut() = Some(ImmediateIsqParams {
             guard: QuantizeOntoGuard::new(),
-            ty: isq,
-            predicates,
-            overrides,
-            backpressure: Arc::new(IsqBackpressure::new(max_outstanding)),
-            pool: Some(Arc::new(pool)),
+            ty: config.ty,
+            predicates: config.predicates,
+            promoted_predicates: config.promoted_predicates,
+            overrides: config.overrides,
+            executor,
+            capture: config.capture,
         });
     });
 }
 
-/// Create a rayon thread pool for parallel immediate ISQ.
-/// Returns `(pool, num_threads)` so callers can log the thread count.
-///
-/// Thread count is based on the quantization type:
-/// - GGML types (Q2K-Q8K) and F8E4M3: `rayon::current_num_threads()` (CPU quantization)
-/// - HQQ/AFQ: 1 thread (GPU quantization, serialized by `QuantizeOntoGuard`)
+#[cfg(target_os = "macos")]
+unsafe fn set_isq_thread_affinity() {
+    use libc::{pthread_set_qos_class_self_np, qos_class_t::QOS_CLASS_USER_INTERACTIVE};
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe fn set_isq_thread_affinity() {}
+
+/// Legacy Rayon pool helper for callers that still need raw pool semantics.
+/// New ISQ scheduling should use `create_isq_executor`.
 pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
     let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
         1
@@ -221,9 +342,18 @@ pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize)
 
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
+        .start_handler(|_| unsafe {
+            set_isq_thread_affinity();
+        })
         .build()
         .expect("Failed to create ISQ thread pool");
     (pool, num_threads)
+}
+
+pub fn create_isq_executor(config: IsqExecutorConfig) -> (IsqExecutor, usize) {
+    let executor = IsqExecutor::new(config);
+    let num_threads = executor.worker_threads();
+    (executor, num_threads)
 }
 
 pub fn get_immediate_isq() -> Option<ImmediateIsqParams> {
@@ -248,27 +378,65 @@ pub fn immediate_isq_match(vb: &ShardedVarBuilder) -> Option<ImmediateIsqMatch> 
 }
 
 fn resolve_immediate_isq(params: &ImmediateIsqParams, prefix: &str) -> Option<ImmediateIsqMatch> {
+    let promote_default = params
+        .promoted_predicates
+        .iter()
+        .any(|predicate| predicate.is_match(prefix));
+    let default_ty = params.ty.map(|ty| {
+        if promote_default {
+            ty.promote_for_sensitive_tensor()
+        } else {
+            ty
+        }
+    });
+    if params.capture == IsqCaptureMode::CaptureAll {
+        // Capture everything; topology overrides still pin per-layer ty/device.
+        if let Some(override_hit) = params
+            .overrides
+            .iter()
+            .find(|override_entry| override_entry.matches(prefix))
+        {
+            return Some(ImmediateIsqMatch {
+                ty: override_hit.ty.or(default_ty),
+                device: override_hit.device.clone(),
+                promote_default,
+            });
+        }
+        return Some(ImmediateIsqMatch {
+            ty: None,
+            device: None,
+            promote_default,
+        });
+    }
+
     if let Some(override_hit) = params
         .overrides
         .iter()
-        .find(|override_pred| override_pred.predicate.is_match(prefix))
+        .find(|override_entry| override_entry.matches(prefix))
     {
-        if let Some(ty) = override_hit.ty.or(params.ty) {
+        let ty = override_hit.ty.or(default_ty);
+        // Device-only overrides still need a match so the layer gets relocated
+        if ty.is_some() || override_hit.device.is_some() {
             return Some(ImmediateIsqMatch {
                 ty,
                 device: override_hit.device.clone(),
+                promote_default,
             });
         }
         return None;
     }
 
-    if let Some(ty) = params.ty {
+    if let Some(ty) = default_ty {
         if params
             .predicates
             .iter()
             .any(|predicate| predicate.is_match(prefix))
         {
-            return Some(ImmediateIsqMatch { ty, device: None });
+            return Some(ImmediateIsqMatch {
+                ty: Some(ty),
+                device: None,
+                promote_default,
+            });
         }
     }
 
@@ -706,6 +874,22 @@ impl std::fmt::Display for IsqType {
 }
 
 impl IsqType {
+    pub fn promote_for_sensitive_tensor(self) -> Self {
+        match self {
+            Self::AFQ2 | Self::AFQ3 | Self::AFQ4 => Self::AFQ6,
+            Self::AFQ6 | Self::AFQ8 => Self::AFQ8,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q4_0 | Self::Q4_1 => Self::Q6K,
+            Self::Q5K
+            | Self::Q6K
+            | Self::Q8K
+            | Self::Q5_0
+            | Self::Q5_1
+            | Self::Q8_0
+            | Self::Q8_1 => Self::Q8_0,
+            ty => ty,
+        }
+    }
+
     /// Factor by which the weight size is reduced over the given dtype.
     /// original size / pack factor = quantized size
     pub fn pack_factor(&self, dtype: DType) -> usize {
@@ -744,6 +928,42 @@ impl IsqType {
             // For BF16 (2 bytes): (2*32)/(16+1) ≈ 3.76 → 3
             Self::MXFP4 => 3,
         }
+    }
+
+    /// Only the K-quant formats consume importance weights; the rest quantize without them.
+    pub fn supports_imatrix(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K | Self::Q3K | Self::Q4K | Self::Q5K | Self::Q6K
+        )
+    }
+
+    pub fn supports_uqff(self) -> bool {
+        matches!(
+            self,
+            Self::Q2K
+                | Self::Q3K
+                | Self::Q4K
+                | Self::Q4_0
+                | Self::Q4_1
+                | Self::Q5K
+                | Self::Q5_0
+                | Self::Q5_1
+                | Self::Q6K
+                | Self::Q8K
+                | Self::Q8_0
+                | Self::Q8_1
+                | Self::HQQ4
+                | Self::HQQ8
+                | Self::F8E4M3
+                | Self::AFQ2
+                | Self::AFQ3
+                | Self::AFQ4
+                | Self::AFQ6
+                | Self::AFQ8
+                | Self::F8Q8
+                | Self::MXFP4
+        )
     }
 
     pub fn get_max_isq_cpu_threads(&self) -> Option<NonZeroUsize> {
@@ -842,7 +1062,7 @@ impl TryFrom<GgmlDType> for IsqType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum QuantizedSerdeType {
     Gguf = 0,
     Unquant = 1,
@@ -851,6 +1071,79 @@ pub enum QuantizedSerdeType {
     Afq = 4,
     F8Q8 = 5,
     Mxfp4 = 6,
+}
+
+impl QuantizedSerdeType {
+    pub const ALL: [Self; 7] = [
+        Self::Gguf,
+        Self::Unquant,
+        Self::Hqq,
+        Self::Fp8,
+        Self::Afq,
+        Self::F8Q8,
+        Self::Mxfp4,
+    ];
+
+    pub fn stored_label(self, quant_group: &str) -> String {
+        match self {
+            Self::Gguf => {
+                if quant_group.starts_with('q') {
+                    quant_group.to_string()
+                } else {
+                    "gguf".to_string()
+                }
+            }
+            Self::Unquant => "unquant".to_string(),
+            Self::Hqq => {
+                if quant_group.starts_with("hqq") {
+                    quant_group.to_string()
+                } else {
+                    "hqq".to_string()
+                }
+            }
+            Self::Fp8 => "fp8".to_string(),
+            Self::Afq => {
+                if quant_group.starts_with("afq") {
+                    quant_group.to_string()
+                } else {
+                    "afq".to_string()
+                }
+            }
+            Self::F8Q8 => "f8q8".to_string(),
+            Self::Mxfp4 => "mxfp4".to_string(),
+        }
+    }
+
+    pub(crate) fn inspect_uqff_header(
+        self,
+        layer: &uqff::UqffLayerHeaderView<'_>,
+    ) -> Option<uqff::UqffHeaderMatch> {
+        match self {
+            Self::Gguf => GgufMatMul::inspect_uqff_header(layer),
+            Self::Unquant => UnquantLinear::inspect_uqff_header(layer),
+            Self::Hqq => HqqLayer::inspect_uqff_header(layer),
+            Self::Fp8 => FP8Linear::inspect_uqff_header(layer),
+            Self::Afq => AfqLayer::inspect_uqff_header(layer),
+            Self::F8Q8 => F8Q8Linear::inspect_uqff_header(layer),
+            Self::Mxfp4 => MXFP4Layer::inspect_uqff_header(layer),
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        self,
+        tensors: &[uqff::UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        match self {
+            Self::Gguf => GgufMatMul::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::Unquant => UnquantLinear::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::Hqq => HqqLayer::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::Fp8 => FP8Linear::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::Afq => AfqLayer::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::F8Q8 => F8Q8Linear::stored_label_from_uqff_tensors(tensors, prefix),
+            Self::Mxfp4 => MXFP4Layer::stored_label_from_uqff_tensors(tensors, prefix),
+        }
+    }
 }
 
 impl TryFrom<usize> for QuantizedSerdeType {
@@ -874,33 +1167,34 @@ pub trait QuantizedSerde {
     fn isq_serde_supported(&self) -> bool {
         false
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize` is not supported.")
+    fn serialize_uqff(&self, _prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        candle_core::bail!(
+            "`{}` does not support UQFF serialization for {ty}.",
+            self.name()
+        )
     }
-    fn deserialize(
-        _data: Cow<[u8]>,
+    fn deserialize_uqff(
+        _reader: &UqffReader,
+        _prefix: &str,
         _device: &Device,
-        _comm: &Arc<crate::Comm>,
-        _guard: QuantizeOntoGuard,
+        _shard: Shard,
     ) -> Result<Arc<dyn QuantMethod>>
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize` is not supported.")
+        candle_core::bail!(
+            "`{}` does not support UQFF deserialization.",
+            std::any::type_name::<Self>()
+        )
     }
-    fn deserialize_ext_bias(
-        _data: Cow<[u8]>,
-        _device: &Device,
-        _guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
+    fn isq_type_from_uqff(_reader: &UqffReader, _prefix: &str) -> Result<IsqType>
     where
         Self: Sized,
     {
-        candle_core::bail!("`QuantizedSerde::deserialize_ext_bias` is not supported.")
-    }
-    /// NOT meant for external calling
-    fn serialize_with_bias(&self, _bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        candle_core::bail!("`QuantizedSerde::serialize_with_bias` is not supported.")
+        candle_core::bail!(
+            "`{}` does not support UQFF type detection.",
+            std::any::type_name::<Self>()
+        )
     }
 }
 
@@ -909,6 +1203,9 @@ pub trait QuantizedSerde {
 #[allow(unused)]
 pub struct QuantizeOntoGuard {
     pub inner: Arc<Mutex<()>>,
+    module_key: Option<Arc<str>>,
+    report: Option<QuantizationReport>,
+    requested: Option<Arc<str>>,
 }
 
 /// Real (for Metal) and Fake (for CUDA)
@@ -927,7 +1224,37 @@ impl QuantizeOntoGuard {
     pub fn new() -> Self {
         QuantizeOntoGuard {
             inner: Arc::new(Mutex::new(())),
+            module_key: None,
+            report: None,
+            requested: None,
         }
+    }
+
+    pub fn with_module_key(mut self, module_key: impl Into<String>) -> Self {
+        self.module_key = Some(Arc::<str>::from(module_key.into()));
+        self
+    }
+
+    pub fn module_key(&self) -> Option<&str> {
+        self.module_key.as_deref()
+    }
+
+    pub fn with_report(mut self, report: QuantizationReport) -> Self {
+        self.report = Some(report);
+        self
+    }
+
+    pub fn with_requested(mut self, requested: impl Into<String>) -> Self {
+        self.requested = Some(Arc::<str>::from(requested.into()));
+        self
+    }
+
+    pub fn report(&self) -> Option<&QuantizationReport> {
+        self.report.as_ref()
+    }
+
+    pub fn requested(&self) -> Option<&str> {
+        self.requested.as_deref()
     }
 
     /// Acquire the quantize drop guard to protect the critical section.
@@ -1009,10 +1336,43 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
+        self.embedding_forward_raw(ids)?.to_dtype(output_dtype)
+    }
+
+    fn embedding_forward_raw(&self, _ids: &Tensor) -> Result<Tensor> {
+        candle_core::bail!(
+            "{} does not support `embedding_forward`. Please raise an issue.",
+            self.name()
+        )
+    }
+
     /// Get the underlying QTensor if this is a GGUF quantized layer.
-    /// Used for direct kernel access in the grouped MoE prefill path.
-    #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<&candle_core::quantized::QTensor> {
+    /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
+    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
+        None
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn prepare_gguf_affine_raw(
+        &self,
+        _flat_batch: usize,
+        _dtype: DType,
+        _device: &Device,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
+
+    /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
+    /// Used by Metal fused QKV / gate-up paths.
+    fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
         None
     }
 
@@ -1021,6 +1381,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// Weight dtype and device
     fn dtype_and_device(&self) -> (DType, Device);
+
+    fn plan_isq(&self, request: &IsqRequest) -> Result<IsqPlanParams>;
 
     /// Add a delta weight from LoRA to the weights. This should be prescaled with alpha.
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>>;
@@ -1039,8 +1401,20 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    fn is_dynamic_lora_active(&self) -> bool {
+        false
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        replacement
+    }
+
+    fn has_bias(&self) -> bool {
+        false
+    }
+
     /// Begin tracking stats into an ImatrixLayerStats
-    fn begin_track_stats(&mut self) -> Result<()> {
+    fn begin_track_stats(&self) -> Result<()> {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 
@@ -1049,11 +1423,22 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         candle_core::bail!("`{}` does not support tracking stats.", self.name())
     }
 
+    /// (forward calls, token rows) accumulated by stats tracking, if enabled.
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Feed routed activations for per-expert stats; called by the owning MoE block, which alone
+    /// knows the token-to-expert pairing. No-op unless routed tracking is enabled.
+    fn process_routed_stats(&self, _x: &Tensor, _ids: &Tensor) -> Result<()> {
+        Ok(())
+    }
+
     fn is_distributed(&self) -> Option<DistributedKind> {
         None
     }
 
-    fn dummy_info(&self) -> Option<&DummyLayerInfo> {
+    fn dummy_info(&self) -> Option<DummyLayerInfo> {
         None
     }
 }
@@ -1062,6 +1447,597 @@ impl Module for dyn QuantMethod {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         QuantMethod::forward(self, xs)
     }
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_ffn(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    down: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some()
+        || up.stats_snapshot().is_some()
+        || down.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() || down.is_dynamic_lora_active()
+    {
+        return Ok(None);
+    }
+    if gate.has_bias() || up.has_bias() || down.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let (flat_batch, k) = match xs.dims() {
+        [batch, k] => (*batch, *k),
+        [batch, rows, k] => (*batch * *rows, *k),
+        _ => return Ok(None),
+    };
+    if flat_batch < gguf::GGUF_AFFINE_MIN_BATCH {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(down_q) = down.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+    let (intermediate, gate_cols) = gate_q.shape().dims2()?;
+    let (_, down_cols) = down_q.shape().dims2()?;
+    if gate_cols != k || down_cols != intermediate {
+        return Ok(None);
+    }
+    if !gate_q.device().same_device(xs.device())
+        || !up_q.device().same_device(xs.device())
+        || !down_q.device().same_device(xs.device())
+    {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let down_ready = down.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready && down_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            let intermediate = fused_glu(&gate_out, &up_out, activation)?;
+            drop(gate_out);
+            drop(up_out);
+            let out = down
+                .try_gguf_affine_forward_raw(&intermediate)?
+                .expect("prepared GGUF affine down projection");
+            return Ok(Some(out));
+        }
+    }
+
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    if gate_q.dtype() != up_q.dtype()
+        || !gguf::fast_mmq::supports(gate_q.dtype())
+        || !gguf::fast_mmq::supports(down_q.dtype())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmq::fused_ffn(
+        &gate_q, &up_q, &down_q, xs, activation,
+    )?))
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_gate_up(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() {
+        return Ok(None);
+    }
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 {
+        return Ok(None);
+    }
+    let (_, ncols) = gate_q.shape().dims2()?;
+    if k != ncols {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
+        }
+    }
+
+    if gate_q.dtype() != up_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    } else {
+        if !gguf::fast_mmq::supports(gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    }
+}
+
+/// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
+/// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
+pub fn try_fused_gemv_shared_lhs_cpu(
+    xs: &Tensor,
+    ws: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if !xs.device().is_cpu() || xs.dtype() != DType::F32 {
+        return Ok(None);
+    }
+    if ws.iter().any(|w| w.has_bias()) {
+        return Ok(None);
+    }
+    let mut qs = Vec::with_capacity(ws.len());
+    for w in ws {
+        let Some(q) = w.get_qtensor() else {
+            return Ok(None);
+        };
+        qs.push(q);
+    }
+    let refs: Vec<&candle_core::quantized::QTensor> = qs.iter().map(|a| a.as_ref()).collect();
+    candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
+}
+
+#[cfg(feature = "cuda")]
+pub fn try_fused_quantized_qkv(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if q.is_dynamic_lora_active() || k.is_dynamic_lora_active() || v.is_dynamic_lora_active() {
+        return Ok(None);
+    }
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let Some(q_q) = q.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(k_q) = k.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(v_q) = v.get_qtensor() else {
+        return Ok(None);
+    };
+
+    let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
+        return Ok(None);
+    };
+    let flat_batch = batch_dims.iter().product::<usize>();
+    if flat_batch == 0 {
+        return Ok(None);
+    }
+    let (_, q_cols) = q_q.shape().dims2()?;
+    let (_, k_cols) = k_q.shape().dims2()?;
+    let (_, v_cols) = v_q.shape().dims2()?;
+    if input_cols != q_cols || input_cols != k_cols || input_cols != v_cols {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let q_ready = q.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let k_ready = k.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let v_ready = v.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if q_ready && k_ready && v_ready {
+            let q_out = q
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine query projection");
+            let k_out = k
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine key projection");
+            let v_out = v
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine value projection");
+            return Ok(Some((q_out, k_out, v_out)));
+        }
+    }
+
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    } else {
+        if !gguf::fast_mmq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    }
+}
+
+/// Metal fused gate+up: single Metal kernel that does both matmuls with shared
+/// x reads and applies the GLU activation in-register before writing one output.
+#[cfg(feature = "metal")]
+pub fn try_fused_gate_up_metal(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if gate.has_bias() || up.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(gi) = gate.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ui) = up.afq_inner() else {
+        return Ok(None);
+    };
+    if gi.bits != ui.bits || gi.group_size != ui.group_size {
+        return Ok(None);
+    }
+    if gi.scales.dtype() != ui.scales.dtype() {
+        return Ok(None);
+    }
+    if gi.w_q.rank() != 2 || ui.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let k = xs.dim(D::Minus1)?;
+    let n_gate = gi.w_q.dim(0)?;
+    let n_up = ui.w_q.dim(0)?;
+    if n_gate != n_up {
+        return Ok(None);
+    }
+    let n = n_gate;
+    // qmm_t kernel uses BM=32 tiles; for small M (decode) it wastes most of the
+    // tile. Let the caller fall back to separate qmv-based forwards.
+    let probe_m = xs.elem_count() / k;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+    if k * gi.bits as usize / 8 / 4 != gi.w_q.dim(1)? {
+        // unexpected pack factor; let the generic path handle it
+        return Ok(None);
+    }
+
+    let act_code: u32 = match activation {
+        GluActivationType::Silu => 0,
+        GluActivationType::Gelu => 1,
+        GluActivationType::GeluErf => 2,
+        GluActivationType::Relu => 3,
+    };
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_storage, xs_layout) = xs.storage_and_layout();
+    let Storage::Metal(xs_storage) = &*xs_storage else {
+        return Ok(None);
+    };
+    let (g_w_s, _) = gi.w_q.storage_and_layout();
+    let Storage::Metal(g_w_s) = &*g_w_s else {
+        return Ok(None);
+    };
+    let (g_s_s, _) = gi.scales.storage_and_layout();
+    let Storage::Metal(g_s_s) = &*g_s_s else {
+        return Ok(None);
+    };
+    let (g_b_s, _) = gi.biases.storage_and_layout();
+    let Storage::Metal(g_b_s) = &*g_b_s else {
+        return Ok(None);
+    };
+    let (u_w_s, _) = ui.w_q.storage_and_layout();
+    let Storage::Metal(u_w_s) = &*u_w_s else {
+        return Ok(None);
+    };
+    let (u_s_s, _) = ui.scales.storage_and_layout();
+    let Storage::Metal(u_s_s) = &*u_s_s else {
+        return Ok(None);
+    };
+    let (u_b_s, _) = ui.biases.storage_and_layout();
+    let Storage::Metal(u_b_s) = &*u_b_s else {
+        return Ok(None);
+    };
+
+    let device = xs_storage.device().clone();
+    let dtype = xs.dtype();
+    let mut out_shape = xs.dims().to_vec();
+    *out_shape.last_mut().unwrap() = n;
+    let out = device.new_buffer(out_shape.iter().product(), dtype, "afq-gate-up-out")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-gate-up");
+
+    metal_kernels::call_afq_qmm_gate_up(
+        device.device(),
+        &encoder,
+        metal_kernels::Kernels::global(),
+        dtype,
+        (
+            xs_storage.buffer(),
+            xs_layout.start_offset() * dtype.size_in_bytes(),
+        ),
+        g_w_s.buffer(),
+        g_s_s.buffer(),
+        g_b_s.buffer(),
+        u_w_s.buffer(),
+        u_s_s.buffer(),
+        u_b_s.buffer(),
+        &out,
+        m,
+        n,
+        k,
+        gi.bits as usize,
+        gi.group_size as usize,
+        act_code,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let out_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            out,
+            device.clone(),
+            out_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(out_shape),
+    ));
+    Ok(Some(out_t))
+}
+
+/// Metal fused QKV: single Metal kernel that handles all three projections,
+/// routing per-tile to the right weight matrix.
+#[cfg(feature = "metal")]
+pub fn try_fused_qkv_metal(
+    xs: &Tensor,
+    q: &dyn QuantMethod,
+    k: &dyn QuantMethod,
+    v: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor, Tensor)>> {
+    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
+
+    if q.has_bias() || k.has_bias() || v.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+    if !xs.device().is_metal() {
+        return Ok(None);
+    }
+
+    let Some(qi) = q.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(ki) = k.afq_inner() else {
+        return Ok(None);
+    };
+    let Some(vi) = v.afq_inner() else {
+        return Ok(None);
+    };
+    if qi.bits != ki.bits || qi.bits != vi.bits {
+        return Ok(None);
+    }
+    if qi.group_size != ki.group_size || qi.group_size != vi.group_size {
+        return Ok(None);
+    }
+    if qi.scales.dtype() != ki.scales.dtype() || qi.scales.dtype() != vi.scales.dtype() {
+        return Ok(None);
+    }
+    if qi.w_q.rank() != 2 || ki.w_q.rank() != 2 || vi.w_q.rank() != 2 {
+        return Ok(None);
+    }
+    let n_q = qi.w_q.dim(0)?;
+    let n_k = ki.w_q.dim(0)?;
+    let n_v = vi.w_q.dim(0)?;
+    // The kernel routes by tile-aligned column boundaries; require N_q and
+    // N_k to be multiples of the tile width (32). For Gemma-style models
+    // those are already 32-multiples; fall back when they're not.
+    if n_q % 32 != 0 || n_k % 32 != 0 || n_v % 32 != 0 {
+        return Ok(None);
+    }
+    let k_dim = xs.dim(D::Minus1)?;
+    // qmm_t kernel uses BM=32; for small M (decode) the tile is mostly empty.
+    // Fall back to separate qmv calls.
+    let probe_m = xs.elem_count() / k_dim;
+    if probe_m < 16 {
+        return Ok(None);
+    }
+
+    let xs = xs.contiguous()?;
+    let m = xs.elem_count() / k_dim;
+    if m == 0 {
+        return Ok(None);
+    }
+
+    let (xs_s, xs_l) = xs.storage_and_layout();
+    let Storage::Metal(xs_s) = &*xs_s else {
+        return Ok(None);
+    };
+    let qws = qi.w_q.storage_and_layout().0;
+    let qss = qi.scales.storage_and_layout().0;
+    let qbs = qi.biases.storage_and_layout().0;
+    let kws = ki.w_q.storage_and_layout().0;
+    let kss = ki.scales.storage_and_layout().0;
+    let kbs = ki.biases.storage_and_layout().0;
+    let vws = vi.w_q.storage_and_layout().0;
+    let vss = vi.scales.storage_and_layout().0;
+    let vbs = vi.biases.storage_and_layout().0;
+    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) = (&*qws, &*qss, &*qbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) = (&*kws, &*kss, &*kbs)
+    else {
+        return Ok(None);
+    };
+    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) = (&*vws, &*vss, &*vbs)
+    else {
+        return Ok(None);
+    };
+
+    let device = xs_s.device().clone();
+    let dtype = xs.dtype();
+    let mut q_shape = xs.dims().to_vec();
+    let mut k_shape = q_shape.clone();
+    let mut v_shape = q_shape.clone();
+    *q_shape.last_mut().unwrap() = n_q;
+    *k_shape.last_mut().unwrap() = n_k;
+    *v_shape.last_mut().unwrap() = n_v;
+    let q_out = device.new_buffer(q_shape.iter().product(), dtype, "afq-qkv-q")?;
+    let k_out = device.new_buffer(k_shape.iter().product(), dtype, "afq-qkv-k")?;
+    let v_out = device.new_buffer(v_shape.iter().product(), dtype, "afq-qkv-v")?;
+
+    let encoder = device.command_encoder()?;
+    encoder.set_label("afq-qkv");
+
+    metal_kernels::call_afq_qmm_qkv(
+        device.device(),
+        &encoder,
+        metal_kernels::Kernels::global(),
+        dtype,
+        (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
+        qw_m.buffer(),
+        qs_m.buffer(),
+        qb_m.buffer(),
+        kw_m.buffer(),
+        ks_m.buffer(),
+        kb_m.buffer(),
+        vw_m.buffer(),
+        vs_m.buffer(),
+        vb_m.buffer(),
+        &q_out,
+        &k_out,
+        &v_out,
+        m,
+        n_q,
+        n_k,
+        n_v,
+        k_dim,
+        qi.bits as usize,
+        qi.group_size as usize,
+    )
+    .map_err(candle_core::Error::wrap)?;
+
+    let q_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            q_out,
+            device.clone(),
+            q_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(q_shape),
+    ));
+    let k_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            k_out,
+            device.clone(),
+            k_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(k_shape),
+    ));
+    let v_t = Tensor::from((
+        Storage::Metal(MetalStorage::new(
+            v_out,
+            device.clone(),
+            v_shape.iter().product(),
+            dtype,
+        )),
+        Shape::from(v_shape),
+    ));
+    Ok(Some((q_t, k_t, v_t)))
 }
 
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {
@@ -1123,6 +2099,19 @@ pub fn linear_no_bias(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
@@ -1168,7 +2157,6 @@ pub fn linear_no_bias(
             make_dummy_or_error("linear_no_bias", &vb, &["weight"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
@@ -1176,7 +2164,9 @@ pub fn linear_no_bias(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear(
@@ -1186,6 +2176,19 @@ pub fn linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let base_vb = vb.clone();
+    if config.is_none() {
+        if let Some(reader) = base_vb.uqff_reader() {
+            if let Some(layer) =
+                reader.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
+            {
+                return maybe_wrap_dynamic_lora(
+                    &base_vb,
+                    layer,
+                    LoraLinearSpec::replicated(in_dim, out_dim),
+                );
+            }
+        }
+    }
     let vb = if should_apply_immediate_isq(&vb) {
         vb.set_device(Device::Cpu)
     } else {
@@ -1231,7 +2234,6 @@ pub fn linear(
             make_dummy_or_error("linear", &vb, &["weight", "bias"])?
         } else {
             let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-            let weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
             let bias = vb.get_with_hints((out_dim,), "bias", Default::default())?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
@@ -1240,7 +2242,9 @@ pub fn linear(
             Arc::new(layer) as Arc<dyn QuantMethod>
         }
     };
-    apply_immediate_isq(layer, base_vb)
+    let layer =
+        maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+    apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()))
 }
 
 pub fn linear_b(
@@ -1275,11 +2279,136 @@ mod tests {
             )
         });
         ShardedSafeTensors::wrap_with_dummy_regexes(
-            Box::new(backend),
+            backend,
             DType::F32,
             Device::Cpu,
             make_dummy_regexes,
         )
+    }
+
+    fn immediate_params(
+        ty: Option<IsqType>,
+        overrides: Vec<ImmediateIsqOverride>,
+    ) -> ImmediateIsqParams {
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        ImmediateIsqParams {
+            guard: QuantizeOntoGuard::new(),
+            ty,
+            predicates: vec![Regex::new(r"\.weight$").unwrap()],
+            promoted_predicates: vec![
+                Regex::new(r"^model\.embed_tokens\.(?:weight|bias)$").unwrap()
+            ],
+            overrides,
+            executor,
+            capture: IsqCaptureMode::Immediate,
+        }
+    }
+
+    #[test]
+    fn sensitive_tensor_policy_promotes_expected_types() {
+        for ty in [IsqType::AFQ2, IsqType::AFQ3, IsqType::AFQ4] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ6);
+        }
+        for ty in [IsqType::AFQ6, IsqType::AFQ8] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::AFQ8);
+        }
+        for ty in [
+            IsqType::Q2K,
+            IsqType::Q3K,
+            IsqType::Q4K,
+            IsqType::Q4_0,
+            IsqType::Q4_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q6K);
+        }
+        for ty in [
+            IsqType::Q5K,
+            IsqType::Q6K,
+            IsqType::Q8K,
+            IsqType::Q5_0,
+            IsqType::Q5_1,
+            IsqType::Q8_0,
+            IsqType::Q8_1,
+        ] {
+            assert_eq!(ty.promote_for_sensitive_tensor(), IsqType::Q8_0);
+        }
+        assert_eq!(IsqType::HQQ4.promote_for_sensitive_tensor(), IsqType::HQQ4);
+    }
+
+    #[test]
+    fn immediate_isq_promotion_requires_an_explicit_predicate() {
+        let params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, Some(IsqType::AFQ6));
+        assert!(promoted.promote_default);
+
+        let lookalike = resolve_immediate_isq(&params, "vision.embed_tokens.weight").unwrap();
+        assert_eq!(lookalike.ty, Some(IsqType::AFQ4));
+        assert!(!lookalike.promote_default);
+    }
+
+    #[test]
+    fn immediate_isq_explicit_type_wins_over_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ2));
+        assert!(matched.promote_default);
+    }
+
+    #[test]
+    fn immediate_isq_uses_sensitive_default_only_for_sensitive_tensors() {
+        for (base, sensitive) in [
+            (IsqType::AFQ6, IsqType::AFQ8),
+            (IsqType::Q4K, IsqType::Q6K),
+            (IsqType::Q6K, IsqType::Q8_0),
+        ] {
+            let params = immediate_params(Some(base), Vec::new());
+            let embedding = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+            assert_eq!(embedding.ty, Some(sensitive));
+            let projection =
+                resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+            assert_eq!(projection.ty, Some(base));
+        }
+    }
+
+    #[test]
+    fn immediate_isq_device_only_override_keeps_sensitive_default() {
+        let params = immediate_params(
+            Some(IsqType::AFQ4),
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: None,
+                device: Some(Device::Cpu),
+            }],
+        );
+
+        let matched = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(matched.ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn capture_all_records_promotion_without_pinning_a_type() {
+        let mut params = immediate_params(Some(IsqType::AFQ4), Vec::new());
+        params.capture = IsqCaptureMode::CaptureAll;
+
+        let promoted = resolve_immediate_isq(&params, "model.embed_tokens.weight").unwrap();
+        assert_eq!(promoted.ty, None);
+        assert!(promoted.promote_default);
+
+        let regular =
+            resolve_immediate_isq(&params, "model.layers.0.mlp.down_proj.weight").unwrap();
+        assert_eq!(regular.ty, None);
+        assert!(!regular.promote_default);
     }
 
     #[test]

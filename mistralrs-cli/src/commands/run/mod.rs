@@ -2,8 +2,8 @@
 
 mod interactive;
 
-pub(crate) use interactive::interactive_mode;
 use interactive::OneshotInput;
+pub(crate) use interactive::{interactive_mode, InteractiveConfig};
 
 use anyhow::Result;
 use tracing::info;
@@ -11,13 +11,14 @@ use tracing::info;
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 
-#[cfg(feature = "code-execution")]
-use super::serve::build_code_exec_config;
+use super::normalize_requested_adapter;
 use super::serve::{
     apply_agent_mode, apply_quant_resolution, convert_to_model_selected, extract_device_settings,
     extract_isq_setting, extract_paged_attn_settings, extract_sandbox_settings, load_mcp_config,
     log_agent_runtime, validate_agent_options,
 };
+#[cfg(feature = "code-execution")]
+use super::serve::{build_code_exec_config, build_shell_config};
 use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
 
 /// Run the model in interactive or one-shot mode
@@ -33,8 +34,11 @@ pub async fn run_interactive(
     images: Vec<String>,
     videos: Vec<String>,
     audios: Vec<String>,
+    request_adapter: Option<String>,
 ) -> Result<()> {
     initialize_logging();
+
+    let request_adapter = normalize_requested_adapter(&model_type, request_adapter.as_deref())?;
 
     agent_options.apply_to(&mut runtime);
     apply_agent_mode(&mut runtime);
@@ -89,6 +93,7 @@ pub async fn run_interactive(
         .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
         .with_paged_ctxt_len_optional(paged_ctxt_len)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
+        .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);
 
     if let Some(model) = runtime.search_embedding_model {
@@ -98,17 +103,26 @@ pub async fn run_interactive(
     let mcp_client_config = load_mcp_config(runtime.mcp_config.as_deref())?;
     builder = builder.with_mcp_config_optional(mcp_client_config);
 
-    let sandbox_policy = extract_sandbox_settings(sandbox);
+    let sandbox_policy = extract_sandbox_settings(sandbox, &runtime);
 
     #[cfg(feature = "code-execution")]
     {
-        let config = build_code_exec_config(&runtime, sandbox_policy);
+        let config = build_code_exec_config(&runtime, sandbox_policy.clone());
         builder = builder.with_code_exec_config_optional(config);
+        let shell_config = build_shell_config(&runtime, sandbox_policy);
+        builder = builder.with_shell_config_optional(shell_config);
     }
     #[cfg(not(feature = "code-execution"))]
     let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
+
+    if let Some(alias) = request_adapter.as_deref() {
+        let adapters = mistralrs.list_lora_adapters(None).await?;
+        if !adapters.iter().any(|adapter| adapter.alias == alias) {
+            anyhow::bail!("LoRA adapter alias `{alias}` is not loaded");
+        }
+    }
 
     if let Some(text) = input {
         info!("Model loaded, running one-shot mode...");
@@ -116,18 +130,26 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         interactive::oneshot_mode(
             mistralrs.clone(),
-            runtime.enable_search,
-            do_code_exec,
-            runtime.code_exec_permission.into(),
-            thinking,
             OneshotInput {
                 text,
                 images,
                 videos,
                 audios,
+            },
+            InteractiveConfig {
+                do_search: runtime.enable_search,
+                do_code_exec,
+                do_shell,
+                agent_permission: runtime.code_exec_permission.into(),
+                enable_thinking: thinking,
+                adapter: request_adapter,
             },
         )
         .await;
@@ -136,14 +158,22 @@ pub async fn run_interactive(
         let do_code_exec = runtime.enable_code_execution;
         #[cfg(not(feature = "code-execution"))]
         let do_code_exec = false;
+        #[cfg(feature = "code-execution")]
+        let do_shell = runtime.enable_shell;
+        #[cfg(not(feature = "code-execution"))]
+        let do_shell = false;
 
         info!("Model loaded, starting interactive mode...");
         interactive::interactive_mode(
             mistralrs.clone(),
-            runtime.enable_search,
-            do_code_exec,
-            runtime.code_exec_permission.into(),
-            thinking,
+            InteractiveConfig {
+                do_search: runtime.enable_search,
+                do_code_exec,
+                do_shell,
+                agent_permission: runtime.code_exec_permission.into(),
+                enable_thinking: thinking,
+                adapter: request_adapter,
+            },
         )
         .await;
     }

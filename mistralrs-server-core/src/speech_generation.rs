@@ -81,6 +81,8 @@ pub fn parse_request(
         return_raw_logits: false,
         web_search_options: None,
         enable_code_execution: false,
+        enable_shell: false,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: None,
@@ -93,9 +95,11 @@ pub fn parse_request(
         } else {
             Some(oairequest.model.clone())
         },
+        adapter: None,
         truncate_sequence: false,
         session_id: None,
         files: None,
+        input_files: Vec::new(),
     }));
 
     Ok((request, oairequest.response_format))
@@ -226,6 +230,7 @@ pub fn match_responses(
         Response::Raw { .. } => unreachable!(),
         Response::Embeddings { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
+        Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
     }

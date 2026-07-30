@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use utoipa::{
-    openapi::{schema::SchemaType, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
+    openapi::{schema::SchemaType, ArrayBuilder, ObjectBuilder, OneOfBuilder, RefOr, Schema, Type},
     PartialSchema, ToSchema,
 };
 
@@ -57,6 +57,9 @@ pub enum OpenResponsesInputContent {
         /// Base64 encoded file data
         #[serde(skip_serializing_if = "Option::is_none")]
         file_data: Option<String>,
+        /// File URL (Responses API only)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
         /// Filename
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
@@ -132,10 +135,12 @@ impl InputContent {
                 OpenResponsesInputContent::InputFile {
                     file_id,
                     file_data,
+                    file_url,
                     filename,
                 } => NormalizedInputContent::File {
                     file_id,
                     file_data,
+                    file_url,
                     filename,
                 },
             },
@@ -185,6 +190,8 @@ pub enum NormalizedInputContent {
         file_id: Option<String>,
         /// Base64 encoded file data
         file_data: Option<String>,
+        /// File URL
+        file_url: Option<String>,
         /// Filename
         filename: Option<String>,
     },
@@ -230,6 +237,12 @@ fn input_content_schema() -> Schema {
                             ObjectBuilder::new()
                                 .schema_type(SchemaType::Type(Type::String))
                                 .build(),
+                        )),
+                    )
+                    .property(
+                        "annotations",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new().items(Annotation::schema()).build(),
                         )),
                     )
                     .required("type")
@@ -318,6 +331,30 @@ fn input_content_schema() -> Schema {
                                 .build(),
                         )),
                     )
+                    .property(
+                        "file_data",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "file_url",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "filename",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
                     .required("type")
                     .build(),
             ))
@@ -364,6 +401,22 @@ pub enum Annotation {
         end_index: usize,
         /// File path details
         file_path: FilePathInfo,
+    },
+    /// Container file citation annotation
+    #[serde(rename = "container_file_citation")]
+    ContainerFileCitation {
+        /// File ID
+        file_id: String,
+        /// Optional annotation index
+        index: Option<usize>,
+        /// Container ID
+        container_id: String,
+        /// End index in the text
+        end_index: usize,
+        /// Filename
+        filename: String,
+        /// Start index in the text
+        start_index: usize,
     },
 }
 

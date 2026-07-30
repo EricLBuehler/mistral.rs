@@ -1,7 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -26,14 +26,11 @@ use crate::{
     get_mut_arcmutex, get_paths, DeviceMapSetting, PagedAttentionConfig, Pipeline, Topology,
     TryIntoDType, DEBUG,
 };
-use crate::{
-    models::quantized_llama::ModelWeights as QLlama, utils::tokens::get_token,
-    xlora_models::XLoraQLlama,
-};
+use crate::{models::quantized_llama::ModelWeights as QLlama, xlora_models::XLoraQLlama};
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
 use candle_core::{Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -75,7 +72,6 @@ pub struct GGMLLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -192,7 +188,6 @@ impl GGMLLoaderBuilder {
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
         })
     }
 }
@@ -235,7 +230,6 @@ impl GGMLLoader {
             kind,
             tgt_non_granular_index,
             jinja_explicit,
-            lora_adapter_ids: None,
         }
     }
 }
@@ -402,6 +396,7 @@ impl Loader for GGMLLoader {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
         })))
@@ -428,7 +423,13 @@ impl Loader for GGMLLoader {
             self.quantized_model_id,
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent,
-            false // Never loading UQFF
+            false,
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: self.xlora_model_id.as_ref(),
+                lora_adapters: None,
+                xlora_order: self.xlora_order.as_ref(),
+                xlora_preload: crate::pipeline::XLoraPreload::Load,
+            }
         );
         self.load_model_from_path(
             &paths?,
@@ -530,6 +531,14 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        true
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -545,6 +554,8 @@ impl Pipeline for GGMLPipeline {
             paged_attn_meta: _, // NOTE(EricLBuehler): ignore it for ggml
             flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
+            recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
             Model::Llama(ref model) => {

@@ -9,20 +9,23 @@ use std::sync::{Arc, Mutex};
 use super::llava_llm::{LLaVALLM, Llama, Mistral};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::amoe::MlpLayer;
-use crate::device_map::DeviceMapper;
+
 use crate::layers;
+use crate::paged_attention::block_hash::MultimodalKind;
 use crate::paged_attention::encoder_cache::{
     cached_encode_images, CacheModality, EncoderCacheManager,
 };
 use crate::paged_attention::{AttentionImplementation, ModelConfigMetadata};
-use crate::pipeline::text_models_inputs_processor::FlashParams;
-use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::IsqModel;
+use crate::pipeline::ModelForwardContext;
 use crate::pipeline::MultimodalModel;
 use crate::pipeline::NormalLoadingMetadata;
 use crate::utils::unvarbuilder::UnVarBuilder;
 use crate::vision_models::clip::{ClipConfig, ClipVisionTransformer};
 use crate::vision_models::llava::config::Config;
+use crate::vision_models::multimodal_layout::{
+    MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+};
 use crate::AnyMoeConfig;
 use crate::AnyMoeExpertType;
 use candle_core::{bail, DType, Device, IndexOp, Result, Tensor};
@@ -32,6 +35,49 @@ use mistralrs_quant::ShardedVarBuilder;
 
 pub(crate) struct LLaVAVisionSpecificArgs {
     pub image_hashes: Vec<u64>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
+}
+
+fn splice_llava_image_embeddings(
+    mut result: Tensor,
+    input_ids: &Tensor,
+    image_features: &Tensor,
+    num_image_tokens: usize,
+) -> Result<Tensor> {
+    let image_indexes = input_ids.lt(0i64)?.nonzero()?.to_vec2::<u32>()?;
+    let (batch_size, seq_len) = input_ids.dims2()?;
+    let num_images = image_features.dim(0)?;
+    if image_indexes.len() != num_images {
+        candle_core::bail!(
+            "LLaVA input has {} image markers but {num_images} encoder outputs",
+            image_indexes.len()
+        );
+    }
+    if image_features.dim(1)? != num_image_tokens {
+        candle_core::bail!(
+            "LLaVA encoder produced {} tokens per image but the prompt reserves {num_image_tokens}",
+            image_features.dim(1)?
+        );
+    }
+    for (image_index, coordinates) in image_indexes.iter().enumerate() {
+        if coordinates.len() != 2 {
+            candle_core::bail!("LLaVA image marker coordinates must have rank 2");
+        }
+        let batch_index = coordinates[0] as usize;
+        let token_index = coordinates[1] as usize;
+        if batch_index >= batch_size || token_index + num_image_tokens > seq_len {
+            candle_core::bail!("LLaVA image placeholder is outside the input batch");
+        }
+        result = result.slice_assign(
+            &[
+                batch_index..batch_index + 1,
+                token_index..token_index + num_image_tokens,
+                0..result.dim(2)?,
+            ],
+            &image_features.get(image_index)?.unsqueeze(0)?,
+        )?;
+    }
+    Ok(result)
 }
 
 pub struct MMProjector {
@@ -196,15 +242,10 @@ impl Model {
         images: &Tensor,    //[sum of samples of all images,channel,width,height]
         num_image_tokens: usize,
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
-        let image_indexes = input_ids
-            .squeeze(0)?
-            .lt(0i64)?
-            .nonzero()?
-            .squeeze(1)?
-            .to_vec1::<u32>()?;
         let mut result = input_ids.clamp(0i64, i64::MAX)?.to_dtype(DType::U32)?;
-        result = self.llm.embed(&result)?; //[seq_len,hidden_size]
+        result = self.llm.embed(&result)?;
         let images_typed = images.to_dtype(self.dtype)?;
         let image_features = cached_encode_images(
             CacheModality::Image,
@@ -214,23 +255,33 @@ impl Model {
             |pv| Ok(vec![self.encode_images(pv)?]),
         )?[0]
             .clone(); //[num of images,patch_size*patch_size,hidden_size]
-        let num_of_images = image_features.shape().dims()[0];
-        let mut image_features_vec = Vec::new();
-        for i in 0..num_of_images {
-            image_features_vec.push(image_features.get(i)?.unsqueeze(0)?);
+        if let Some(layout) = packed_layout {
+            if image_hashes.len() != image_features.dim(0)? {
+                candle_core::bail!(
+                    "packed LLaVA input has {} image hashes but {} encoder outputs",
+                    image_hashes.len(),
+                    image_features.dim(0)?
+                );
+            }
+            let encoder_outputs = image_hashes
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, hash)| {
+                    Ok((
+                        MultimodalEncoderKey {
+                            kind: MultimodalKind::Image,
+                            hash,
+                        },
+                        vec![image_features.get(index)?],
+                    ))
+                })
+                .collect::<Result<MultimodalEncoderOutputs>>()?;
+            return layout.splice_embeddings(&result, &encoder_outputs);
         }
-        for (i, image_index) in image_indexes.iter().enumerate() {
-            result = result.slice_assign(
-                &[
-                    0usize..1usize,
-                    *image_index as usize..*image_index as usize + num_image_tokens,
-                    0..result.dim(2)?,
-                ],
-                &image_features_vec[i],
-            )?;
-        }
-        //truncate
-        let (_, seq_len) = input_ids.shape().dims2()?;
+        result =
+            splice_llava_image_embeddings(result, input_ids, &image_features, num_image_tokens)?;
+        let (_, seq_len) = input_ids.dims2()?;
         if seq_len > self.config.text_config.max_length {
             result = result.i((.., ..self.config.text_config.max_length, ..))?
         }
@@ -243,11 +294,8 @@ impl Model {
         pixel_values: Option<Tensor>,
         num_image_tokens: Option<usize>,
         image_hashes: &[u64],
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        packed_layout: Option<&PackedMultimodalLayout>,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         if let Some(ref pixel_values) = pixel_values {
             // we assume(as it should be) only prompt request contains image
@@ -256,41 +304,16 @@ impl Model {
                 pixel_values,
                 num_image_tokens.unwrap(),
                 image_hashes,
+                packed_layout,
             )?;
-            self.llm.forward_input_embed(
-                input_ids,
-                input_embeds,
-                seqlen_offsets,
-                context_lens,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward_input_embed(input_ids, input_embeds, ctx)
         } else {
-            self.llm.forward(
-                input_ids,
-                seqlen_offsets,
-                context_lens,
-                position_ids,
-                metadata,
-                flash_params,
-            )
+            self.llm.forward(input_ids, ctx)
         }
     }
 }
 
 impl IsqModel for Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(
-            &mut std::sync::Arc<dyn mistralrs_quant::QuantMethod>,
-            Option<usize>,
-        )>,
-        &dyn DeviceMapper,
-    ) {
-        self.llm.get_layers()
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 
@@ -310,19 +333,30 @@ impl IsqModel for Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
+impl crate::block_diffusion::BlockDiffusionMixin for Model {}
+
 impl MultimodalModel for Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
-        let LLaVAVisionSpecificArgs { image_hashes } = *model_specific_args
+        let LLaVAVisionSpecificArgs {
+            image_hashes,
+            packed_layout,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `LLaVAVisionSpecificArgs`");
         self.forward_inputs(
@@ -333,11 +367,8 @@ impl MultimodalModel for Model {
                     * self.clip_vision_tower.num_patches_per_side(),
             ),
             &image_hashes,
-            seqlen_offsets,
-            context_lens,
-            position_ids,
-            metadata,
-            flash_params,
+            packed_layout.as_ref(),
+            ctx,
         )
     }
 
@@ -348,10 +379,6 @@ impl MultimodalModel for Model {
     fn cache(&self) -> &crate::pipeline::EitherCache {
         self.llm.cache()
     }
-    fn cache_mut(&mut self) -> &mut crate::pipeline::EitherCache {
-        self.llm.cache_mut()
-    }
-
     fn max_seq_len(&self) -> usize {
         self.config.text_config.max_length
     }
@@ -362,6 +389,7 @@ impl MultimodalModel for Model {
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn Any> {
         Box::new(LLaVAVisionSpecificArgs {
             image_hashes: vec![],
+            packed_layout: None,
         })
     }
     fn encoder_cache_counters(
@@ -406,5 +434,40 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_embeddings_follow_markers_across_batch_rows() {
+        let device = Device::Cpu;
+        let input_ids = Tensor::new(&[[1i64, -1, 0, 2], [3, 4, -1, 0]], &device).unwrap();
+        let result = Tensor::zeros((2, 4, 2), DType::F32, &device).unwrap();
+        let image_features = Tensor::new(
+            &[[[11f32, 12.0], [13.0, 14.0]], [[21.0, 22.0], [23.0, 24.0]]],
+            &device,
+        )
+        .unwrap();
+        let result = splice_llava_image_embeddings(result, &input_ids, &image_features, 2).unwrap();
+        assert_eq!(
+            result.to_vec3::<f32>().unwrap(),
+            vec![
+                vec![
+                    vec![0.0, 0.0],
+                    vec![11.0, 12.0],
+                    vec![13.0, 14.0],
+                    vec![0.0, 0.0],
+                ],
+                vec![
+                    vec![0.0, 0.0],
+                    vec![0.0, 0.0],
+                    vec![21.0, 22.0],
+                    vec![23.0, 24.0],
+                ],
+            ]
+        );
     }
 }

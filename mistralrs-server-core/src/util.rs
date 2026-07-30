@@ -5,10 +5,8 @@ use mistralrs_core::AudioInput;
 use mistralrs_core::MistralRs;
 use std::error::Error;
 use std::sync::Arc;
-use tokio::{
-    fs::{self, File},
-    io::AsyncReadExt,
-};
+
+use crate::media_source::{load_media_source, MediaSourcePolicy};
 
 /// Parses and loads an image from a URL, file path, or data URL.
 ///
@@ -43,91 +41,40 @@ use tokio::{
 /// let image = parse_image_url("file:///home/user/picture.jpg").await?;
 /// ```
 pub async fn parse_image_url(url_unparsed: &str) -> Result<DynamicImage, anyhow::Error> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        anyhow::bail!(
-            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
-             Use a full URL, a data URL, or an absolute file path that exists on the server.",
-            url_unparsed
-        )
-    };
+    parse_image_url_with_policy(url_unparsed, MediaSourcePolicy::Local).await
+}
 
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        // Read from http
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
+pub(crate) async fn parse_image_url_for_server(
+    url_unparsed: &str,
+) -> Result<DynamicImage, anyhow::Error> {
+    parse_image_url_with_policy(url_unparsed, MediaSourcePolicy::ServerRequest).await
+}
 
-        if let Ok(mut f) = File::open(&path).await {
-            // Read from local file
-            let metadata = fs::metadata(&path).await?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer).await?;
-            buffer
-        } else {
-            anyhow::bail!("Could not open file at path: {}", url);
-        }
-    } else if url.scheme() == "data" {
-        // Decode with base64
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
-    } else {
-        anyhow::bail!("Unsupported URL scheme: {}", url.scheme());
-    };
-
-    Ok(image::load_from_memory(&bytes)?)
+async fn parse_image_url_with_policy(
+    url_unparsed: &str,
+    policy: MediaSourcePolicy,
+) -> Result<DynamicImage, anyhow::Error> {
+    let media = load_media_source(url_unparsed, policy, "image").await?;
+    Ok(image::load_from_memory(&media.bytes)?)
 }
 
 /// Parses and loads an audio file from a URL, file path, or data URL.
 pub async fn parse_audio_url(url_unparsed: &str) -> Result<AudioInput, anyhow::Error> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).await.is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url_unparsed))?
-    } else {
-        anyhow::bail!(
-            "Invalid source '{}': not a valid URL (http/https/data) and file not found on server. \
-             Use a full URL, a data URL, or an absolute file path that exists on the server.",
-            url_unparsed
-        )
-    };
+    parse_audio_url_with_policy(url_unparsed, MediaSourcePolicy::Local).await
+}
 
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        match reqwest::get(url.clone()).await {
-            Ok(http_resp) => http_resp.bytes().await?.to_vec(),
-            Err(e) => anyhow::bail!(e),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| anyhow::anyhow!("Could not parse file path: {}", url))?;
+pub(crate) async fn parse_audio_url_for_server(
+    url_unparsed: &str,
+) -> Result<AudioInput, anyhow::Error> {
+    parse_audio_url_with_policy(url_unparsed, MediaSourcePolicy::ServerRequest).await
+}
 
-        if let Ok(mut f) = File::open(&path).await {
-            let metadata = fs::metadata(&path).await?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer).await?;
-            buffer
-        } else {
-            anyhow::bail!("Could not open file at path: {}", url);
-        }
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str())?;
-        data_url.decode_to_vec()?.0
-    } else {
-        anyhow::bail!("Unsupported URL scheme: {}", url.scheme());
-    };
-
-    AudioInput::from_bytes(&bytes)
+async fn parse_audio_url_with_policy(
+    url_unparsed: &str,
+    policy: MediaSourcePolicy,
+) -> Result<AudioInput, anyhow::Error> {
+    let media = load_media_source(url_unparsed, policy, "audio").await?;
+    AudioInput::from_bytes(&media.bytes)
 }
 
 /// Validates that the requested model matches one of the loaded models.
@@ -297,6 +244,17 @@ mod tests {
         let audio = parse_audio_url(&url).await.unwrap();
         assert_eq!(audio.sample_rate, 8000);
         assert_eq!(audio.samples.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn server_media_rejects_local_sources() {
+        assert!(parse_image_url_for_server("resources/rust-logo-32x32.png")
+            .await
+            .is_err());
+
+        let absolute_path = std::path::absolute("resources/rust-logo-32x32.png").unwrap();
+        let url = format!("file://{}", absolute_path.as_os_str().to_str().unwrap());
+        assert!(parse_image_url_for_server(&url).await.is_err());
     }
 
     #[test]

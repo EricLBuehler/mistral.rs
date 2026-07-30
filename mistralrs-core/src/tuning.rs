@@ -2,21 +2,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
-use hf_hub::{
-    api::sync::{ApiBuilder, ApiRepo},
-    Cache, Repo, RepoType,
-};
+use hf_hub::{api::sync::ApiRepo, Cache, Repo, RepoType};
 use serde::{Deserialize, Serialize};
 
 use crate::device_map::{DeviceLayerMapMetadata, DeviceMapMetadata};
 use crate::model_loader::{get_auto_device_map_params, get_model_dtype};
+use crate::pipeline::hf::build_api_with_cache;
 use crate::pipeline::{
-    AutoDeviceMapParams, AutoEmbeddingLoader, AutoMultimodalLoader, AutoNormalLoader,
-    DeviceMappedModelLoader, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType,
-    TokenSource,
+    AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader, AutoMultimodalLoader,
+    AutoNormalLoader, DeviceMappedModelLoader, EmbeddingLoaderType, MultimodalLoaderType,
+    NormalLoaderType, TokenSource,
 };
-use crate::utils::tokens::get_token;
-use crate::{paged_attn_supported, IsqType, ModelSelected, TryIntoDType, GLOBAL_HF_CACHE};
+use crate::{
+    paged_attn_supported, IsqType, ModelSelected, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -148,7 +147,7 @@ fn select_devices(force_cpu: bool) -> Result<Vec<Device>> {
         return Ok(vec![Device::Cpu]);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(feature = "cuda")]
     {
         if let Ok(dev) = Device::new_cuda(0) {
             return Ok(crate::device_map::get_all_similar_devices(&dev)?);
@@ -180,10 +179,7 @@ fn hf_cache_path_from_model(model: &ModelSelected) -> Option<PathBuf> {
 fn model_id_from_selected(model: &ModelSelected) -> String {
     match model {
         ModelSelected::Plain { model_id, .. }
-        | ModelSelected::Lora {
-            model_id: Some(model_id),
-            ..
-        }
+        | ModelSelected::Lora { model_id, .. }
         | ModelSelected::XLora {
             model_id: Some(model_id),
             ..
@@ -217,6 +213,19 @@ fn model_id_from_selected(model: &ModelSelected) -> String {
     }
 }
 
+fn topology_from_model(model: &ModelSelected) -> Result<Option<Topology>> {
+    let path = match model {
+        ModelSelected::Run { topology, .. }
+        | ModelSelected::Plain { topology, .. }
+        | ModelSelected::Lora { topology, .. }
+        | ModelSelected::XLora { topology, .. }
+        | ModelSelected::MultimodalPlain { topology, .. }
+        | ModelSelected::Embedding { topology, .. } => topology.as_deref(),
+        _ => None,
+    };
+    Topology::from_option_path(path)
+}
+
 fn load_config_artifacts(
     model_id: &str,
     token_source: &TokenSource,
@@ -238,13 +247,7 @@ fn load_config_artifacts(
         .unwrap_or_else(Cache::from_env);
     GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
 
-    let mut api = ApiBuilder::from_cache(cache)
-        .with_progress(false)
-        .with_token(get_token(token_source)?);
-    if let Some(cache_dir) = crate::hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    let api = api.build()?;
+    let api = build_api_with_cache(token_source, false, Some(cache))?;
     let revision = hf_revision.unwrap_or_else(|| "main".to_string());
     let api = api.repo(Repo::with_revision(
         model_id.to_string(),
@@ -448,10 +451,13 @@ fn map_for_candidate(
     params: &AutoDeviceMapParams,
     devices: &[Device],
     isq: Option<IsqType>,
+    topology: Option<&Topology>,
 ) -> Result<(DeviceMapMetadata, usize)> {
     let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
+    let quantization = AutoDeviceMapQuantization::isq(isq, topology);
     let layer_sizes = loader.layer_sizes_in_bytes(config, dtype, pack_factor, None)?;
-    let non_mapped = loader.non_mapped_size_in_bytes(config, dtype, pack_factor, None)?;
+    let non_mapped =
+        loader.non_mapped_size_in_bytes(config, dtype, pack_factor, Some(&quantization), None)?;
     let total = layer_sizes.iter().sum::<usize>() + non_mapped;
     let map = crate::pipeline::get_device_layers_for_loader(
         loader,
@@ -517,6 +523,7 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
         let refs = devices.iter().collect::<Vec<_>>();
         model_dtype.try_into_dtype(&refs)?
     };
+    let topology = topology_from_model(&req.model)?;
 
     let loader_normal = AutoNormalLoader;
     let loader_multimodal = AutoMultimodalLoader;
@@ -556,7 +563,15 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
     let mut recommended_idx: Option<usize> = None;
 
     for isq in all_isq_candidates {
-        let result = map_for_candidate(loader, &config, dtype, &params, &devices, isq);
+        let result = map_for_candidate(
+            loader,
+            &config,
+            dtype,
+            &params,
+            &devices,
+            isq,
+            topology.as_ref(),
+        );
 
         let (fit_status, estimated_size, device_layers_cli) = match &result {
             Ok((map, total_size)) => {
@@ -574,11 +589,18 @@ pub fn auto_tune(req: AutoTuneRequest) -> Result<AutoTuneResult> {
             Err(_) => {
                 // Calculate estimated size even for non-fitting candidates
                 let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
+                let quantization = AutoDeviceMapQuantization::isq(isq, topology.as_ref());
                 let layer_sizes = loader
                     .layer_sizes_in_bytes(&config, dtype, pack_factor, None)
                     .unwrap_or_default();
                 let non_mapped = loader
-                    .non_mapped_size_in_bytes(&config, dtype, pack_factor, None)
+                    .non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        pack_factor,
+                        Some(&quantization),
+                        None,
+                    )
                     .unwrap_or(0);
                 let est_size = (layer_sizes.iter().sum::<usize>() + non_mapped) as u64;
                 (FitStatus::TooLarge, est_size, None)

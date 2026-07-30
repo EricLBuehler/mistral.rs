@@ -1,21 +1,20 @@
 //! Interactive mode implementation
-//!
-//! Ported from mistralrs-server/src/interactive_mode.rs
 
 use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
-    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
-    WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
+    speech_utils, AdapterSelection, AgentPermission, AgentToolKind, Constraint,
+    DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat, MessageContent,
+    MistralRs, ModelCategory, NormalRequest, Request, RequestMessage, Response, ResponseOk,
+    SamplingParams, Usage, WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
 use serde_json::Value;
+#[cfg(feature = "code-execution")]
+use std::collections::VecDeque;
 use std::{
-    collections::VecDeque,
     fs,
     io::{self, Write},
     path::PathBuf,
@@ -29,6 +28,7 @@ use mistralrs_server_core::util;
 use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
+const DENOISING_BAR_WIDTH: usize = 28;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -83,18 +83,78 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn build_prompt(do_search: bool, do_code_exec: bool) -> String {
+fn build_prompt(
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    adapter: Option<&str>,
+) -> String {
     let mut tags = Vec::new();
     if do_code_exec {
-        tags.push("code");
+        tags.push("code".to_string());
+    }
+    if do_shell {
+        tags.push("shell".to_string());
     }
     if do_search {
-        tags.push("search");
+        tags.push("search".to_string());
+    }
+    if let Some(adapter) = adapter {
+        tags.push(format!("lora:{adapter}"));
     }
     if tags.is_empty() {
         "> ".to_string()
     } else {
         format!("[{}] > ", tags.join(","))
+    }
+}
+
+struct DenoisingProgress {
+    active: bool,
+}
+
+impl DenoisingProgress {
+    fn new() -> Self {
+        Self { active: false }
+    }
+
+    fn clear(&mut self) {
+        if self.active {
+            eprint!("\r\x1b[K");
+            io::stderr().flush().unwrap();
+            self.active = false;
+        }
+    }
+
+    fn render(&mut self, progress: &mistralrs_core::BlockDenoisingProgress) {
+        if progress.final_block {
+            self.clear();
+            return;
+        }
+
+        let total_steps = progress.total_steps.max(1) as u64;
+        let step = progress.step.min(progress.total_steps.max(1)) as u64;
+        let status = if progress.finished {
+            "stable"
+        } else {
+            "denoising"
+        };
+        let filled = (step as usize)
+            .saturating_mul(DENOISING_BAR_WIDTH)
+            .checked_div(total_steps as usize)
+            .unwrap_or(0)
+            .min(DENOISING_BAR_WIDTH);
+        let empty = DENOISING_BAR_WIDTH - filled;
+        eprint!(
+            "\rblock diffusion [{}{}] {}/{} {}\x1b[K",
+            "=".repeat(filled),
+            " ".repeat(empty),
+            step,
+            total_steps,
+            status,
+        );
+        io::stderr().flush().unwrap();
+        self.active = true;
     }
 }
 
@@ -135,52 +195,68 @@ pub struct OneshotInput {
     pub audios: Vec<String>,
 }
 
-pub async fn oneshot_mode(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
-    input: OneshotInput,
-) {
-    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
-    let has_media =
-        !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
-
-    if has_media {
-        oneshot_multimodal(
-            mistralrs,
-            do_search,
-            do_code_exec,
-            agent_permission,
-            agent_approval_callback,
-            enable_thinking,
-            input,
-        )
-        .await;
-    } else {
-        oneshot_text(
-            mistralrs,
-            do_search,
-            do_code_exec,
-            agent_permission,
-            agent_approval_callback,
-            enable_thinking,
-            input.text,
-        )
-        .await;
-    }
+pub struct InteractiveConfig {
+    pub do_search: bool,
+    pub do_code_exec: bool,
+    pub do_shell: bool,
+    pub agent_permission: AgentPermission,
+    pub enable_thinking: Option<bool>,
+    pub adapter: Option<String>,
 }
 
-async fn oneshot_text(
-    mistralrs: Arc<MistralRs>,
+struct OneshotCtx {
     do_search: bool,
     do_code_exec: bool,
+    do_shell: bool,
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
-    text: String,
+    adapter: Option<String>,
+}
+
+pub async fn oneshot_mode(
+    mistralrs: Arc<MistralRs>,
+    input: OneshotInput,
+    config: InteractiveConfig,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        adapter,
+    } = config;
+    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
+    let has_media =
+        !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
+    let ctx = OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+        adapter,
+    };
+
+    if has_media {
+        oneshot_multimodal(mistralrs, ctx, input).await;
+    } else {
+        oneshot_text(mistralrs, ctx, input.text).await;
+    }
+}
+
+async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) {
+    let OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+        adapter,
+    } = ctx;
     let sender = mistralrs.get_sender(None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
 
@@ -196,7 +272,7 @@ async fn oneshot_text(
     };
 
     let (tx, mut rx) = channel(10_000);
-    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
+    let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -212,6 +288,8 @@ async fn oneshot_text(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
+        enable_shell: do_shell,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: Some(agent_permission),
@@ -222,8 +300,10 @@ async fn oneshot_text(
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: adapter.map(AdapterSelection::alias),
         truncate_sequence: false,
         files: None,
+        input_files: Vec::new(),
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -243,15 +323,16 @@ async fn oneshot_text(
     println!();
 }
 
-async fn oneshot_multimodal(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    agent_permission: AgentPermission,
-    agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
-    input: OneshotInput,
-) {
+async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: OneshotInput) {
+    let OneshotCtx {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        agent_approval_callback,
+        enable_thinking,
+        adapter: _,
+    } = ctx;
     let config = mistralrs.config(None).unwrap();
     let prefixer = match &config.category {
         ModelCategory::Multimodal { prefixer } => prefixer,
@@ -368,7 +449,7 @@ async fn oneshot_multimodal(
     };
 
     let (tx, mut rx) = channel(10_000);
-    let session_id = do_code_exec.then(|| uuid::Uuid::new_v4().to_string());
+    let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
         messages: request_messages,
@@ -384,6 +465,8 @@ async fn oneshot_multimodal(
         return_raw_logits: false,
         web_search_options: do_search.then(WebSearchOptions::default),
         enable_code_execution: do_code_exec,
+        enable_shell: do_shell,
+        shell_options: None,
         code_execution_permission: None,
         code_execution_approval_notifier: None,
         agent_permission: Some(agent_permission),
@@ -394,8 +477,10 @@ async fn oneshot_multimodal(
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: None,
         truncate_sequence: false,
         files: None,
+        input_files: Vec::new(),
     }));
     sender.send(req).await.unwrap();
     let start_ttft = Instant::now();
@@ -426,7 +511,7 @@ fn print_stats(
         println!();
         println!("Stats:");
         if let Some(ttft) = first_token_duration {
-            println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+            println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
         }
         println!(
             "Prompt: {} tokens, {:.2} T/s",
@@ -454,31 +539,26 @@ fn print_stats(
     }
 }
 
-pub async fn interactive_mode(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
-) {
-    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConfig) {
+    let agent_approval_callback = cli_agent_approval_callback(config.agent_permission);
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(
-                mistralrs,
-                do_search,
-                do_code_exec,
-                agent_permission,
-                agent_approval_callback.clone(),
-                enable_thinking,
-            )
-            .await
+            text_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking,
+                adapter: _,
+            } = config;
             multimodal_interactive_mode(
                 mistralrs,
                 do_search,
                 do_code_exec,
+                do_shell,
                 agent_permission,
                 agent_approval_callback.clone(),
                 enable_thinking,
@@ -486,20 +566,38 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Diffusion) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking: _,
+                adapter: _,
+            } = config;
             diffusion_interactive_mode(
                 mistralrs,
                 do_search,
                 do_code_exec,
+                do_shell,
                 agent_permission,
                 agent_approval_callback.clone(),
             )
             .await
         }
         Ok(ModelCategory::Audio) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking,
+                adapter: _,
+            } = config;
             audio_interactive_mode(
                 mistralrs,
                 do_search,
                 do_code_exec,
+                do_shell,
                 agent_permission,
                 agent_approval_callback.clone(),
                 enable_thinking,
@@ -507,10 +605,19 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Speech) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking: _,
+                adapter: _,
+            } = config;
             speech_interactive_mode(
                 mistralrs,
                 do_search,
                 do_code_exec,
+                do_shell,
                 agent_permission,
                 agent_approval_callback.clone(),
             )
@@ -531,6 +638,10 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `/system Always respond as a pirate.`
 - `/clear`: Clear the chat history.
+- `/adapter <alias>`: Use a loaded LoRA adapter for subsequent requests.
+- `/adapter use <alias>`: Select an alias named `none` or `list`.
+- `/adapter none`: Use the base model for subsequent requests.
+- `/adapter list`: List loaded LoRA adapters.
 - `/temperature <float>`: Set sampling temperature (0.0 to 2.0).
 - `/topk <int>`: Set top-k sampling value (>0).
 - `/topp <float>`: Set top-p sampling value in (0.0 to 1.0).
@@ -570,6 +681,7 @@ const HELP_CMD: &str = "/help";
 const EXIT_CMD: &str = "/exit";
 const SYSTEM_CMD: &str = "/system";
 const CLEAR_CMD: &str = "/clear";
+const ADAPTER_CMD: &str = "/adapter";
 const TEMPERATURE_CMD: &str = "/temperature";
 const TOPK_CMD: &str = "/topk";
 const TOPP_CMD: &str = "/topp";
@@ -677,17 +789,89 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
     false
 }
 
+async fn handle_adapter_command(
+    mistralrs: &MistralRs,
+    prompt: &str,
+    adapter: &mut Option<String>,
+) -> bool {
+    let Some(command) = parse_adapter_command(prompt) else {
+        return false;
+    };
+
+    match command {
+        AdapterCommand::Invalid => {
+            println!("Error: format is `{ADAPTER_CMD} <alias|none|list>`")
+        }
+        AdapterCommand::Base => {
+            *adapter = None;
+            info!("Using the base model.");
+        }
+        AdapterCommand::List => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.is_empty() => println!("No LoRA adapters are loaded."),
+            Ok(adapters) => {
+                println!("Loaded LoRA adapters:");
+                for loaded in adapters {
+                    let selected = adapter.as_deref() == Some(loaded.alias.as_str());
+                    let marker = if selected { " (selected)" } else { "" };
+                    println!("- {}{marker}", loaded.alias);
+                }
+            }
+            Err(error) => println!("Error: {error}"),
+        },
+        AdapterCommand::Select(alias) => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.iter().any(|loaded| loaded.alias == alias) => {
+                *adapter = Some(alias.to_string());
+                info!("Using LoRA adapter `{alias}`.");
+            }
+            Ok(_) => println!("Error: LoRA adapter alias `{alias}` is not loaded"),
+            Err(error) => println!("Error: {error}"),
+        },
+    }
+    true
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum AdapterCommand<'a> {
+    Invalid,
+    Base,
+    List,
+    Select(&'a str),
+}
+
+fn parse_adapter_command(prompt: &str) -> Option<AdapterCommand<'_>> {
+    let argument = if prompt == ADAPTER_CMD {
+        ""
+    } else {
+        prompt.strip_prefix("/adapter ")?.trim()
+    };
+    Some(match argument {
+        "" => AdapterCommand::Invalid,
+        "none" => AdapterCommand::Base,
+        "list" => AdapterCommand::List,
+        argument => match argument.strip_prefix("use ").map(str::trim) {
+            Some("") => AdapterCommand::Invalid,
+            Some(alias) => AdapterCommand::Select(alias),
+            None => AdapterCommand::Select(argument),
+        },
+    })
+}
+
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    agent_permission: AgentPermission,
+    config: InteractiveConfig,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        mut adapter,
+    } = config;
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
-    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     let mut sampling_params = interactive_sample_parameters(&mistralrs);
 
@@ -711,13 +895,19 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, adapter.as_deref()),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
             continue;
         }
         if handle_sampling_command(prompt_trimmed, &mut sampling_params) {
+            continue;
+        }
+        if handle_adapter_command(&mistralrs, prompt_trimmed, &mut adapter).await {
             continue;
         }
         match prompt_trimmed {
@@ -785,6 +975,8 @@ async fn text_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
@@ -792,16 +984,18 @@ async fn text_interactive_mode(
                 .clone()
                 .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
-            session_id: if do_code_exec {
-                Some(code_exec_session_id.clone())
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
             } else {
                 None
             },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: adapter.clone().map(AdapterSelection::alias),
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -819,7 +1013,7 @@ async fn text_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
@@ -945,6 +1139,13 @@ fn print_agentic_progress(
                 } => {
                     println!("│ query: {query}");
                 }
+                AgenticToolCallData::Shell { commands, .. } => {
+                    for command in commands {
+                        for line in command.lines() {
+                            println!("│ {line}");
+                        }
+                    }
+                }
                 AgenticToolCallData::Custom { arguments, .. } if !arguments.is_empty() => {
                     println!("│ {arguments}");
                 }
@@ -1040,6 +1241,51 @@ fn print_agentic_progress(
                         }
                     }
                 }
+                AgenticToolCallData::Shell {
+                    stdout,
+                    stderr,
+                    exit_code,
+                    status,
+                    working_directory,
+                    timed_out,
+                    ..
+                } => {
+                    let status = status.as_deref().unwrap_or("result");
+                    let divider = format!("├─ {status} ");
+                    let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
+                    println!("{divider}{}", "─".repeat(pad));
+                    if let Some(dir) = working_directory {
+                        println!("│ workdir: {dir}");
+                    }
+                    if let Some(code) = exit_code {
+                        println!("│ exit: {code}");
+                    }
+                    if matches!(timed_out, Some(true)) {
+                        println!("│ timed out");
+                    }
+                    println!("│ stdout:");
+                    match stdout {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                    println!("│ stderr:");
+                    match stderr {
+                        Some(s) if !s.trim().is_empty() => {
+                            for line in s.trim().lines() {
+                                println!("│   {line}");
+                            }
+                        }
+                        _ => {
+                            println!("│   {GRAY}<none>{RESET}");
+                        }
+                    }
+                }
                 AgenticToolCallData::Custom { content, .. } if !content.is_empty() => {
                     let divider = "├─ result ".to_string();
                     let pad = AGENTIC_PANEL_WIDTH.saturating_sub(divider.len());
@@ -1083,6 +1329,26 @@ pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCall
         println!("{divider}{}", "─".repeat(pad));
         println!("│ session: {}", approval.session_id);
         println!("│ tool: {}", approval.tool.label);
+        if matches!(approval.tool.kind, AgentToolKind::Shell) {
+            if let Some(commands) = approval
+                .arguments
+                .get("commands")
+                .and_then(|v| v.as_array())
+            {
+                let commands = commands
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>();
+                if !commands.is_empty() {
+                    println!("│ commands:");
+                    for command in commands {
+                        for line in command.lines() {
+                            println!("│   {line}");
+                        }
+                    }
+                }
+            }
+        }
         if let Some(outputs) = approval.arguments.get("outputs").and_then(|v| v.as_array()) {
             let outputs = outputs
                 .iter()
@@ -1123,6 +1389,7 @@ async fn stream_assistant_response(
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
+    let mut denoising_progress = DenoisingProgress::new();
 
     const GRAY: &str = "\x1b[90m";
     const RESET: &str = "\x1b[0m";
@@ -1131,6 +1398,7 @@ async fn stream_assistant_response(
     while let Some(resp) = rx.recv().await {
         match resp {
             Response::Chunk(chunk) => {
+                denoising_progress.clear();
                 last_usage = chunk.usage.clone();
                 let choice = &chunk.choices[0];
 
@@ -1171,21 +1439,37 @@ async fn stream_assistant_response(
                 tool_name,
                 phase,
             } => {
+                denoising_progress.clear();
                 let complete = matches!(phase, mistralrs_core::AgenticToolCallPhase::Complete(_));
                 print_agentic_progress(&tool_name, &phase, &pending_agentic_files);
                 if complete {
                     pending_agentic_files.clear();
                 }
             }
+            Response::BlockDenoisingProgress(progress) => {
+                if progress.index != 0 {
+                    denoising_progress.clear();
+                    continue;
+                }
+
+                denoising_progress.render(&progress);
+            }
             Response::File(file) => {
                 pending_agentic_files.push(file);
             }
             Response::AgenticToolApprovalRequired { .. } => continue,
-            Response::InternalError(e) => return Err(format!("Got an internal error: {e:?}")),
+            Response::InternalError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got an internal error: {e:?}"));
+            }
             Response::ModelError(e, resp) => {
+                denoising_progress.clear();
                 return Err(format!("Got a model error: {e:?}, response: {resp:?}"));
             }
-            Response::ValidationError(e) => return Err(format!("Got a validation error: {e:?}")),
+            Response::ValidationError(e) => {
+                denoising_progress.clear();
+                return Err(format!("Got a validation error: {e:?}"));
+            }
             Response::Done(_) => unreachable!(),
             Response::CompletionDone(_) => unreachable!(),
             Response::CompletionModelError(_, _) => unreachable!(),
@@ -1196,6 +1480,7 @@ async fn stream_assistant_response(
             Response::Embeddings { .. } => unreachable!(),
         }
     }
+    denoising_progress.clear();
 
     Ok((assistant_output, first_token_duration, last_usage))
 }
@@ -1204,11 +1489,12 @@ async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    do_shell: bool,
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
 ) {
-    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
     let image_regex = Regex::new(IMAGE_REGEX).unwrap();
@@ -1253,7 +1539,10 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1436,6 +1725,8 @@ async fn multimodal_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
@@ -1443,16 +1734,18 @@ async fn multimodal_interactive_mode(
                 .clone()
                 .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
-            session_id: if do_code_exec {
-                Some(code_exec_session_id.clone())
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
             } else {
                 None
             },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
         sender.send(req).await.unwrap();
         let start_ttft = Instant::now();
@@ -1470,7 +1763,7 @@ async fn multimodal_interactive_mode(
             println!();
             println!("Stats:");
             if let Some(ttft) = first_token_duration {
-                println!("Time to first token: {:.2?}s", ttft.as_secs_f32());
+                println!("CLI time to first token: {:.2?}s", ttft.as_secs_f32());
             }
             println!(
                 "Prompt: {} tokens, {:.2} T/s",
@@ -1515,6 +1808,7 @@ async fn audio_interactive_mode(
     _mistralrs: Arc<MistralRs>,
     _do_search: bool,
     _do_code_exec: bool,
+    _do_shell: bool,
     _agent_permission: AgentPermission,
     _agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     _enable_thinking: Option<bool>,
@@ -1526,11 +1820,12 @@ async fn diffusion_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    do_shell: bool,
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
-    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     let diffusion_params = DiffusionGenerationParams::default();
 
@@ -1553,7 +1848,10 @@ async fn diffusion_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1595,6 +1893,8 @@ async fn diffusion_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
@@ -1602,16 +1902,18 @@ async fn diffusion_interactive_mode(
                 .clone()
                 .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
-            session_id: if do_code_exec {
-                Some(code_exec_session_id.clone())
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
             } else {
                 None
             },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
@@ -1641,11 +1943,12 @@ async fn speech_interactive_mode(
     mistralrs: Arc<MistralRs>,
     do_search: bool,
     do_code_exec: bool,
+    do_shell: bool,
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
 ) {
     let sender = mistralrs.get_sender(None).unwrap();
-    let code_exec_session_id = uuid::Uuid::new_v4().to_string();
+    let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     info!("Starting interactive loop for speech");
     println!(
@@ -1668,7 +1971,10 @@ async fn speech_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1707,6 +2013,8 @@ async fn speech_interactive_mode(
             return_raw_logits: false,
             web_search_options: do_search.then(WebSearchOptions::default),
             enable_code_execution: do_code_exec,
+            enable_shell: do_shell,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: Some(agent_permission),
@@ -1714,16 +2022,18 @@ async fn speech_interactive_mode(
                 .clone()
                 .map(mistralrs_core::AgentToolApprovalHandler::from_sync),
             agent_approval_notifier: None,
-            session_id: if do_code_exec {
-                Some(code_exec_session_id.clone())
+            session_id: if do_code_exec || do_shell {
+                Some(tool_session_id.clone())
             } else {
                 None
             },
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
+            input_files: Vec::new(),
         }));
 
         let start = Instant::now();
@@ -1765,5 +2075,21 @@ mod tests {
         let (urls, text) = parse_files_and_message(input, &regex);
         assert_eq!(urls, vec!["https://example.com/test.png"]);
         assert_eq!(text, "Look at this .");
+    }
+
+    #[test]
+    fn adapter_command_can_select_reserved_aliases() {
+        assert_eq!(
+            parse_adapter_command("/adapter use none"),
+            Some(AdapterCommand::Select("none"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter use list"),
+            Some(AdapterCommand::Select("list"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter none"),
+            Some(AdapterCommand::Base)
+        );
     }
 }

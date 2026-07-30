@@ -13,7 +13,7 @@
 // online softmax as: new_max = max(m, sink_h), rescale accumulators,
 // l += exp(sink_h - new_max).
 
-#include "bf16.metal"
+#include "utils.metal"
 
 // ============================================================================
 // Decode: sdpa_vector_with_sinks

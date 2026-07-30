@@ -50,14 +50,20 @@ pub struct DeviceInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BuildInfo {
+    pub version: String,
     pub cuda: bool,
     pub metal: bool,
     pub cudnn: bool,
     pub flash_attn: bool,
     pub flash_attn_v3: bool,
+    pub cutile: bool,
     pub accelerate: bool,
     pub mkl: bool,
     pub git_revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_toolkit_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cuda_toolkit_version_code: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,14 +117,19 @@ pub struct DoctorReport {
 
 fn build_info() -> BuildInfo {
     BuildInfo {
+        version: crate::MISTRALRS_VERSION.to_string(),
         cuda: cfg!(feature = "cuda"),
         metal: cfg!(feature = "metal"),
         cudnn: cfg!(feature = "cudnn"),
         flash_attn: cfg!(feature = "flash-attn"),
         flash_attn_v3: cfg!(feature = "flash-attn-v3"),
+        cutile: cfg!(feature = "cutile"),
         accelerate: cfg!(feature = "accelerate"),
         mkl: cfg!(feature = "mkl"),
         git_revision: crate::MISTRALRS_GIT_REVISION.to_string(),
+        cuda_toolkit_version: option_env!("MISTRALRS_BUILD_CUDA_VERSION").map(str::to_string),
+        cuda_toolkit_version_code: option_env!("MISTRALRS_BUILD_CUDA_VERSION_CODE")
+            .and_then(|s| s.parse().ok()),
     }
 }
 
@@ -367,6 +378,33 @@ fn disk_usage_for(path: &Path) -> Option<(u64, u64)> {
     best.map(|(_, avail, total)| (avail, total))
 }
 
+#[cfg(feature = "cuda")]
+fn cuda_driver_version_code() -> Option<u32> {
+    let output = std::process::Command::new("nvidia-smi").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    parse_cuda_driver_version_code(&stdout)
+}
+
+#[cfg(feature = "cuda")]
+fn parse_cuda_driver_version_code(output: &str) -> Option<u32> {
+    let version = output.split("CUDA Version:").nth(1)?.trim_start();
+    let version = version
+        .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .next()?;
+    let mut parts = version.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts.next().unwrap_or("0").parse().ok()?;
+    Some(major * 100 + minor)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_version_code_to_string(code: u32) -> String {
+    format!("{}.{}", code / 100, code % 100)
+}
+
 pub fn run_doctor() -> DoctorReport {
     let system = collect_system_info();
     let mut checks = Vec::new();
@@ -456,6 +494,67 @@ pub fn run_doctor() -> DoctorReport {
         }
     }
 
+    #[cfg(feature = "cuda")]
+    {
+        let has_cuda_device = system.devices.iter().any(|d| d.kind == "cuda");
+        if system.build.cuda && has_cuda_device {
+            match (
+                system.build.cuda_toolkit_version_code,
+                cuda_driver_version_code(),
+            ) {
+                (Some(build_code), Some(driver_code)) if build_code > driver_code => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Error,
+                        message: format!(
+                            "CUDA binary was built with CUDA {}, but the NVIDIA driver supports CUDA {}.",
+                            cuda_version_code_to_string(build_code),
+                            cuda_version_code_to_string(driver_code),
+                        ),
+                        suggestion: Some(
+                            "Install a matching prebuilt, rebuild with a CUDA toolkit no newer than the driver supports, or upgrade the NVIDIA driver."
+                                .to_string(),
+                        ),
+                    });
+                }
+                (Some(build_code), Some(driver_code)) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Ok,
+                        message: format!(
+                            "CUDA build/driver compatibility: build CUDA {}, driver supports CUDA {}.",
+                            cuda_version_code_to_string(build_code),
+                            cuda_version_code_to_string(driver_code),
+                        ),
+                        suggestion: None,
+                    });
+                }
+                (None, _) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Warn,
+                        message: "CUDA build toolkit version is unknown.".to_string(),
+                        suggestion: Some(
+                            "Rebuild with the current release so doctor can verify driver compatibility."
+                                .to_string(),
+                        ),
+                    });
+                }
+                (_, None) => {
+                    checks.push(DoctorCheck {
+                        name: "cuda_build_driver_compatibility".to_string(),
+                        status: DoctorStatus::Warn,
+                        message: "NVIDIA driver CUDA compatibility version could not be detected."
+                            .to_string(),
+                        suggestion: Some(
+                            "Check that nvidia-smi is available and working.".to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Unified memory detection
     for dev in system
         .devices
@@ -532,6 +631,47 @@ pub fn run_doctor() -> DoctorReport {
                     });
                 }
             }
+        }
+    }
+
+    #[cfg(feature = "cutile")]
+    {
+        for dev in system.devices.iter().filter(|d| d.kind == "cuda") {
+            let Some(ord) = dev.ordinal else {
+                continue;
+            };
+            let Ok(device) = Device::new_cuda(ord) else {
+                continue;
+            };
+            let Ok(cuda) = device.as_cuda_device() else {
+                continue;
+            };
+            let (status, message, suggestion) = if !mistralrs_quant::cutile::device_supported(cuda)
+            {
+                (
+                    DoctorStatus::Warn,
+                    format!("GPU {ord}: cuTile is compiled in but this CUDA/SM pair is unsupported."),
+                    Some("Use a supported release artifact or rebuild with the required CUDA toolkit.".to_string()),
+                )
+            } else if mistralrs_quant::cutile::jit_available(cuda) {
+                (
+                    DoctorStatus::Ok,
+                    format!("GPU {ord}: cuTile runtime tooling and tileiras target are ready."),
+                    None,
+                )
+            } else {
+                (
+                    DoctorStatus::Warn,
+                    format!("GPU {ord}: cuTile runtime tooling is unavailable; native CUDA and CUTLASS fallbacks remain active."),
+                    Some("Install NVIDIA tileiras and put it on PATH or set CUTILE_TILEIRAS_PATH.".to_string()),
+                )
+            };
+            checks.push(DoctorCheck {
+                name: format!("cuda_{ord}_cutile_jit"),
+                status,
+                message,
+                suggestion,
+            });
         }
     }
 

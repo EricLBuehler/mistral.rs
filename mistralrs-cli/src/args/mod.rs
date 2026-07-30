@@ -102,6 +102,10 @@ pub enum Command {
         /// Can be specified multiple times: --audio audio1.wav --audio audio2.mp3
         #[arg(long, requires = "input")]
         audio: Vec<String>,
+
+        /// LoRA adapter alias to use for requests. Omit to run the base model.
+        #[arg(long)]
+        adapter: Option<String>,
     },
 
     /// Generate shell completions
@@ -121,6 +125,12 @@ pub enum Command {
         default_quantize: QuantizeDefaultOptions,
     },
 
+    /// Inspect, report, or verify UQFF artifacts
+    Uqff {
+        #[command(subcommand)]
+        command: UqffCommand,
+    },
+
     /// Run system diagnostics and environment checks
     Doctor {
         /// Output JSON instead of human-readable text
@@ -130,7 +140,8 @@ pub enum Command {
 
     /// Recommend quantization + device mapping for a model.
     /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
-    /// the recommendation toward a specific quantization target.
+    /// the recommendation toward a specific quantization target. Adapter options
+    /// are rejected because adapter memory is not included in the estimate.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -165,7 +176,7 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks for plain model generation.
+    /// Run performance benchmarks for base or LoRA model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -177,19 +188,27 @@ pub enum Command {
         #[command(flatten)]
         runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt
-        #[arg(long, default_value = "512")]
-        prompt_len: usize,
+        /// LoRA adapter alias to benchmark. Omit to benchmark the base model.
+        #[arg(long)]
+        adapter: Option<String>,
 
-        /// Number of tokens to generate
+        /// Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "512")]
+        prompt_len: Vec<usize>,
+
+        /// Output tokens per decode request. Values below 2 skip decode metrics.
         #[arg(long, default_value = "128")]
         gen_len: usize,
+
+        /// Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps.
+        #[arg(long, value_delimiter = ',', default_value = "4")]
+        depth: Vec<usize>,
 
         /// Number of benchmark iterations
         #[arg(long, default_value = "3")]
         iterations: usize,
 
-        /// Number of warmup runs (discarded)
+        /// Number of warmup runs per benchmark case (discarded)
         #[arg(long, default_value = "1")]
         warmup: usize,
     },
@@ -200,6 +219,20 @@ pub enum Command {
         /// Path to configuration file (.toml)
         #[arg(short, long)]
         file: PathBuf,
+    },
+
+    /// Update or migrate an install using the installer
+    Update {
+        /// Install a specific release tag instead of the latest (e.g. v0.9.0)
+        #[arg(long)]
+        tag: Option<String>,
+    },
+
+    /// Remove an installer-managed install
+    Uninstall {
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 
@@ -214,6 +247,82 @@ pub enum CacheCommand {
         /// Model ID (e.g., "Qwen/Qwen3-4B")
         #[arg(short = 'm', long)]
         model_id: String,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum UqffCommand {
+    /// Print or write a UQFF report
+    Report {
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
+
+        /// Write uqff_report.json beside the artifacts
+        #[arg(long)]
+        write: bool,
+
+        /// Print JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Base model ID to include in a written report
+        #[arg(long)]
+        base_model: Option<String>,
+
+        /// Hugging Face repo ID to include in a written report
+        #[arg(long)]
+        repo_id: Option<String>,
+    },
+
+    /// Validate UQFF artifact structure
+    Verify {
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
+
+        /// Print JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Fail on missing report/producer metadata or fallback layers
+        #[arg(long)]
+        strict: bool,
+
+        /// Allow same-major UQFF files with a newer minor version
+        #[arg(long)]
+        allow_newer_minor: bool,
+    },
+
+    /// Open a UQFF-aware tensor explorer
+    Inspect {
+        /// Hugging Face model ID or local path containing UQFF files
+        #[arg(short = 'm', long)]
+        model_id: String,
+
+        /// Quant group to inspect, such as 3, q3k, afq3, or all
+        #[arg(long)]
+        quant: Option<String>,
+
+        /// Hugging Face revision to use
+        #[arg(long)]
+        revision: Option<String>,
     },
 }
 
@@ -356,7 +465,7 @@ pub enum ModelType {
         #[command(flatten)]
         format: FormatOptions,
 
-        #[command(flatten)]
+        #[arg(skip)]
         adapter: AdapterOptions,
 
         #[command(flatten)]
@@ -472,6 +581,16 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
+    /// MTP assistant model id or path.
+    #[arg(long)]
+    #[serde(default)]
+    pub mtp_model: Option<String>,
+
+    /// Number of MTP draft tokens to propose per target step.
+    #[arg(long)]
+    #[serde(default)]
+    pub mtp_n_predict: Option<usize>,
+
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
     #[serde(default)]
@@ -497,6 +616,11 @@ pub struct RuntimeOptions {
     #[cfg(feature = "code-execution")]
     #[arg(skip)]
     #[serde(default)]
+    pub enable_shell: bool,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
     pub code_exec_python: Option<PathBuf>,
 
     #[cfg(feature = "code-execution")]
@@ -509,6 +633,26 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub code_exec_workdir: Option<PathBuf>,
 
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_path: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_timeout: Option<u64>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub shell_workdir: Option<PathBuf>,
+
+    #[cfg(feature = "code-execution")]
+    #[arg(skip)]
+    #[serde(default)]
+    pub skills_dir: Option<PathBuf>,
+
     #[arg(skip)]
     #[serde(default, rename = "agent_permission", alias = "code_exec_permission")]
     pub code_exec_permission: CodeExecPermissionArg,
@@ -516,9 +660,9 @@ pub struct RuntimeOptions {
 
 #[derive(clap::Args, Clone, Default)]
 pub struct AgentCliOptions {
-    /// Build a local agent: enables web search and Python code execution, runs the agentic
+    /// Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic
     /// tool loop with a per-session temp workdir. Equivalent to passing
-    /// `--enable-search --enable-code-execution` together.
+    /// `--enable-search --enable-code-execution --enable-shell` together.
     #[arg(long, alias = "agentic")]
     pub agent: bool,
 
@@ -535,13 +679,18 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub enable_code_execution: bool,
 
+    /// Enable shell execution tool (WARNING: allows arbitrary command execution)
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub enable_shell: bool,
+
     /// Python interpreter path for code execution. Requires code execution to be on
     /// (via `--enable-code-execution` or `--agent`). Defaults to `python3`.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub code_exec_python: Option<PathBuf>,
 
-    /// Code execution timeout in seconds (default: 30). Requires code execution to be on.
+    /// Code execution timeout in seconds (default: 60). Requires code execution to be on.
     #[cfg(feature = "code-execution")]
     #[arg(long)]
     pub code_exec_timeout: Option<u64>,
@@ -552,8 +701,28 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub code_exec_workdir: Option<PathBuf>,
 
+    /// Shell executable path. Requires shell execution to be on. Defaults to /bin/sh.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_path: Option<PathBuf>,
+
+    /// Shell execution timeout in seconds (default: 600). Requires shell execution to be on.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_timeout: Option<u64>,
+
+    /// Root directory for per-session shell working directories. Defaults to temp dirs.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub shell_workdir: Option<PathBuf>,
+
+    /// Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory.
+    #[cfg(feature = "code-execution")]
+    #[arg(long)]
+    pub skills_dir: Option<PathBuf>,
+
     /// Agent action permission mode.
-    #[arg(long = "agent-permission", alias = "code-exec-permission", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
+    #[arg(long = "agent-permission", alias = "code-exec-permission", value_name = "PERMISSION", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
     pub code_exec_permission: CodeExecPermissionArg,
 }
 
@@ -565,9 +734,14 @@ impl AgentCliOptions {
         #[cfg(feature = "code-execution")]
         {
             runtime.enable_code_execution = self.enable_code_execution;
+            runtime.enable_shell = self.enable_shell;
             runtime.code_exec_python = self.code_exec_python;
             runtime.code_exec_timeout = self.code_exec_timeout;
             runtime.code_exec_workdir = self.code_exec_workdir;
+            runtime.shell_path = self.shell_path;
+            runtime.shell_timeout = self.shell_timeout;
+            runtime.shell_workdir = self.shell_workdir;
+            runtime.skills_dir = self.skills_dir;
         }
         runtime.code_exec_permission = self.code_exec_permission;
     }
@@ -586,6 +760,14 @@ pub struct BenchRuntimeOptions {
     /// MatFormer slice to load (must match a slice name in the config file).
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
+
+    /// MTP assistant model id or path.
+    #[arg(long)]
+    pub mtp_model: Option<String>,
+
+    /// Number of MTP draft tokens to propose per target step.
+    #[arg(long)]
+    pub mtp_n_predict: Option<usize>,
 }
 
 impl BenchRuntimeOptions {
@@ -594,6 +776,15 @@ impl BenchRuntimeOptions {
             config_path: self.matformer_config_path.clone(),
             slice_name: self.matformer_slice_name.clone(),
         }
+    }
+
+    pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        self.mtp_model
+            .clone()
+            .map(|model| mistralrs_core::MtpConfig {
+                model,
+                n_predict: self.mtp_n_predict,
+            })
     }
 }
 
@@ -635,6 +826,15 @@ impl RuntimeOptions {
             config_path: self.matformer_config_path.clone(),
             slice_name: self.matformer_slice_name.clone(),
         }
+    }
+
+    pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        self.mtp_model
+            .clone()
+            .map(|model| mistralrs_core::MtpConfig {
+                model,
+                n_predict: self.mtp_n_predict,
+            })
     }
 }
 
@@ -699,6 +899,8 @@ impl Default for RuntimeOptions {
             jinja_explicit: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            mtp_model: None,
+            mtp_n_predict: None,
             mcp_config: None,
             agent: false,
             enable_search: false,
@@ -706,11 +908,21 @@ impl Default for RuntimeOptions {
             #[cfg(feature = "code-execution")]
             enable_code_execution: false,
             #[cfg(feature = "code-execution")]
+            enable_shell: false,
+            #[cfg(feature = "code-execution")]
             code_exec_python: None,
             #[cfg(feature = "code-execution")]
             code_exec_timeout: None,
             #[cfg(feature = "code-execution")]
             code_exec_workdir: None,
+            #[cfg(feature = "code-execution")]
+            shell_path: None,
+            #[cfg(feature = "code-execution")]
+            shell_timeout: None,
+            #[cfg(feature = "code-execution")]
+            shell_workdir: None,
+            #[cfg(feature = "code-execution")]
+            skills_dir: None,
             code_exec_permission: CodeExecPermissionArg::Auto,
         }
     }
@@ -730,4 +942,122 @@ fn default_max_seqs() -> usize {
 
 fn default_prefix_cache_n() -> usize {
     16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_parses_explicit_lora_preloads_and_request_selection() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--enable-lora",
+            "--lora",
+            "code=org/code-lora",
+            "--lora",
+            "math=./math-lora",
+            "--adapter",
+            "code",
+        ])
+        .unwrap();
+
+        let Command::Run {
+            default_model,
+            adapter,
+            ..
+        } = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(adapter.as_deref(), Some("code"));
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.adapter.lora.len(), 2);
+        assert_eq!(default_model.adapter.lora[1].alias, "math");
+    }
+
+    #[test]
+    fn auto_lora_parses_multimodal_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "Qwen/Qwen3.6-35B-A3B",
+            "--enable-lora",
+            "--max-edge",
+            "2048",
+            "--max-num-images",
+            "5",
+            "--max-image-length",
+            "1536",
+        ])
+        .unwrap();
+
+        let Command::Serve { default_model, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.multimodal.max_edge, Some(2048));
+        assert_eq!(default_model.multimodal.max_num_images, Some(5));
+        assert_eq!(default_model.multimodal.max_image_length, Some(1536));
+    }
+
+    #[test]
+    fn lora_preload_requires_an_explicit_alias() {
+        let result = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--lora",
+            "org/code-lora",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("expected an invalid LoRA preload"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("expected ALIAS=SOURCE"));
+    }
+
+    #[test]
+    fn legacy_raw_lora_does_not_conflict_with_default_runtime_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/raw-model",
+            "--format",
+            "gguf",
+            "-f",
+            "model.gguf",
+            "--legacy-lora",
+            "org/legacy-lora",
+            "--legacy-lora-order",
+            "order.json",
+        ]);
+        if let Err(error) = cli {
+            panic!("{error}");
+        }
+    }
+
+    #[test]
+    fn explicit_multimodal_does_not_advertise_lora_options() {
+        let result = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "multimodal",
+            "-m",
+            "org/vision-model",
+            "--lora",
+            "code=org/code-lora",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("expected explicit multimodal LoRA options to be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unexpected argument '--lora'"));
+    }
 }

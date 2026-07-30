@@ -4,6 +4,15 @@ description: "Request dataclasses passed to Runner methods."
 sidebar:
   order: 4
 ---
+## `LoraAdapterGeneration`
+
+Select one exact immutable LoRA adapter generation by its 64-character ID.
+
+| Field | Type |
+| --- | --- |
+| `generation` | `str` |
+
+
 ## `ChatCompletionRequest`
 
 A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -14,13 +23,13 @@ The messages type is as follows: (for normal chat completion, for chat completio
 Agent permission fields:
 
 - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
-  agent actions such as code execution, web search, file tools, callbacks,
+  agent actions such as code execution, shell, web search, file tools, callbacks,
   and external tool dispatch.
 - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
-See [agent permissions](/mistral.rs/guides/agents/agentic-runtime/#agent-permissions)
+See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
 for the shared CLI, HTTP, Python, and Rust behavior.
 
 | Field | Type | Default |
@@ -56,11 +65,15 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `max_tool_rounds` | `int \| None` | `None` |
 | `tool_dispatch_url` | `str \| None` | `None` |
 | `enable_code_execution` | `bool` | `False` |
+| `enable_shell` | `bool` | `False` |
+| `shell_skills` | `list[ShellSkillMount] \| None` | `None` |
 | `agent_permission` | `AgentPermission \| None` | `None` |
 | `agent_approval_callback` | `Callable[[AgentToolApproval], bool \| AgentToolApprovalDecision] \| None` | `None` |
 | `code_execution_permission` | `CodeExecutionPermission \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
+| `input_files` | `list[InputFile] \| None` | `None` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`
@@ -95,6 +108,7 @@ about input data, sampling, and how to return the response.
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `EmbeddingRequest`

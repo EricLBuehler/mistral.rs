@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_nn::Module;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -13,9 +13,8 @@ use crate::{
     layers::{self, Activation, F32RmsNorm, Qwen3VLRotaryEmbedding, RmsNorm, Sdpa},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -70,10 +69,10 @@ impl Mlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let original_dtype = xs.dtype();
         let xs = xs.clone();
-        let lhs = self.gate_proj.forward(&xs)?.apply(&self.act_fn)?;
+        let lhs = self.gate_proj.forward(&xs)?;
         let rhs = self.up_proj.forward(&xs)?;
         self.down_proj
-            .forward(&(lhs * rhs)?)?
+            .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act_fn)?)?
             .to_dtype(original_dtype)
     }
 }
@@ -120,7 +119,7 @@ impl Attention {
             cfg.num_key_value_heads,
             cfg.hidden_size / cfg.num_attention_heads,
             comm,
-        );
+        )?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             hidden_sz,
             num_kv_heads * cfg.head_dim,
@@ -174,7 +173,7 @@ impl Attention {
                     cfg.num_key_value_heads,
                     cfg.num_attention_heads,
                     comm,
-                ),
+                )?,
                 softcap: None,
                 softmax_scale: 1.0 / (cfg.head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -195,9 +194,8 @@ impl Attention {
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
-        let mut q = self.q_proj.forward(xs)?;
-        let mut k = self.k_proj.forward(xs)?;
-        let mut v = self.v_proj.forward(xs)?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(xs, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         (q, k, v) = if q_len != 1 {
             let q = q
                 .reshape((b_sz, q_len, self.num_heads, self.head_dim))?
@@ -216,10 +214,15 @@ impl Attention {
             (q, k, v)
         };
 
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         let q = q.contiguous()?;
         let k = k.contiguous()?;
@@ -362,7 +365,7 @@ impl DecoderLayer {
 }
 
 pub struct Qwen3VLTextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: F32RmsNorm,
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -384,16 +387,20 @@ impl Qwen3VLTextModel {
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         // Support both HuggingFace naming (model.language_model.*) and MLX naming (language_model.model.*)
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
-        } else {
-            vb.pp("model").pp("language_model")
-        };
+        let vb_m =
+            if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+                vb.pp("language_model").pp("model")
+            } else {
+                vb.pp("model").pp("language_model")
+            };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -458,13 +465,7 @@ impl Qwen3VLTextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
@@ -495,7 +496,7 @@ impl Qwen3VLTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -504,9 +505,7 @@ impl Qwen3VLTextModel {
         mut xs: Tensor,
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
@@ -524,10 +523,8 @@ impl Qwen3VLTextModel {
                 &attention_mask.get(xs.device()),
                 &cos_sin,
                 &mut cache[i],
-                metadata
-                    .as_ref()
-                    .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                flash_params,
+                ctx.paged_layer(i),
+                ctx.flash_params(),
             )?;
 
             // Integrate DeepStack visual features when provided.
@@ -541,7 +538,7 @@ impl Qwen3VLTextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 
@@ -594,26 +591,6 @@ impl Qwen3VLTextModel {
 }
 
 impl IsqModel for Qwen3VLTextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            tensors.push((&mut layer.self_attn.q_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.k_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.v_proj, Some(i)));
-            tensors.push((&mut layer.self_attn.o_proj, Some(i)));
-            tensors.push((&mut layer.mlp.gate_proj, Some(i)));
-            tensors.push((&mut layer.mlp.up_proj, Some(i)));
-            tensors.push((&mut layer.mlp.down_proj, Some(i)));
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
 

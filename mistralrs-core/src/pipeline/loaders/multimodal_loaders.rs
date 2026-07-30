@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::borrow::Cow;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::{fmt::Debug, str::FromStr};
@@ -22,30 +23,33 @@ use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 use super::{DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata};
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
+use crate::block_diffusion::BlockDiffusionMixin;
 use crate::device_map::DeviceMapper;
 use crate::layers::Conv3dConfig;
 use crate::matformer::MatformerSliceConfig;
 use crate::paged_attention::{AttentionImplementation, ModelConfigLike, ModelConfigMetadata};
 use crate::pipeline::isq::IsqModelLoader;
 use crate::pipeline::loaders::AutoDeviceMapParams;
-use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    EitherCache, IsqModel, Modalities, MultimodalPromptPrefixer, Processor, ProcessorCreator,
-    SupportedModality,
+    EitherCache, IsqModel, Modalities, ModelForwardContext, MultimodalPromptPrefixer, Processor,
+    ProcessorCreator, SupportedModality,
 };
+use crate::speculative::SpeculativeTargetMixin;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::vision_models::clip::ClipConfig;
+use crate::vision_models::diffusion_gemma::{DiffusionGemmaConfig, DiffusionGemmaModel};
 use crate::vision_models::gemma3::config::Gemma3Config;
 use crate::vision_models::gemma3::{Gemma3Model, Gemma3Processor};
 use crate::vision_models::gemma3n::config::{Gemma3nConfig, IntermediateSize};
 use crate::vision_models::gemma3n::{Gemma3nModel, Gemma3nProcessor};
 use crate::vision_models::gemma4::config::Gemma4Config;
-use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor};
+use crate::vision_models::gemma4::{Gemma4Model, Gemma4Processor, Gemma4ProcessorSettings};
 use crate::vision_models::idefics2::{Config as Idefics2Config, Idefics2};
 use crate::vision_models::idefics2_input_processor::Idefics2Processor;
 use crate::vision_models::idefics3::{Idefics3Config, Idefics3Model, Idefics3Processor};
 use crate::vision_models::image_processor::ImagePreProcessor;
 use crate::vision_models::inputs_processor::Phi4MMProcessor;
+use crate::vision_models::lfm2_vl::{Config as Lfm2VlConfig, Lfm2VlModel, Lfm2VlProcessor};
 use crate::vision_models::llama4::{
     self, Llama4Config, Llama4ImageProcessor, Llama4Model, Llama4Processor,
 };
@@ -77,23 +81,36 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
-pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
+pub trait MultimodalModel:
+    IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin + BlockDiffusionMixin
+{
     // pixel_values and pixel_attention_mask only specified for prompt seqs
-    #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        position_ids: Vec<usize>,
         model_specific_args: Box<dyn Any>, // pixel attention mask, or image sizes, or anything else
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor>;
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        false
+    }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs_for_args(&self, _model_specific_args: &dyn Any) -> bool {
+        self.supports_cuda_decode_graphs()
+    }
+    fn requires_uniform_completion_batch(&self) -> bool {
+        self.is_block_diffusion()
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
+    fn supports_mixed_media_batches(&self) -> bool {
+        false
+    }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
-    fn cache_mut(&mut self) -> &mut EitherCache;
     fn max_seq_len(&self) -> usize;
     fn config(&self) -> &ModelConfigMetadata;
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
@@ -105,9 +122,10 @@ pub trait MultimodalModel: IsqModel + AnyMoeBaseModelMixin {
     fn encoder_cache_counters(&self) -> Option<(Arc<AtomicUsize>, Arc<AtomicUsize>)> {
         None
     }
-    /// Reset model-specific state (e.g. cached audio embeddings) between requests.
-    /// Called when the pipeline's non-granular state is reset.
     fn reset_model_specific_state(&self) {}
+    fn reset_model_specific_state_for_sequences(&self, _sequence_ids: &[usize]) {
+        self.reset_model_specific_state();
+    }
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
@@ -118,6 +136,18 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>>;
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        if let Some(max_model_len) = max_model_len {
+            anyhow::bail!(
+                "max_model_len={max_model_len} is not supported by this multimodal loader"
+            );
+        }
+        Ok(Cow::Borrowed(config))
+    }
     fn is_gptx(&self, config: &str) -> bool;
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
     fn get_processor(
@@ -177,7 +207,7 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
 }
 
 #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
 /// The architecture to load the multimodal model as.
 pub enum MultimodalLoaderType {
     #[serde(rename = "phi3v")]
@@ -188,6 +218,8 @@ pub enum MultimodalLoaderType {
     LLaVANext,
     #[serde(rename = "llava")]
     LLaVA,
+    #[serde(rename = "lfm2vl")]
+    Lfm2Vl,
     #[serde(rename = "vllama")]
     VLlama,
     #[serde(rename = "qwen2vl")]
@@ -220,6 +252,8 @@ pub enum MultimodalLoaderType {
     Voxtral,
     #[serde(rename = "gemma4")]
     Gemma4,
+    #[serde(rename = "diffusiongemma")]
+    DiffusionGemma,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -230,6 +264,7 @@ impl MultimodalLoaderType {
             "Idefics2ForConditionalGeneration" => Ok(Self::Idefics2),
             "LlavaNextForConditionalGeneration" => Ok(Self::LLaVANext),
             "LlavaForConditionalGeneration" => Ok(Self::LLaVA),
+            "Lfm2VlForConditionalGeneration" => Ok(Self::Lfm2Vl),
             "MllamaForConditionalGeneration" => Ok(Self::VLlama),
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
@@ -240,7 +275,11 @@ impl MultimodalLoaderType {
             "Mistral3ForConditionalGeneration" => Ok(Self::Mistral3),
             "Llama4ForConditionalGeneration" => Ok(Self::Llama4),
             "Gemma3nForConditionalGeneration" => Ok(Self::Gemma3n),
-            "Gemma4ForConditionalGeneration" => Ok(Self::Gemma4),
+            "Gemma4ForConditionalGeneration"
+            | "Gemma4ForCausalLM"
+            | "Gemma4UnifiedForConditionalGeneration"
+            | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
+            "DiffusionGemmaForBlockDiffusion" => Ok(Self::DiffusionGemma),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
             "Qwen3_5ForConditionalGeneration" => Ok(Self::Qwen3_5),
@@ -262,6 +301,7 @@ impl FromStr for MultimodalLoaderType {
             "idefics2" => Ok(Self::Idefics2),
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
+            "lfm2vl" | "lfm2_vl" => Ok(Self::Lfm2Vl),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
@@ -273,12 +313,13 @@ impl FromStr for MultimodalLoaderType {
             "llama4" => Ok(Self::Llama4),
             "gemma3n" => Ok(Self::Gemma3n),
             "gemma4" => Ok(Self::Gemma4),
+            "diffusiongemma" => Ok(Self::DiffusionGemma),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -290,6 +331,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Idefics2 => "idefics2",
             MultimodalLoaderType::LLaVANext => "llava_next",
             MultimodalLoaderType::LLaVA => "llava",
+            MultimodalLoaderType::Lfm2Vl => "lfm2vl",
             MultimodalLoaderType::VLlama => "vllama",
             MultimodalLoaderType::Qwen2VL => "qwen2vl",
             MultimodalLoaderType::Idefics3 => "idefics3",
@@ -306,6 +348,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
+            MultimodalLoaderType::DiffusionGemma => "diffusiongemma",
         };
         write!(f, "{name}")
     }
@@ -348,6 +391,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Idefics2 => Box::new(Idefics2Loader),
             MultimodalLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             MultimodalLoaderType::LLaVA => Box::new(LLaVALoader),
+            MultimodalLoaderType::Lfm2Vl => Box::new(Lfm2VlLoader),
             MultimodalLoaderType::VLlama => Box::new(VLlamaLoader),
             MultimodalLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             MultimodalLoaderType::Idefics3 => Box::new(Idefics3Loader),
@@ -364,6 +408,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
+            MultimodalLoaderType::DiffusionGemma => Box::new(DiffusionGemmaLoader),
         })
     }
 }
@@ -377,6 +422,14 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
         Self::get_loader(config)?.load(config, vb, normal_loading_metadata, attention_mechanism)
+    }
+
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        Self::get_loader(config)?.runtime_config(config, max_model_len)
     }
 
     fn is_gptx(&self, config: &str) -> bool {
@@ -442,6 +495,10 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
 }
 
 impl IsqModelLoader for AutoMultimodalLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.promoted_isq_predicates(config)
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.isq_layer_regexes(config)
     }
@@ -476,12 +533,14 @@ impl DeviceMappedModelLoader for AutoMultimodalLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_size_in_bytes(
             config,
             dtype,
             weight_pack_factor,
+            quantization,
             _matformer_config,
         )
     }
@@ -633,6 +692,13 @@ impl MultimodalModelLoader for Phi3VLoader {
 }
 
 impl IsqModelLoader for Phi3VLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -717,14 +783,23 @@ impl DeviceMappedModelLoader for Phi3VLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Phi3Config = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -913,6 +988,13 @@ impl MultimodalModelLoader for Idefics2Loader {
 }
 
 impl IsqModelLoader for Idefics2Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.text_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1011,6 +1093,7 @@ impl DeviceMappedModelLoader for Idefics2Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Idefics2Config = serde_json::from_str(config)?;
@@ -1018,9 +1101,18 @@ impl DeviceMappedModelLoader for Idefics2Loader {
             let tie_word_embeddings = cfg.tie_word_embeddings;
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tie_word_embeddings {
-                cfg.hidden_size * cfg.vocab_size
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -1259,6 +1351,13 @@ impl MultimodalModelLoader for LLaVANextLoader {
 }
 
 impl IsqModelLoader for LLaVANextLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1365,13 +1464,26 @@ impl DeviceMappedModelLoader for LLaVANextLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "language_model.model.embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let lm_head_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "language_model.lm_head.weight",
+                dtype,
+                1,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -1529,6 +1641,13 @@ impl MultimodalModelLoader for LLaVALoader {
 }
 
 impl IsqModelLoader for LLaVALoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -1627,13 +1746,26 @@ impl DeviceMappedModelLoader for LLaVALoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: LLaVAConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "language_model.model.embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let lm_head_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "language_model.lm_head.weight",
+                dtype,
+                1,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -1777,7 +1909,7 @@ impl MultimodalModelLoader for VLlamaLoader {
         true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+        false
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VLlamaPrefixer)
@@ -1791,6 +1923,13 @@ impl MultimodalModelLoader for VLlamaLoader {
 }
 
 impl IsqModelLoader for VLlamaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, config: &str) -> Result<Vec<Regex>> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let cross_attn_layers = &config.text_config.cross_attention_layers;
@@ -1938,15 +2077,24 @@ impl DeviceMappedModelLoader for VLlamaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let config: MLlamaConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &config.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * (cfg.vocab_size + 8) / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -2169,7 +2317,7 @@ impl MultimodalModelLoader for Qwen2VLLoader {
         Arc::new(Qwen2VLProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2VLPrefixer)
@@ -2183,6 +2331,13 @@ impl MultimodalModelLoader for Qwen2VLLoader {
 }
 
 impl IsqModelLoader for Qwen2VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2280,14 +2435,26 @@ impl DeviceMappedModelLoader for Qwen2VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2VLConfig = serde_json::from_str(config)?;
         let text_elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -2483,6 +2650,13 @@ impl MultimodalModelLoader for Idefics3Loader {
 }
 
 impl IsqModelLoader for Idefics3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.text_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -2597,14 +2771,28 @@ impl DeviceMappedModelLoader for Idefics3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Idefics3Config = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if cfg.tie_word_embeddings {
+                0
+            } else {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+            };
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -2800,6 +2988,13 @@ impl MultimodalModelLoader for MiniCpmOLoader {
 }
 
 impl IsqModelLoader for MiniCpmOLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^llm\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^llm\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"llm.lm_head\.(weight|bias)$")?,
@@ -2887,14 +3082,28 @@ impl DeviceMappedModelLoader for MiniCpmOLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: MiniCpmOConfig = serde_json::from_str(config)?;
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "llm.model.embed_tokens.weight",
+                    "llm.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if cfg.tie_word_embeddings {
+                0
+            } else {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
+            };
             let norm = cfg.hidden_size;
             embed_tokens + lm_head + norm
         };
@@ -3098,6 +3307,13 @@ impl MultimodalModelLoader for Phi4MMLoader {
 }
 
 impl IsqModelLoader for Phi4MMLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3194,14 +3410,23 @@ impl DeviceMappedModelLoader for Phi4MMLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Phi4MMConfig = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -3413,7 +3638,7 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
         Arc::new(Qwen2_5VLProcessor::new(max_edge))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen2_5VLPrefixer)
@@ -3427,6 +3652,13 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
 }
 
 impl IsqModelLoader for Qwen2_5VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3520,14 +3752,26 @@ impl DeviceMappedModelLoader for Qwen2_5VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen2_5VLConfig = serde_json::from_str(config)?;
         let text_elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -3722,6 +3966,13 @@ impl MultimodalModelLoader for Gemma3Loader {
 }
 
 impl IsqModelLoader for Gemma3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(model|language_model\.model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^(lm_head|language_model\.lm_head)\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -3832,6 +4083,7 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3Config = serde_json::from_str(config)?;
@@ -3841,10 +4093,21 @@ impl DeviceMappedModelLoader for Gemma3Loader {
                 Gemma3Config::Text(cfg) => cfg,
                 Gemma3Config::WithVision { text_config, .. } => text_config,
             };
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "model.embed_tokens.weight",
+                        "language_model.model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight", "language_model.lm_head.weight"],
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -4057,6 +4320,13 @@ impl MultimodalModelLoader for Mistral3Loader {
 }
 
 impl IsqModelLoader for Mistral3Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4185,6 +4455,7 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Mistral3Config = serde_json::from_str(config)?;
@@ -4192,10 +4463,18 @@ impl DeviceMappedModelLoader for Mistral3Loader {
         let text_elems = {
             let cfg = &cfg.text_config;
 
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !cfg.tie_word_embeddings {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -4383,6 +4662,13 @@ impl MultimodalModelLoader for VLlama4Loader {
 }
 
 impl IsqModelLoader for VLlama4Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^language_model\.model\.embed_tokens\.weight$")?,
+            Regex::new(r"^language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -4553,15 +4839,25 @@ impl DeviceMappedModelLoader for VLlama4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Llama4Config = serde_json::from_str(config)?;
         let tcfg = &cfg.text_config;
 
         let text_elems = {
-            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / weight_pack_factor;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    tcfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = tcfg.hidden_size * tcfg.vocab_size / embed_tokens_pack_factor;
             let lm_head = if !tcfg.tie_word_embeddings {
-                tcfg.hidden_size * tcfg.vocab_size
+                tcfg.hidden_size * tcfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -4705,12 +5001,12 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
             hidden_size: cfg.hidden_size,
-            num_kv_heads: cfg.num_attention_heads,
+            num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
-            sliding_window: None,
+            sliding_window: Some(cfg.attention_chunk_size),
             k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
             v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::StandardNoFlashInfer,
         };
 
         Ok(Box::new(cfg))
@@ -4775,7 +5071,7 @@ impl MultimodalModelLoader for Gemma3nLoader {
         ))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
         true
@@ -4796,6 +5092,13 @@ impl MultimodalModelLoader for Gemma3nLoader {
 }
 
 impl IsqModelLoader for Gemma3nLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5058,6 +5361,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma3nConfig = serde_json::from_str(config)?;
@@ -5085,14 +5389,24 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
         // Text components that are not device-mapped
         let text_elems = {
             // Embeddings
-            let embed_tokens = text_cfg.hidden_size * text_cfg.vocab_size;
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    quantization,
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
+                    text_cfg.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens =
+                text_cfg.hidden_size * text_cfg.vocab_size / embed_tokens_pack_factor;
             let embed_tokens_per_layer = text_cfg.num_hidden_layers
                 * text_cfg.hidden_size_per_layer_input
                 * text_cfg.vocab_size_per_layer_input;
 
             // LM head (if not tied)
-            let lm_head = if !text_cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                text_cfg.hidden_size * text_cfg.vocab_size / weight_pack_factor
+            let lm_head = if !text_cfg.tie_word_embeddings {
+                text_cfg.hidden_size * text_cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -5198,10 +5512,7 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                                 in_chs = *out_channels;
                             }
                             BlockType::MultiQueryAttention {
-                                num_heads,
-                                kv_dim,
-                                kv_stride: _,
-                                ..
+                                num_heads, kv_dim, ..
                             } => {
                                 // MMQA: all Conv2d layers, not quantizable
                                 let dw_kernel_size = 3; // Default dw_kernel_size for MMQA
@@ -5662,6 +5973,13 @@ impl MultimodalModelLoader for Qwen3VLLoader {
 }
 
 impl IsqModelLoader for Qwen3VLLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -5760,16 +6078,28 @@ impl DeviceMappedModelLoader for Qwen3VLLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3VLConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !tie || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tie {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -5984,6 +6314,13 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
 }
 
 impl IsqModelLoader for Qwen3VLMoELoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6118,16 +6455,28 @@ impl DeviceMappedModelLoader for Qwen3VLMoELoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3VLMoEConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !tie || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tie {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6364,6 +6713,13 @@ impl MultimodalModelLoader for Qwen3_5Loader {
 }
 
 impl IsqModelLoader for Qwen3_5Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6372,7 +6728,19 @@ impl IsqModelLoader for Qwen3_5Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6460,15 +6828,28 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !tie || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tie {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6569,12 +6950,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                 }
                 crate::vision_models::qwen3_5::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
@@ -6582,7 +6961,14 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 
@@ -6699,6 +7085,13 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
 }
 
 impl IsqModelLoader for Qwen3_5MoeLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^(language_model\.model|model\.language_model)\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -6707,7 +7100,19 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // GDN linear attention output projection
+            // GDN linear attention projections
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+            )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
@@ -6721,6 +7126,10 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
+            )?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
             // Shared expert
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
@@ -6749,6 +7158,10 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
+            )?,
+            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
             // Shared expert
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
@@ -6839,15 +7252,28 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3_5MoeConfig = serde_json::from_str(config)?;
         let tie = cfg.tie_word_embeddings;
         let text_elems = {
             let cfg = &cfg.text_config;
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !tie || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors_with_aliases(
+                    _quantization,
+                    &[
+                        "language_model.model.embed_tokens.weight",
+                        "model.language_model.embed_tokens.weight",
+                    ],
+                    &["lm_head.weight"],
+                    tie,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tie {
+                cfg.hidden_size * cfg.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -6948,12 +7374,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                 }
                 crate::vision_models::qwen3_5_moe::config::LayerType::LinearAttention => {
                     let hidden = text_cfg.hidden_size;
-                    let key_dim = text_cfg.linear_key_dim();
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
-                    // in_proj_ba: (2 * num_v_heads, hidden)
+                    let in_proj_qkv = hidden * conv_dim;
+                    let in_proj_z = hidden * value_dim;
                     let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
@@ -6964,7 +7388,14 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let a_log = text_cfg.linear_num_value_heads;
                     // RmsNormGated over per-head value dim
                     let norm = text_cfg.linear_value_head_dim;
-                    in_proj_qkvz + in_proj_ba + out_proj + conv1d + dt_bias + a_log + norm
+                    in_proj_qkv
+                        + in_proj_z
+                        + in_proj_ba
+                        + out_proj
+                        + conv1d
+                        + dt_bias
+                        + a_log
+                        + norm
                 }
             };
 
@@ -7080,10 +7511,10 @@ impl MultimodalModelLoader for VoxtralLoader {
         Arc::new(VoxtralProcessor::new(&cfg))
     }
     fn supports_paged_attention(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        false
+        true
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(VoxtralPrefixer)
@@ -7105,10 +7536,18 @@ impl MultimodalModelLoader for VoxtralLoader {
 }
 
 impl IsqModelLoader for VoxtralLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^mm_streams_embeddings\.embedding_module\.tok_embeddings\.weight$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             // Output / lm_head (tied with tok_embeddings)
             Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
             // Decoder attention (Mistral-native naming)
             Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
@@ -7123,6 +7562,7 @@ impl IsqModelLoader for VoxtralLoader {
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"tok_embeddings\.(weight|bias)$")?,
+            Regex::new(r"^output\.(weight|bias)$")?,
             // Decoder attention
             Regex::new(r"layers\.(\d+)\.attention\.wq\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.attention\.wk\.(weight|bias)$")?,
@@ -7182,7 +7622,8 @@ impl DeviceMappedModelLoader for VoxtralLoader {
         &self,
         config: &str,
         dtype: DType,
-        _weight_pack_factor: usize,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: VoxtralConfig = serde_json::from_str(config)?;
@@ -7209,10 +7650,22 @@ impl DeviceMappedModelLoader for VoxtralLoader {
 
         let total_encoder = conv1 + conv2 + enc_layers + enc_final_norm + adapter;
 
-        // Decoder embeddings
-        let embeddings = cfg.vocab_size * cfg.dim;
+        let (embedding_pack_factor, output_pack_factor) = super::language_model_pack_factors(
+            _quantization,
+            "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+            "output.weight",
+            cfg.tied_embeddings,
+            dtype,
+            weight_pack_factor,
+        )?;
+        let embeddings = cfg.vocab_size * cfg.dim / embedding_pack_factor;
+        let output = if cfg.tied_embeddings {
+            0
+        } else {
+            cfg.vocab_size * cfg.dim / output_pack_factor
+        };
 
-        Ok((total_encoder + embeddings) * elem)
+        Ok((total_encoder + embeddings + output) * elem)
     }
 
     fn layer_sizes_in_bytes(
@@ -7267,6 +7720,55 @@ impl DeviceMappedModelLoader for VoxtralLoader {
 
 pub struct Gemma4Loader;
 
+fn supports_gemma4_incremental_cache(config: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(config)
+        .ok()
+        .and_then(|config| {
+            config
+                .pointer("/text_config/use_bidirectional_attention")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        != Some("all")
+}
+
+fn gemma4_runtime_config(config: &str, max_model_len: Option<usize>) -> Result<Cow<'_, str>> {
+    let Some(max_model_len) = max_model_len else {
+        return Ok(Cow::Borrowed(config));
+    };
+    anyhow::ensure!(max_model_len > 0, "max_model_len must be greater than zero");
+
+    let parsed: Gemma4Config = serde_json::from_str(config)?;
+    if parsed.text_config.max_position_embeddings <= max_model_len {
+        return Ok(Cow::Borrowed(config));
+    }
+
+    let mut value: serde_json::Value = serde_json::from_str(config)?;
+    let root = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Gemma4 config must be a JSON object"))?;
+    if root
+        .get("text_config")
+        .is_some_and(serde_json::Value::is_object)
+    {
+        root.get_mut("text_config")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("text_config was checked as an object")
+            .insert(
+                "max_position_embeddings".to_string(),
+                serde_json::Value::from(max_model_len),
+            );
+    } else {
+        root.insert(
+            "max_position_embeddings".to_string(),
+            serde_json::Value::from(max_model_len),
+        );
+    }
+
+    Ok(Cow::Owned(serde_json::to_string(&value)?))
+}
+
 #[allow(dead_code)]
 pub struct Gemma4Prefixer;
 
@@ -7296,6 +7798,13 @@ impl MultimodalModelLoader for Gemma4Loader {
             attention_mechanism,
         )?))
     }
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        gemma4_runtime_config(config, max_model_len)
+    }
     fn is_gptx(&self, _config: &str) -> bool {
         true
     }
@@ -7311,31 +7820,51 @@ impl MultimodalModelLoader for Gemma4Loader {
         _max_edge: Option<u32>,
     ) -> Arc<dyn Processor + Send + Sync> {
         let cfg: Gemma4Config = serde_json::from_str(config).expect("Failed to parse Gemma4Config");
-        Arc::new(Gemma4Processor::new(
-            processor_config.unwrap_or_default(),
-            cfg.vision_config.patch_size,
-            cfg.vision_config.pooling_kernel_size,
-            cfg.vision_config.default_output_length,
-            true,
-            cfg.audio_config.is_some(),
-        ))
+        let (patch_size, pooling_kernel_size, default_output_length, supports_images) = cfg
+            .vision_config
+            .as_ref()
+            .map_or((16, 1, 0, false), |vision_cfg| {
+                (
+                    vision_cfg.patch_size,
+                    vision_cfg.pooling_kernel_size,
+                    vision_cfg.default_output_length,
+                    true,
+                )
+            });
+        let raw_audio_frame_size = cfg
+            .audio_config
+            .as_ref()
+            .and_then(|audio_cfg| cfg.is_unified().then_some(audio_cfg.input_feat_size()));
+        Arc::new(Gemma4Processor::new(Gemma4ProcessorSettings {
+            processor_config: processor_config.unwrap_or_default(),
+            patch_size,
+            pooling_kernel_size,
+            default_output_length,
+            supports_images,
+            supports_audio: cfg.audio_config.is_some(),
+            raw_audio_frame_size,
+            is_unified: cfg.is_unified(),
+            decode_window: None,
+            bidirectional_attention: cfg.text_config.bidirectional_attention(),
+            vision_attention_on_full_layers: false,
+        }))
     }
-    fn supports_paged_attention(&self, _config: &str) -> bool {
-        true
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
-    fn supports_prefix_cacher(&self, _config: &str) -> bool {
-        true
+    fn supports_prefix_cacher(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma4Prefixer)
     }
     fn modalities(&self, config: &str) -> Result<Modalities> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
-        let mut input = vec![
-            SupportedModality::Text,
-            SupportedModality::Vision,
-            SupportedModality::Video,
-        ];
+        let mut input = vec![SupportedModality::Text];
+        if cfg.vision_config.is_some() {
+            input.push(SupportedModality::Vision);
+            input.push(SupportedModality::Video);
+        }
         if cfg.audio_config.is_some() {
             input.push(SupportedModality::Audio);
         }
@@ -7347,6 +7876,14 @@ impl MultimodalModelLoader for Gemma4Loader {
 }
 
 impl IsqModelLoader for Gemma4Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.language_model\.embed_tokens_per_layer\.weight$")?,
+            Regex::new(r"^model\.language_model\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         // `embed_vision.embedding_projection` is intentionally excluded.
         Ok(vec![
@@ -7369,6 +7906,8 @@ impl IsqModelLoader for Gemma4Loader {
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
+            Regex::new(r"model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"model\.language_model\.embed_tokens_per_layer\.weight$")?,
             Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
@@ -7411,7 +7950,11 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
 
-        let vision_tokens_per_image = cfg.vision_soft_tokens_per_image.unwrap_or(280);
+        let vision_tokens_per_image = if cfg.vision_config.is_some() {
+            cfg.vision_soft_tokens_per_image.unwrap_or(280)
+        } else {
+            0
+        };
         let audio_tokens = if cfg.audio_config.is_some() { 750 } else { 0 };
         let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images + audio_tokens;
         let max_text_attn = max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len;
@@ -7435,35 +7978,58 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         };
 
         let cfg: Gemma4Config = serde_json::from_str(config)?;
-        let vc = &cfg.vision_config;
-
-        let max_patches =
-            vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
-        let max_vision_attn =
-            max_batch_size * max_num_images * vc.num_attention_heads * max_patches * max_patches;
-        let max_vision_hidden = max_batch_size
-            * max_num_images
-            * max_patches
-            * vc.hidden_size.max(vc.intermediate_size);
+        let (max_vision_attn, max_vision_hidden) =
+            cfg.vision_config.as_ref().map_or((0, 0), |vc| {
+                let (max_patches, hidden_size, intermediate_size, num_attention_heads) = if cfg
+                    .is_unified()
+                {
+                    (
+                        vc.default_output_length,
+                        vc.hidden_size(),
+                        vc.hidden_size(),
+                        0,
+                    )
+                } else {
+                    (
+                        vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size,
+                        vc.hidden_size,
+                        vc.intermediate_size,
+                        vc.num_attention_heads,
+                    )
+                };
+                let max_vision_attn = max_batch_size
+                    * max_num_images
+                    * num_attention_heads
+                    * max_patches
+                    * max_patches;
+                let max_vision_hidden = max_batch_size
+                    * max_num_images
+                    * max_patches
+                    * hidden_size.max(intermediate_size);
+                (max_vision_attn, max_vision_hidden)
+            });
 
         let max_audio_activation = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
-            let subsample_factor: usize = audio_cfg
-                .sscp_conv_stride_size
-                .iter()
-                .map(|stride| stride[0])
-                .product();
-            let max_audio_frames = 750 * subsample_factor.max(1);
-            let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
+            if cfg.is_unified() {
+                max_batch_size * 750 * audio_cfg.input_feat_size()
+            } else {
+                let subsample_factor: usize = audio_cfg
+                    .sscp_conv_stride_size
+                    .iter()
+                    .map(|stride| stride[0])
+                    .product();
+                let max_audio_frames = 750 * subsample_factor.max(1);
+                let audio_seq_after_subsample = max_audio_frames / subsample_factor.max(1);
+                let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);
+                let chunk_size = audio_cfg.conf_attention_chunk_size;
+                let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
+                    + audio_cfg.conf_attention_context_right;
+                let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
+                let audio_attn_act =
+                    audio_cfg.conf_num_attention_heads * num_chunks * chunk_size * context_size;
 
-            let audio_encoder_act = audio_seq_after_subsample * (audio_cfg.hidden_size * 4);
-            let chunk_size = audio_cfg.conf_attention_chunk_size;
-            let context_size = chunk_size + audio_cfg.conf_attention_context_left - 1
-                + audio_cfg.conf_attention_context_right;
-            let num_chunks = audio_seq_after_subsample.div_ceil(chunk_size);
-            let audio_attn_act =
-                audio_cfg.conf_num_attention_heads * num_chunks * chunk_size * context_size;
-
-            max_batch_size * audio_encoder_act.max(audio_attn_act)
+                max_batch_size * audio_encoder_act.max(audio_attn_act)
+            }
         });
 
         Ok(max_vision_attn
@@ -7476,16 +8042,30 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Gemma4Config = serde_json::from_str(config)?;
         let tc = &cfg.text_config;
-        let vc = &cfg.vision_config;
-
         let text_elems = {
-            let embed_tokens = tc.hidden_size * tc.vocab_size;
-            let lm_head = if !tc.tie_word_embeddings || weight_pack_factor != 1 {
-                tc.hidden_size * tc.vocab_size / weight_pack_factor
+            let (resolved_embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
+                    tc.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens_pack_factor =
+                if tc.tie_word_embeddings && tc.keep_tied_lm_head_unquantized {
+                    1
+                } else {
+                    resolved_embed_tokens_pack_factor
+                };
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tc.tie_word_embeddings {
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
             } else {
                 0
             };
@@ -7493,8 +8073,14 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
             let ple_dim = tc.hidden_size_per_layer_input.unwrap_or(0);
             let ple_vocab = tc.vocab_size_per_layer_input.unwrap_or(tc.vocab_size);
+            let ple_embedding_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "model.language_model.embed_tokens_per_layer.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
             let embed_tokens_per_layer = if ple_dim > 0 {
-                ple_vocab * tc.num_hidden_layers * ple_dim
+                ple_vocab * tc.num_hidden_layers * ple_dim / ple_embedding_pack_factor
             } else {
                 0
             };
@@ -7513,86 +8099,101 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                 + per_layer_projection_norm
         };
 
-        let vision_layer_elems = {
-            let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
-                + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
-                + 2 * (vc.hidden_size * vc.intermediate_size)
-                + vc.intermediate_size * vc.hidden_size;
-            let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
-            quantized / weight_pack_factor + norms
-        };
-        let vision_elems = {
-            let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
-            let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
-            let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
-            let encoder = vc.num_hidden_layers * vision_layer_elems;
-            let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+        let vision_elems = cfg.vision_config.as_ref().map_or(0, |vc| {
+            if cfg.is_unified() {
+                let hidden_size = vc.hidden_size();
+                let patch_dim = vc.patch_size() * vc.patch_size() * 3;
+                let patch_norms = 2 * patch_dim + 4 * hidden_size;
+                let patch_dense = hidden_size * patch_dim / weight_pack_factor + hidden_size;
+                let pos_embedding = 2 * vc.position_embedding_size * hidden_size;
+                let embed_vision = hidden_size * tc.hidden_size / weight_pack_factor;
+                patch_norms + patch_dense + pos_embedding + embed_vision
+            } else {
+                let vision_layer_elems = {
+                    let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
+                        + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
+                        + 2 * (vc.hidden_size * vc.intermediate_size)
+                        + vc.intermediate_size * vc.hidden_size;
+                    let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
+                    quantized / weight_pack_factor + norms
+                };
+                let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
+                let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
+                let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+                let encoder = vc.num_hidden_layers * vision_layer_elems;
+                let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
 
-            patch_embedder + encoder + embed_vision
-        };
+                patch_embedder + encoder + embed_vision
+            }
+        });
 
         let audio_elems = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
-            let mut f_out = audio_cfg.input_feat_size;
-            for i in 0..2 {
-                let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
-                let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
-                let pad_left = 1;
-                let pad_right = 1;
-                f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+            if cfg.is_unified() {
+                audio_cfg.input_feat_size() * tc.hidden_size / weight_pack_factor
+            } else {
+                let mut f_out = audio_cfg.input_feat_size();
+                for i in 0..2 {
+                    let kernel_w = audio_cfg.sscp_conv_kernel_size[i][1];
+                    let stride_w = audio_cfg.sscp_conv_stride_size[i][1];
+                    let pad_left = 1;
+                    let pad_right = 1;
+                    f_out = (f_out + pad_left + pad_right + stride_w - kernel_w) / stride_w;
+                }
+
+                let subsample_conv_projection = {
+                    let conv_0 = audio_cfg.sscp_conv_channel_size[0]
+                        * audio_cfg.sscp_conv_kernel_size[0][0]
+                        * audio_cfg.sscp_conv_kernel_size[0][1];
+                    let conv_1 = audio_cfg.sscp_conv_channel_size[0]
+                        * audio_cfg.sscp_conv_channel_size[1]
+                        * audio_cfg.sscp_conv_kernel_size[1][0]
+                        * audio_cfg.sscp_conv_kernel_size[1][1];
+                    let norms =
+                        audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
+                    let input_proj =
+                        audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
+                            / weight_pack_factor;
+                    conv_0 + conv_1 + norms + input_proj
+                };
+
+                let conformer_block = {
+                    let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
+                        / weight_pack_factor
+                        + 2 * audio_cfg.hidden_size
+                        + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
+                        + audio_cfg.hidden_size / 2
+                        + (audio_cfg.conf_attention_context_left
+                            + audio_cfg.conf_attention_context_right
+                            + 1)
+                        + (audio_cfg.conf_attention_chunk_size
+                            * (audio_cfg.conf_attention_chunk_size
+                                + audio_cfg.conf_attention_context_left
+                                - 1
+                                + audio_cfg.conf_attention_context_right))
+                        + 1;
+                    let ffw = 2
+                        * (2 * audio_cfg.hidden_size
+                            + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
+                                / weight_pack_factor);
+                    let conv = 2 * audio_cfg.hidden_size
+                        + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
+                        + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
+                        + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
+                    attention + ffw + conv + audio_cfg.hidden_size
+                };
+
+                let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
+                    audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
+                });
+                let audio_embed_hidden =
+                    audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
+                let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
+
+                subsample_conv_projection
+                    + audio_cfg.conf_num_hidden_layers * conformer_block
+                    + output_proj
+                    + embed_audio
             }
-
-            let subsample_conv_projection = {
-                let conv_0 = audio_cfg.sscp_conv_channel_size[0]
-                    * audio_cfg.sscp_conv_kernel_size[0][0]
-                    * audio_cfg.sscp_conv_kernel_size[0][1];
-                let conv_1 = audio_cfg.sscp_conv_channel_size[0]
-                    * audio_cfg.sscp_conv_channel_size[1]
-                    * audio_cfg.sscp_conv_kernel_size[1][0]
-                    * audio_cfg.sscp_conv_kernel_size[1][1];
-                let norms =
-                    audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
-                let input_proj =
-                    audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
-                        / weight_pack_factor;
-                conv_0 + conv_1 + norms + input_proj
-            };
-
-            let conformer_block = {
-                let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
-                    / weight_pack_factor
-                    + 2 * audio_cfg.hidden_size
-                    + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
-                    + audio_cfg.hidden_size / 2
-                    + (audio_cfg.conf_attention_context_left
-                        + audio_cfg.conf_attention_context_right
-                        + 1)
-                    + (audio_cfg.conf_attention_chunk_size
-                        * (audio_cfg.conf_attention_chunk_size
-                            + audio_cfg.conf_attention_context_left
-                            - 1
-                            + audio_cfg.conf_attention_context_right))
-                    + 1;
-                let ffw = 2
-                    * (2 * audio_cfg.hidden_size
-                        + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
-                            / weight_pack_factor);
-                let conv = 2 * audio_cfg.hidden_size
-                    + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
-                    + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
-                    + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
-                attention + ffw + conv + audio_cfg.hidden_size
-            };
-
-            let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
-                audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
-            });
-            let audio_embed_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
-            let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
-
-            subsample_conv_projection
-                + audio_cfg.conf_num_hidden_layers * conformer_block
-                + output_proj
-                + embed_audio
         });
 
         let vision_dtype = if dtype == DType::F16 {
@@ -7698,5 +8299,1294 @@ impl DeviceMappedModelLoader for Gemma4Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+// ======================== LFM2-VL loader
+
+/// [`MultimodalLoader`] for an LFM2-VL model.
+///
+/// [`MultimodalLoader`]: https://docs.rs/mistralrs/latest/mistralrs/struct.MultimodalLoader.html
+pub struct Lfm2VlLoader;
+
+pub struct Lfm2VlPrefixer;
+
+impl MultimodalPromptPrefixer for Lfm2VlPrefixer {
+    fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
+        prompt.to_string()
+    }
+}
+
+impl Lfm2VlLoader {
+    fn max_image_seq_len(cfg: &Lfm2VlConfig) -> usize {
+        let num_patches = cfg.tile_size / cfg.encoder_patch_size;
+        let downsampled_patches = num_patches.div_ceil(cfg.downsample_factor);
+        let tokens_per_tile = downsampled_patches * downsampled_patches;
+        if cfg.do_image_splitting {
+            cfg.max_tiles * tokens_per_tile
+                + if cfg.use_thumbnail {
+                    cfg.max_image_tokens
+                } else {
+                    0
+                }
+        } else {
+            cfg.max_image_tokens
+        }
+    }
+
+    fn max_num_patches(cfg: &Lfm2VlConfig) -> usize {
+        let max_thumbnail_image_patches = cfg.max_image_tokens * cfg.downsample_factor.pow(2);
+        let tile_size_patches = if cfg.do_image_splitting {
+            (cfg.tile_size / cfg.encoder_patch_size).pow(2)
+        } else {
+            0
+        };
+        max_thumbnail_image_patches.max(tile_size_patches)
+    }
+
+    fn max_crops_per_image(cfg: &Lfm2VlConfig) -> usize {
+        if cfg.do_image_splitting {
+            cfg.max_tiles + if cfg.use_thumbnail { 1 } else { 0 }
+        } else {
+            1
+        }
+    }
+}
+
+impl MultimodalModelLoader for Lfm2VlLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(Lfm2VlModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: Lfm2VlConfig =
+            serde_json::from_str(model_config).expect("Failed to parse LFM2-VL config");
+        Arc::new(Lfm2VlProcessor::new(&cfg, &preprocessor_config))
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn modalities(&self, _config: &str) -> Result<Modalities> {
+        Ok(Modalities {
+            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            output: vec![SupportedModality::Text],
+        })
+    }
+
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Lfm2VlPrefixer)
+    }
+
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        if loading_isq {
+            Ok(Arc::new(|_| DeviceForLoadTensor::Base))
+        } else {
+            let re = Regex::new(r"model\.language_model\.layers\.(\d+)\.").unwrap();
+            let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+            let num_layers = cfg.text_config.num_hidden_layers;
+            Ok(Arc::new(move |name: String| {
+                if let Some(captures) = re.captures(&name) {
+                    captures
+                        .get(1)
+                        .and_then(|m| m.as_str().parse::<usize>().ok())
+                        .map(|l| l.min(num_layers))
+                        .map(DeviceForLoadTensor::Idx)
+                        .unwrap_or(DeviceForLoadTensor::Base)
+                } else {
+                    DeviceForLoadTensor::Base
+                }
+            }))
+        }
+    }
+}
+
+impl IsqModelLoader for Lfm2VlLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.self_attn\.out_proj\.(weight|bias)$",
+            )?,
+            Regex::new(r"(model\.)?language_model\.layers\.(\d+)\.conv\.in_proj\.(weight|bias)$")?,
+            Regex::new(r"(model\.)?language_model\.layers\.(\d+)\.conv\.out_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w1\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w2\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(model\.)?language_model\.layers\.(\d+)\.feed_forward\.w3\.(weight|bias)$",
+            )?,
+            Regex::new(r"model\.multi_modal_projector\.linear_1\.(weight|bias)$")?,
+            Regex::new(r"model\.multi_modal_projector\.linear_2\.(weight|bias)$")?,
+        ])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for Lfm2VlLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let seq_len =
+            max_seq_len.min(&ATTENTION_CHUNK_SIZE) + Self::max_image_seq_len(&cfg) * max_num_images;
+        Ok(max_batch_size * cfg.text_config.num_attention_heads * seq_len * seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let max_crops = max_num_images * Self::max_crops_per_image(&cfg);
+        let max_patches = Self::max_num_patches(&cfg);
+        let max_vision_attn = max_batch_size
+            * max_crops
+            * cfg.vision_config.num_attention_heads
+            * max_patches
+            * max_patches;
+        let max_vision_hidden = max_batch_size
+            * max_crops
+            * max_patches
+            * cfg
+                .vision_config
+                .hidden_size
+                .max(cfg.vision_config.intermediate_size);
+        Ok(max_vision_attn.max(max_vision_hidden))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let text = {
+            let tc = &cfg.text_config;
+            let tied = tc.tie_word_embeddings();
+            let (embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.language_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    tied,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if tied {
+                0
+            } else {
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
+            };
+            embed_tokens + lm_head + tc.hidden_size
+        };
+        let vision = {
+            let vc = &cfg.vision_config;
+            let patch_embedding =
+                (vc.num_channels * vc.patch_size * vc.patch_size * vc.hidden_size
+                    / weight_pack_factor)
+                    + vc.hidden_size;
+            let position_embedding = vc.num_patches * vc.hidden_size;
+            let post_layernorm = 2 * vc.hidden_size;
+            let layer = {
+                let attn =
+                    4 * (vc.hidden_size * vc.hidden_size / weight_pack_factor + vc.hidden_size);
+                let mlp = vc.hidden_size * vc.intermediate_size / weight_pack_factor
+                    + vc.intermediate_size
+                    + vc.intermediate_size * vc.hidden_size / weight_pack_factor
+                    + vc.hidden_size;
+                let norms = 4 * vc.hidden_size;
+                attn + mlp + norms
+            };
+            patch_embedding + position_embedding + post_layernorm + vc.num_hidden_layers * layer
+        };
+        let projector = {
+            let in_channels = cfg.vision_config.hidden_size * cfg.downsample_factor.pow(2);
+            let linears = in_channels * cfg.projector_hidden_size / weight_pack_factor
+                + cfg.projector_hidden_size * cfg.text_config.hidden_size / weight_pack_factor;
+            let bias = if cfg.projector_bias {
+                cfg.projector_hidden_size + cfg.text_config.hidden_size
+            } else {
+                0
+            };
+            let norm = if cfg.projector_use_layernorm {
+                2 * in_channels
+            } else {
+                0
+            };
+            linears + bias + norm
+        };
+        Ok((text + vision + projector) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let cfg = cfg.text_config;
+        let head_dim = cfg.head_dim();
+        let hidden = cfg.hidden_size;
+        let intermediate = cfg.intermediate_size();
+        let mut sizes = Vec::with_capacity(cfg.num_hidden_layers);
+
+        for layer_type in cfg.layer_types() {
+            let operator_norm = hidden;
+            let ffn_norm = hidden;
+            let feed_forward = 3 * hidden * intermediate / weight_pack_factor;
+            let operator = match layer_type {
+                crate::models::lfm2::LayerType::Attention => {
+                    let q_dim = cfg.num_attention_heads * head_dim;
+                    let kv_dim = cfg.num_key_value_heads * head_dim;
+                    let projections = (hidden * q_dim + hidden * kv_dim * 2 + q_dim * hidden)
+                        / weight_pack_factor;
+                    projections + 2 * head_dim
+                }
+                crate::models::lfm2::LayerType::Conv => {
+                    let projections = (hidden * 3 * hidden + hidden * hidden) / weight_pack_factor;
+                    let conv = hidden * cfg.conv_l_cache;
+                    let bias = if cfg.conv_bias { 5 * hidden } else { 0 };
+                    projections + conv + bias
+                }
+            };
+
+            sizes
+                .push((operator_norm + ffn_norm + operator + feed_forward) * dtype.size_in_bytes());
+        }
+
+        Ok(sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: Lfm2VlConfig = serde_json::from_str(config)?;
+        let tc = cfg.text_config;
+        let head_dim = tc.head_dim();
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
+    }
+}
+
+// ======================== DiffusionGemma loader
+
+pub struct DiffusionGemmaLoader;
+
+impl DiffusionGemmaLoader {
+    fn is_sliding(tc: &crate::vision_models::gemma4::config::Gemma4TextConfig, i: usize) -> bool {
+        tc.layer_types[i] == "sliding_attention"
+    }
+}
+
+impl MultimodalModelLoader for DiffusionGemmaLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        Ok(Box::new(DiffusionGemmaModel::new(
+            &cfg,
+            vb,
+            self.is_gptx(config),
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let config: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        Ok(Box::new(config))
+    }
+    fn get_processor(
+        &self,
+        config: &str,
+        processor_config: Option<ProcessorConfig>,
+        _preprocessor_config: PreProcessorConfig,
+        _max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: DiffusionGemmaConfig =
+            serde_json::from_str(config).expect("Failed to parse DiffusionGemmaConfig");
+        let (patch_size, pooling_kernel_size, default_output_length, supports_images) = cfg
+            .vision_config
+            .as_ref()
+            .map_or((16, 1, 0, false), |vision_cfg| {
+                (
+                    vision_cfg.patch_size,
+                    vision_cfg.pooling_kernel_size,
+                    vision_cfg.default_output_length,
+                    true,
+                )
+            });
+        Arc::new(Gemma4Processor::new(Gemma4ProcessorSettings {
+            processor_config: processor_config.unwrap_or_default(),
+            patch_size,
+            pooling_kernel_size,
+            default_output_length,
+            supports_images,
+            supports_audio: false,
+            raw_audio_frame_size: None,
+            is_unified: false,
+            decode_window: Some(cfg.canvas_length),
+            bidirectional_attention: cfg.text_config.bidirectional_attention(),
+            vision_attention_on_full_layers: true,
+        }))
+    }
+    fn supports_paged_attention(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
+    }
+    fn supports_prefix_cacher(&self, config: &str) -> bool {
+        supports_gemma4_incremental_cache(config)
+    }
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(Gemma4Prefixer)
+    }
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let mut input = vec![SupportedModality::Text];
+        if cfg.vision_config.is_some() {
+            input.push(SupportedModality::Vision);
+        }
+        Ok(Modalities {
+            input,
+            output: vec![SupportedModality::Text],
+        })
+    }
+}
+
+impl IsqModelLoader for DiffusionGemmaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.decoder\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.decoder\.lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.moe\.gate_up_proj\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.moe\.down_proj\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.experts\.down_proj\.weight$")?,
+        ])
+    }
+    fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.moe\.gate_up_proj\.weight$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.moe\.down_proj\.weight$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
+            Regex::new(r"model\.decoder\.layers\.(\d+)\.experts\.down_proj\.weight$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for DiffusionGemmaLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+
+        let vision_tokens_per_image = if cfg.vision_config.is_some() {
+            cfg.vision_soft_tokens_per_image.unwrap_or(280)
+        } else {
+            0
+        };
+        let total_seq_len = *max_seq_len + vision_tokens_per_image * max_num_images;
+        Ok(max_batch_size * tc.num_attention_heads * total_seq_len * total_seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape: _,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let (max_vision_attn, max_vision_hidden) =
+            cfg.vision_config.as_ref().map_or((0, 0), |vc| {
+                let max_patches =
+                    vc.default_output_length * vc.pooling_kernel_size * vc.pooling_kernel_size;
+                let max_vision_attn = max_batch_size
+                    * max_num_images
+                    * vc.num_attention_heads
+                    * max_patches
+                    * max_patches;
+                let max_vision_hidden = max_batch_size
+                    * max_num_images
+                    * max_patches
+                    * vc.hidden_size.max(vc.intermediate_size);
+                (max_vision_attn, max_vision_hidden)
+            });
+
+        // The denoising loop materializes several fp32 [canvas, vocab] transients
+        // (logits, log-probs, probs) on the output device.
+        let canvas_logits = 4 * cfg.canvas_length * cfg.text_config.vocab_size;
+
+        Ok(max_vision_attn.max(max_vision_hidden).max(canvas_logits))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let text_elems = {
+            let (resolved_embed_tokens_pack_factor, lm_head_pack_factor) =
+                super::language_model_pack_factors(
+                    _quantization,
+                    "model.decoder.embed_tokens.weight",
+                    "model.decoder.lm_head.weight",
+                    tc.tie_word_embeddings,
+                    dtype,
+                    weight_pack_factor,
+                )?;
+            let embed_tokens_pack_factor = if tc.tie_word_embeddings {
+                1
+            } else {
+                resolved_embed_tokens_pack_factor
+            };
+            let embed_tokens = tc.hidden_size * tc.vocab_size / embed_tokens_pack_factor;
+            let lm_head = if !tc.tie_word_embeddings {
+                tc.hidden_size * tc.vocab_size / lm_head_pack_factor
+            } else {
+                0
+            };
+            let norm = tc.hidden_size;
+            let self_conditioning = 3 * tc.hidden_size * tc.intermediate_size + tc.hidden_size;
+            embed_tokens + lm_head + norm + self_conditioning
+        };
+
+        let vision_elems = cfg.vision_config.as_ref().map_or(0, |vc| {
+            let vision_layer_elems = {
+                let quantized = vc.hidden_size * vc.num_attention_heads * vc.head_dim
+                    + 3 * (vc.hidden_size * vc.num_key_value_heads * vc.head_dim)
+                    + 2 * (vc.hidden_size * vc.intermediate_size)
+                    + vc.intermediate_size * vc.hidden_size;
+                let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
+                quantized / weight_pack_factor + norms
+            };
+            let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
+            let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
+            let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+            let encoder = vc.num_hidden_layers * vision_layer_elems;
+            let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+            patch_embedder + encoder + embed_vision
+        });
+
+        let vision_dtype = if dtype == DType::F16 {
+            DType::F32
+        } else {
+            dtype
+        };
+
+        Ok(text_elems * dtype.size_in_bytes() + vision_elems * vision_dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let sizes: Vec<usize> = (0..tc.num_hidden_layers)
+            .map(|layer_idx| {
+                let is_sliding = Self::is_sliding(tc, layer_idx);
+                let hd = if is_sliding {
+                    tc.head_dim
+                } else {
+                    tc.global_head_dim
+                };
+                let nkv = if is_sliding {
+                    tc.num_key_value_heads
+                } else {
+                    tc.num_global_key_value_heads
+                        .unwrap_or(tc.num_key_value_heads)
+                };
+                let use_k_eq_v = tc.attention_k_eq_v && !is_sliding;
+
+                let mut attn = tc.hidden_size * tc.num_attention_heads * hd
+                    + tc.hidden_size * nkv * hd
+                    + tc.num_attention_heads * hd * tc.hidden_size;
+                if !use_k_eq_v {
+                    attn += tc.hidden_size * nkv * hd;
+                }
+                attn += 2 * hd;
+
+                let mlp = 3 * tc.hidden_size * tc.intermediate_size;
+
+                let moe = if tc.enable_moe_block {
+                    let ne = tc.num_experts.unwrap_or(0);
+                    let ei = tc.expert_intermediate_size().unwrap_or(0);
+                    ne * tc.hidden_size * ei * 2
+                        + ne * ei * tc.hidden_size
+                        + ne
+                        + ne * tc.hidden_size
+                        + tc.hidden_size
+                        + 3 * tc.hidden_size
+                } else {
+                    0
+                };
+
+                // 4 norms + decoder layer_scalar + encoder layer_scalar
+                let norms = 4 * tc.hidden_size + 2;
+
+                (attn + mlp + moe + norms) * dtype.size_in_bytes() / weight_pack_factor
+            })
+            .collect();
+        Ok(sizes)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        Ok(cfg.text_config.num_hidden_layers)
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: DiffusionGemmaConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+
+        let cfg = ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: Some(tc.sliding_window),
+            k_head_dim: tc.global_head_dim,
+            v_head_dim: tc.global_head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+
+        Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::AutoDeviceMapQuantization;
+    use super::*;
+    use mistralrs_quant::IsqType;
+
+    fn matches_any(regexes: &[Regex], name: &str) -> bool {
+        regexes.iter().any(|regex| regex.is_match(name))
+    }
+
+    struct PromotedIsqCase {
+        name: &'static str,
+        architecture: &'static str,
+        loader: Box<dyn IsqModelLoader>,
+        accepted: Vec<&'static str>,
+    }
+
+    fn promoted_isq_cases() -> Vec<PromotedIsqCase> {
+        vec![
+            PromotedIsqCase {
+                name: "phi3v",
+                architecture: "Phi3VForCausalLM",
+                loader: Box::new(Phi3VLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "idefics2",
+                architecture: "Idefics2ForConditionalGeneration",
+                loader: Box::new(Idefics2Loader),
+                accepted: vec![
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llava_next",
+                architecture: "LlavaNextForConditionalGeneration",
+                loader: Box::new(LLaVANextLoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llava",
+                architecture: "LlavaForConditionalGeneration",
+                loader: Box::new(LLaVALoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "lfm2vl",
+                architecture: "Lfm2VlForConditionalGeneration",
+                loader: Box::new(Lfm2VlLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "vllama",
+                architecture: "MllamaForConditionalGeneration",
+                loader: Box::new(VLlamaLoader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen2vl",
+                architecture: "Qwen2VLForConditionalGeneration",
+                loader: Box::new(Qwen2VLLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "idefics3",
+                architecture: "Idefics3ForConditionalGeneration",
+                loader: Box::new(Idefics3Loader),
+                accepted: vec![
+                    "model.text_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "minicpmo",
+                architecture: "MiniCPMO",
+                loader: Box::new(MiniCpmOLoader),
+                accepted: vec![
+                    "llm.model.embed_tokens.weight",
+                    "llm.lm_head.weight",
+                    "llm.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "phi4mm",
+                architecture: "Phi4MMForCausalLM",
+                loader: Box::new(Phi4MMLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen2_5vl",
+                architecture: "Qwen2_5_VLForConditionalGeneration",
+                loader: Box::new(Qwen2_5VLLoader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma3",
+                architecture: "Gemma3ForConditionalGeneration",
+                loader: Box::new(Gemma3Loader),
+                accepted: vec![
+                    "model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "mistral3",
+                architecture: "Mistral3ForConditionalGeneration",
+                loader: Box::new(Mistral3Loader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "llama4",
+                architecture: "Llama4ForConditionalGeneration",
+                loader: Box::new(VLlama4Loader),
+                accepted: vec![
+                    "language_model.model.embed_tokens.weight",
+                    "language_model.lm_head.weight",
+                    "language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma3n",
+                architecture: "Gemma3nForConditionalGeneration",
+                loader: Box::new(Gemma3nLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.lm_head.weight",
+                    "model.language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3vl",
+                architecture: "Qwen3VLForConditionalGeneration",
+                loader: Box::new(Qwen3VLLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3vlmoe",
+                architecture: "Qwen3VLMoeForConditionalGeneration",
+                loader: Box::new(Qwen3VLMoELoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3_5",
+                architecture: "Qwen3_5ForConditionalGeneration",
+                loader: Box::new(Qwen3_5Loader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "qwen3_5moe",
+                architecture: "Qwen3_5MoeForConditionalGeneration",
+                loader: Box::new(Qwen3_5MoeLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "language_model.model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "voxtral",
+                architecture: "VoxtralForConditionalGeneration",
+                loader: Box::new(VoxtralLoader),
+                accepted: vec![
+                    "mm_streams_embeddings.embedding_module.tok_embeddings.weight",
+                    "output.weight",
+                    "output.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "gemma4",
+                architecture: "Gemma4ForConditionalGeneration",
+                loader: Box::new(Gemma4Loader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "model.language_model.embed_tokens_per_layer.weight",
+                    "model.language_model.lm_head.weight",
+                    "model.language_model.lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
+                name: "diffusiongemma",
+                architecture: "DiffusionGemmaForBlockDiffusion",
+                loader: Box::new(DiffusionGemmaLoader),
+                accepted: vec![
+                    "model.decoder.embed_tokens.weight",
+                    "model.decoder.lm_head.weight",
+                    "model.decoder.lm_head.bias",
+                ],
+            },
+        ]
+    }
+
+    fn assert_model_scoped_promoted_predicates(case: &PromotedIsqCase, predicates: &[Regex]) {
+        for name in &case.accepted {
+            assert!(
+                matches_any(predicates, name),
+                "{} did not promote {name}",
+                case.name
+            );
+            for lookalike in [format!("vision_tower.{name}"), format!("{name}.shadow")] {
+                assert!(
+                    !matches_any(predicates, &lookalike),
+                    "{} promoted lookalike {lookalike}",
+                    case.name
+                );
+            }
+        }
+
+        for lookalike in [
+            "model.vision_tower.embed_tokens.weight",
+            "model.vision_tower.embed_tokens_per_layer.weight",
+            "model.vision_tower.lm_head.weight",
+            "vision_model.embeddings.word_embeddings.weight",
+            "transformer.wte.weight",
+        ] {
+            assert!(
+                !matches_any(predicates, lookalike),
+                "{} promoted lookalike {lookalike}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn multimodal_promoted_isq_predicates_are_model_scoped() -> Result<()> {
+        for case in promoted_isq_cases() {
+            let predicates = case.loader.promoted_isq_predicates("")?;
+            assert_model_scoped_promoted_predicates(&case, &predicates);
+        }
+
+        let gemma4 = Gemma4Loader.promoted_isq_predicates("")?;
+        assert!(matches_any(
+            &gemma4,
+            "model.language_model.embed_tokens_per_layer.weight"
+        ));
+        for name in [
+            "model.language_model.per_layer_model_projection.weight",
+            "model.language_model.layers.0.per_layer_projection.weight",
+            "model.language_model.per_layer_projection_norm.weight",
+        ] {
+            assert!(!matches_any(&gemma4, name), "Gemma4 promoted {name}");
+        }
+
+        let gemma3n = Gemma3nLoader.promoted_isq_predicates("")?;
+        for name in [
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.lm_head.weight",
+        ] {
+            assert!(matches_any(&gemma3n, name), "Gemma3n missed {name}");
+        }
+        assert!(!matches_any(
+            &gemma3n,
+            "model.language_model.embed_tokens_per_layer.weight"
+        ));
+
+        Ok(())
+    }
+
+    #[test]
+    fn auto_multimodal_delegates_promoted_isq_predicates() -> Result<()> {
+        let auto = AutoMultimodalLoader;
+        for case in promoted_isq_cases() {
+            let config = format!(r#"{{"architectures":["{}"]}}"#, case.architecture);
+            let direct = case.loader.promoted_isq_predicates(&config)?;
+            let delegated = auto.promoted_isq_predicates(&config)?;
+            assert_eq!(
+                delegated.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                direct.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert_model_scoped_promoted_predicates(&case, &delegated);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn qwen3_5_moe_isq_matches_stacked_experts() -> Result<()> {
+        let loader = Qwen3_5MoeLoader;
+        let names = [
+            "model.language_model.layers.0.mlp.experts.gate_up_proj.weight",
+            "model.language_model.layers.0.mlp.experts.down_proj.weight",
+        ];
+
+        for regexes in [
+            loader.immediate_isq_predicates("")?,
+            loader.immediate_isq_predicates_moqe("")?,
+        ] {
+            for name in names {
+                assert!(matches_any(&regexes, name), "{name} was not matched");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn mllama_enables_paged_attention_without_prefix_caching() {
+        let loader = VLlamaLoader;
+        assert!(loader.supports_paged_attention(""));
+        assert!(!loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn gemma3n_enables_paged_attention_and_prefix_caching() {
+        let loader = Gemma3nLoader;
+        assert!(loader.supports_paged_attention(""));
+        assert!(loader.supports_prefix_cacher(""));
+    }
+
+    #[test]
+    fn gemma4_all_bidirectional_disables_incremental_cache() {
+        let all = r#"{"text_config":{"use_bidirectional_attention":"all"}}"#;
+        let vision = r#"{"text_config":{"use_bidirectional_attention":"vision"}}"#;
+
+        for loader in [
+            &Gemma4Loader as &dyn MultimodalModelLoader,
+            &DiffusionGemmaLoader as &dyn MultimodalModelLoader,
+        ] {
+            assert!(!loader.supports_paged_attention(all));
+            assert!(!loader.supports_prefix_cacher(all));
+            assert!(loader.supports_paged_attention(vision));
+            assert!(loader.supports_prefix_cacher(vision));
+        }
+    }
+
+    #[test]
+    fn gemma4_uqff_keeps_legacy_dense_embeddings_out_of_dummy_layer_regexes() -> Result<()> {
+        let loader = Gemma4Loader;
+        let embeddings = [
+            "model.language_model.embed_tokens.weight",
+            "model.language_model.embed_tokens_per_layer.weight",
+        ];
+
+        let isq_layers = loader.isq_layer_regexes("")?;
+        for name in embeddings {
+            assert!(!matches_any(&isq_layers, name), "{name} was matched");
+        }
+
+        let promoted = loader.promoted_isq_predicates("")?;
+        for name in embeddings {
+            assert!(matches_any(&promoted, name), "{name} was not promoted");
+        }
+
+        Ok(())
+    }
+
+    fn gemma4_estimator_config(tie_word_embeddings: bool) -> String {
+        format!(
+            r#"{{
+                "architectures": ["Gemma4ForCausalLM"],
+                "text_config": {{
+                    "hidden_size": 12,
+                    "intermediate_size": 24,
+                    "num_hidden_layers": 2,
+                    "sliding_window": 16,
+                    "final_logit_softcapping": null,
+                    "vocab_size": 24,
+                    "tie_word_embeddings": {tie_word_embeddings},
+                    "layer_types": ["sliding_attention", "full_attention"],
+                    "hidden_size_per_layer_input": 6,
+                    "vocab_size_per_layer_input": 18
+                }}
+            }}"#
+        )
+    }
+
+    #[test]
+    fn gemma4_runtime_config_caps_nested_and_flat_contexts() -> Result<()> {
+        let loader = Gemma4Loader;
+        let config = gemma4_estimator_config(true);
+
+        assert!(matches!(
+            loader.runtime_config(&config, None)?,
+            Cow::Borrowed(_)
+        ));
+        assert!(loader.runtime_config(&config, Some(0)).is_err());
+
+        let capped = loader.runtime_config(&config, Some(8192))?;
+        let parsed: Gemma4Config = serde_json::from_str(&capped)?;
+        assert_eq!(parsed.text_config.max_position_embeddings, 8192);
+        assert!(matches!(
+            loader.runtime_config(&capped, Some(16384))?,
+            Cow::Borrowed(_)
+        ));
+
+        let mut flat_value: serde_json::Value = serde_json::from_str(&config)?;
+        let text_config = flat_value
+            .as_object_mut()
+            .unwrap()
+            .remove("text_config")
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone();
+        flat_value.as_object_mut().unwrap().extend(text_config);
+        let flat = serde_json::to_string(&flat_value)?;
+        let flat_capped = AutoMultimodalLoader.runtime_config(&flat, Some(8192))?;
+        assert_eq!(
+            serde_json::from_str::<Gemma4Config>(&flat_capped)?
+                .text_config
+                .max_position_embeddings,
+            8192
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn gemma4_estimator_promotes_tied_untied_and_ple_embeddings() -> Result<()> {
+        let loader = Gemma4Loader;
+        let dtype = DType::BF16;
+
+        for (default, tied, untied) in [
+            (IsqType::AFQ4, 444, 636),
+            (IsqType::AFQ6, 636, 924),
+            (IsqType::Q4K, 444, 636),
+            (IsqType::Q5K, 636, 924),
+            (IsqType::Q6K, 636, 924),
+        ] {
+            let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
+            let pack_factor = default.pack_factor(dtype);
+            assert_eq!(
+                loader.non_mapped_size_in_bytes(
+                    &gemma4_estimator_config(true),
+                    dtype,
+                    pack_factor,
+                    Some(&quantization),
+                    None,
+                )?,
+                tied,
+                "{default} tied"
+            );
+            assert_eq!(
+                loader.non_mapped_size_in_bytes(
+                    &gemma4_estimator_config(false),
+                    dtype,
+                    pack_factor,
+                    Some(&quantization),
+                    None,
+                )?,
+                untied,
+                "{default} untied"
+            );
+        }
+
+        Ok(())
+    }
+
+    fn gemma3n_estimator_config(ple_vocab_size: usize) -> String {
+        format!(
+            r#"{{
+                "text_config": {{
+                    "hidden_size": 12,
+                    "intermediate_size": 24,
+                    "num_hidden_layers": 2,
+                    "num_kv_shared_layers": 0,
+                    "vocab_size": 24,
+                    "sliding_window": 16,
+                    "tie_word_embeddings": true,
+                    "rope_scaling": null,
+                    "vocab_size_per_layer_input": {ple_vocab_size},
+                    "hidden_size_per_layer_input": 6,
+                    "altup_num_inputs": 2,
+                    "layer_types": ["sliding_attention", "full_attention"],
+                    "altup_active_idx": 0,
+                    "altup_coef_clip": null,
+                    "laurel_rank": 4,
+                    "altup_correct_scale": true,
+                    "activation_sparsity_pattern": [0.0, 0.0],
+                    "final_logit_softcapping": null
+                }},
+                "vision_config": {{}},
+                "audio_config": {{}},
+                "audio_soft_tokens_per_image": 0
+            }}"#
+        )
+    }
+
+    #[test]
+    fn gemma3n_estimator_keeps_ple_embedding_dense_for_q_defaults() -> Result<()> {
+        let loader = Gemma3nLoader;
+        let dtype = DType::BF16;
+        let expected_ple_vocab_delta = 2 * 6 * dtype.size_in_bytes();
+
+        for default in [IsqType::Q4K, IsqType::Q5K, IsqType::Q6K] {
+            let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
+            let pack_factor = default.pack_factor(dtype);
+            let base = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(18),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                None,
+            )?;
+            let expanded = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(19),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                None,
+            )?;
+            assert_eq!(expanded - base, expected_ple_vocab_delta, "{default}");
+        }
+
+        Ok(())
     }
 }

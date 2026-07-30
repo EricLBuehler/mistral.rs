@@ -38,6 +38,7 @@ pub struct GgufModelBuilder {
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
+    pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
 }
 
 impl GgufModelBuilder {
@@ -72,6 +73,7 @@ impl GgufModelBuilder {
             tool_callbacks: HashMap::new(),
             device: None,
             code_exec_config: None,
+            shell_config: None,
         }
     }
 
@@ -128,6 +130,18 @@ impl GgufModelBuilder {
                 tool,
             },
         );
+        self
+    }
+
+    /// Enable Python code execution.
+    pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
+        self.code_exec_config = Some(config);
+        self
+    }
+
+    /// Enable shell execution.
+    pub fn with_shell_execution(mut self, config: mistralrs_core::ShellConfig) -> Self {
+        self.shell_config = Some(config);
         self
     }
 

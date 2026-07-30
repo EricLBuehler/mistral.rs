@@ -1,4 +1,3 @@
-use byteorder::{LittleEndian, ReadBytesExt};
 use candle_core::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
@@ -13,20 +12,17 @@ use candle_core::Storage;
 use candle_nn::Linear;
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
+use safetensors::tensor::Dtype;
 use std::{
-    borrow::Cow,
-    io::Cursor,
     num::NonZeroUsize,
     sync::{atomic::AtomicUsize, Arc},
 };
 
+use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
 use crate::{
-    utils::{
-        deserialize_tensor, fake_deserialize_tensor, serialize_tensor, version_is_compatible,
-        BitWiseOp, LeftshiftOp, UQFF_VERSION,
-    },
+    utils::{BitWiseOp, LeftshiftOp},
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, QuantizedSerdeType,
-    UnquantLinear,
+    Shard, UnquantLinear, UqffReader, UqffTensor,
 };
 
 #[cfg(feature = "cuda")]
@@ -50,6 +46,12 @@ mod quantize;
 pub(crate) const ISQ_HQQ_GROUP_SIZE: usize = 64;
 pub(crate) const ISQ_HQQ_DEFAULT_OPT_STEPS: Option<usize> = Some(10);
 pub(crate) const OPTIMIZER_HQQ_DEFAULT_STEPS: usize = 20;
+const HQQ_EMBEDDING_CHUNK_ELEMENTS: usize = 1024 * 1024;
+const HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS: usize = 1;
+const HQQ4_HIGH_MASK: u8 = 0xf0;
+const HQQ4_LOW_MASK: u8 = 0x0f;
+const HQQ4_HIGH_MULTIPLIER: f32 = 1.0 / 16.0;
+const HQQ4_LOW_MULTIPLIER: f32 = 1.0;
 
 #[cfg(feature = "cuda")]
 macro_rules! dequant_for_dtype {
@@ -212,7 +214,7 @@ impl HqqBits {
                     crate::metal_kernels::call_hqq_pack_8bit(
                         dev.device(),
                         &encoder,
-                        &crate::metal_kernels::Kernels::new(),
+                        crate::metal_kernels::Kernels::global(),
                         wq_storage.buffer(),
                         &output,
                         output_shape.elem_count(),
@@ -299,7 +301,7 @@ impl HqqBits {
                     crate::metal_kernels::call_hqq_pack_4bit(
                         dev.device(),
                         &encoder,
-                        &crate::metal_kernels::Kernels::new(),
+                        crate::metal_kernels::Kernels::global(),
                         wq_storage.buffer(),
                         &output,
                         wq.dims()[0],
@@ -585,7 +587,240 @@ pub struct HqqLayer {
     pub(crate) cfg: HqqConfig,
 }
 
+struct HqqEmbeddingSelection {
+    packed_indices: Tensor,
+    metadata_indices: Tensor,
+    nibble_masks: Option<Tensor>,
+    nibble_multipliers: Option<Tensor>,
+}
+
 impl HqqLayer {
+    pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
+        const WEIGHT_SUFFIXES: &[&str] = &[
+            "weight",
+            "weight.format",
+            "weight.scales",
+            "weight.zeros",
+            "weight.shape",
+            "weight.bits",
+            "weight.group_size",
+            "weight.axis",
+            "weight.optimization_steps",
+            "weight.round_zeros",
+            "weight.channel_wise",
+        ];
+        if layer.exact_weight_suffixes(WEIGHT_SUFFIXES)
+            && layer.scalar("weight.format", Dtype::U8)
+            && layer.scalar("weight.bits", Dtype::U8)
+            && layer.scalar("weight.group_size", Dtype::U32)
+            && layer.scalar("weight.axis", Dtype::U8)
+            && layer.scalar("weight.optimization_steps", Dtype::U32)
+            && layer.scalar("weight.round_zeros", Dtype::U8)
+            && layer.scalar("weight.channel_wise", Dtype::U8)
+            && layer.u32_vector("weight.shape")
+        {
+            Some(UqffHeaderMatch {
+                serde_type: QuantizedSerdeType::Hqq,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn stored_label_from_uqff_tensors(
+        tensors: &[UqffTensor],
+        prefix: &str,
+    ) -> Result<String> {
+        let bits = crate::uqff::u8_scalar_with_suffix(tensors, prefix, "weight.bits")?;
+        Ok(format!("hqq{bits}"))
+    }
+
+    pub fn from_parts(
+        w_q: Tensor,
+        scales: Tensor,
+        zeros: Tensor,
+        bias: Option<Tensor>,
+        w_shape: Shape,
+        cfg: HqqConfig,
+    ) -> Self {
+        Self {
+            w_q,
+            zeros,
+            scales,
+            bias,
+            w_shape,
+            cfg,
+        }
+    }
+
+    fn embedding_selection(
+        &self,
+        ids: &[u32],
+        embedding_dim: usize,
+        output_start: usize,
+        output_len: usize,
+        pack_factor: usize,
+    ) -> Result<HqqEmbeddingSelection> {
+        let (packed_height, metadata_width) = self.w_q.dims2()?;
+        let mut packed_indices = Vec::with_capacity(output_len);
+        let mut metadata_indices = Vec::with_capacity(output_len);
+        let mut nibble_masks = (pack_factor == 2).then(|| Vec::with_capacity(output_len));
+        let mut nibble_multipliers = (pack_factor == 2).then(|| Vec::with_capacity(output_len));
+
+        for output_index in output_start..output_start + output_len {
+            let token_id = ids[output_index / embedding_dim] as usize;
+            let column_in_embedding = output_index % embedding_dim;
+            let flat_index = token_id * embedding_dim + column_in_embedding;
+            let quantized_row = flat_index / metadata_width;
+            let metadata_index = flat_index % metadata_width;
+            let packed_row = quantized_row % packed_height;
+            packed_indices.push(u32::try_from(packed_row * metadata_width + metadata_index)?);
+            metadata_indices.push(u32::try_from(metadata_index)?);
+
+            if let (Some(masks), Some(multipliers)) = (&mut nibble_masks, &mut nibble_multipliers) {
+                if quantized_row < packed_height {
+                    masks.push(HQQ4_HIGH_MASK);
+                    multipliers.push(HQQ4_HIGH_MULTIPLIER);
+                } else {
+                    masks.push(HQQ4_LOW_MASK);
+                    multipliers.push(HQQ4_LOW_MULTIPLIER);
+                }
+            }
+        }
+
+        let device = self.w_q.device();
+        let packed_indices = Tensor::from_vec(packed_indices, output_len, device)?;
+        let metadata_indices = Tensor::from_vec(metadata_indices, output_len, device)?;
+        let nibble_masks = nibble_masks
+            .map(|masks| Tensor::from_vec(masks, output_len, device))
+            .transpose()?;
+        let nibble_multipliers = nibble_multipliers
+            .map(|multipliers| {
+                Tensor::from_vec(multipliers, output_len, device)?.to_dtype(self.scales.dtype())
+            })
+            .transpose()?;
+
+        Ok(HqqEmbeddingSelection {
+            packed_indices,
+            metadata_indices,
+            nibble_masks,
+            nibble_multipliers,
+        })
+    }
+
+    fn embedding_forward_raw_with_chunk_elements(
+        &self,
+        ids: &Tensor,
+        chunk_elements: usize,
+    ) -> Result<Tensor> {
+        if !matches!(self.cfg.axis, HqqAxis::Zero) || !self.cfg.channel_wise {
+            candle_core::bail!("HQQ embedding requires channel-wise axis-0 quantization.");
+        }
+        let pack_factor = match self.cfg.bits {
+            HqqBits::Eight => 1,
+            HqqBits::Four => 2,
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("HQQ embedding supports only 4-bit and 8-bit weights.")
+            }
+        };
+        let [vocab_size, embedding_dim] = self.w_shape.dims() else {
+            candle_core::bail!(
+                "HQQ embedding requires rank-2 weights, got {:?}.",
+                self.w_shape.dims()
+            );
+        };
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(*embedding_dim);
+        if ids.elem_count() == 0 {
+            return Tensor::zeros(
+                HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS,
+                self.scales.dtype(),
+                self.w_q.device(),
+            )?
+            .narrow(0, 0, 0)?
+            .reshape(Shape::from_dims(&output_shape));
+        }
+
+        let ids = ids
+            .flatten_all()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        for &token_id in &ids {
+            if token_id as usize >= *vocab_size {
+                candle_core::bail!(
+                    "HQQ embedding index {token_id} is out of bounds for vocabulary size {vocab_size}."
+                );
+            }
+        }
+        let output_elements = ids.len().checked_mul(*embedding_dim).ok_or_else(|| {
+            candle_core::Error::Msg("HQQ embedding output element count overflowed.".into())
+        })?;
+        let w_q = self.w_q.flatten_all()?;
+        let scales = self.scales.flatten_all()?;
+        let zeros = self.zeros.flatten_all()?;
+        let mut chunks = Vec::with_capacity(output_elements.div_ceil(chunk_elements));
+
+        for output_start in (0..output_elements).step_by(chunk_elements) {
+            let output_len = chunk_elements.min(output_elements - output_start);
+            let selection = self.embedding_selection(
+                &ids,
+                *embedding_dim,
+                output_start,
+                output_len,
+                pack_factor,
+            )?;
+            let packed = w_q.index_select(&selection.packed_indices, 0)?;
+            let quantized = match (
+                selection.nibble_masks.as_ref(),
+                selection.nibble_multipliers.as_ref(),
+            ) {
+                (Some(masks), Some(multipliers)) => packed
+                    .bitwise_and(masks)?
+                    .to_dtype(self.scales.dtype())?
+                    .mul(multipliers)?,
+                (None, None) => packed.to_dtype(self.scales.dtype())?,
+                _ => unreachable!(),
+            };
+            let scales = scales.index_select(&selection.metadata_indices, 0)?;
+            let zeros = zeros.index_select(&selection.metadata_indices, 0)?;
+            chunks.push(((quantized - zeros)? * scales)?);
+        }
+
+        let output = if chunks.len() == 1 {
+            chunks.pop().unwrap()
+        } else {
+            Tensor::cat(&chunks.iter().collect::<Vec<_>>(), 0)?
+        };
+        output.reshape(Shape::from_dims(&output_shape))
+    }
+
+    fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
+        if !matches!(shard, Shard::Simple { world_size: 1, .. }) {
+            candle_core::bail!("HQQ UQFF artifacts do not support sharded loading.");
+        }
+        let w_q = reader.load_tensor(&format!("{key}.weight"), device)?;
+        let scales = reader.load_tensor(&format!("{key}.weight.scales"), device)?;
+        let zeros = reader.load_tensor(&format!("{key}.weight.zeros"), device)?;
+        let bias = reader.load_optional_tensor(&format!("{key}.bias"), device)?;
+        let w_shape = Shape::from_dims(&reader.load_u32_vec(&format!("{key}.weight.shape"))?);
+        let optimization_steps =
+            match reader.load_u32_scalar(&format!("{key}.weight.optimization_steps"))? as usize {
+                0 => None,
+                steps => Some(steps),
+            };
+        let cfg = HqqConfig {
+            bits: HqqBits::try_from(reader.load_u8_scalar(&format!("{key}.weight.bits"))? as usize)?,
+            group_size: NonZeroUsize::try_from(
+                reader.load_u32_scalar(&format!("{key}.weight.group_size"))? as usize,
+            )?,
+            axis: HqqAxis::try_from(reader.load_u8_scalar(&format!("{key}.weight.axis"))? as usize)?,
+            optimization_steps,
+            round_zeros: reader.load_u8_scalar(&format!("{key}.weight.round_zeros"))? != 0,
+            channel_wise: reader.load_u8_scalar(&format!("{key}.weight.channel_wise"))? != 0,
+        };
+        Ok(Self::from_parts(w_q, scales, zeros, bias, w_shape, cfg))
+    }
+
     /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
@@ -921,6 +1156,10 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)
+    }
+
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         /*
         if self.cfg.force_dequantize {
@@ -941,6 +1180,16 @@ impl QuantMethod for HqqLayer {
 
     fn dtype_and_device(&self) -> (DType, Device) {
         (self.scales.dtype(), self.scales.device().clone())
+    }
+
+    fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        Ok(crate::plan_weight_isq(
+            self.scales.dtype(),
+            self.scales.device().clone(),
+            self.w_shape.dims().to_vec(),
+            request,
+            true,
+        ))
     }
 
     fn apply_isq(
@@ -987,42 +1236,6 @@ impl QuantMethod for HqqLayer {
     }
 }
 
-// Serialization structure:
-//
-// -----------------------
-// UQFF version, u32, little endian
-// -----------------------
-// ISQ type (2 for hqq), u8, little endian
-// -----------------------
-// Whether bias data is included, u8 boolean
-// -----------------------
-// Quantized weight tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-// Quantized scale tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-// Quantized zeroes tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-// Weight (after dequant) shape dims, u32, little endian
-// -----------------------
-// ...
-// Array (in original order): Weight (after dequant) shape dims, u32, little endian
-// ...
-// -----------------------
-// Cfg bits, u8, little endian
-// -----------------------
-// Cfg group size, u32, little endian
-// -----------------------
-// Cfg axis, u8, little endian
-// -----------------------
-// Cfg optimization steps, u32, little endian
-// -----------------------
-// Cfg round_zeros, boolean u8, little endian
-// -----------------------
-// Cfg channel_wise, boolean u8, little endian
-// -----------------------
-// [OPTIONAL] Bias tensor data generated by `serialize_tensor`. Refer to its docs for layout.
-// -----------------------
-
 impl QuantizedSerde for HqqLayer {
     fn isq_serde_supported(&self) -> bool {
         true
@@ -1030,268 +1243,238 @@ impl QuantizedSerde for HqqLayer {
     fn name(&self) -> &'static str {
         "hqq"
     }
-    fn serialize(&self) -> Result<Cow<'_, [u8]>> {
-        self.serialize_with_bias(self.bias.clone())
-    }
-    fn serialize_with_bias(&self, bias: Option<Tensor>) -> Result<Cow<'_, [u8]>> {
-        let mut buffer = Vec::new();
-
-        // Version is always first!
-        buffer.extend(&UQFF_VERSION.to_le_bytes());
-
-        // ISQ type for hqq is 2
-        buffer.push(QuantizedSerdeType::Hqq as u8);
-
-        // Has bias
-        buffer.push(bias.is_some() as u8);
-
-        serialize_tensor(&mut buffer, &self.w_q)?;
-        serialize_tensor(&mut buffer, &self.scales)?;
-        serialize_tensor(&mut buffer, &self.zeros)?;
-
-        let w_shape = self.w_shape.dims();
-        let shape_len = w_shape.len();
-        if shape_len > u32::MAX as usize {
-            candle_core::bail!(
-                "Weight tensor has too many dimensions for UQFF format: {} exceeds u32::MAX",
-                shape_len
-            );
-        }
-        buffer.extend((shape_len as u32).to_le_bytes());
-        for dim in w_shape {
-            if *dim > u32::MAX as usize {
-                candle_core::bail!(
-                    "Weight tensor dimension too large for UQFF format: {} exceeds u32::MAX",
-                    dim
-                );
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        let actual_ty = match self.cfg.bits {
+            HqqBits::Eight => IsqType::HQQ8,
+            HqqBits::Four => IsqType::HQQ4,
+            HqqBits::One | HqqBits::Two | HqqBits::Three => {
+                candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF.")
             }
-            buffer.extend((*dim as u32).to_le_bytes());
+        };
+        if ty != actual_ty {
+            candle_core::bail!("Cannot serialize HQQ layer as {ty}; actual type is {actual_ty}.");
         }
 
-        // Config
-        buffer.push(self.cfg.bits as u8);
-        let group_size = <NonZeroUsize as Into<usize>>::into(self.cfg.group_size);
-        if group_size > u32::MAX as usize {
-            candle_core::bail!(
-                "HQQ group size too large for UQFF format: {} exceeds u32::MAX",
-                group_size
-            );
+        let mut data = vec![
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.format"),
+                QuantizedSerdeType::Hqq as u8,
+            ),
+            UqffTensor::from_tensor(format!("{prefix}.weight"), &self.w_q)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.scales"), &self.scales)?,
+            UqffTensor::from_tensor(format!("{prefix}.weight.zeros"), &self.zeros)?,
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                self.w_shape.dims().iter().map(|dim| *dim as u32).collect(),
+                vec![self.w_shape.dims().len()],
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), self.cfg.bits as u8),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.group_size"),
+                self.cfg.group_size.get() as u32,
+            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.axis"), self.cfg.axis as u8),
+            UqffTensor::from_u32_scalar(
+                format!("{prefix}.weight.optimization_steps"),
+                self.cfg.optimization_steps.unwrap_or(0) as u32,
+            ),
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.round_zeros"),
+                self.cfg.round_zeros as u8,
+            ),
+            UqffTensor::from_u8_scalar(
+                format!("{prefix}.weight.channel_wise"),
+                self.cfg.channel_wise as u8,
+            ),
+        ];
+        if let Some(bias) = &self.bias {
+            data.push(UqffTensor::from_tensor(format!("{prefix}.bias"), bias)?);
         }
-        buffer.extend(&(group_size as u32).to_le_bytes());
-        buffer.push(self.cfg.axis as u8);
-        // NOTE: using 0 as a sentinel for None. This means legitimate 0 values cannot be distinguished from None.
-        // This is acceptable because 0 optimization steps would be functionally equivalent to None.
-        let opt_steps = self.cfg.optimization_steps.unwrap_or(0);
-        if opt_steps > u32::MAX as usize {
-            candle_core::bail!(
-                "HQQ optimization steps too large for UQFF format: {} exceeds u32::MAX",
-                opt_steps
-            );
-        }
-        buffer.extend(&(opt_steps as u32).to_le_bytes());
-        buffer.push(self.cfg.round_zeros as u8);
-        buffer.push(self.cfg.channel_wise as u8);
-
-        if let Some(bias) = &bias {
-            // Bias
-            serialize_tensor(&mut buffer, bias)?;
-        }
-
-        Ok(Cow::from(buffer))
+        Ok(data)
     }
-
-    fn deserialize(
-        data: Cow<[u8]>,
+    fn deserialize_uqff(
+        reader: &UqffReader,
+        prefix: &str,
         device: &Device,
-        _comm: &Arc<crate::Comm>,
-        guard: QuantizeOntoGuard,
-    ) -> Result<Arc<dyn QuantMethod>>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Hqq as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let w_q = deserialize_tensor(&mut buffer, device)?;
-        let scales = deserialize_tensor(&mut buffer, device)?;
-        let zeros = deserialize_tensor(&mut buffer, device)?;
-
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
-        }
-        let w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
-        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
-        let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
-        let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
-        let optimization_steps = match buffer.read_u32::<LittleEndian>()? as usize {
-            0 => None,
-            other => Some(other),
-        };
-        let round_zeros = buffer.read_u8()? != 0;
-        let channel_wise = buffer.read_u8()? != 0;
-
-        let cfg = HqqConfig {
-            bits,
-            group_size,
-            axis,
-            optimization_steps,
-            round_zeros,
-            channel_wise,
-        };
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok(Arc::new(Self {
-            w_q,
-            zeros,
-            scales,
-            bias: b,
-            w_shape,
-            cfg,
-        }))
+        shard: Shard,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(Self::from_uqff(reader, prefix, device, shard)?))
     }
-    fn deserialize_ext_bias(
-        data: Cow<[u8]>,
-        device: &Device,
-        guard: QuantizeOntoGuard,
-    ) -> Result<(Arc<dyn QuantMethod>, Option<Tensor>)>
-    where
-        Self: Sized,
-    {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Hqq as usize
-            );
-        }
-
-        let has_bias = buffer.read_u8()? != 0;
-
-        let _acquired_load_guard = guard.acquire(device);
-        let w_q = deserialize_tensor(&mut buffer, device)?;
-        let scales = deserialize_tensor(&mut buffer, device)?;
-        let zeros = deserialize_tensor(&mut buffer, device)?;
-
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
-        }
-        let w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
-        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
-        let group_size = NonZeroUsize::try_from(buffer.read_u32::<LittleEndian>()? as usize)?;
-        let axis = HqqAxis::try_from(buffer.read_u8()? as usize)?;
-        let optimization_steps = match buffer.read_u32::<LittleEndian>()? as usize {
-            0 => None,
-            other => Some(other),
-        };
-        let round_zeros = buffer.read_u8()? != 0;
-        let channel_wise = buffer.read_u8()? != 0;
-
-        let cfg = HqqConfig {
-            bits,
-            group_size,
-            axis,
-            optimization_steps,
-            round_zeros,
-            channel_wise,
-        };
-
-        let b = if has_bias {
-            Some(deserialize_tensor(&mut buffer, device)?)
-        } else {
-            None
-        };
-
-        Ok((
-            Arc::new(Self {
-                w_q,
-                zeros,
-                scales,
-                bias: None,
-                w_shape,
-                cfg,
-            }),
-            b,
-        ))
-    }
-}
-
-impl HqqLayer {
-    pub fn get_isq_type_from_uqff(data: Cow<[u8]>) -> Result<IsqType> {
-        let mut buffer = Cursor::new(data);
-
-        let version = buffer.read_u32::<LittleEndian>()?;
-        if let Err(e) = version_is_compatible(version) {
-            return Err(candle_core::Error::wrap(e));
-        }
-
-        let isq_type = buffer.read_u8()? as usize;
-        if isq_type != QuantizedSerdeType::Hqq as usize {
-            candle_core::bail!(
-                "ISQ type ({isq_type}) doesn't match expected type {}",
-                QuantizedSerdeType::Hqq as usize
-            );
-        }
-
-        let _has_bias = buffer.read_u8()? != 0;
-
-        fake_deserialize_tensor(&mut buffer)?;
-        fake_deserialize_tensor(&mut buffer)?;
-        fake_deserialize_tensor(&mut buffer)?;
-
-        let n_dims = buffer.read_u32::<LittleEndian>()? as usize;
-
-        let mut dims = Vec::with_capacity(n_dims);
-        for _ in 0..n_dims {
-            dims.push(buffer.read_u32::<LittleEndian>()? as usize)
-        }
-        let _w_shape = Shape::from_dims(&dims);
-
-        // TODO: keep this in sync with get_isq_type_from_uqff!
-        let bits = HqqBits::try_from(buffer.read_u8()? as usize)?;
-
-        match bits {
+    fn isq_type_from_uqff(reader: &UqffReader, prefix: &str) -> Result<IsqType> {
+        match HqqBits::try_from(reader.load_u8_scalar(&format!("{prefix}.weight.bits"))? as usize)?
+        {
             HqqBits::Eight => Ok(IsqType::HQQ8),
             HqqBits::Four => Ok(IsqType::HQQ4),
             HqqBits::One | HqqBits::Two | HqqBits::Three => {
-                candle_core::bail!("cannot convert hqq bits to isq type")
+                candle_core::bail!("Cannot convert HQQ bit width to an ISQ type.")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
+    use crate::{uqff_version_tensors, IsqType, QuantMethod, QuantizedSerde, Shard, UqffReader};
+
+    const TEST_VOCAB_SIZE: usize = 96;
+    const TEST_EMBEDDING_DIM: usize = 32;
+
+    fn test_layer_on_device(bits: HqqBits, device: &Device) -> Result<HqqLayer> {
+        let values = (0..TEST_VOCAB_SIZE * TEST_EMBEDDING_DIM)
+            .map(|index| {
+                let index = index as f32;
+                (index * 0.017).sin() + (index * 0.013).cos() * 0.25
+            })
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (TEST_VOCAB_SIZE, TEST_EMBEDDING_DIM), &Device::Cpu)?;
+        HqqLayer::quantize(
+            &weight,
+            device,
+            HqqConfig {
+                bits,
+                group_size: super::ISQ_HQQ_GROUP_SIZE.try_into()?,
+                axis: HqqAxis::Zero,
+                optimization_steps: Some(2),
+                round_zeros: false,
+                channel_wise: true,
+            },
+        )
+    }
+
+    // Dequantization is accelerator-only when built with cuda/metal, so tests must live on that device.
+    fn test_device() -> Result<Device> {
+        #[cfg(feature = "metal")]
+        {
+            Device::new_metal(0)
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            Device::cuda_if_available(0)
+        }
+    }
+
+    fn test_layer(bits: HqqBits) -> Result<HqqLayer> {
+        test_layer_on_device(bits, &test_device()?)
+    }
+
+    fn assert_embedding_matches_dequantized_gather(layer: &HqqLayer) -> Result<()> {
+        let device = layer.w_q.device().clone();
+        let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &device)?;
+        let actual = layer.embedding_forward_raw(&ids)?;
+        let expected = layer
+            .dequantize()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 3, TEST_EMBEDDING_DIM))?;
+
+        assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(actual.dtype(), DType::F32);
+        assert_eq!(actual.device().location(), device.location());
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(max_diff <= 1e-6, "max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn hqq4_embedding_matches_dequantized_gather() -> Result<()> {
+        assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Four)?)
+    }
+
+    #[test]
+    fn hqq8_embedding_matches_dequantized_gather() -> Result<()> {
+        assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Eight)?)
+    }
+
+    #[test]
+    fn hqq_embedding_chunks_preserve_shape_and_values() -> Result<()> {
+        const TEST_CHUNK_ELEMENTS: usize = 45;
+        let device = test_device()?;
+        let ids = Tensor::from_vec(vec![95u32, 0, 64, 63, 17, 95], (1, 2, 3), &device)?;
+
+        for bits in [HqqBits::Four, HqqBits::Eight] {
+            let layer = test_layer_on_device(bits, &device)?;
+            let actual =
+                layer.embedding_forward_raw_with_chunk_elements(&ids, TEST_CHUNK_ELEMENTS)?;
+            let expected = layer
+                .dequantize()?
+                .index_select(&ids.flatten_all()?, 0)?
+                .reshape((1, 2, 3, TEST_EMBEDDING_DIM))?;
+
+            assert_eq!(actual.dims(), &[1, 2, 3, TEST_EMBEDDING_DIM]);
+            let actual_values = actual
+                .flatten_all()?
+                .to_device(&Device::Cpu)?
+                .to_vec1::<f32>()?;
+            let expected_values = expected
+                .flatten_all()?
+                .to_device(&Device::Cpu)?
+                .to_vec1::<f32>()?;
+            let max_diff = actual_values
+                .iter()
+                .zip(expected_values)
+                .map(|(actual, expected)| (actual - expected).abs())
+                .fold(0f32, f32::max);
+            assert!(max_diff <= 1e-6, "bits={bits:?}, max_diff={max_diff}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hqq_embedding_accepts_empty_ids() -> Result<()> {
+        let device = test_device()?;
+        let layer = test_layer_on_device(HqqBits::Four, &device)?;
+        let ids = Tensor::zeros(
+            super::HQQ_EMPTY_EMBEDDING_BACKING_ELEMENTS,
+            DType::U32,
+            &device,
+        )?
+        .narrow(0, 0, 0)?
+        .reshape((2, 0, 3))?;
+        let output = layer.embedding_forward_raw(&ids)?;
+
+        assert_eq!(output.dims(), &[2, 0, 3, TEST_EMBEDDING_DIM]);
+        assert_eq!(output.dtype(), DType::F32);
+        assert_eq!(output.device().location(), device.location());
+        Ok(())
+    }
+
+    #[test]
+    fn hqq4_uqff_embedding_matches_dequantized_gather() -> Result<()> {
+        let device = test_device()?;
+        let layer = test_layer_on_device(HqqBits::Four, &device)?;
+        let mut tensors = uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("test.embedding", IsqType::HQQ4)?);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mistralrs-hqq-embedding-{}-{stamp}.uqff",
+            std::process::id()
+        ));
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = UqffReader::open(std::slice::from_ref(&path))?;
+        let loaded = reader
+            .load_linear("test.embedding", &device, Shard::default())?
+            .unwrap();
+        let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &device)?;
+        let actual = loaded.embedding_forward_raw(&ids)?;
+        let expected = layer
+            .dequantize()?
+            .index_select(&ids.flatten_all()?, 0)?
+            .reshape((2, 2, TEST_EMBEDDING_DIM))?;
+        let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+
+        drop(reader);
+        let _ = std::fs::remove_file(path);
+        assert!(max_diff <= 1e-6, "max_diff={max_diff}");
+        Ok(())
     }
 }

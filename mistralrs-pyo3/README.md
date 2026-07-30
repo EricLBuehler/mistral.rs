@@ -11,7 +11,9 @@ For full documentation, see:
 ## Quick Install
 
 ```bash
-pip install mistralrs-cuda   # NVIDIA GPUs
-pip install mistralrs-metal  # Apple Silicon
-pip install mistralrs        # CPU only
+pip install mistralrs        # CPU, or Metal on Apple Silicon
 ```
+
+NVIDIA CUDA wheels ship as GitHub release assets because they vary by CUDA toolkit lane
+(`cuda128`, `cuda129`, `cuda130`, `cuda131`, `cuda132`, `cuda133`) and GPU compute
+capability. See the Python SDK installation guide for the `--find-links` command.

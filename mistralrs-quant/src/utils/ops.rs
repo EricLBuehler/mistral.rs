@@ -11,7 +11,7 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{ffi, slice_ptr};
+use crate::utils::{ffi, slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 #[cfg(feature = "cuda")]
 use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
@@ -167,7 +167,7 @@ impl CustomOp1 for Leftshift {
         crate::metal_kernels::call_bitwise_leftshift(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             s1.buffer(),
             l1.start_offset(),
@@ -614,7 +614,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -627,7 +627,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -640,7 +640,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -768,7 +768,7 @@ impl CustomOp1 for BitWiseUnary {
             BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 l1.start_offset() * s1.dtype().size_in_bytes(),
@@ -918,7 +918,7 @@ impl CustomOp1 for ArgSort {
         crate::metal_kernels::call_argsort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1025,7 +1025,7 @@ impl CustomOp1 for Sort {
         crate::metal_kernels::call_sort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1089,7 +1089,7 @@ impl NonZero {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
 mod cuda_ops_cccl2 {
     use super::*;
 
@@ -1161,7 +1161,7 @@ mod cuda_ops_cccl2 {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+#[cfg(all(feature = "cuda", cuda_ge_13000))]
 mod cuda_ops_cccl3 {
     use super::*;
 
@@ -1233,9 +1233,9 @@ mod cuda_ops_cccl3 {
     }
 }
 
-#[cfg(all(feature = "cuda", not(feature = "cuda-13000")))]
+#[cfg(all(feature = "cuda", not(cuda_ge_13000)))]
 use cuda_ops_cccl2::{count_nonzero_cuda, nonzero_cuda};
-#[cfg(all(feature = "cuda", feature = "cuda-13000"))]
+#[cfg(all(feature = "cuda", cuda_ge_13000))]
 use cuda_ops_cccl3::{count_nonzero_cuda, nonzero_cuda};
 
 impl CustomOp1 for NonZero {
@@ -1530,7 +1530,7 @@ impl CustomOp1 for CumSum {
         crate::metal_kernels::call_scan(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             ScanType::Sum,
             s1.buffer(),
@@ -2003,7 +2003,8 @@ impl CustomOp1 for SoftmaxWithSinks {
         let dtype = storage.dtype();
         let n_elements = layout.shape().elem_count();
         let out_shape = layout.shape().clone();
-        let stream = device.cuda_stream().cu_stream();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
         let logits_offset = layout.start_offset();
 
         let batch_size = out_shape.dims()[0];
@@ -2017,13 +2018,14 @@ impl CustomOp1 for SoftmaxWithSinks {
 
         match dtype {
             DType::F16 => {
-                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
                 let logits_slice = storage.as_cuda_slice::<f16>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<f16>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_f16(
@@ -2036,7 +2038,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2045,13 +2047,14 @@ impl CustomOp1 for SoftmaxWithSinks {
                 Ok((out_storage, out_shape))
             }
             DType::BF16 => {
-                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
                 let logits_slice = storage.as_cuda_slice::<bf16>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<bf16>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_bf16(
@@ -2064,7 +2067,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2073,13 +2076,14 @@ impl CustomOp1 for SoftmaxWithSinks {
                 Ok((out_storage, out_shape))
             }
             DType::F32 => {
-                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let mut output = unsafe { device.alloc::<f32>(n_elements) }?;
                 let logits_slice = storage.as_cuda_slice::<f32>()?;
                 let sinks_slice = sinks_cuda.as_cuda_slice::<f32>()?;
 
-                let (logits_ptr, _l_guard) = slice_ptr(logits_slice, logits_offset);
-                let (sinks_ptr, _s_guard) = slice_ptr(sinks_slice, sinks_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (logits_ptr, _l_guard) =
+                    slice_ptr_on_stream(logits_slice, logits_offset, &stream);
+                let (sinks_ptr, _s_guard) = slice_ptr_on_stream(sinks_slice, sinks_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::softmax_with_sinks_f32(
@@ -2092,7 +2096,7 @@ impl CustomOp1 for SoftmaxWithSinks {
                         self.q_len as i32,
                         self.k_len as i32,
                         1.0,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2131,7 +2135,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         crate::metal_kernels::call_softmax_with_sinks(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             storage.buffer(),
             layout.start_offset() * dtype.size_in_bytes(),
@@ -2255,7 +2259,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2286,7 +2290,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2314,7 +2318,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2340,7 +2344,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
             crate::metal_kernels::call_flash_attn_sinks_prefill(
                 device.device(),
                 &encoder,
-                &kernels,
+                kernels,
                 dtype,
                 q_storage.buffer(),
                 q_offset,
@@ -2499,7 +2503,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks-varlen");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2508,7 +2512,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         crate::metal_kernels::call_flash_attn_sinks_varlen_prefill(
             device.device(),
             &encoder,
-            &kernels,
+            kernels,
             dtype,
             q_storage.buffer(),
             q_offset,
@@ -2660,14 +2664,19 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<f32> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i];
-                        let b_val = b_slice[b_offset + i];
-                        apply_cpu_activation(a_val, activation) * b_val
-                    })
-                    .collect();
+                // barrier pool instead of rayon: its workers already own these cores and
+                // would otherwise spin against the rayon threads between matmuls
+                let mut result = vec![0f32; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut f32;
+                    for i in range {
+                        let v = apply_cpu_activation(a[i], activation) * b[i];
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::F32(result)
             }
             DType::F16 => {
@@ -2676,16 +2685,20 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<f16> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to f16 before multiplying, matching candle's
-                        // two-step behavior: unary op in f32 -> cast to f16 -> binary mul
-                        let activated = f16::from_f32(apply_cpu_activation(a_val, activation));
-                        f16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
-                    })
-                    .collect();
+                let mut result = vec![f16::ZERO; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut f16;
+                    for i in range {
+                        // unary in f32 -> cast to f16 -> mul, matching candle's two-step behavior
+                        let activated =
+                            f16::from_f32(apply_cpu_activation(a[i].to_f32(), activation));
+                        let v = f16::from_f32(activated.to_f32() * b[i].to_f32());
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::F16(result)
             }
             DType::BF16 => {
@@ -2694,16 +2707,20 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<bf16> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to bf16 before multiplying, matching candle's
-                        // two-step behavior: unary op in f32 -> cast to bf16 -> binary mul
-                        let activated = bf16::from_f32(apply_cpu_activation(a_val, activation));
-                        bf16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
-                    })
-                    .collect();
+                let mut result = vec![bf16::ZERO; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut bf16;
+                    for i in range {
+                        // unary in f32 -> cast to bf16 -> mul, matching candle's two-step behavior
+                        let activated =
+                            bf16::from_f32(apply_cpu_activation(a[i].to_f32(), activation));
+                        let v = bf16::from_f32(activated.to_f32() * b[i].to_f32());
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::BF16(result)
             }
             other => candle_core::bail!("fused_glu: unsupported dtype {:?}", other),
@@ -2727,19 +2744,20 @@ impl CustomOp2 for FusedGlu {
         let n_elements = l1.shape().elem_count();
         let dtype = s1.dtype();
         let out_shape = l1.shape().clone();
-        let stream = device.cuda_stream().cu_stream();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
         let a_offset = l1.start_offset();
         let b_offset = l2.start_offset();
 
         match dtype {
             DType::F16 => {
-                let output = device.alloc_zeros::<f16>(n_elements)?;
+                let mut output = device.alloc_zeros::<f16>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<f16>()?;
                 let b_slice = s2.as_cuda_slice::<f16>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_f16(
@@ -2748,7 +2766,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2757,13 +2775,13 @@ impl CustomOp2 for FusedGlu {
                 Ok((out_storage, out_shape))
             }
             DType::BF16 => {
-                let output = device.alloc_zeros::<bf16>(n_elements)?;
+                let mut output = device.alloc_zeros::<bf16>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<bf16>()?;
                 let b_slice = s2.as_cuda_slice::<bf16>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_bf16(
@@ -2772,7 +2790,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2781,13 +2799,13 @@ impl CustomOp2 for FusedGlu {
                 Ok((out_storage, out_shape))
             }
             DType::F32 => {
-                let output = device.alloc_zeros::<f32>(n_elements)?;
+                let mut output = device.alloc_zeros::<f32>(n_elements)?;
                 let a_slice = s1.as_cuda_slice::<f32>()?;
                 let b_slice = s2.as_cuda_slice::<f32>()?;
 
-                let (a_ptr, _a_guard) = slice_ptr(a_slice, a_offset);
-                let (b_ptr, _b_guard) = slice_ptr(b_slice, b_offset);
-                let (out_ptr, _o_guard) = slice_ptr(&output, 0);
+                let (a_ptr, _a_guard) = slice_ptr_on_stream(a_slice, a_offset, &stream);
+                let (b_ptr, _b_guard) = slice_ptr_on_stream(b_slice, b_offset, &stream);
+                let (out_ptr, _o_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
 
                 unsafe {
                     ffi::fused_glu_f32(
@@ -2796,7 +2814,7 @@ impl CustomOp2 for FusedGlu {
                         out_ptr as *mut c_void,
                         n_elements as u32,
                         activation as i32,
-                        stream,
+                        stream_raw,
                     );
                 }
 
@@ -2830,7 +2848,7 @@ impl CustomOp2 for FusedGlu {
         crate::metal_kernels::call_fused_glu(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             s2.buffer(),
@@ -2867,7 +2885,447 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
 
+#[cfg(feature = "cuda")]
+struct FusedSplitGlu {
+    split_size: usize,
+    activation: GluActivationType,
+}
+
+#[cfg(feature = "cuda")]
+impl CustomOp1 for FusedSplitGlu {
+    fn name(&self) -> &'static str {
+        "fused-split-glu"
+    }
+
+    fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("fused split GLU CUDA op received CPU storage")
+    }
+
+    fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
+        use half::{bf16, f16};
+
+        if !layout.is_contiguous() {
+            candle_core::bail!("fused split GLU input must be contiguous");
+        }
+        let mut output_dims = layout.dims().to_vec();
+        let last = output_dims
+            .last_mut()
+            .ok_or_else(|| candle_core::Error::msg("fused split GLU input must have a rank"))?;
+        *last = self.split_size;
+        let output_shape = Shape::from(output_dims);
+        let output_elements = output_shape.elem_count();
+        let rows = output_elements / self.split_size;
+        let rows = u32::try_from(rows)?;
+        let split_size = u32::try_from(self.split_size)?;
+        let device = storage.device();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
+
+        let output = match storage.dtype() {
+            DType::F16 => {
+                let input = storage.as_cuda_slice::<f16>()?;
+                let mut output = unsafe { device.alloc::<f16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::BF16 => {
+                let input = storage.as_cuda_slice::<bf16>()?;
+                let mut output = unsafe { device.alloc::<bf16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_bf16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::F32 => {
+                let input = storage.as_cuda_slice::<f32>()?;
+                let mut output = unsafe { device.alloc::<f32>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f32(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            dtype => candle_core::bail!("fused split GLU does not support {dtype:?}"),
+        };
+        Ok((output, output_shape))
+    }
+}
+
+pub fn fused_split_glu(
+    input: &Tensor,
+    split_size: usize,
+    activation: GluActivationType,
+) -> Result<Tensor> {
+    if split_size == 0 {
+        candle_core::bail!("fused split GLU split size must be nonzero");
+    }
+    let expected = split_size
+        .checked_mul(2)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU split size overflow"))?;
+    if input.dim(candle_core::D::Minus1)? != expected {
+        candle_core::bail!("fused split GLU expected last dimension {expected}");
+    }
+
+    #[cfg(feature = "cuda")]
+    if input.device().is_cuda() && matches!(input.dtype(), DType::F16 | DType::BF16 | DType::F32) {
+        return input.contiguous()?.apply_op1_no_bwd(&FusedSplitGlu {
+            split_size,
+            activation,
+        });
+    }
+
+    let gate = input.narrow(candle_core::D::Minus1, 0, split_size)?;
+    let up = input.narrow(candle_core::D::Minus1, split_size, split_size)?;
+    fused_glu(&gate, &up, activation)
+}
+
+struct Softcap(f32);
+
+impl CustomOp1 for Softcap {
+    fn name(&self) -> &'static str {
+        "softcap"
+    }
+
+    fn cpu_fwd(&self, s1: &CpuStorage, l1: &Layout) -> Result<(CpuStorage, Shape)> {
+        let out_shape = l1.shape().clone();
+        let len = out_shape.elem_count();
+        let cap = self.0;
+
+        let DType::F32 = s1.dtype() else {
+            candle_core::bail!("softcap: unsupported dtype {:?}", s1.dtype());
+        };
+        let input = s1.as_slice::<f32>()?;
+        let offset = l1.start_offset();
+        let result: Vec<f32> = (0..len)
+            .into_par_iter()
+            .map(|i| (input[offset + i] / cap).tanh() * cap)
+            .collect();
+
+        Ok((CpuStorage::F32(result), out_shape))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_fwd(&self, s1: &CudaStorage, l1: &Layout) -> Result<(CudaStorage, Shape)> {
+        let device = s1.device();
+        let n_elements = l1.shape().elem_count();
+        let out_shape = l1.shape().clone();
+        let stream = device.cuda_stream();
+        let mut output = device.alloc_zeros::<f32>(n_elements)?;
+        let (output_ptr, _output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+
+        macro_rules! launch {
+            ($ty:ty, $ffi:path) => {{
+                let input = s1.as_cuda_slice::<$ty>()?;
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, l1.start_offset(), &stream);
+                unsafe {
+                    $ffi(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        u32::try_from(n_elements)?,
+                        self.0,
+                        stream.cu_stream(),
+                    );
+                }
+                drop(_input_guard);
+            }};
+        }
+
+        match s1.dtype() {
+            DType::F32 => launch!(f32, ffi::softcap_f32),
+            DType::F16 => launch!(half::f16, ffi::softcap_f16_to_f32),
+            DType::BF16 => launch!(half::bf16, ffi::softcap_bf16_to_f32),
+            dtype => candle_core::bail!("softcap: unsupported dtype {dtype:?}"),
+        }
+
+        drop(_output_guard);
+        Ok((
+            CudaStorage::wrap_cuda_slice(output, device.clone()),
+            out_shape,
+        ))
+    }
+
+    #[cfg(feature = "metal")]
+    fn metal_fwd(
+        &self,
+        s1: &candle_core::MetalStorage,
+        l1: &Layout,
+    ) -> Result<(candle_core::MetalStorage, Shape)> {
+        let n_elements = l1.shape().elem_count();
+        let out_shape = l1.shape().clone();
+        let dtype = s1.dtype();
+        let DType::F32 = dtype else {
+            candle_core::bail!("softcap: unsupported dtype {:?}", dtype);
+        };
+
+        let device = s1.device();
+        let encoder = device.command_encoder()?;
+        encoder.set_label("softcap");
+
+        let output = device.new_buffer(n_elements, dtype, "softcap-output")?;
+        crate::metal_kernels::call_softcap(
+            device.device(),
+            &encoder,
+            crate::metal_kernels::Kernels::global(),
+            dtype,
+            s1.buffer(),
+            l1.start_offset() * dtype.size_in_bytes(),
+            n_elements,
+            self.0,
+            &output,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        Ok((
+            candle_core::MetalStorage::new(output, device.clone(), n_elements, dtype),
+            out_shape,
+        ))
+    }
+}
+
+pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
+    if !cap.is_finite() || cap <= 0.0 {
+        candle_core::bail!("softcap requires a positive finite cap");
+    }
+
+    let input = input.contiguous()?;
+    if input.device().is_cuda() && matches!(input.dtype(), DType::F32 | DType::F16 | DType::BF16) {
+        input.apply_op1_no_bwd(&Softcap(cap))
+    } else {
+        input.to_dtype(DType::F32)?.apply_op1_no_bwd(&Softcap(cap))
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            let diff = (a - e).abs();
+            assert!(
+                diff <= tolerance,
+                "mismatch at {i}: actual={a}, expected={e}, diff={diff}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fused_split_glu_cpu_matches_pair() {
+        use super::{fused_glu, fused_split_glu, GluActivationType};
+        use candle_core::{Device, Tensor};
+
+        const ROWS: usize = 3;
+        const SPLIT: usize = 7;
+
+        let device = Device::Cpu;
+        let gate_data = (0..ROWS * SPLIT)
+            .map(|index| (index as f32 - 9.0) / 7.0)
+            .collect::<Vec<_>>();
+        let up_data = (0..ROWS * SPLIT)
+            .map(|index| (13.0 - index as f32) / 11.0)
+            .collect::<Vec<_>>();
+        let gate = Tensor::from_vec(gate_data, (ROWS, SPLIT), &device).unwrap();
+        let up = Tensor::from_vec(up_data, (ROWS, SPLIT), &device).unwrap();
+        let packed = Tensor::cat(&[&gate, &up], 1).unwrap();
+
+        for activation in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+        ] {
+            let expected = fused_glu(&gate, &up, activation)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let actual = fused_split_glu(&packed, SPLIT, activation)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            assert_close(&actual, &expected, 1e-6);
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_split_glu_cuda_scalar_and_vector_paths() {
+        use super::{fused_glu, fused_split_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+
+        const ROWS: usize = 3;
+
+        let cpu = Device::Cpu;
+        let cuda = Device::new_cuda(0).unwrap();
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            for split in [7, 8] {
+                let gate_data = (0..ROWS * split)
+                    .map(|index| (index as f32 - 10.0) / 8.0)
+                    .collect::<Vec<_>>();
+                let up_data = (0..ROWS * split)
+                    .map(|index| (15.0 - index as f32) / 12.0)
+                    .collect::<Vec<_>>();
+                let gate = Tensor::from_vec(gate_data, (ROWS, split), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap();
+                let up = Tensor::from_vec(up_data, (ROWS, split), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap();
+                let packed = Tensor::cat(&[&gate, &up], 1).unwrap();
+                let tolerance = if dtype == DType::F32 { 1e-6 } else { 2e-2 };
+
+                for activation in [
+                    GluActivationType::Silu,
+                    GluActivationType::Gelu,
+                    GluActivationType::Relu,
+                    GluActivationType::GeluErf,
+                ] {
+                    let expected = fused_glu(&gate, &up, activation)
+                        .unwrap()
+                        .to_dtype(DType::F32)
+                        .unwrap()
+                        .to_device(&cpu)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap();
+                    let actual = fused_split_glu(&packed, split, activation)
+                        .unwrap()
+                        .to_dtype(DType::F32)
+                        .unwrap()
+                        .to_device(&cpu)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap();
+                    assert_close(&actual, &expected, tolerance);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_softcap_cpu_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let device = candle_core::Device::Cpu;
+        let cap = 30.0;
+        let data: Vec<f32> = (-64..64).map(|i| i as f32 * 0.75).collect();
+        let expected: Vec<f32> = data.iter().map(|x| (x / cap).tanh() * cap).collect();
+        let input = Tensor::from_vec(data, &[8, 16], &device).unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 1e-6);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_softcap_cuda_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let cuda = candle_core::Device::new_cuda(0).unwrap();
+        let cap = 30.0;
+        let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
+        let input = Tensor::from_vec(data, &[4, 64], &cuda).unwrap();
+        let expected = ((&input / cap as f64).unwrap().tanh().unwrap() * cap as f64)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 5e-4);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_softcap_metal_f32() {
+        use super::softcap;
+        use candle_core::Tensor;
+
+        let cpu = candle_core::Device::Cpu;
+        let metal = candle_core::Device::new_metal(0).unwrap();
+        let cap = 30.0;
+        let data: Vec<f32> = (-128..128).map(|i| i as f32 * 0.5).collect();
+        let input = Tensor::from_vec(data, &[4, 64], &metal).unwrap();
+        let expected = ((&input / cap as f64).unwrap().tanh().unwrap() * cap as f64)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let output = softcap(&input, cap)
+            .unwrap()
+            .to_device(&cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+
+        assert_close(&output, &expected, 1e-4);
+    }
+
     #[test]
     fn test_cumsum_exclusive_forward_cpu() {
         use crate::utils::ops::CumSumOp;
@@ -3082,6 +3540,77 @@ mod tests {
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
         let c = a.bitwise_xor(&b).unwrap().to_vec2::<i64>().unwrap();
         assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitwise_metal_unaligned_length() -> candle_core::Result<()> {
+        use super::{BitWiseOp, LeftshiftOp};
+        use candle_core::{Device, Tensor};
+
+        const TEST_LENGTH: usize = 2049;
+        const TEST_SHIFT: usize = 3;
+
+        let device = Device::new_metal(0)?;
+        let lhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let rhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(19).wrapping_add(7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let lhs_tensor = Tensor::from_vec(lhs.clone(), TEST_LENGTH, &device)?;
+        let rhs_tensor = Tensor::from_vec(rhs.clone(), TEST_LENGTH, &device)?;
+
+        let and = lhs_tensor
+            .bitwise_and(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let or = lhs_tensor
+            .bitwise_or(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let xor = lhs_tensor
+            .bitwise_xor(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let not = lhs_tensor
+            .bitwise_not()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let shifted = lhs_tensor
+            .leftshift(TEST_SHIFT)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+
+        assert_eq!(
+            and,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs & rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            or,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs | rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            xor,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs ^ rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(not, lhs.iter().map(|value| !value).collect::<Vec<_>>());
+        assert_eq!(
+            shifted,
+            lhs.iter()
+                .map(|value| value.wrapping_shl(TEST_SHIFT as u32))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
     }
 
     #[test]

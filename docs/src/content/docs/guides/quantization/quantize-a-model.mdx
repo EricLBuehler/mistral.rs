@@ -1,0 +1,254 @@
+---
+title: Quantize a model
+description: Shrink a model so it fits on the hardware you have, pick the right format, and understand what ISQ does.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Quantization stores weights at lower precision so a model fits in less memory. A 14B model in
+BF16 (2 bytes/param) needs about 28 GB for weights; at 4 bits the same model is about 7 GB.
+`--quant` is the front door:
+
+```bash
+mistralrs run --quant 4 -m google/gemma-4-E4B-it
+```
+
+`--quant 4` first looks for a matching prebuilt
+[UQFF (Universal Quantized File Format)](/mistral.rs/guides/quantization/uqff/) in
+`mistralrs-community/<model>-UQFF` and loads it directly if one is published. Otherwise it falls
+back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/): the engine
+quantizes weights on the fly as they load, picking a hardware-appropriate format (AFQ4 on Metal,
+Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading just
+takes longer than a pre-quantized file.
+
+For a local model path, `--quant` skips the UQFF probe and applies ISQ directly.
+
+## How much memory you save
+
+Footprint scales roughly linearly with bits per weight: a BF16 model uses about half the memory
+at `--quant 8` and a quarter at `--quant 4`. The KV cache is a separate budget that depends on
+context length, not on weight quantization. Use `nvidia-smi` (or equivalent) to measure, and
+[`mistralrs tune`](#estimate-with-mistralrs-tune) to estimate before downloading anything.
+
+## Picking a bit width
+
+Supported widths: 2, 3, 4, 5, 6, 8. Fewer bits means less memory and more quality loss:
+
+- 8 bits is near-lossless.
+- 5-6 bits is a good middle ground.
+- 4 bits is the common sweet spot for fitting larger models.
+- 2-3 bits degrades noticeably; use only when nothing else fits.
+
+At 4 bits and below, an [importance matrix](#imatrix) recovers a meaningful amount of quality.
+
+## Picking a specific format
+
+`--quant` also accepts format names:
+
+```bash
+mistralrs run --quant q4k -m google/gemma-4-E4B-it     # GGML K-quant
+mistralrs run --quant afq4 -m google/gemma-4-E4B-it    # AFQ, Metal-optimized
+mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # the GGUF standard 8-bit
+```
+
+How the numeric shorthands resolve per backend, plus the full type list and hardware
+constraints, is in the [quantization types reference](/mistral.rs/reference/quantization-types/).
+
+Use `--isq` instead of `--quant` only when you want to force runtime ISQ and skip the UQFF
+lookup.
+
+## Letting mistral.rs decide
+
+`--quant auto` estimates what fits on the current host and picks for you:
+
+```bash
+mistralrs run --quant auto -m google/gemma-4-E4B-it
+```
+
+It runs the same analysis as `mistralrs tune` with the balanced profile. If the model fits at
+full precision, no quantization is applied; otherwise the recommended type is resolved like an
+explicit `--quant` value (prebuilt UQFF preferred, ISQ fallback).
+
+### Estimate with mistralrs tune
+
+`mistralrs tune` prints the full analysis instead of acting on it:
+
+```bash
+mistralrs tune -m google/gemma-4-E4B-it
+```
+
+Output is a table with columns `Quant | Est. Size | VRAM % | Context Room | Quality | Status`.
+One row is marked `Recommended`; the others are marked `Fits`, `Hybrid` (split across GPU and
+CPU), or `Too Large`. A recommended command line is printed below the table.
+
+`tune` is a config-based estimator, not a benchmark. It downloads only the model's config files,
+computes per-quantization sizes from the architecture, and checks them against detected VRAM.
+No weights are downloaded, no model is loaded, and the quality column is a fixed tier per format
+(`Baseline`, `Near-lossless`, `Good`, `Acceptable`, `Degraded`), not a measurement.
+
+Variations:
+
+```bash
+mistralrs tune --profile quality -m google/gemma-4-E4B-it     # quality, balanced (default), fast
+mistralrs tune --isq q4k -m google/gemma-4-E4B-it             # bias toward a specific target
+mistralrs tune --json -m google/gemma-4-E4B-it                # machine-readable output
+mistralrs tune --emit-config gemma.toml -m google/gemma-4-E4B-it
+```
+
+`--emit-config` writes a TOML config with the recommended settings; run it with
+`mistralrs from-config -f gemma.toml`. `tune` rejects `--quant auto` since tune is the
+recommender. All flags: [CLI reference](/mistral.rs/reference/cli/tune/).
+
+## Quantization on each surface
+
+<Tabs>
+<TabItem label="CLI">
+
+`--quant` for the resolve-then-fallback front door, `--isq` to force runtime ISQ:
+
+```bash
+mistralrs serve -m google/gemma-4-E4B-it --quant 4
+mistralrs serve -m google/gemma-4-E4B-it --isq q4k
+```
+
+To quantize once and reuse the result, write a UQFF file with `mistralrs quantize`. See the
+[UQFF guide](/mistral.rs/guides/quantization/uqff/).
+
+</TabItem>
+<TabItem label="HTTP">
+
+There is no quantize-at-load HTTP request; a server quantizes via the `--quant`/`--isq` flags on
+the CLI tab. To re-quantize a model already running, `POST /re_isq` swaps every ISQ-eligible
+layer to a new type in place (no effect on GGUF/GGML models):
+
+```bash
+curl -X POST localhost:1234/re_isq \
+  -H "Content-Type: application/json" \
+  -d '{"ggml_type": "Q4K"}'
+```
+
+</TabItem>
+<TabItem label="Python">
+
+`in_situ_quant` accepts the same values as `--isq`, including numeric shorthands resolved
+against the actual device:
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="microsoft/Phi-3.5-mini-instruct"),
+    in_situ_quant="Q4K",
+)
+```
+
+[Full example](/mistral.rs/examples/python/isq/)
+
+</TabItem>
+<TabItem label="Rust">
+
+`with_auto_isq` picks the platform-preferred format at a bit width; `with_isq` requests an exact
+type:
+
+```rust
+use mistralrs::{IsqBits, ModelBuilder};
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_auto_isq(IsqBits::Four)
+    .build()
+    .await?;
+```
+
+[Full example](/mistral.rs/examples/rust/quantization/isq/)
+
+</TabItem>
+</Tabs>
+
+## What ISQ does
+
+ISQ runs at model load time: the engine reads each weight, produces its quantized form in
+parallel, and discards the source before moving on. First-run load is slower than pre-quantized
+formats (UQFF, GGUF), which have no conversion work to do. To skip the conversion on repeated
+loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
+
+<details>
+<summary>Format families</summary>
+
+- **Q\*K** (`q2k`-`q6k`): GGML-compatible block quantization. Broadly applicable, works on all
+  backends.
+- **AFQ** (`afq2`-`afq8`): affine quantization optimized for Apple Silicon. Runs on Metal
+  (native kernels), CUDA (dedicated backend), and CPU (fallback).
+- **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
+- **FP8** (`fp8`, `f8q8`): native FP8 matmul on NVIDIA compute capability 8.9+.
+- **MXFP4** (4-bit microscaling): native fast path on Blackwell.
+- **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
+
+The numeric shorthand picks a format the active device supports; explicit names override that,
+and incompatible combinations are rejected at load time. Full constraint table:
+[quantization types reference](/mistral.rs/reference/quantization-types/).
+
+</details>
+
+### Organization: default vs moqe
+
+`--isq-organization` selects which layers get quantized:
+
+- `default`: every linear layer the pipeline exposes for quantization.
+- `moqe` (MoQE, Mixture of Quantization Experts): only MoE (Mixture of Experts) expert layers;
+  the shared (non-expert) trunk stays at native precision.
+
+`moqe` is useful on MoE models where the experts dominate parameter count.
+
+### imatrix
+
+An importance matrix (imatrix) is a per-column weight derived from running the model on
+calibration data and accumulating squared input activations. The quantizer uses it to allocate
+precision to higher-impact weights, which matters most at low bit widths.
+
+Two flags, used with `--isq`:
+
+- `--imatrix <path>`: load an existing imatrix. Accepts llama.cpp `.imatrix` files (layer names
+  are mapped automatically) or mistral.rs `.cimatrix` files.
+- `--calibration-file <path>`: generate the importance data at load time by running the
+  calibration text through the model, then quantize.
+
+The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every
+load. Importance weighting applies to the K-quant formats (`q2k`-`q6k`); other formats quantize
+without it. Calibration runs on all pipelines (text, multimodal, embedding); the calibration
+text drives the language model, so vision/audio encoder layers quantize without importance data.
+
+To collect an imatrix from a live server's real traffic instead of a static calibration file,
+see [online calibration](/mistral.rs/guides/quantization/online-calibration/).
+
+Full example: [Rust](/mistral.rs/examples/rust/quantization/imatrix/),
+[Python](/mistral.rs/examples/python/imatrix/).
+
+<details>
+<summary>Interaction with paged attention and flash attention</summary>
+
+ISQ applies to weights. The KV cache is a separate budget:
+[paged attention](/mistral.rs/guides/perf/paged-attention/) manages its memory independently, and
+`--pa-cache-type` quantizes the cache itself. Flash attention operates on activations, not
+weights, and composes with any ISQ format.
+
+</details>
+
+## Pre-quantized formats
+
+These load directly, with no ISQ conversion:
+
+- **UQFF**: the native pre-quantized format. Loaded automatically by `--quant` when a sibling
+  UQFF repo exists, or explicitly via `--from-uqff`. See the
+  [UQFF guide](/mistral.rs/guides/quantization/uqff/).
+- **GGUF**: loaded via `--format gguf -f <file>`.
+- **GPTQ, AWQ**: detected from the source repo's config and loaded directly; no `--quant` or
+  `--isq` needed.
+
+## See also
+
+- [Quantization types reference](/mistral.rs/reference/quantization-types/) for the full type
+  list, shorthand resolution, and hardware constraints.
+- [UQFF guide](/mistral.rs/guides/quantization/uqff/) to quantize once and reuse.
+- [Online calibration](/mistral.rs/guides/quantization/online-calibration/) to improve a served
+  model from its own traffic.
+- [Topology](/mistral.rs/guides/perf/topology/) to pin individual layers to a different type.

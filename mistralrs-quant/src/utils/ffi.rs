@@ -295,4 +295,49 @@ extern "C" {
         activation: i32,
         stream: CUstream,
     );
+    pub fn fused_split_glu_f16(
+        input: *const c_void,
+        output: *mut c_void,
+        rows: u32,
+        split_size: u32,
+        activation: i32,
+        stream: CUstream,
+    );
+    pub fn fused_split_glu_bf16(
+        input: *const c_void,
+        output: *mut c_void,
+        rows: u32,
+        split_size: u32,
+        activation: i32,
+        stream: CUstream,
+    );
+    pub fn fused_split_glu_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        rows: u32,
+        split_size: u32,
+        activation: i32,
+        stream: CUstream,
+    );
+    pub fn softcap_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        cap: f32,
+        stream: CUstream,
+    );
+    pub fn softcap_f16_to_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        cap: f32,
+        stream: CUstream,
+    );
+    pub fn softcap_bf16_to_f32(
+        input: *const c_void,
+        output: *mut c_void,
+        N: u32,
+        cap: f32,
+        stream: CUstream,
+    );
 }

@@ -42,6 +42,7 @@ pub struct PythonSession {
     sandbox_policy: SandboxPolicy,
     stderr_tail: StderrTail,
     _stderr_pump: Option<JoinHandle<()>>,
+    mounted_input_files_key: Option<String>,
 }
 
 impl PythonSession {
@@ -90,6 +91,7 @@ impl PythonSession {
             sandbox_policy,
             stderr_tail: spawned.stderr_tail,
             _stderr_pump: spawned.stderr_pump,
+            mounted_input_files_key: None,
         })
     }
 
@@ -195,51 +197,96 @@ impl PythonSession {
         self.work_dir.display().to_string()
     }
 
+    pub fn mount_input_files(
+        &mut self,
+        files: &[mistralrs_mcp::ToolInputFile],
+    ) -> anyhow::Result<()> {
+        let key = files
+            .iter()
+            .map(|f| format!("{}:{}:{}", f.id, f.name, f.size_bytes))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if self.mounted_input_files_key.as_deref() == Some(key.as_str()) {
+            return Ok(());
+        }
+        crate::mount::mount_input_files(&self.work_dir, files)?;
+        self.mounted_input_files_key = Some(key);
+        Ok(())
+    }
+
     pub async fn execute_with_outputs(
         &mut self,
         code: &str,
         outputs: &[ExecuteOutputSpec],
     ) -> CodeExecResult {
         self.last_active = Instant::now();
+        let work_dir = self.work_dir.clone();
+        let work_dir_str = self.work_dir_str();
         if !self.alive {
             if let Err(e) = self.respawn().await {
                 return CodeExecResult::error(
                     &format!("Failed to respawn Python session: {e}"),
-                    &self.work_dir_str(),
+                    &work_dir_str,
                 );
             }
         }
 
+        let snapshot = crate::files::snapshot_output_files(&work_dir);
         let request = ExecutorRequest::Execute {
             code: code.to_string(),
             outputs,
         };
         if let Err(e) = self.send(&request).await {
             self.alive = false;
-            return CodeExecResult::error(
-                &format!("Failed to send to Python: {e}"),
-                &self.work_dir_str(),
+            let mut result =
+                CodeExecResult::error(&format!("Failed to send to Python: {e}"), &work_dir_str);
+            crate::files::append_auto_output_files(
+                &work_dir,
+                &snapshot,
+                outputs,
+                &mut result.files,
             );
+            return result;
         }
 
         match tokio::time::timeout(self.timeout, self.read_response::<ExecuteResponse>()).await {
-            Ok(Ok(response)) => CodeExecResult::from_response(response, &self.work_dir_str()),
+            Ok(Ok(response)) => {
+                let mut result = CodeExecResult::from_response(response, &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
+            }
             Ok(Err(e)) => {
                 self.alive = false;
-                CodeExecResult::error(
-                    &format!("Python subprocess error: {e}"),
-                    &self.work_dir_str(),
-                )
+                let mut result =
+                    CodeExecResult::error(&format!("Python subprocess error: {e}"), &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
             }
             Err(_) => {
-                // Timeout: try SIGINT first.
                 let interrupted = self.try_interrupt().await;
                 if !interrupted {
-                    // SIGKILL as last resort.
                     let _ = self.child.kill().await;
                     self.alive = false;
                 }
-                CodeExecResult::timeout(self.timeout.as_secs(), interrupted, &self.work_dir_str())
+                let mut result =
+                    CodeExecResult::timeout(self.timeout.as_secs(), interrupted, &work_dir_str);
+                crate::files::append_auto_output_files(
+                    &work_dir,
+                    &snapshot,
+                    outputs,
+                    &mut result.files,
+                );
+                result
             }
         }
     }

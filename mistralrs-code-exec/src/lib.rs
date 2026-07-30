@@ -1,6 +1,9 @@
+mod files;
+mod mount;
 mod output;
 mod protocol;
 mod session;
+mod shell;
 pub mod tools;
 
 use std::collections::HashMap;
@@ -19,10 +22,14 @@ use serde::{Deserialize, Serialize};
 use session::PythonSession;
 use tokio::sync::Mutex;
 
+pub use mistralrs_mcp::{CodeExecutionPermission, ShellOptions, ShellSkillMount};
+pub use mount::{mounted_input_files, MountedInputFile};
 pub use protocol::{ExecuteFile as CodeExecFile, ExecuteOutputSpec as CodeExecOutputSpec};
+pub use shell::{ShellConfig, ShellManager};
 pub use tools::{
-    build_list_files_tool, build_read_file_tool, code_exec_tool_called, EXECUTE_PYTHON_TOOL_NAME,
-    LIST_FILES_TOOL_NAME, READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME,
+    build_list_files_tool, build_read_file_tool, build_surface_outputs_tool, code_exec_tool_called,
+    shell_tool_called, surface_outputs_tool_called, EXECUTE_PYTHON_TOOL_NAME, LIST_FILES_TOOL_NAME,
+    READ_FILE_TOOL_NAME, RESET_SESSION_TOOL_NAME, SHELL_TOOL_NAME, SURFACE_OUTPUTS_TOOL_NAME,
 };
 
 /// Tailors the tool description to what the model can take as input.
@@ -35,6 +42,9 @@ pub enum InputModality {
 }
 
 const EXECUTOR_PY: &str = include_str!("../python/executor.py");
+
+pub const DEFAULT_CODE_EXEC_TIMEOUT_SECS: u64 = 60;
+pub const DEFAULT_SHELL_TIMEOUT_SECS: u64 = 600;
 
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
@@ -52,8 +62,8 @@ pub struct CodeExecutionConfig {
     /// Defaults to `python3` (`python` on Windows).
     #[serde(default = "default_python_path")]
     pub python_path: PathBuf,
-    /// Per-execution timeout. Defaults to 30s.
-    #[serde(default = "default_timeout_secs")]
+    /// Per-execution timeout. Defaults to 60s.
+    #[serde(default = "default_code_exec_timeout_secs")]
     pub timeout_secs: u64,
     /// If `None`, a temp dir is created. Otherwise this is the cwd for the model's code.
     #[serde(default)]
@@ -66,7 +76,7 @@ pub struct CodeExecutionConfig {
     #[serde(default)]
     pub permission: CodeExecutionPermission,
     #[serde(skip)]
-    pub approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
+    pub approval_callback: Option<CodeExecutionApprovalCallback>,
 }
 
 impl fmt::Debug for CodeExecutionConfig {
@@ -82,35 +92,6 @@ impl fmt::Debug for CodeExecutionConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CodeExecutionPermission {
-    #[default]
-    Auto,
-    Ask,
-    Deny,
-}
-
-impl CodeExecutionPermission {
-    fn strictest(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::Deny, _) | (_, Self::Deny) => Self::Deny,
-            (Self::Ask, _) | (_, Self::Ask) => Self::Ask,
-            (Self::Auto, Self::Auto) => Self::Auto,
-        }
-    }
-}
-
-impl From<mistralrs_mcp::CodeExecutionPermission> for CodeExecutionPermission {
-    fn from(value: mistralrs_mcp::CodeExecutionPermission) -> Self {
-        match value {
-            mistralrs_mcp::CodeExecutionPermission::Auto => Self::Auto,
-            mistralrs_mcp::CodeExecutionPermission::Ask => Self::Ask,
-            mistralrs_mcp::CodeExecutionPermission::Deny => Self::Deny,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct CodeExecutionApproval {
     pub approval_id: String,
@@ -121,7 +102,7 @@ pub struct CodeExecutionApproval {
 }
 
 pub type CodeExecutionApprovalCallback =
-    dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static;
+    Arc<dyn Fn(&CodeExecutionApproval) -> bool + Send + Sync + 'static>;
 
 fn default_python_path() -> PathBuf {
     if cfg!(windows) {
@@ -131,8 +112,32 @@ fn default_python_path() -> PathBuf {
     }
 }
 
-fn default_timeout_secs() -> u64 {
-    30
+fn default_code_exec_timeout_secs() -> u64 {
+    DEFAULT_CODE_EXEC_TIMEOUT_SECS
+}
+
+fn duration_secs_ceil(duration: Duration) -> u64 {
+    duration.as_secs() + u64::from(duration.subsec_nanos() > 0)
+}
+
+fn raise_cpu_limit_for_timeout(
+    sandbox: &dyn Sandbox,
+    policy: &mut SandboxPolicy,
+    timeout: Duration,
+    tool_name: &str,
+) {
+    if !sandbox.effective(policy).rlimits_applied {
+        return;
+    }
+    let timeout_secs = duration_secs_ceil(timeout);
+    if policy.max_cpu_secs >= timeout_secs {
+        return;
+    }
+    tracing::warn!(
+        "{tool_name} timeout is {timeout_secs}s but sandbox max_cpu_secs is {}s; raising max_cpu_secs to {timeout_secs}s",
+        policy.max_cpu_secs
+    );
+    policy.max_cpu_secs = timeout_secs;
 }
 
 async fn resolve_python_prefixes(python_path: &Path) -> Vec<PathBuf> {
@@ -170,7 +175,7 @@ impl Default for CodeExecutionConfig {
     fn default() -> Self {
         Self {
             python_path: default_python_path(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_code_exec_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
             permission: CodeExecutionPermission::Auto,
@@ -201,7 +206,7 @@ struct SpawnCtx {
     sandbox: Arc<dyn Sandbox>,
     sandbox_policy: SandboxPolicy,
     permission: CodeExecutionPermission,
-    approval_callback: Option<Arc<CodeExecutionApprovalCallback>>,
+    approval_callback: Option<CodeExecutionApprovalCallback>,
 }
 
 impl SpawnCtx {
@@ -311,6 +316,13 @@ async fn sandbox_for_config(
                 SandboxPolicy::default(),
             ),
         };
+
+    raise_cpu_limit_for_timeout(
+        sandbox.as_ref(),
+        &mut policy,
+        Duration::from_secs(config.timeout_secs),
+        "code execution",
+    );
 
     policy.extra_fs_read.push(executor_dir.to_path_buf());
     for prefix in resolve_python_prefixes(&config.python_path).await {
@@ -487,6 +499,7 @@ impl CodeExecutionManager {
                         let session_arc = ctx.session_handle(&sessions, &session_id).await?;
 
                         let mut session = session_arc.lock().await;
+                        session.mount_input_files(&tc.input_files)?;
                         let result = session.execute_with_outputs(&code, &outputs).await;
                         let files: Vec<ToolFile> =
                             result.files.iter().map(execute_file_to_tool_file).collect();
@@ -591,7 +604,6 @@ fn denied_by_permission(
 ) -> Option<String> {
     let permission = tool_ctx
         .code_execution_permission
-        .map(Into::into)
         .map(|request_permission| ctx.permission.strictest(request_permission))
         .unwrap_or(ctx.permission);
 
@@ -644,7 +656,7 @@ fn code_execution_denied_text(reason: &str) -> String {
     .to_string()
 }
 
-fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
+pub(crate) fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
     arr.iter()
         .filter_map(|v| {
             let name = v.get("name")?.as_str()?.to_string();
@@ -657,7 +669,7 @@ fn parse_output_specs(arr: &[serde_json::Value]) -> Vec<ExecuteOutputSpec> {
         .collect()
 }
 
-fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
+pub(crate) fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
     ToolFile {
         name: f.name.clone(),
         format: f.format.clone(),
@@ -666,5 +678,65 @@ fn execute_file_to_tool_file(f: &ExecuteFile) -> ToolFile {
         data_base64: f.data_base64.clone(),
         size_bytes: f.size_bytes,
         error: f.error.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeSandbox {
+        rlimits_applied: bool,
+    }
+
+    impl Sandbox for FakeSandbox {
+        fn harden(
+            &self,
+            _cmd: &mut tokio::process::Command,
+            _policy: &SandboxPolicy,
+        ) -> Result<(), mistralrs_sandbox::SandboxError> {
+            Ok(())
+        }
+
+        fn name(&self) -> &'static str {
+            "fake"
+        }
+
+        fn effective(&self, _policy: &SandboxPolicy) -> mistralrs_sandbox::EffectiveProtection {
+            mistralrs_sandbox::EffectiveProtection {
+                rlimits_applied: self.rlimits_applied,
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn raises_cpu_limit_to_ceiled_timeout_when_rlimits_apply() {
+        let sandbox = FakeSandbox {
+            rlimits_applied: true,
+        };
+        let mut policy = SandboxPolicy {
+            max_cpu_secs: 5,
+            ..SandboxPolicy::default()
+        };
+
+        raise_cpu_limit_for_timeout(&sandbox, &mut policy, Duration::from_millis(5500), "test");
+
+        assert_eq!(policy.max_cpu_secs, 6);
+    }
+
+    #[test]
+    fn leaves_cpu_limit_when_rlimits_do_not_apply() {
+        let sandbox = FakeSandbox {
+            rlimits_applied: false,
+        };
+        let mut policy = SandboxPolicy {
+            max_cpu_secs: 5,
+            ..SandboxPolicy::default()
+        };
+
+        raise_cpu_limit_for_timeout(&sandbox, &mut policy, Duration::from_secs(10), "test");
+
+        assert_eq!(policy.max_cpu_secs, 5);
     }
 }

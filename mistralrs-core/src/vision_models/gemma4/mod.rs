@@ -4,35 +4,46 @@ use std::sync::{Arc, Mutex};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use config::Gemma4Config;
-use mistralrs_quant::{NonZeroOp, QuantMethod, ShardedVarBuilder};
+use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    device_map::DeviceMapper,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, MultimodalModel, NormalLoadingMetadata,
+        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+    },
+    speculative::{
+        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
 };
 
 pub(crate) mod audio;
 pub(crate) mod audio_processing;
 pub mod config;
 pub(crate) mod inputs_processor;
-mod multimodal_embedding;
+mod mtp;
+pub(crate) mod multimodal_embedding;
 pub(crate) mod text;
 pub mod vision;
 
-pub(crate) use inputs_processor::Gemma4Processor;
+pub(crate) use inputs_processor::{Gemma4Processor, Gemma4ProcessorSettings};
+
+fn has_clippable_linear_prefix(vb: &ShardedVarBuilder) -> bool {
+    crate::layers::contains_tensor_or_uqff(vb, "linear.weight")
+}
 
 #[derive(Default)]
 pub struct Gemma4SpecificArgs {
+    pub image_position_ids: Option<Tensor>,
     pub audio_mel: Option<Tensor>,
     pub audio_mel_mask: Option<Tensor>,
     pub image_hashes: Vec<u64>,
@@ -41,20 +52,160 @@ pub struct Gemma4SpecificArgs {
     pub audio_hashes: Vec<u64>,
     pub audio_cached_tokens: Vec<usize>,
     pub video_pixel_values: Option<Tensor>,
+    pub video_position_ids: Option<Tensor>,
     pub video_hashes: Vec<u64>,
     pub video_cached_tokens: Vec<usize>,
     pub video_sizes: Vec<(u32, u32)>,
+    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
+    pub(crate) block_denoising_progress:
+        Option<Vec<crate::block_diffusion::BlockDenoisingProgressEmitter>>,
+}
+
+enum Gemma4VisionPath {
+    Tower {
+        tower: vision::VisionTower,
+        embedder: multimodal_embedding::Gemma4MultimodalEmbedder,
+    },
+    Unified(vision::UnifiedVisionEmbedder),
+}
+
+impl Gemma4VisionPath {
+    fn forward(
+        &self,
+        pixel_values: &[Tensor],
+        image_position_ids: Option<&[Tensor]>,
+        vision_dtype: DType,
+        output_dtype: DType,
+    ) -> Result<Tensor> {
+        match self {
+            Self::Tower { tower, embedder } => {
+                let vision_features = tower.forward(
+                    &pixel_values
+                        .iter()
+                        .map(|t| t.to_dtype(vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                )?;
+                embedder.forward(&vision_features)?.to_dtype(output_dtype)
+            }
+            Self::Unified(embedder) => embedder
+                .forward(
+                    &pixel_values
+                        .iter()
+                        .map(|t| t.to_dtype(vision_dtype))
+                        .collect::<Result<Vec<_>>>()?,
+                    image_position_ids.ok_or_else(|| {
+                        candle_core::Error::Msg(
+                            "Gemma4 unified vision requires image position ids.".to_string(),
+                        )
+                    })?,
+                )?
+                .to_dtype(output_dtype),
+        }
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        match self {
+            Self::Tower { tower, .. } => tower.residual_tensors(),
+            Self::Unified(embedder) => embedder.residual_tensors(),
+        }
+    }
+
+    fn embedder_residual_tensors(&self) -> Vec<(String, Tensor)> {
+        match self {
+            Self::Tower { embedder, .. } => embedder.residual_tensors(),
+            Self::Unified(embedder) => embedder.embedder_residual_tensors(),
+        }
+    }
+}
+
+enum Gemma4AudioPath {
+    Conformer {
+        tower: Box<audio::AudioModel>,
+        embedder: multimodal_embedding::Gemma4MultimodalEmbedder,
+    },
+    Unified {
+        embedder: multimodal_embedding::Gemma4MultimodalEmbedder,
+    },
+}
+
+impl Gemma4AudioPath {
+    fn forward_one(
+        &self,
+        audio_input: &Tensor,
+        audio_mask: &Tensor,
+        output_dtype: DType,
+    ) -> Result<Tensor> {
+        match self {
+            Self::Conformer { tower, embedder } => {
+                let (audio_features, enc_mask) = tower.forward(audio_input, audio_mask)?;
+                let valid = enc_mask.eq(0.0)?;
+                let valid_indices = valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
+                let valid_features = audio_features
+                    .squeeze(0)?
+                    .contiguous()?
+                    .index_select(&valid_indices, 0)?;
+                embedder
+                    .forward(&valid_features.unsqueeze(0)?)?
+                    .to_dtype(output_dtype)?
+                    .squeeze(0)
+            }
+            Self::Unified { embedder } => {
+                let valid = audio_mask.eq(0.0)?;
+                let valid_indices = valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
+                let valid_features = audio_input
+                    .squeeze(0)?
+                    .contiguous()?
+                    .index_select(&valid_indices, 0)?;
+                embedder
+                    .forward(&valid_features.unsqueeze(0)?)?
+                    .to_dtype(output_dtype)?
+                    .squeeze(0)
+            }
+        }
+    }
+
+    fn forward_batch(
+        &self,
+        audio_input: &Tensor,
+        audio_mask: &Tensor,
+        output_dtype: DType,
+    ) -> Result<Tensor> {
+        let batch = audio_input.dim(0)?;
+        let mut parts = Vec::with_capacity(batch);
+        for idx in 0..batch {
+            parts.push(self.forward_one(
+                &audio_input.get(idx)?.unsqueeze(0)?,
+                &audio_mask.get(idx)?.unsqueeze(0)?,
+                output_dtype,
+            )?);
+        }
+        Tensor::cat(&parts, 0)
+    }
+
+    fn residual_tensors(&self) -> Option<Vec<(String, Tensor)>> {
+        match self {
+            Self::Conformer { tower, .. } => Some(tower.residual_tensors()),
+            Self::Unified { .. } => None,
+        }
+    }
+
+    fn embedder_residual_tensors(&self) -> Vec<(String, Tensor)> {
+        match self {
+            Self::Conformer { embedder, .. } | Self::Unified { embedder } => {
+                embedder.residual_tensors()
+            }
+        }
+    }
 }
 
 pub struct Gemma4Model {
     language_model: TextModel,
-    vision_tower: vision::VisionTower,
-    embed_vision: multimodal_embedding::Gemma4MultimodalEmbedder,
-    audio_tower: Option<audio::AudioModel>,
-    embed_audio: Option<multimodal_embedding::Gemma4MultimodalEmbedder>,
+    vision: Option<Gemma4VisionPath>,
+    audio: Option<Gemma4AudioPath>,
     cfg: Gemma4Config,
     vision_dtype: DType,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    mtp: Mutex<Option<mtp::Gemma4MtpRuntime>>,
 }
 
 impl Gemma4Model {
@@ -85,47 +236,83 @@ impl Gemma4Model {
         };
         let audio_dtype = DType::F32;
 
-        let vision_tower = vision::VisionTower::new(
-            &cfg.vision_config,
-            normal_loading_metadata
-                .mapper
-                .set_nm_device(vb.pp("vision_tower"), false)
-                .set_dtype(vision_dtype),
-        )?;
-
-        let vis_hidden = cfg.vision_config.hidden_size;
         let text_hidden = cfg.text_config.hidden_size;
-        let embed_vision = multimodal_embedding::Gemma4MultimodalEmbedder::new(
-            vis_hidden,
-            text_hidden,
-            cfg.vision_config.rms_norm_eps,
-            normal_loading_metadata
-                .mapper
-                .set_nm_device(vb.pp("embed_vision"), false)
-                .set_dtype(vision_dtype),
-        )?;
-
-        let (audio_tower, embed_audio) = if let Some(ref audio_cfg) = cfg.audio_config {
-            let tower = audio::AudioModel::new(
-                audio_cfg,
-                normal_loading_metadata
-                    .mapper
-                    .set_nm_device(vb.pp("audio_tower"), false)
-                    .set_dtype(audio_dtype),
-            )?;
-            let audio_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
-            let embed = multimodal_embedding::Gemma4MultimodalEmbedder::new(
-                audio_hidden,
-                text_hidden,
-                audio_cfg.rms_norm_eps,
-                normal_loading_metadata
-                    .mapper
-                    .set_nm_device(vb.pp("embed_audio"), false)
-                    .set_dtype(audio_dtype),
-            )?;
-            (Some(tower), Some(embed))
+        let vision = if let Some(ref vision_cfg) = cfg.vision_config {
+            if cfg.is_unified() {
+                Some(Gemma4VisionPath::Unified(
+                    vision::UnifiedVisionEmbedder::new(
+                        vision_cfg,
+                        text_hidden,
+                        normal_loading_metadata
+                            .mapper
+                            .set_nm_device(vb.pp("vision_embedder"), false)
+                            .set_dtype(vision_dtype),
+                        normal_loading_metadata
+                            .mapper
+                            .set_nm_device(vb.pp("embed_vision"), false)
+                            .set_dtype(vision_dtype),
+                    )?,
+                ))
+            } else {
+                let tower = vision::VisionTower::new(
+                    vision_cfg,
+                    normal_loading_metadata
+                        .mapper
+                        .set_nm_device(vb.pp("vision_tower"), false)
+                        .set_dtype(vision_dtype),
+                )?;
+                let embedder = multimodal_embedding::Gemma4MultimodalEmbedder::new(
+                    vision_cfg.hidden_size,
+                    text_hidden,
+                    vision_cfg.rms_norm_eps,
+                    normal_loading_metadata
+                        .mapper
+                        .set_nm_device(vb.pp("embed_vision"), false)
+                        .set_dtype(vision_dtype),
+                )?;
+                Some(Gemma4VisionPath::Tower { tower, embedder })
+            }
         } else {
-            (None, None)
+            None
+        };
+
+        let audio = if let Some(ref audio_cfg) = cfg.audio_config {
+            if cfg.is_unified() {
+                let embedder = multimodal_embedding::Gemma4MultimodalEmbedder::new(
+                    audio_cfg.input_feat_size(),
+                    text_hidden,
+                    audio_cfg.rms_norm_eps,
+                    normal_loading_metadata
+                        .mapper
+                        .set_nm_device(vb.pp("embed_audio"), false)
+                        .set_dtype(audio_dtype),
+                )?;
+                Some(Gemma4AudioPath::Unified { embedder })
+            } else {
+                let tower = audio::AudioModel::new(
+                    audio_cfg,
+                    normal_loading_metadata
+                        .mapper
+                        .set_nm_device(vb.pp("audio_tower"), false)
+                        .set_dtype(audio_dtype),
+                )?;
+                let audio_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
+                let embedder = multimodal_embedding::Gemma4MultimodalEmbedder::new(
+                    audio_hidden,
+                    text_hidden,
+                    audio_cfg.rms_norm_eps,
+                    normal_loading_metadata
+                        .mapper
+                        .set_nm_device(vb.pp("embed_audio"), false)
+                        .set_dtype(audio_dtype),
+                )?;
+                Some(Gemma4AudioPath::Conformer {
+                    tower: Box::new(tower),
+                    embedder,
+                })
+            }
+        } else {
+            None
         };
 
         let language_model = TextModel::new(
@@ -140,40 +327,46 @@ impl Gemma4Model {
 
         Ok(Self {
             language_model,
-            vision_tower,
-            embed_vision,
-            audio_tower,
-            embed_audio,
+            vision,
+            audio,
             cfg: cfg.clone(),
             vision_dtype,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            mtp: Mutex::new(None),
         })
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn forward(
+    fn forward_inner(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
         audio_mel: Option<&Tensor>,
         audio_mel_mask: Option<&Tensor>,
+        image_position_ids: Option<&Tensor>,
         image_hashes: &[u64],
         image_cached_tokens: &[usize],
         image_sizes: &[(u32, u32)],
         audio_hashes: &[u64],
         audio_cached_tokens: &[usize],
         video_pixel_values: Option<&Tensor>,
+        video_position_ids: Option<&Tensor>,
         video_hashes: &[u64],
         video_cached_tokens: &[usize],
         video_sizes: &[(u32, u32)],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let mut encoder_outputs = MultimodalEncoderOutputs::new();
 
         if let Some(ref pixel_values) = pixel_values {
+            let vision = self.vision.as_ref().ok_or_else(|| {
+                candle_core::Error::Msg(
+                    "Gemma4 model was loaded without a vision encoder.".to_string(),
+                )
+            })?;
+            let is_unified_vision = matches!(vision, Gemma4VisionPath::Unified(_));
             let image_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.image_token_id as f64)?;
@@ -192,79 +385,160 @@ impl Gemma4Model {
                     Ok(pv)
                 }
             };
-            let image_embeds = if !image_hashes.is_empty() && image_hashes.len() == n_images {
-                let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (image_embeds, per_image_embeds) =
+                if !image_hashes.is_empty() && image_hashes.len() == n_images {
+                    let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
+                                per_image[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_pv = crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
-                        let vision_features = self
-                            .vision_tower
-                            .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;
-                        let feats = self
-                            .embed_vision
-                            .forward(&vision_features)?
-                            .to_dtype(input_embeds.dtype())?
-                            .squeeze(0)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[idx],
-                                vec![feats.clone()],
-                            );
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_pv = if is_unified_vision {
+                                pixel_values.get(idx)?.unsqueeze(0)?
+                            } else {
+                                crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?
+                            };
+                            let single_position_ids = if is_unified_vision {
+                                Some(
+                                    image_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified image position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(idx)?
+                                        .unsqueeze(0)?,
+                                )
+                            } else {
+                                None
+                            };
+                            let single_position_ids_slice =
+                                single_position_ids.as_ref().map(std::slice::from_ref);
+                            let feats = vision
+                                .forward(
+                                    &[single_pv],
+                                    single_position_ids_slice,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Image,
+                                    image_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_image[idx] = Some(feats);
                         }
-                        per_image[idx] = Some(feats);
                     }
-                }
-                let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
-                Self::trim_cached_prefix_tokens(
-                    Tensor::cat(&parts, 0)?,
-                    image_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            } else {
-                let per_image_tensors: Vec<Tensor> = (0..n_images)
-                    .map(|i| {
-                        pixel_values
-                            .get(i)
-                            .and_then(|t| t.unsqueeze(0))
-                            .and_then(|t| crop_image(t, i))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let vision_features = self.vision_tower.forward(
-                    &per_image_tensors
+                    let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
                         .iter()
-                        .map(|t| t.to_dtype(self.vision_dtype))
-                        .collect::<Result<Vec<_>>>()?,
-                )?;
-                let embeds = self
-                    .embed_vision
-                    .forward(&vision_features)?
-                    .to_dtype(input_embeds.dtype())?
-                    .squeeze(0)?;
-                Self::trim_cached_prefix_tokens(
-                    embeds,
-                    image_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            };
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                image_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
+                } else {
+                    let per_image_tensors: Vec<Tensor> = (0..n_images)
+                        .map(|i| {
+                            pixel_values
+                                .get(i)
+                                .and_then(|t| t.unsqueeze(0))
+                                .and_then(|t| {
+                                    if is_unified_vision {
+                                        Ok(t)
+                                    } else {
+                                        crop_image(t, i)
+                                    }
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let per_image_position_ids = if is_unified_vision {
+                        Some(
+                            (0..n_images)
+                                .map(|i| {
+                                    image_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified image position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(i)
+                                        .and_then(|t| t.unsqueeze(0))
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    let parts = per_image_tensors
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, pixels)| {
+                            let position_ids = per_image_position_ids
+                                .as_ref()
+                                .map(|positions| std::slice::from_ref(&positions[idx]));
+                            let output = vision
+                                .forward(
+                                    &[pixels],
+                                    position_ids,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            Self::trim_cached_prefix_tokens(
+                                output,
+                                image_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&parts, 0)?, None)
+                };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if image_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed image prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_image_embeds = per_image_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed image prefill requires per-image encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in image_hashes.iter().zip(per_image_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = image_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -274,17 +548,9 @@ impl Gemma4Model {
             }
         }
 
-        if let (
-            Some(audio_mel),
-            Some(audio_mel_mask),
-            Some(ref audio_tower),
-            Some(ref embed_audio),
-        ) = (
-            audio_mel,
-            audio_mel_mask,
-            &self.audio_tower,
-            &self.embed_audio,
-        ) {
+        if let (Some(audio_mel), Some(audio_mel_mask), Some(audio_path)) =
+            (audio_mel, audio_mel_mask, &self.audio)
+        {
             let audio_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.audio_token_id as f64)?;
@@ -295,83 +561,107 @@ impl Gemma4Model {
             let indices = audio_mask_expanded.flatten_all()?.nonzero()?.squeeze(1)?;
 
             let n_audio = audio_mel.dim(0)?;
-            let audio_embeds = if !audio_hashes.is_empty() && audio_hashes.len() == n_audio {
-                let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in audio_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Audio, hash) {
-                            per_audio[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (audio_embeds, per_audio_embeds) =
+                if !audio_hashes.is_empty() && audio_hashes.len() == n_audio {
+                    let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in audio_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Audio, hash) {
+                                per_audio[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
-                        let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
-                        let (audio_features, enc_mask) =
-                            audio_tower.forward(&single_mel, &single_mask)?;
-                        let valid = enc_mask.eq(0.0)?;
-                        let valid_indices =
-                            valid.squeeze(0)?.flatten_all()?.nonzero()?.squeeze(1)?;
-                        let valid_features = audio_features
-                            .squeeze(0)?
-                            .contiguous()?
-                            .index_select(&valid_indices, 0)?;
-                        let feats = embed_audio
-                            .forward(&valid_features.unsqueeze(0)?)?
-                            .to_dtype(input_embeds.dtype())?
-                            .squeeze(0)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Audio,
-                                audio_hashes[idx],
-                                vec![feats.clone()],
-                            );
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
+                            let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
+                            let feats = audio_path.forward_one(
+                                &single_mel,
+                                &single_mask,
+                                input_embeds.dtype(),
+                            )?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Audio,
+                                    audio_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_audio[idx] = Some(feats);
                         }
-                        per_audio[idx] = Some(feats);
                     }
-                }
-                let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
-                Self::trim_cached_prefix_tokens(
-                    Tensor::cat(&parts, 0)?,
-                    audio_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            } else {
-                let (audio_features, enc_mask) = audio_tower.forward(audio_mel, audio_mel_mask)?;
-                let valid = enc_mask.eq(0.0)?;
-                let batch = audio_features.dim(0)?;
-                let mut all_feats = Vec::new();
-                for b in 0..batch {
-                    let valid_indices = valid.get(b)?.flatten_all()?.nonzero()?.squeeze(1)?;
-                    let feats = audio_features
-                        .get(b)?
-                        .contiguous()?
-                        .index_select(&valid_indices, 0)?;
-                    all_feats.push(feats);
-                }
-                let audio_feats = Tensor::cat(&all_feats, 0)?.unsqueeze(0)?;
-                let embeds = embed_audio
-                    .forward(&audio_feats)?
-                    .to_dtype(input_embeds.dtype())?
-                    .squeeze(0)?;
-                Self::trim_cached_prefix_tokens(
-                    embeds,
-                    audio_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            };
+                    let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                audio_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
+                } else {
+                    if audio_cached_tokens.iter().all(|&tokens| tokens == 0) {
+                        (
+                            audio_path.forward_batch(
+                                audio_mel,
+                                audio_mel_mask,
+                                input_embeds.dtype(),
+                            )?,
+                            None,
+                        )
+                    } else {
+                        let parts = (0..n_audio)
+                            .map(|idx| {
+                                let output = audio_path.forward_one(
+                                    &audio_mel.get(idx)?.unsqueeze(0)?,
+                                    &audio_mel_mask.get(idx)?.unsqueeze(0)?,
+                                    input_embeds.dtype(),
+                                )?;
+                                Self::trim_cached_prefix_tokens(
+                                    output,
+                                    audio_cached_tokens.get(idx).copied().unwrap_or(0),
+                                )
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        (Tensor::cat(&parts, 0)?, None)
+                    }
+                };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if audio_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed audio prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_audio_embeds = per_audio_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed audio prefill requires per-audio encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in audio_hashes.iter().zip(per_audio_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Audio,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = audio_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -381,8 +671,14 @@ impl Gemma4Model {
             }
         }
 
-        // ── Video embedding (same vision tower as images) ──────────────
+        // Video embedding uses the same vision path as images.
         if let Some(vid_pixel_values) = video_pixel_values {
+            let vision = self.vision.as_ref().ok_or_else(|| {
+                candle_core::Error::Msg(
+                    "Gemma4 model was loaded without a vision encoder.".to_string(),
+                )
+            })?;
+            let is_unified_vision = matches!(vision, Gemma4VisionPath::Unified(_));
             let video_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.video_token_id as f64)?;
@@ -402,78 +698,160 @@ impl Gemma4Model {
                 }
             };
 
-            let video_embeds = if !video_hashes.is_empty() && video_hashes.len() == n_frames {
-                let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in video_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Video, hash) {
-                            per_frame[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (video_embeds, per_frame_embeds) =
+                if !video_hashes.is_empty() && video_hashes.len() == n_frames {
+                    let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in video_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Video, hash) {
+                                per_frame[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_pv = crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
-                        let vision_features = self
-                            .vision_tower
-                            .forward(&[single_pv.to_dtype(self.vision_dtype)?])?;
-                        let feats = self
-                            .embed_vision
-                            .forward(&vision_features)?
-                            .to_dtype(input_embeds.dtype())?
-                            .squeeze(0)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Video,
-                                video_hashes[idx],
-                                vec![feats.clone()],
-                            );
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_pv = if is_unified_vision {
+                                vid_pixel_values.get(idx)?.unsqueeze(0)?
+                            } else {
+                                crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?
+                            };
+                            let single_position_ids = if is_unified_vision {
+                                Some(
+                                    video_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified video position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(idx)?
+                                        .unsqueeze(0)?,
+                                )
+                            } else {
+                                None
+                            };
+                            let single_position_ids_slice =
+                                single_position_ids.as_ref().map(std::slice::from_ref);
+                            let feats = vision
+                                .forward(
+                                    &[single_pv],
+                                    single_position_ids_slice,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Video,
+                                    video_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_frame[idx] = Some(feats);
                         }
-                        per_frame[idx] = Some(feats);
                     }
-                }
-                let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
-                // Sum all per-frame cached counts — unlike images (where fully-cached
-                // ones are skipped), ALL video frames are sent when not fully cached,
-                // so we must trim the total cached prefix from the concatenated features.
-                let total_cached: usize = video_cached_tokens.iter().copied().sum();
-                Self::trim_cached_prefix_tokens(Tensor::cat(&parts, 0)?, total_cached)?
-            } else {
-                let per_frame_tensors: Vec<Tensor> = (0..n_frames)
-                    .map(|i| {
-                        vid_pixel_values
-                            .get(i)
-                            .and_then(|t| t.unsqueeze(0))
-                            .and_then(|t| crop_frame(t, i))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let vision_features = self.vision_tower.forward(
-                    &per_frame_tensors
+                    let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
                         .iter()
-                        .map(|t| t.to_dtype(self.vision_dtype))
-                        .collect::<Result<Vec<_>>>()?,
-                )?;
-                let embeds = self
-                    .embed_vision
-                    .forward(&vision_features)?
-                    .to_dtype(input_embeds.dtype())?
-                    .squeeze(0)?;
-                let total_cached: usize = video_cached_tokens.iter().copied().sum();
-                Self::trim_cached_prefix_tokens(embeds, total_cached)?
-            };
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                video_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
+                } else {
+                    let per_frame_tensors: Vec<Tensor> = (0..n_frames)
+                        .map(|i| {
+                            vid_pixel_values
+                                .get(i)
+                                .and_then(|t| t.unsqueeze(0))
+                                .and_then(|t| {
+                                    if is_unified_vision {
+                                        Ok(t)
+                                    } else {
+                                        crop_frame(t, i)
+                                    }
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let per_frame_position_ids = if is_unified_vision {
+                        Some(
+                            (0..n_frames)
+                                .map(|i| {
+                                    video_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified video position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(i)
+                                        .and_then(|t| t.unsqueeze(0))
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    let parts = per_frame_tensors
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, pixels)| {
+                            let position_ids = per_frame_position_ids
+                                .as_ref()
+                                .map(|positions| std::slice::from_ref(&positions[idx]));
+                            let output = vision
+                                .forward(
+                                    &[pixels],
+                                    position_ids,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            Self::trim_cached_prefix_tokens(
+                                output,
+                                video_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&parts, 0)?, None)
+                };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if video_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed video prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_frame_embeds = per_frame_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed video prefill requires per-frame encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in video_hashes.iter().zip(per_frame_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Video,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = video_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -481,6 +859,10 @@ impl Gemma4Model {
                 x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
                 input_embeds = x_flat.reshape(input_embeds.shape())?;
             }
+        }
+
+        if let Some(layout) = packed_layout {
+            input_embeds = layout.splice_embeddings(&input_embeds, &encoder_outputs)?;
         }
 
         let ple_vocab_limit = self
@@ -502,26 +884,55 @@ impl Gemma4Model {
             input_ids,
             &ple_input_ids,
             input_embeds,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             pixel_values.is_some() || video_pixel_values.is_some(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        ctx: &mut ModelForwardContext<'_>,
+        audio_mel: Option<&Tensor>,
+        audio_mel_mask: Option<&Tensor>,
+        image_position_ids: Option<&Tensor>,
+        image_hashes: &[u64],
+        image_cached_tokens: &[usize],
+        image_sizes: &[(u32, u32)],
+        audio_hashes: &[u64],
+        audio_cached_tokens: &[usize],
+        video_pixel_values: Option<&Tensor>,
+        video_position_ids: Option<&Tensor>,
+        video_hashes: &[u64],
+        video_cached_tokens: &[usize],
+        video_sizes: &[(u32, u32)],
+        packed_layout: Option<&PackedMultimodalLayout>,
+    ) -> Result<Tensor> {
+        self.forward_inner(
+            input_ids,
+            pixel_values,
+            ctx,
+            audio_mel,
+            audio_mel_mask,
+            image_position_ids,
+            image_hashes,
+            image_cached_tokens,
+            image_sizes,
+            audio_hashes,
+            audio_cached_tokens,
+            video_pixel_values,
+            video_position_ids,
+            video_hashes,
+            video_cached_tokens,
+            video_sizes,
+            packed_layout,
         )
     }
 }
 
 impl IsqModel for Gemma4Model {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let (tensors, mapper) = self.language_model.get_layers();
-        (tensors, mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_model = uvb.pp("model");
@@ -529,41 +940,49 @@ impl IsqModel for Gemma4Model {
         let uvb_language = uvb_model.pp("language_model");
         uvb_language.extend(self.language_model.residual_tensors());
 
-        let uvb_vision = uvb_model.pp("vision_tower");
-        uvb_vision.extend(self.vision_tower.residual_tensors());
-
-        if let Some(ref audio) = self.audio_tower {
-            let uvb_audio = uvb_model.pp("audio_tower");
-            uvb_audio.extend(audio.residual_tensors());
+        if let Some(ref vision) = self.vision {
+            let vision_prefix = match vision {
+                Gemma4VisionPath::Tower { .. } => "vision_tower",
+                Gemma4VisionPath::Unified(_) => "vision_embedder",
+            };
+            uvb_model
+                .pp(vision_prefix)
+                .extend(vision.residual_tensors());
+            uvb_model
+                .pp("embed_vision")
+                .extend(vision.embedder_residual_tensors());
         }
 
-        let uvb_embed_vision = uvb_model.pp("embed_vision");
-        uvb_embed_vision.extend(self.embed_vision.residual_tensors());
-
-        if let Some(ref embed_audio) = self.embed_audio {
-            let uvb_embed_audio = uvb_model.pp("embed_audio");
-            uvb_embed_audio.extend(embed_audio.residual_tensors());
+        if let Some(ref audio) = self.audio {
+            if let Some(tensors) = audio.residual_tensors() {
+                uvb_model.pp("audio_tower").extend(tensors);
+            }
+            uvb_model
+                .pp("embed_audio")
+                .extend(audio.embedder_residual_tensors());
         }
 
         uvb.to_safetensors()
     }
-
-    fn imatrix_names(&self) -> candle_core::Result<Vec<Option<String>>> {
-        self.language_model.imatrix_names()
-    }
 }
 
+impl crate::block_diffusion::BlockDiffusionMixin for Gemma4Model {}
+
 impl MultimodalModel for Gemma4Model {
+    fn supports_packed_prefill(&self) -> bool {
+        self.language_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
-        seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        _position_ids: Vec<usize>,
         model_specific_args: Box<dyn std::any::Any>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
         let args = model_specific_args
             .downcast::<Gemma4SpecificArgs>()
@@ -572,22 +991,27 @@ impl MultimodalModel for Gemma4Model {
         self.forward(
             input_ids,
             pixel_values,
-            seqlen_offsets,
-            context_lens,
-            metadata,
-            flash_params,
+            ctx,
             args.audio_mel.as_ref(),
             args.audio_mel_mask.as_ref(),
+            args.image_position_ids.as_ref(),
             &args.image_hashes,
             &args.image_cached_tokens,
             &args.image_sizes,
             &args.audio_hashes,
             &args.audio_cached_tokens,
             args.video_pixel_values.as_ref(),
+            args.video_position_ids.as_ref(),
             &args.video_hashes,
             &args.video_cached_tokens,
             &args.video_sizes,
+            args.packed_layout.as_ref(),
         )
+    }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        self.language_model.supports_cuda_decode_graphs()
     }
 
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
@@ -597,11 +1021,6 @@ impl MultimodalModel for Gemma4Model {
     fn cache(&self) -> &EitherCache {
         self.language_model.cache()
     }
-
-    fn cache_mut(&mut self) -> &mut EitherCache {
-        self.language_model.cache_mut()
-    }
-
     fn device(&self) -> &Device {
         self.language_model.device()
     }
@@ -633,4 +1052,147 @@ impl MultimodalModel for Gemma4Model {
     }
 }
 
+impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
+    fn attach_speculative(
+        &mut self,
+        config: SpeculativeConfig,
+    ) -> candle_core::Result<Option<SpeculativeAttachInfo>> {
+        let SpeculativeConfig::Mtp(config) = config else {
+            *self.mtp.lock().expect("MTP mutex poisoned") = None;
+            self.language_model.set_store_spec_hidden(false);
+            return Ok(None);
+        };
+        let assistant = config.model.clone();
+        let runtime = mtp::Gemma4MtpRuntime::load(
+            config,
+            &self.cfg.text_config,
+            self.language_model.device(),
+            self.language_model.device_mapper(),
+            false,
+        )?;
+        let attach_info = SpeculativeAttachInfo::mtp(assistant, runtime.proposal_len());
+        *self.mtp.lock().expect("MTP mutex poisoned") = Some(runtime);
+        self.language_model.set_store_spec_hidden(true);
+        Ok(Some(attach_info))
+    }
+
+    fn has_speculative_proposer(&self) -> bool {
+        self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
+    }
+
+    fn speculative_proposal_len(&self) -> Option<usize> {
+        self.mtp
+            .lock()
+            .ok()
+            .and_then(|mtp| mtp.as_ref().map(SpeculativeProposer::proposal_len))
+    }
+
+    fn speculative_propose(
+        &mut self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+    ) -> candle_core::Result<Option<SpeculativeProposalBatch>> {
+        let embedder = |token: &Tensor| self.language_model.embed_tokens(token);
+        let mut guard = self.mtp.lock().expect("MTP mutex poisoned");
+        let Some(runtime) = guard.as_mut() else {
+            return Ok(None);
+        };
+        runtime.propose(ctx, Some(&embedder)).map(Some)
+    }
+
+    fn speculative_target_hiddens(
+        &self,
+        rows: &[(usize, usize)],
+    ) -> candle_core::Result<Option<Tensor>> {
+        let hidden = self.language_model.last_spec_hidden().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "MTP target hidden state was not captured before proposal.".to_string(),
+            )
+        })?;
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        match hidden.dims() {
+            [batch, row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx >= *batch {
+                        candle_core::bail!(
+                            "MTP hidden batch {batch_idx} is out of range for {batch}"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, row, 1)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            [row_count, _] => {
+                let mut gathered = Vec::with_capacity(rows.len());
+                for &(batch_idx, row) in rows {
+                    if batch_idx != 0 {
+                        candle_core::bail!(
+                            "MTP hidden batch {batch_idx} is out of range for single-batch hidden state"
+                        );
+                    }
+                    if row >= *row_count {
+                        candle_core::bail!(
+                            "MTP hidden row {row} is out of range for {row_count} rows"
+                        );
+                    }
+                    gathered.push(hidden.narrow(0, row, 1)?.unsqueeze(0)?);
+                }
+                Tensor::cat(&gathered, 0).map(Some)
+            }
+            shape => candle_core::bail!("MTP hidden state has unsupported shape {shape:?}"),
+        }
+    }
+}
+
 impl AnyMoeBaseModelMixin for Gemma4Model {}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use candle_core::{DType, Device, Tensor};
+    use mistralrs_quant::{uqff_version_tensors, ShardedSafeTensors, UqffReader, UqffTensor};
+
+    use super::has_clippable_linear_prefix;
+
+    #[test]
+    fn clippable_linears_detect_nested_weights_only_in_uqff() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested-linear.uqff");
+        let prefixes = [
+            "model.vision_tower.encoder.layers.0.self_attn.q_proj",
+            "model.audio_tower.layers.0.feed_forward1.ffw_layer_1",
+        ];
+        let mut tensors = uqff_version_tensors();
+        for prefix in prefixes {
+            tensors.push(UqffTensor::from_raw_u8(
+                format!("{prefix}.linear.weight"),
+                vec![0],
+                vec![1],
+            ));
+        }
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let residual: HashMap<String, Tensor> = HashMap::new();
+        let vb = ShardedSafeTensors::wrap(residual, DType::F32, Device::Cpu)
+            .with_uqff_reader(Arc::new(UqffReader::open(&[path]).unwrap()));
+
+        for prefix in prefixes {
+            let linear_vb = vb.pp(prefix);
+            assert!(!linear_vb.contains_tensor("linear.weight"));
+            assert!(has_clippable_linear_prefix(&linear_vb));
+        }
+    }
+}

@@ -3,17 +3,153 @@
 //! This provides a direct implementation using local CUDA kernels for
 //! quantized matrix-vector multiplication with expert indexing.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use super::ffi;
-use crate::utils::slice_ptr;
+use crate::utils::{slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
+use candle_core::cuda::cudarc::driver::DeviceRepr;
+use candle_core::cuda_backend::CudaDType;
 use candle_core::{
-    cuda::cudarc::driver::CudaSlice,
+    cuda::cudarc::driver::{CudaSlice, DevicePtr},
     quantized::{GgmlDType, QMatMul, QTensor},
-    CudaDevice, CudaStorage, Device, Result, Shape, Storage, Tensor,
+    CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
+use half::{bf16, f16};
 
 // Constants matching candle's quantized CUDA implementation
 pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
 pub const MATRIX_ROW_PADDING: usize = 512;
+const CUDA_GRID_YZ_LIMIT: usize = 65_535;
+const MOE_REDUCE_THREADS: usize = 256;
+const MOE_OUTPUT_F32: i32 = 0;
+const MOE_OUTPUT_F16: i32 = 1;
+const MOE_OUTPUT_BF16: i32 = 2;
+
+struct DispatchWorkspaceSlot {
+    slice: CudaSlice<u32>,
+    cap: usize,
+}
+
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct WorkspaceKey {
+    device: candle_core::cuda::DeviceId,
+    stream: usize,
+}
+
+type DispatchWsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<DispatchWorkspaceSlot>>>;
+
+static MOE_DISPATCH_WORKSPACE: OnceLock<DispatchWsMap> = OnceLock::new();
+
+struct U8WorkspaceSlot {
+    slice: CudaSlice<u8>,
+    cap: usize,
+}
+
+struct F32WorkspaceSlot {
+    slice: CudaSlice<f32>,
+    cap: usize,
+}
+
+type U8WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<U8WorkspaceSlot>>>;
+type F32WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<F32WorkspaceSlot>>>;
+
+static MOE_DECODE_Q8_WORKSPACE: OnceLock<U8WsMap> = OnceLock::new();
+static MOE_DECODE_F32_WORKSPACE: OnceLock<F32WsMap> = OnceLock::new();
+
+fn workspace_key(dev: &CudaDevice) -> WorkspaceKey {
+    WorkspaceKey {
+        device: dev.id(),
+        stream: dev.cuda_stream().cu_stream() as usize,
+    }
+}
+
+fn dispatch_workspace_ensure(
+    dev: &CudaDevice,
+    len: usize,
+) -> Result<(u64, std::sync::MutexGuard<'static, DispatchWorkspaceSlot>)> {
+    let len = len.max(1);
+    let map = MOE_DISPATCH_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = workspace_key(dev);
+    let device_mtx: &'static Mutex<DispatchWorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u32>(len)? };
+                let leaked = Box::leak(Box::new(Mutex::new(DispatchWorkspaceSlot {
+                    slice,
+                    cap: len,
+                })));
+                guard.insert(key, leaked);
+                leaked
+            }
+        }
+    };
+    let mut slot = device_mtx.lock().unwrap();
+    if slot.cap < len {
+        slot.slice = unsafe { dev.alloc::<u32>(len)? };
+        slot.cap = len;
+    }
+    let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
+    Ok((ptr, slot))
+}
+
+fn u8_workspace_ensure(
+    ws: &'static OnceLock<U8WsMap>,
+    dev: &CudaDevice,
+    len: usize,
+) -> Result<std::sync::MutexGuard<'static, U8WorkspaceSlot>> {
+    let len = len.max(1);
+    let map = ws.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = workspace_key(dev);
+    let device_mtx: &'static Mutex<U8WorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<u8>(len)? };
+                let leaked = Box::leak(Box::new(Mutex::new(U8WorkspaceSlot { slice, cap: len })));
+                guard.insert(key, leaked);
+                leaked
+            }
+        }
+    };
+    let mut slot = device_mtx.lock().unwrap();
+    if slot.cap < len {
+        slot.slice = unsafe { dev.alloc::<u8>(len)? };
+        slot.cap = len;
+    }
+    Ok(slot)
+}
+
+fn f32_workspace_ensure(
+    ws: &'static OnceLock<F32WsMap>,
+    dev: &CudaDevice,
+    len: usize,
+) -> Result<std::sync::MutexGuard<'static, F32WorkspaceSlot>> {
+    let len = len.max(1);
+    let map = ws.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = workspace_key(dev);
+    let device_mtx: &'static Mutex<F32WorkspaceSlot> = {
+        let mut guard = map.lock().unwrap();
+        match guard.get(&key).copied() {
+            Some(mtx) => mtx,
+            None => {
+                let slice = unsafe { dev.alloc::<f32>(len)? };
+                let leaked = Box::leak(Box::new(Mutex::new(F32WorkspaceSlot { slice, cap: len })));
+                guard.insert(key, leaked);
+                leaked
+            }
+        }
+    };
+    let mut slot = device_mtx.lock().unwrap();
+    if slot.cap < len {
+        slot.slice = unsafe { dev.alloc::<f32>(len)? };
+        slot.cap = len;
+    }
+    Ok(slot)
+}
 
 fn ceil_div(p: usize, q: usize) -> usize {
     p.div_ceil(q)
@@ -21,6 +157,40 @@ fn ceil_div(p: usize, q: usize) -> usize {
 
 fn pad(p: usize, q: usize) -> usize {
     ceil_div(p, q) * q
+}
+
+fn indexed_moe_weight_dtype(dtype: GgmlDType) -> bool {
+    matches!(
+        dtype,
+        GgmlDType::Q4_0
+            | GgmlDType::Q4_1
+            | GgmlDType::Q5_0
+            | GgmlDType::Q5_1
+            | GgmlDType::Q8_0
+            | GgmlDType::Q8_1
+            | GgmlDType::Q2K
+            | GgmlDType::Q3K
+            | GgmlDType::Q4K
+            | GgmlDType::Q5K
+            | GgmlDType::Q6K
+    )
+}
+
+fn moe_output_type(dtype: DType) -> Option<i32> {
+    match dtype {
+        DType::F32 => Some(MOE_OUTPUT_F32),
+        DType::F16 => Some(MOE_OUTPUT_F16),
+        DType::BF16 => Some(MOE_OUTPUT_BF16),
+        _ => None,
+    }
+}
+
+fn check_cuda_launch(status: i32, kernel: &str) -> Result<()> {
+    if status == 0 {
+        Ok(())
+    } else {
+        candle_core::bail!("{kernel} CUDA launch failed with status {status}")
+    }
 }
 
 /// Quantize f32 input to Q8_1 format for use with quantized matmul kernels.
@@ -37,7 +207,8 @@ fn quantize_q8_1(
     let total_rows = ky;
 
     // Get stream pointer
-    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let cuda_stream = dev.cuda_stream();
+    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
 
     const CHUNK_SIZE: usize = 65535;
     let mut rows_processed = 0;
@@ -54,8 +225,8 @@ fn quantize_q8_1(
 
         let dst_start_byte = rows_processed * dst_row_size_bytes;
 
-        let (src_ptr, _src_guard) = slice_ptr(src, src_start_elem);
-        let (dst_ptr, _dst_guard) = slice_ptr(dst, dst_start_byte);
+        let (src_ptr, _src_guard) = slice_ptr_on_stream(src, src_start_elem, &cuda_stream);
+        let (dst_ptr, _dst_guard) = slice_ptr_mut_on_stream(dst, dst_start_byte, &cuda_stream);
 
         unsafe {
             ffi::launch_quantize_q8_1(
@@ -75,13 +246,28 @@ fn quantize_q8_1(
     Ok(())
 }
 
+fn q8_1_bytes(num_rows: usize, k_padded: usize) -> usize {
+    let q8_1_block_size = GgmlDType::Q8_1.block_size();
+    let q8_1_type_size = GgmlDType::Q8_1.type_size();
+    let num_blocks_per_row = k_padded / q8_1_block_size;
+    num_rows * num_blocks_per_row * q8_1_type_size
+}
+
+fn q8_1_bytes_checked(num_rows: usize, k_padded: usize) -> Result<usize> {
+    let blocks = k_padded / GgmlDType::Q8_1.block_size();
+    num_rows
+        .checked_mul(blocks)
+        .and_then(|elements| elements.checked_mul(GgmlDType::Q8_1.type_size()))
+        .ok_or_else(|| candle_core::Error::msg("Q8_1 workspace size overflow"))
+}
+
 /// Perform indexed MoE forward pass with fused Q8_1 input quantization.
 ///
 /// # Arguments
 /// * `weight_ptr` - Raw device pointer to quantized weight data
 /// * `w_shape` - Weight shape [num_experts, n, k]
 /// * `w_dtype` - Weight quantization dtype
-/// * `input` - Input CudaSlice [batch * topk_or_1 * k]
+/// * `input` - Input tensor [batch, topk_or_1, k]
 /// * `in_shape` - Input shape
 /// * `ids` - Expert indices CudaSlice [batch * topk]
 /// * `idx_shape` - Indices shape
@@ -91,7 +277,7 @@ fn indexed_moe_forward_fused_q8_1_input(
     weight_ptr: u64,
     w_shape: &Shape,
     w_dtype: GgmlDType,
-    input: &CudaSlice<f32>,
+    input: &Tensor,
     in_shape: &Shape,
     ids: &CudaSlice<u32>,
     idx_shape: &Shape,
@@ -104,18 +290,10 @@ fn indexed_moe_forward_fused_q8_1_input(
     let topk = idx_shape.dims()[1];
     assert!(batch == idx_shape.dims()[0], "batch dim not match!");
 
-    // Quantize input into Q8_1
     let total_rows = batch * input_dim1;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let q8_1_block_size = GgmlDType::Q8_1.block_size();
-    let q8_1_type_size = GgmlDType::Q8_1.type_size();
-
-    let num_blocks_per_row = k_padded / q8_1_block_size;
-    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
-    let y_size_in_bytes = total_rows * dst_row_size_bytes;
-    let mut input_quant = dev.alloc_zeros::<u8>(y_size_in_bytes)?;
-
-    quantize_q8_1(input, &mut input_quant, k, total_rows, dev)?;
+    let input = input.reshape((total_rows, k))?;
+    let (input_quant, quant_k, k_padded) = quantize_input_q8_1(&input, dev)?;
+    assert!(quant_k == k, "K mismatch");
 
     // Output buffer - zero-initialize to prevent NaN from uninitialized memory
     let outsize = batch * topk * n;
@@ -337,20 +515,7 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     let dtype = qtensor.dtype();
 
     // Check supported dtypes
-    if !matches!(
-        dtype,
-        GgmlDType::Q4_0
-            | GgmlDType::Q4_1
-            | GgmlDType::Q5_0
-            | GgmlDType::Q5_1
-            | GgmlDType::Q8_0
-            | GgmlDType::Q8_1
-            | GgmlDType::Q2K
-            | GgmlDType::Q3K
-            | GgmlDType::Q4K
-            | GgmlDType::Q5K
-            | GgmlDType::Q6K
-    ) {
+    if !indexed_moe_weight_dtype(dtype) {
         candle_core::bail!(
             "The given quantized dtype {:?} is not supported for indexed_moe_forward!",
             dtype
@@ -363,7 +528,7 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     };
 
     let (x_storage, _x_layout) = x.storage_and_layout();
-    let Storage::Cuda(x_cuda) = &*x_storage else {
+    let Storage::Cuda(_) = &*x_storage else {
         candle_core::bail!("indexed_moe_forward requires CUDA device for input");
     };
 
@@ -375,14 +540,13 @@ pub fn qtensor_indexed_moe_forward(qtensor: &QTensor, x: &Tensor, ids: &Tensor) 
     // Get weight device pointer directly (no copy)
     let weight_ptr = qtensor.device_ptr()? as u64;
 
-    let input_storage = x_cuda.as_cuda_slice::<f32>()?;
     let ids_slice = ids_cuda.as_cuda_slice::<u32>()?;
 
     let (storage, out_shape) = indexed_moe_forward_fused_q8_1_input(
         weight_ptr,
         qtensor.shape(),
         dtype,
-        input_storage,
+        x,
         x.shape(),
         ids_slice,
         ids.shape(),
@@ -416,16 +580,10 @@ pub fn qmatmul_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) 
 
 // ============== Grouped MoE (prefill-optimized) ==============
 
-/// Build expert dispatch tables on GPU.
-///
-/// Takes flattened topk_ids and produces expert_bounds + sorted_token_ids
-/// entirely on GPU with no CPU-GPU sync.
-///
-/// # Returns
-/// (expert_bounds CudaSlice<i32>, sorted_token_ids CudaSlice<i32>)
 /// Build expert dispatch tables on GPU using u32 buffers.
 ///
-/// Returns (expert_bounds, sorted_token_ids) as u32 CudaSlices.
+/// Returns (expert_bounds, sorted_token_ids, sorted_source_ids) as u32
+/// CudaSlices.
 /// Values are always non-negative so u32 and i32 are interchangeable.
 /// We use u32 so the sorted_token_ids can be wrapped directly into
 /// Candle tensors (which don't support i32).
@@ -433,54 +591,366 @@ pub fn moe_dispatch_build(
     topk_ids_flat: &CudaSlice<u32>,
     total_assignments: usize,
     num_experts: usize,
+    topk: usize,
     dev: &CudaDevice,
-) -> Result<(CudaSlice<u32>, CudaSlice<u32>)> {
+) -> Result<(CudaSlice<u32>, CudaSlice<u32>, CudaSlice<u32>)> {
     let expert_bounds = unsafe { dev.alloc::<u32>(num_experts + 1) }?;
     let sorted_token_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
+    let sorted_source_ids = unsafe { dev.alloc::<u32>(total_assignments) }?;
 
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+    let (dispatch_ws_ptr, _dispatch_ws_guard) = dispatch_workspace_ensure(dev, 2 * num_experts)?;
 
     {
         // Cast u32 pointers to i32 for the CUDA kernel (same bit pattern)
         let (topk_ptr, _topk_guard) = slice_ptr(topk_ids_flat, 0);
         let (bounds_ptr, _bounds_guard) = slice_ptr(&expert_bounds, 0);
         let (sorted_ptr, _sorted_guard) = slice_ptr(&sorted_token_ids, 0);
+        let (source_ptr, _source_guard) = slice_ptr(&sorted_source_ids, 0);
+        let counts_ptr = dispatch_ws_ptr as *mut i32;
+        let cursors_ptr = unsafe { counts_ptr.add(num_experts) };
 
         unsafe {
             ffi::launch_moe_dispatch(
                 topk_ptr as *const i32,
                 bounds_ptr as *mut i32,
                 sorted_ptr as *mut i32,
+                source_ptr as *mut i32,
                 total_assignments as i32,
                 num_experts as i32,
+                topk as i32,
+                counts_ptr,
+                cursors_ptr,
                 stream,
             );
         }
     }
 
-    Ok((expert_bounds, sorted_token_ids))
+    Ok((expert_bounds, sorted_token_ids, sorted_source_ids))
+}
+
+/// Reduce flat per-assignment MoE outputs into per-token outputs.
+///
+/// # Safety
+///
+/// `topk_weights` must be a valid CUDA device pointer to at least
+/// `num_tokens * topk` contiguous `f32` values on `dev`. The pointed allocation
+/// must remain alive until all work queued on `dev`'s stream by this function
+/// has completed.
+pub unsafe fn moe_weighted_reduce_flat(
+    inputs: &Tensor,
+    topk_weights: *const f32,
+    num_tokens: usize,
+    topk: usize,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let expected_assignments = num_tokens
+        .checked_mul(topk)
+        .ok_or_else(|| candle_core::Error::msg("moe_weighted_reduce_flat: route count overflow"))?;
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != expected_assignments {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat: input dtype must be F32, got {:?}",
+            inputs.dtype()
+        );
+    }
+
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(cuda) = &*storage else {
+        candle_core::bail!("moe_weighted_reduce_flat: input must live on CUDA");
+    };
+    let input_slice = cuda.as_cuda_slice::<f32>()?;
+    let out = unsafe { dev.alloc::<f32>(num_tokens * hidden)? };
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) = slice_ptr(input_slice, layout.start_offset());
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+        unsafe {
+            let status = ffi::launch_moe_weighted_reduce_flat(
+                input_ptr as *const std::ffi::c_void,
+                topk_weights,
+                out_ptr as *mut std::ffi::c_void,
+                num_tokens as i32,
+                hidden as i32,
+                topk as i32,
+                stream,
+            );
+            check_cuda_launch(status, "moe_weighted_reduce_flat")?;
+        }
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
+    )))
+}
+
+/// Reduce flat per-assignment MoE outputs into BF16 per-token outputs.
+///
+/// # Safety
+///
+/// `topk_weights` must be a valid CUDA device pointer to at least
+/// `num_tokens * topk` contiguous `f32` values on `dev`. The pointed allocation
+/// must remain alive until all work queued on `dev`'s stream by this function
+/// has completed.
+pub unsafe fn moe_weighted_reduce_flat_bf16(
+    inputs: &Tensor,
+    topk_weights: *const f32,
+    num_tokens: usize,
+    topk: usize,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != num_tokens * topk {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if inputs.dtype() != DType::F32 {
+        candle_core::bail!(
+            "moe_weighted_reduce_flat_bf16: input dtype must be F32, got {:?}",
+            inputs.dtype()
+        );
+    }
+
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(cuda) = &*storage else {
+        candle_core::bail!("moe_weighted_reduce_flat_bf16: input must live on CUDA");
+    };
+    let input_slice = cuda.as_cuda_slice::<f32>()?;
+    let out = unsafe { dev.alloc::<half::bf16>(num_tokens * hidden)? };
+    let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) = slice_ptr(input_slice, layout.start_offset());
+        let (out_ptr, _og) = slice_ptr(&out, 0);
+        unsafe {
+            let status = ffi::launch_moe_weighted_reduce_flat_bf16(
+                input_ptr as *const std::ffi::c_void,
+                topk_weights,
+                out_ptr as *mut std::ffi::c_void,
+                num_tokens as i32,
+                hidden as i32,
+                topk as i32,
+                stream,
+            );
+            check_cuda_launch(status, "moe_weighted_reduce_flat_bf16")?;
+        }
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
+    )))
+}
+
+type TypedReduceFn = unsafe extern "C" fn(
+    *const std::ffi::c_void,
+    *const f32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+) -> i32;
+
+struct TypedReduce<'a> {
+    inputs: &'a Tensor,
+    topk_weights: &'a CudaSlice<f32>,
+    topk_weights_offset: usize,
+    num_tokens: usize,
+    topk: usize,
+    dev: &'a CudaDevice,
+}
+
+unsafe fn moe_weighted_reduce_same_dtype<T: CudaDType + DeviceRepr>(
+    reduce: TypedReduce<'_>,
+    launch: TypedReduceFn,
+    kernel: &str,
+) -> Result<Tensor> {
+    let TypedReduce {
+        inputs,
+        topk_weights,
+        topk_weights_offset,
+        num_tokens,
+        topk,
+        dev,
+    } = reduce;
+    let expected_assignments = num_tokens
+        .checked_mul(topk)
+        .ok_or_else(|| candle_core::Error::msg(format!("{kernel}: route count overflow")))?;
+    let (total_assignments, hidden) = inputs.dims2()?;
+    if total_assignments != expected_assignments {
+        candle_core::bail!(
+            "{kernel}: input rows {total_assignments} do not match num_tokens={num_tokens} * topk={topk}"
+        );
+    }
+    if hidden == 0 {
+        candle_core::bail!("{kernel}: hidden dimension must be nonzero");
+    }
+    if hidden.div_ceil(MOE_REDUCE_THREADS) > CUDA_GRID_YZ_LIMIT {
+        candle_core::bail!("{kernel}: hidden dimension exceeds the CUDA grid limit");
+    }
+    let num_tokens_i32 = i32::try_from(num_tokens)?;
+    let hidden_i32 = i32::try_from(hidden)?;
+    let topk_i32 = i32::try_from(topk)?;
+    let inputs = inputs.contiguous()?;
+    let (storage, layout) = inputs.storage_and_layout();
+    let Storage::Cuda(cuda) = &*storage else {
+        candle_core::bail!("{kernel}: input must live on CUDA");
+    };
+    if cuda.device.id() != dev.id() {
+        candle_core::bail!("{kernel}: input must share a CUDA device");
+    }
+    let input_slice = cuda.as_cuda_slice::<T>()?;
+    let output_len = num_tokens
+        .checked_mul(hidden)
+        .ok_or_else(|| candle_core::Error::msg(format!("{kernel}: output size overflow")))?;
+    let mut out = unsafe { dev.alloc::<T>(output_len)? };
+    let cuda_stream = dev.cuda_stream();
+    let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+
+    {
+        let (input_ptr, _ig) =
+            slice_ptr_on_stream(input_slice, layout.start_offset(), &cuda_stream);
+        let (weights_ptr, _wg) =
+            slice_ptr_on_stream(topk_weights, topk_weights_offset, &cuda_stream);
+        let (out_ptr, _og) = slice_ptr_mut_on_stream(&mut out, 0, &cuda_stream);
+        let status = unsafe {
+            launch(
+                input_ptr as *const std::ffi::c_void,
+                weights_ptr as *const f32,
+                out_ptr as *mut std::ffi::c_void,
+                num_tokens_i32,
+                hidden_i32,
+                topk_i32,
+                stream,
+            )
+        };
+        check_cuda_launch(status, kernel)?;
+    }
+
+    Ok(Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(out, dev.clone())),
+        Shape::from((num_tokens, hidden)),
+    )))
+}
+
+pub fn moe_weighted_reduce_flat_same_dtype(
+    inputs: &Tensor,
+    topk_weights: &Tensor,
+    num_tokens: usize,
+    topk: usize,
+    dev: &CudaDevice,
+) -> Result<Tensor> {
+    let routes = num_tokens
+        .checked_mul(topk)
+        .ok_or_else(|| candle_core::Error::msg("typed MoE reduction route count overflow"))?;
+    if num_tokens == 0 || topk == 0 {
+        candle_core::bail!("typed MoE reduction dimensions must be nonzero");
+    }
+    let topk_weights = topk_weights
+        .flatten_all()?
+        .to_dtype(DType::F32)?
+        .contiguous()?;
+    if topk_weights.elem_count() != routes {
+        candle_core::bail!("typed MoE reduction weights do not match routing");
+    }
+    let (weights_storage, weights_layout) = topk_weights.storage_and_layout();
+    let Storage::Cuda(weights_cuda) = &*weights_storage else {
+        candle_core::bail!("typed MoE reduction weights must live on CUDA");
+    };
+    if weights_cuda.device.id() != dev.id() {
+        candle_core::bail!("typed MoE reduction weights must share a CUDA device");
+    }
+    let weights_slice = weights_cuda.as_cuda_slice::<f32>()?;
+    match inputs.dtype() {
+        DType::F32 => unsafe {
+            moe_weighted_reduce_same_dtype::<f32>(
+                TypedReduce {
+                    inputs,
+                    topk_weights: weights_slice,
+                    topk_weights_offset: weights_layout.start_offset(),
+                    num_tokens,
+                    topk,
+                    dev,
+                },
+                ffi::launch_moe_weighted_reduce_flat,
+                "moe_weighted_reduce_flat",
+            )
+        },
+        DType::F16 => unsafe {
+            moe_weighted_reduce_same_dtype::<f16>(
+                TypedReduce {
+                    inputs,
+                    topk_weights: weights_slice,
+                    topk_weights_offset: weights_layout.start_offset(),
+                    num_tokens,
+                    topk,
+                    dev,
+                },
+                ffi::launch_moe_weighted_reduce_flat_f16_input,
+                "moe_weighted_reduce_flat_f16_input",
+            )
+        },
+        DType::BF16 => unsafe {
+            moe_weighted_reduce_same_dtype::<bf16>(
+                TypedReduce {
+                    inputs,
+                    topk_weights: weights_slice,
+                    topk_weights_offset: weights_layout.start_offset(),
+                    num_tokens,
+                    topk,
+                    dev,
+                },
+                ffi::launch_moe_weighted_reduce_flat_bf16_input,
+                "moe_weighted_reduce_flat_bf16_input",
+            )
+        },
+        dtype => candle_core::bail!("typed MoE reduction does not support {dtype:?}"),
+    }
 }
 
 /// Quantize input to Q8_1 format, returning the quantized buffer.
 ///
 /// Supports F32, BF16, and F16 inputs directly without dtype conversion.
 pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u8>, usize, usize)> {
-    use candle_core::cuda::cudarc::driver::DevicePtr;
-
     let xs_contig = xs.contiguous()?;
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
-
-    let q8_1_block_size = GgmlDType::Q8_1.block_size();
-    let q8_1_type_size = GgmlDType::Q8_1.type_size();
-    let num_blocks_per_row = k_padded / q8_1_block_size;
-    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
-    let y_size_in_bytes = num_rows * dst_row_size_bytes;
+    let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
 
     // SAFETY: quantize kernel writes all elements up to k_padded per row
     let mut input_quant = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
+    quantize_input_q8_1_into(&xs_contig, &mut input_quant, dev)?;
 
+    Ok((input_quant, k, k_padded))
+}
+
+fn quantize_input_q8_1_into(
+    xs_contig: &Tensor,
+    input_quant: &mut CudaSlice<u8>,
+    dev: &CudaDevice,
+) -> Result<(usize, usize)> {
+    let num_rows = xs_contig.dim(0)?;
+    let k = xs_contig.dim(1)?;
+    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
+    if input_quant.len() < y_size_in_bytes {
+        candle_core::bail!(
+            "quantize_input_q8_1_into: output buffer too small: {} < {y_size_in_bytes}",
+            input_quant.len()
+        );
+    }
     // Use fused half->Q8_1 kernels when input is BF16/F16 (avoids separate cast kernel)
     if xs_contig.dtype() == candle_core::DType::BF16 || xs_contig.dtype() == candle_core::DType::F16
     {
@@ -490,13 +960,16 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
             _ => candle_core::bail!("expected CUDA tensor"),
         };
         assert!(xs_layout.start_offset() == 0);
-        let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
-        let (out_ptr, _og) = slice_ptr(&input_quant, 0);
+        let cuda_stream = dev.cuda_stream();
+        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let (out_ptr, _og) = slice_ptr_mut_on_stream(input_quant, 0, &cuda_stream);
         if xs_contig.dtype() == candle_core::DType::BF16 {
             let xs_slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
+            let (xs_ptr, _xg) =
+                slice_ptr_on_stream(xs_slice, xs_layout.start_offset(), &cuda_stream);
             unsafe {
                 ffi::launch_quantize_q8_1_bf16(
-                    xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
+                    xs_ptr as *const std::ffi::c_void,
                     out_ptr as *mut std::ffi::c_void,
                     k as i32,
                     k_padded as i32,
@@ -506,9 +979,11 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
             }
         } else {
             let xs_slice = xs_cuda.as_cuda_slice::<half::f16>()?;
+            let (xs_ptr, _xg) =
+                slice_ptr_on_stream(xs_slice, xs_layout.start_offset(), &cuda_stream);
             unsafe {
                 ffi::launch_quantize_q8_1_f16(
-                    xs_slice.slice(0..).device_ptr(xs_slice.stream()).0 as *const std::ffi::c_void,
+                    xs_ptr as *const std::ffi::c_void,
                     out_ptr as *mut std::ffi::c_void,
                     k as i32,
                     k_padded as i32,
@@ -526,10 +1001,343 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
         };
         let xs_slice = xs_cuda.as_cuda_slice::<f32>()?;
         assert!(xs_layout.start_offset() == 0);
-        quantize_q8_1(xs_slice, &mut input_quant, k, num_rows, dev)?;
+        quantize_q8_1(xs_slice, input_quant, k, num_rows, dev)?;
     }
 
-    Ok((input_quant, k, k_padded))
+    Ok((k, k_padded))
+}
+
+pub struct IndexedMoeLoraWeights<'a> {
+    gate: &'a QTensor,
+    up: &'a QTensor,
+    down: &'a QTensor,
+}
+
+impl<'a> IndexedMoeLoraWeights<'a> {
+    pub fn new(gate: &'a QTensor, up: &'a QTensor, down: &'a QTensor) -> Self {
+        Self { gate, up, down }
+    }
+}
+
+pub struct IndexedMoeRouting<'a> {
+    topk_ids: &'a CudaSlice<u32>,
+    batch: usize,
+    topk: usize,
+    num_experts: usize,
+    dev: &'a CudaDevice,
+}
+
+impl<'a> IndexedMoeRouting<'a> {
+    pub fn new(
+        topk_ids: &'a CudaSlice<u32>,
+        batch: usize,
+        topk: usize,
+        num_experts: usize,
+        dev: &'a CudaDevice,
+    ) -> Self {
+        Self {
+            topk_ids,
+            batch,
+            topk,
+            num_experts,
+            dev,
+        }
+    }
+}
+
+type GateUpPairFn = unsafe extern "C" fn(
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const u32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+) -> i32;
+
+type LoraDownFn = unsafe extern "C" fn(
+    *const std::ffi::c_void,
+    *const std::ffi::c_void,
+    *const u32,
+    *mut std::ffi::c_void,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    i32,
+    *mut std::ffi::c_void,
+) -> i32;
+
+fn lora_gate_up_launcher(dtype: GgmlDType) -> Option<GateUpPairFn> {
+    match dtype {
+        GgmlDType::Q8_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q8_0_q8_1),
+        GgmlDType::Q4_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q4_0_q8_1),
+        GgmlDType::Q4_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q4_1_q8_1),
+        GgmlDType::Q5_0 => Some(ffi::launch_moe_gemv_gate_up_pair_q5_0_q8_1),
+        GgmlDType::Q5_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q5_1_q8_1),
+        GgmlDType::Q8_1 => Some(ffi::launch_moe_gemv_gate_up_pair_q8_1_q8_1),
+        GgmlDType::Q2K => Some(ffi::launch_moe_gemv_gate_up_pair_q2k_q8_1),
+        GgmlDType::Q3K => Some(ffi::launch_moe_gemv_gate_up_pair_q3k_q8_1),
+        GgmlDType::Q4K => Some(ffi::launch_moe_gemv_gate_up_pair_q4k_q8_1),
+        GgmlDType::Q5K => Some(ffi::launch_moe_gemv_gate_up_pair_q5k_q8_1),
+        GgmlDType::Q6K => Some(ffi::launch_moe_gemv_gate_up_pair_q6k_q8_1),
+        _ => None,
+    }
+}
+
+fn lora_down_launcher(dtype: GgmlDType) -> Option<LoraDownFn> {
+    match dtype {
+        GgmlDType::Q8_0 => Some(ffi::launch_moe_gemv_lora_down_q8_0_q8_1),
+        GgmlDType::Q4_0 => Some(ffi::launch_moe_gemv_lora_down_q4_0_q8_1),
+        GgmlDType::Q4_1 => Some(ffi::launch_moe_gemv_lora_down_q4_1_q8_1),
+        GgmlDType::Q5_0 => Some(ffi::launch_moe_gemv_lora_down_q5_0_q8_1),
+        GgmlDType::Q5_1 => Some(ffi::launch_moe_gemv_lora_down_q5_1_q8_1),
+        GgmlDType::Q8_1 => Some(ffi::launch_moe_gemv_lora_down_q8_1_q8_1),
+        GgmlDType::Q2K => Some(ffi::launch_moe_gemv_lora_down_q2k_q8_1),
+        GgmlDType::Q3K => Some(ffi::launch_moe_gemv_lora_down_q3k_q8_1),
+        GgmlDType::Q4K => Some(ffi::launch_moe_gemv_lora_down_q4k_q8_1),
+        GgmlDType::Q5K => Some(ffi::launch_moe_gemv_lora_down_q5k_q8_1),
+        GgmlDType::Q6K => Some(ffi::launch_moe_gemv_lora_down_q6k_q8_1),
+        _ => None,
+    }
+}
+
+trait MoeLoraOutput: CudaDType + DeviceRepr {}
+
+impl MoeLoraOutput for f32 {}
+impl MoeLoraOutput for f16 {}
+impl MoeLoraOutput for bf16 {}
+
+pub struct IndexedMoeLoraDecode<'a> {
+    weights: IndexedMoeLoraWeights<'a>,
+    routing: IndexedMoeRouting<'a>,
+    hidden: usize,
+    intermediate: usize,
+    gate_up_launch: GateUpPairFn,
+    down_launch: LoraDownFn,
+}
+
+impl<'a> IndexedMoeLoraDecode<'a> {
+    pub fn new(
+        weights: IndexedMoeLoraWeights<'a>,
+        routing: IndexedMoeRouting<'a>,
+    ) -> Result<Option<Self>> {
+        let gate_dtype = weights.gate.dtype();
+        if weights.up.dtype() != gate_dtype {
+            return Ok(None);
+        }
+        let Some(gate_up_launch) = lora_gate_up_launcher(gate_dtype) else {
+            return Ok(None);
+        };
+        let Some(down_launch) = lora_down_launcher(weights.down.dtype()) else {
+            return Ok(None);
+        };
+        let (num_experts, intermediate, hidden) = weights.gate.shape().dims3()?;
+        if num_experts == 0 || intermediate == 0 || hidden == 0 {
+            candle_core::bail!("indexed MoE LoRA weight dimensions must be nonzero");
+        }
+        if num_experts != routing.num_experts {
+            candle_core::bail!("indexed MoE LoRA expert count does not match routing");
+        }
+        if weights.up.shape().dims3()? != (num_experts, intermediate, hidden)
+            || weights.down.shape().dims3()? != (num_experts, hidden, intermediate)
+        {
+            candle_core::bail!("indexed MoE LoRA weight geometry does not match");
+        }
+        for tensor in [weights.gate, weights.up, weights.down] {
+            let Device::Cuda(weight_dev) = tensor.device() else {
+                candle_core::bail!("indexed MoE LoRA weights must live on CUDA");
+            };
+            if weight_dev.id() != routing.dev.id() {
+                candle_core::bail!("indexed MoE LoRA weights must share a CUDA device");
+            }
+        }
+        if routing.batch == 0 || routing.topk == 0 {
+            candle_core::bail!("indexed MoE LoRA routing dimensions must be nonzero");
+        }
+        if routing.batch > CUDA_GRID_YZ_LIMIT || routing.topk > CUDA_GRID_YZ_LIMIT {
+            candle_core::bail!("indexed MoE LoRA routing exceeds CUDA grid limits");
+        }
+        let routes = routing
+            .batch
+            .checked_mul(routing.topk)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA route count overflow"))?;
+        if routing.topk_ids.len() < routes {
+            candle_core::bail!("indexed MoE LoRA route buffer is too small");
+        }
+        if routing.topk_ids.ordinal() != routing.dev.cuda_stream().context().ordinal() {
+            candle_core::bail!("indexed MoE LoRA routes must share a CUDA device");
+        }
+        for dim in [
+            num_experts,
+            intermediate,
+            hidden,
+            routing.batch,
+            routing.topk,
+        ] {
+            i32::try_from(dim)?;
+        }
+        i32::try_from(pad(hidden, MATRIX_ROW_PADDING))?;
+        i32::try_from(pad(intermediate, MATRIX_ROW_PADDING))?;
+        intermediate
+            .checked_mul(2)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+
+        Ok(Some(Self {
+            weights,
+            routing,
+            hidden,
+            intermediate,
+            gate_up_launch,
+            down_launch,
+        }))
+    }
+
+    fn validate_input(&self, input: &Tensor, rows: usize, features: usize) -> Result<Tensor> {
+        if input.dims2()? != (rows, features) {
+            candle_core::bail!("indexed MoE LoRA input shape does not match weights");
+        }
+        let Device::Cuda(input_dev) = input.device() else {
+            candle_core::bail!("indexed MoE LoRA input must live on CUDA");
+        };
+        if input_dev.id() != self.routing.dev.id() {
+            candle_core::bail!("indexed MoE LoRA input must share a CUDA device");
+        }
+        input.contiguous()
+    }
+
+    fn gate_up_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
+        let input = self.validate_input(input, self.routing.batch, self.hidden)?;
+        let k_padded = pad(self.hidden, MATRIX_ROW_PADDING);
+        let q8_bytes = q8_1_bytes_checked(self.routing.batch, k_padded)?;
+        let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
+        quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
+
+        let output_len = self
+            .routing
+            .batch
+            .checked_mul(self.routing.topk)
+            .and_then(|routes| routes.checked_mul(self.intermediate))
+            .and_then(|elements| elements.checked_mul(2))
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+        let mut output = unsafe { self.routing.dev.alloc::<T>(output_len)? };
+        let cuda_stream = self.routing.dev.cuda_stream();
+        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let (gate_ptr, _gate_guard) = self.weights.gate.device_ptr_with_guard(&cuda_stream)?;
+        let (up_ptr, _up_guard) = self.weights.up.device_ptr_with_guard(&cuda_stream)?;
+
+        {
+            let (input_ptr, _ig) = slice_ptr_on_stream(&q8.slice, 0, &cuda_stream);
+            let (ids_ptr, _idg) = slice_ptr_on_stream(self.routing.topk_ids, 0, &cuda_stream);
+            let (output_ptr, _og) = slice_ptr_mut_on_stream(&mut output, 0, &cuda_stream);
+            let status = unsafe {
+                (self.gate_up_launch)(
+                    gate_ptr as *const std::ffi::c_void,
+                    up_ptr as *const std::ffi::c_void,
+                    input_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    output_ptr as *mut std::ffi::c_void,
+                    self.intermediate as i32,
+                    self.hidden as i32,
+                    self.routing.batch as i32,
+                    self.routing.topk as i32,
+                    k_padded as i32,
+                    self.routing.num_experts as i32,
+                    output_type,
+                    stream,
+                )
+            };
+            check_cuda_launch(status, "moe_gemv_gate_up_pair")?;
+        }
+
+        Ok(Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(
+                output,
+                self.routing.dev.clone(),
+            )),
+            Shape::from((self.routing.batch, self.routing.topk, self.intermediate * 2)),
+        )))
+    }
+
+    pub fn gate_up(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(output_type) = moe_output_type(input.dtype()) else {
+            return Ok(None);
+        };
+        match input.dtype() {
+            DType::F32 => self.gate_up_t::<f32>(input, output_type).map(Some),
+            DType::F16 => self.gate_up_t::<f16>(input, output_type).map(Some),
+            DType::BF16 => self.gate_up_t::<bf16>(input, output_type).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    fn down_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
+        let routes = self.routing.batch * self.routing.topk;
+        let input = self.validate_input(input, routes, self.intermediate)?;
+        let k_padded = pad(self.intermediate, MATRIX_ROW_PADDING);
+        let q8_bytes = q8_1_bytes_checked(routes, k_padded)?;
+        let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
+        quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
+
+        let output_len = routes
+            .checked_mul(self.hidden)
+            .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
+        let mut output = unsafe { self.routing.dev.alloc::<T>(output_len)? };
+        let cuda_stream = self.routing.dev.cuda_stream();
+        let stream = cuda_stream.cu_stream() as *mut std::ffi::c_void;
+        let (down_ptr, _down_guard) = self.weights.down.device_ptr_with_guard(&cuda_stream)?;
+
+        {
+            let (input_ptr, _ig) = slice_ptr_on_stream(&q8.slice, 0, &cuda_stream);
+            let (ids_ptr, _idg) = slice_ptr_on_stream(self.routing.topk_ids, 0, &cuda_stream);
+            let (output_ptr, _og) = slice_ptr_mut_on_stream(&mut output, 0, &cuda_stream);
+            let status = unsafe {
+                (self.down_launch)(
+                    down_ptr as *const std::ffi::c_void,
+                    input_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    output_ptr as *mut std::ffi::c_void,
+                    self.hidden as i32,
+                    self.intermediate as i32,
+                    self.routing.batch as i32,
+                    self.routing.topk as i32,
+                    k_padded as i32,
+                    self.routing.num_experts as i32,
+                    output_type,
+                    stream,
+                )
+            };
+            check_cuda_launch(status, "moe_gemv_lora_down")?;
+        }
+
+        Ok(Tensor::from((
+            Storage::Cuda(CudaStorage::wrap_cuda_slice(
+                output,
+                self.routing.dev.clone(),
+            )),
+            Shape::from((self.routing.batch, self.routing.topk, self.hidden)),
+        )))
+    }
+
+    pub fn down(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(output_type) = moe_output_type(input.dtype()) else {
+            return Ok(None);
+        };
+        match input.dtype() {
+            DType::F32 => self.down_t::<f32>(input, output_type).map(Some),
+            DType::F16 => self.down_t::<f16>(input, output_type).map(Some),
+            DType::BF16 => self.down_t::<bf16>(input, output_type).map(Some),
+            _ => Ok(None),
+        }
+    }
 }
 
 /// Run grouped MoE GEMM with pre-quantized Q8_1 input.
@@ -656,23 +1464,37 @@ pub unsafe fn indexed_moe_fused_decode(
     assert!(n_down == hidden_size);
     assert!(k_down == intermediate_size);
 
+    let xs_contig = xs_flat.contiguous()?;
+    let input_rows = xs_contig.dim(0)?;
+    let k = xs_contig.dim(1)?;
+    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let input_q8_bytes = q8_1_bytes(input_rows, k_padded);
+    let intermediate_rows = batch * topk;
+    let k_down_padded = pad(intermediate_size, MATRIX_ROW_PADDING);
+    let intermediate_q8_bytes = q8_1_bytes(intermediate_rows, k_down_padded);
+
+    let mut q8_workspace = u8_workspace_ensure(
+        &MOE_DECODE_Q8_WORKSPACE,
+        dev,
+        input_q8_bytes.max(intermediate_q8_bytes),
+    )?;
+
     // Step 1: Quantize input to Q8_1 (shared between gate and up)
-    let (input_q8, k, k_padded) = quantize_input_q8_1(xs_flat, dev)?;
+    quantize_input_q8_1_into(&xs_contig, &mut q8_workspace.slice, dev)?;
 
     let stream = dev.cuda_stream().cu_stream() as *mut std::ffi::c_void;
 
     // Step 2: Fused gate+up+activation+multiply
-    // SAFETY: gate_up kernel writes every element, no zeroing needed
     let gate_up_outsize = batch * topk * intermediate_size;
-    let gate_up_out = unsafe { dev.alloc::<f32>(gate_up_outsize)? };
+    let gate_up_workspace = f32_workspace_ensure(&MOE_DECODE_F32_WORKSPACE, dev, gate_up_outsize)?;
 
     let gate_ptr = gate_qt.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up_qt.device_ptr()? as *const std::ffi::c_void;
 
     {
-        let (inp_ptr, _ig) = slice_ptr(&input_q8, 0);
+        let (inp_ptr, _ig) = slice_ptr(&q8_workspace.slice, 0);
         let (ids_ptr, _idg) = slice_ptr(topk_ids, 0);
-        let (out_ptr, _og) = slice_ptr(&gate_up_out, 0);
+        let (out_ptr, _og) = slice_ptr(&gate_up_workspace.slice, 0);
 
         type FusedGateUpFn = unsafe extern "C" fn(
             *const std::ffi::c_void,
@@ -722,28 +1544,15 @@ pub unsafe fn indexed_moe_fused_decode(
         }
     }
 
-    drop(input_q8);
-
     // Step 3: Quantize the intermediate output for down projection
     // gate_up_out is [batch * topk, intermediate_size] in f32
-    let intermediate_rows = batch * topk;
-    let k_down_padded = pad(intermediate_size, MATRIX_ROW_PADDING);
-    let q8_1_block_size = GgmlDType::Q8_1.block_size();
-    let q8_1_type_size = GgmlDType::Q8_1.type_size();
-    let num_blocks_per_row = k_down_padded / q8_1_block_size;
-    let dst_row_size_bytes = num_blocks_per_row * q8_1_type_size;
-    let y_size_in_bytes = intermediate_rows * dst_row_size_bytes;
-    // SAFETY: quantize_q8_1 kernel writes every element, no zeroing needed
-    let mut intermediate_q8 = unsafe { dev.alloc::<u8>(y_size_in_bytes)? };
     quantize_q8_1(
-        &gate_up_out,
-        &mut intermediate_q8,
+        &gate_up_workspace.slice,
+        &mut q8_workspace.slice,
         intermediate_size,
         intermediate_rows,
         dev,
     )?;
-
-    drop(gate_up_out);
 
     // Step 4: Fused down+aggregate with topk_weights and atomicAdd
     let final_outsize = batch * hidden_size;
@@ -752,7 +1561,7 @@ pub unsafe fn indexed_moe_fused_decode(
     let down_ptr = down_qt.device_ptr()? as *const std::ffi::c_void;
 
     {
-        let (inp_ptr, _ig) = slice_ptr(&intermediate_q8, 0);
+        let (inp_ptr, _ig) = slice_ptr(&q8_workspace.slice, 0);
         let (ids_ptr, _idg) = slice_ptr(topk_ids, 0);
         let (out_ptr, _og) = slice_ptr(&final_out, 0);
 

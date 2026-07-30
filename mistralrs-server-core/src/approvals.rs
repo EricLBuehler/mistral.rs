@@ -16,6 +16,7 @@ use mistralrs_core::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc::Sender, oneshot};
+use utoipa::ToSchema;
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -177,26 +178,41 @@ enum ApprovalResolveStatus {
     NotFound,
 }
 
-#[derive(Deserialize)]
+/// Decision payload for a pending agentic tool approval.
+#[derive(Deserialize, ToSchema)]
 pub struct ApprovalDecisionRequest {
     pub decision: ApprovalDecision,
+    /// Auto-approve all later tool calls in the same session.
     #[serde(default)]
     pub remember_for_session: bool,
+    /// Optional note passed back to the model on denial.
     pub message: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalDecision {
     Approve,
     Deny,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 pub struct ApprovalDecisionResponse {
+    /// "resolved", "queued", or "not_found".
     pub status: &'static str,
 }
 
+#[utoipa::path(
+    post,
+    tag = "Mistral.rs",
+    path = "/v1/agent/approvals/{approval_id}",
+    params(("approval_id" = String, Path, description = "Approval ID from the approval-required SSE event")),
+    request_body = ApprovalDecisionRequest,
+    responses(
+        (status = 200, description = "Decision applied or queued", body = ApprovalDecisionResponse),
+        (status = 404, description = "Unknown approval ID", body = ApprovalDecisionResponse),
+    )
+)]
 pub async fn resolve_agent_approval(
     Extension(broker): Extension<ApprovalBroker>,
     Path(approval_id): Path<String>,

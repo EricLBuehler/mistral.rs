@@ -1,5 +1,9 @@
 #pragma once
 
+#include <cstdint>
+#include <mutex>
+#include <unordered_set>
+
 #ifndef USE_ROCM
 #define VLLM_LDG(arg) __ldg(arg)
 #else
@@ -20,8 +24,32 @@
 #endif
 
 #ifndef USE_ROCM
+inline cudaError_t VLLM_SetMaxDynamicSharedMemorySizeOnce(const void *func,
+                                                          int val) {
+  static std::mutex mutex;
+  static std::unordered_set<uint64_t> seen;
+  const auto key =
+      (static_cast<uint64_t>(reinterpret_cast<uintptr_t>(func)) >> 4) ^
+      (static_cast<uint64_t>(static_cast<uint32_t>(val)) << 32) ^
+      static_cast<uint64_t>(static_cast<uint32_t>(val));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (seen.find(key) != seen.end()) {
+      return cudaSuccess;
+    }
+  }
+  const auto result =
+      cudaFuncSetAttribute(func, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                           val);
+  if (result == cudaSuccess) {
+    std::lock_guard<std::mutex> lock(mutex);
+    seen.insert(key);
+  }
+  return result;
+}
+
 #define VLLM_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(FUNC, VAL)        \
-  cudaFuncSetAttribute(FUNC, cudaFuncAttributeMaxDynamicSharedMemorySize, VAL)
+  VLLM_SetMaxDynamicSharedMemorySizeOnce(FUNC, VAL)
 #else
 #define VLLM_DevFuncAttribute_SET_MaxDynamicSharedMemorySize(FUNC, VAL)        \
   hipFuncSetAttribute(FUNC, hipFuncAttributeMaxDynamicSharedMemorySize, VAL)

@@ -683,8 +683,7 @@ cudaError_t SingleDecodeWithKVCacheDispatched(Params params, typename Params::DT
       auto kernel =
           SingleDecodeWithKVCacheKernel<POS_ENCODING_MODE, NUM_STAGES_SMEM, tile_size_per_bdx,
                                         vec_size, bdx, bdy, bdz, AttentionVariant, Params>;
-      FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
 
       if (seq_len <= 256 || tmp == nullptr) {
         // no need to use partition-kv kernel
@@ -766,8 +765,7 @@ cudaError_t BatchDecodeWithPagedKVCacheDispatched(Params params, typename Params
       auto kernel =
           BatchDecodeWithPagedKVCacheKernel<POS_ENCODING_MODE, NUM_STAGES_SMEM, tile_size_per_bdx,
                                             vec_size, bdx, bdy, bdz, AttentionVariant, Params>;
-      FLASHINFER_CUDA_CALL(
-          cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+      FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
       dim3 nblks(padded_batch_size, num_kv_heads);
       dim3 nthrs(bdx, bdy, bdz);
 
@@ -1124,8 +1122,7 @@ cudaError_t BatchDecodeWithPagedKVCacheDispatchedMLA(Params params, typename Par
     auto kernel =
         BatchDecodeWithPagedKVCacheKernelMLA<NUM_STAGES_SMEM, vec_size_ckv, vec_size_kpe, bdx, bdy,
                                              bdz, tile_size_qo_heads, AttentionVariant, Params>;
-    FLASHINFER_CUDA_CALL(
-        cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size));
+    FLASHINFER_SET_MAX_DYNAMIC_SMEM(kernel, smem_size, stream);
 
     dim3 nblks(padded_batch_size, gdy);
     dim3 nthrs(bdx, bdy, bdz);

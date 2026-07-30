@@ -146,6 +146,43 @@ impl AudioProcessor {
         Ok((mel_tensor, mask_tensor, valid_frame_counts))
     }
 
+    pub fn process_raw_frame_audios(
+        &self,
+        audio_inputs: &[AudioInput],
+        device: &Device,
+        frame_size: usize,
+    ) -> Result<(Tensor, Tensor, Vec<usize>)> {
+        let processed = audio_inputs
+            .iter()
+            .map(|audio| self.prepare_audio(audio))
+            .collect::<Result<Vec<_>>>()?;
+
+        let valid_frame_counts = processed
+            .iter()
+            .map(|samples| samples.len().div_ceil(frame_size))
+            .collect::<Vec<_>>();
+        let max_frames = valid_frame_counts.iter().copied().max().unwrap_or(0);
+        let batch_size = processed.len();
+        let mut frame_data = vec![0.0f32; batch_size * max_frames * frame_size];
+        let mut mask_data = vec![1.0f32; batch_size * max_frames];
+
+        for (batch_idx, samples) in processed.iter().enumerate() {
+            let valid_frames = valid_frame_counts[batch_idx];
+            for frame_idx in 0..valid_frames {
+                mask_data[batch_idx * max_frames + frame_idx] = 0.0;
+                let src_start = frame_idx * frame_size;
+                let src_end = (src_start + frame_size).min(samples.len());
+                let dst_start = (batch_idx * max_frames + frame_idx) * frame_size;
+                frame_data[dst_start..dst_start + src_end - src_start]
+                    .copy_from_slice(&samples[src_start..src_end]);
+            }
+        }
+
+        let frames = Tensor::from_vec(frame_data, (batch_size, max_frames, frame_size), device)?;
+        let mask = Tensor::from_vec(mask_data, (batch_size, max_frames), device)?;
+        Ok((frames, mask, valid_frame_counts))
+    }
+
     fn prepare_audio(&self, audio_input: &AudioInput) -> Result<Vec<f32>> {
         let mono_samples = audio_input.to_mono();
 

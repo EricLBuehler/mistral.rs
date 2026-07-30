@@ -1,5 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+use crate::paged_attention::block_hash::{MultiModalFeature, MultimodalKind};
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 use candle_core::Result;
@@ -24,7 +26,13 @@ use crate::sequence::{build_mm_features_from_ranges, Sequence};
 use crate::vision_models::image_processor::{self, ImagePreProcessor, PreprocessedImages};
 use crate::vision_models::llava::config::Config as LLaVAConfig;
 use crate::vision_models::preprocessor_config::{PreProcessorConfig, ToFilter};
-use crate::vision_models::{preprocessor_config, ModelInputs};
+use crate::vision_models::{
+    multimodal_layout::{
+        MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout, PackedMultimodalLayout,
+        RequestMultimodalLayout,
+    },
+    preprocessor_config, ModelInputs,
+};
 
 pub struct LLaVAProcessor {
     inputs_processor: Arc<LLaVAInputProcessor>,
@@ -68,11 +76,199 @@ impl LLaVAInputProcessor {
     }
 }
 
+fn llava_packed_layout(
+    input_seqs: &[&mut Sequence],
+    query_lens: &[usize],
+) -> Result<PackedMultimodalLayout> {
+    if input_seqs.len() != query_lens.len() {
+        candle_core::bail!("LLaVA packed multimodal metadata length mismatch");
+    }
+    let mut requests = Vec::with_capacity(input_seqs.len());
+    for (seq, &query_len) in input_seqs.iter().zip(query_lens) {
+        if query_len != seq.get_toks().len() {
+            candle_core::bail!(
+                "LLaVA packed multimodal prefill requires the complete uncached prompt"
+            );
+        }
+        let mut items = Vec::new();
+        for feature in seq
+            .mm_features()
+            .iter()
+            .filter(|feature| feature.kind == MultimodalKind::Image)
+        {
+            if feature.item_range.len() != 1 || feature.hashes.len() != 1 {
+                candle_core::bail!("LLaVA image feature must describe exactly one image");
+            }
+            let placeholder = feature.offset..feature.end();
+            items.push(MultimodalItemLayout::new(
+                MultimodalEncoderKey {
+                    kind: MultimodalKind::Image,
+                    hash: feature.hashes[0],
+                },
+                feature.item_range.start,
+                placeholder.clone(),
+                feature.attention_policy,
+                vec![MultimodalEmbeddingMap::contiguous(placeholder, 0, 0)?],
+            )?);
+        }
+        requests.push(RequestMultimodalLayout {
+            sequence_id: *seq.id(),
+            query: 0..query_len,
+            items,
+        });
+    }
+    PackedMultimodalLayout::new(&requests)
+}
+
+fn restore_llava_image_markers(
+    tokens: &[u32],
+    features: &[MultiModalFeature],
+    query: Range<usize>,
+    local_query: Range<usize>,
+    expected_images: usize,
+) -> anyhow::Result<Vec<i64>> {
+    if query.len() != local_query.len() {
+        anyhow::bail!("LLaVA prompt coordinate ranges have different lengths");
+    }
+    let active_features = features
+        .iter()
+        .filter(|feature| {
+            feature.kind == MultimodalKind::Image && feature.overlaps(query.start, query.end)
+        })
+        .collect::<Vec<_>>();
+    if active_features.len() != expected_images {
+        anyhow::bail!(
+            "LLaVA prompt query has {} image placeholders but {expected_images} images",
+            active_features.len()
+        );
+    }
+    let mut tokens = tokens
+        .iter()
+        .map(|token| i64::from(*token))
+        .collect::<Vec<_>>();
+    for (image_index, feature) in active_features.into_iter().enumerate() {
+        if feature.item_range.len() != 1 {
+            anyhow::bail!("LLaVA image feature must describe exactly one image");
+        }
+        if feature.offset < query.start || feature.end() > query.end {
+            anyhow::bail!("LLaVA prompt query partially overlaps an image placeholder");
+        }
+        let local = local_query.start + feature.offset - query.start;
+        let token = tokens
+            .get_mut(local)
+            .ok_or_else(|| anyhow::Error::msg("LLaVA image marker is outside the query"))?;
+        *token = -(image_index as i64 + 1);
+    }
+    Ok(tokens)
+}
+
 // Copy from phi3_inputs_processor. different is (1) calculate of num_image_token (2) process_anyres_image (3)image_ids_pad
 impl InputsProcessor for LLaVAInputProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        _other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let Some(tokenizer) = tokenizer else {
+            return Err(anyhow::Error::msg(
+                "LLaVAInputProcessor requires a specified tokenizer.",
+            ));
+        };
+        if !input_seqs.iter().any(|seq| seq.has_images()) {
+            return Ok(());
+        }
+
+        for seq in input_seqs.iter_mut() {
+            if seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let n_images = seq.images().map_or(0, |images| images.len());
+            if n_images == 0 {
+                continue;
+            }
+
+            let detokenized = tokenizer
+                .decode(seq.get_toks(), false)
+                .expect("Decoding failed");
+            let splits = self
+                .image_tag_splitter
+                .split(&detokenized)
+                .map(|span| &detokenized[span.range()])
+                .collect::<Vec<_>>();
+            if splits.len() != n_images + 1 {
+                anyhow::bail!(
+                    "LLaVA prompt has {} image tags but {} images",
+                    splits.len().saturating_sub(1),
+                    n_images
+                );
+            }
+            let prompt_chunks = splits
+                .iter()
+                .map(|s| {
+                    tokenizer
+                        .encode_fast(*s, false)
+                        .unwrap()
+                        .get_ids()
+                        .iter()
+                        .map(|x| *x as i64)
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let image_ids_pad = (0..n_images)
+                .map(|i| {
+                    let mut pad = vec![0; Self::get_num_image_tokens(&self.model_config)];
+                    pad[0] = -(i as i64 + 1);
+                    pad
+                })
+                .collect::<Vec<_>>();
+
+            let mut img_ranges = Vec::new();
+            let mut offset = 0;
+            for (chunk, pad) in prompt_chunks.iter().zip(image_ids_pad.iter()) {
+                offset += chunk.len();
+                img_ranges.push((offset, pad.len()));
+                offset += pad.len();
+            }
+
+            let mut input_ids = Vec::new();
+            for item in prompt_chunks
+                .iter()
+                .map(|x| x.to_vec())
+                .interleave(image_ids_pad)
+            {
+                input_ids.extend(item);
+            }
+            let new_ids = input_ids
+                .iter()
+                .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
+                .collect::<Vec<_>>();
+            let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
+            seq.set_initial_prompt(new_prompt);
+
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &img_ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+            }
+
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -107,45 +303,59 @@ impl InputsProcessor for LLaVAInputProcessor {
             .expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_images = input_seqs.iter().any(|seq| seq.has_images());
 
         let (pixel_values, num_img_tokens) = if has_images {
             let mut pixel_values_accum = Vec::new();
-            let mut num_img_tokens_accum = Vec::new();
-            for seq in input_seqs.iter_mut() {
+            let mut num_img_tokens_accum = vec![Vec::new(); input_seqs.len()];
+            for (seq_idx, seq) in input_seqs.iter_mut().enumerate() {
+                if !seq.has_images() {
+                    continue;
+                }
                 let imgs = seq
                     .take_images()
                     .expect("Need to have images by this point.");
-                let PreprocessedImages {
-                    pixel_values,
-                    pixel_attention_mask: _,
-                    image_sizes: _,
-                    num_img_tokens,
-                    aspect_ratio_ids: _,
-                    aspect_ratio_mask: _,
-                    num_tiles: _,
-                    image_grid_thw: _,
-                    video_grid_thw: _,
-                    rows: _,
-                    cols: _,
-                    pixel_values_list: _,
-                    tgt_sizes: _,
-                    image_sizes_all: _,
-                    num_crops: _,
-                } = self
-                    .preprocess(
-                        imgs.clone(),
+                let cached = seq.count_prefix_cached_mm_items();
+                for image in imgs.into_iter().skip(cached) {
+                    let PreprocessedImages {
+                        pixel_values,
+                        pixel_attention_mask: _,
+                        image_sizes: _,
+                        num_img_tokens,
+                        aspect_ratio_ids: _,
+                        aspect_ratio_mask: _,
+                        num_tiles: _,
+                        image_grid_thw: _,
+                        video_grid_thw: _,
+                        rows: _,
+                        cols: _,
+                        pixel_values_list: _,
+                        tgt_sizes: _,
+                        image_sizes_all: _,
+                        num_crops: _,
+                    } = self.preprocess(
+                        vec![image],
                         vec![],
                         config,
                         device,
                         (usize::MAX, usize::MAX),
-                    )
-                    .expect("Preprocessor failed");
-                pixel_values_accum.push(pixel_values);
-                num_img_tokens_accum.push(num_img_tokens.unwrap());
+                    )?;
+                    let num_img_tokens = num_img_tokens.ok_or_else(|| {
+                        anyhow::Error::msg("LLaVA preprocessing omitted image token counts")
+                    })?;
+                    if pixel_values.dim(0)? != 1 || num_img_tokens.len() != 1 {
+                        anyhow::bail!("LLaVA preprocessing must return one output for one image");
+                    }
+                    pixel_values_accum.push(pixel_values);
+                    num_img_tokens_accum[seq_idx].push(num_img_tokens[0]);
+                }
             }
             (
-                Some(Tensor::cat(&pixel_values_accum, 0).unwrap()),
+                if pixel_values_accum.is_empty() {
+                    None
+                } else {
+                    Some(Tensor::cat(&pixel_values_accum, 0)?)
+                },
                 Some(num_img_tokens_accum),
             )
         } else {
@@ -180,6 +390,8 @@ impl InputsProcessor for LLaVAInputProcessor {
                         paged_attn_meta,
                         flash_meta,
                         flash_meta_full: _,
+                        recurrent_batch_kind,
+                        adapter_leases,
                     } = *inputs
                         .downcast::<text_models_inputs_processor::ModelInputs>()
                         .expect("Downcast failed.");
@@ -192,9 +404,12 @@ impl InputsProcessor for LLaVAInputProcessor {
                         pixel_values: None,
                         model_specific_args: Box::new(LLaVAVisionSpecificArgs {
                             image_hashes: vec![],
+                            packed_layout: None,
                         }),
                         paged_attn_meta,
                         flash_meta,
+                        recurrent_batch_kind,
+                        adapter_leases,
                     });
                     InputProcessorOutput {
                         inputs,
@@ -218,11 +433,44 @@ impl InputsProcessor for LLaVAInputProcessor {
             .into_iter()
             .zip(input_seqs.iter_mut().zip(num_img_tokens.unwrap()))
         {
+            if num_img_tokens.is_empty() {
+                toks.push(
+                    seq.get_toks()
+                        .iter()
+                        .map(|token| i64::from(*token))
+                        .collect(),
+                );
+                continue;
+            }
+            if seq.multimodal.has_changed_prompt {
+                let query = seq
+                    .active_prompt_query_range()
+                    .unwrap_or(0..seq.get_toks().len());
+                let local_query = seq
+                    .active_prompt_local_query_range()
+                    .unwrap_or(0..seq.get_toks().len());
+                toks.push(restore_llava_image_markers(
+                    seq.get_toks(),
+                    seq.mm_features(),
+                    query,
+                    local_query,
+                    num_img_tokens.len(),
+                )?);
+                continue;
+            }
+
             let splits = self
                 .image_tag_splitter
                 .split(&detokenized)
                 .map(|span| &detokenized[span.range()])
                 .collect::<Vec<_>>();
+            if splits.len() != num_img_tokens.len() + 1 {
+                anyhow::bail!(
+                    "LLaVA prompt has {} image tags but {} images",
+                    splits.len().saturating_sub(1),
+                    num_img_tokens.len()
+                );
+            }
             let prompt_chunks = splits
                 .iter()
                 .map(|s| {
@@ -267,26 +515,21 @@ impl InputsProcessor for LLaVAInputProcessor {
                 .iter()
                 .map(|x| if *x < 0 { 0u32 } else { *x as u32 })
                 .collect::<Vec<_>>();
-            if !seq.multimodal.has_changed_prompt {
-                let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
-                seq.set_initial_prompt(new_prompt);
+            let new_prompt = tokenizer.decode(&new_ids, false).unwrap();
+            seq.set_initial_prompt(new_prompt);
 
-                // Build mm_features for position-aware prefix cache hashing
-                if seq.mm_features().is_empty() {
-                    if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
-                        seq.set_mm_features(build_mm_features_from_ranges(
-                            &img_ranges,
-                            &hashes,
-                            "img",
-                        ));
-                    }
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(|h| h.to_vec()) {
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &img_ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
                 }
-
-                // NOTE(EricLBuehler): Casting to u32 is fine, we don't care about the other toks
-                seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
-                seq.multimodal.has_changed_prompt = true;
             }
 
+            seq.set_toks_and_reallocate(new_ids, paged_attn_metadata.as_mut());
+            seq.multimodal.has_changed_prompt = true;
             toks.push(input_ids);
         }
 
@@ -315,48 +558,73 @@ impl InputsProcessor for LLaVAInputProcessor {
             )
         };
 
-        metadata.map(|metadata| {
-            let text_models_inputs_processor::InnerInputProcessorOutput {
-                inputs:
-                    text_models_inputs_processor::InputMetadata {
-                        input,
-                        positions,
-                        context_lens,
-                        position_ids,
-                        paged_attn_meta,
-                        flash_meta,
-                    },
-                seq_indices,
-            } = metadata;
-            let image_hashes: Vec<u64> = input_seqs
-                .iter()
-                .flat_map(|seq| {
-                    seq.image_hashes()
-                        .map(|h| {
-                            let cached = seq.count_prefix_cached_mm_items();
-                            if cached < h.len() {
-                                h[cached..].to_vec()
-                            } else {
-                                vec![]
-                            }
-                        })
-                        .unwrap_or_default()
-                })
-                .collect();
-            let inputs: Box<dyn Any> = Box::new(ModelInputs {
+        let text_models_inputs_processor::InnerInputProcessorOutput {
+            inputs:
+                text_models_inputs_processor::InputMetadata {
+                    input,
+                    positions,
+                    context_lens,
+                    position_ids,
+                    paged_attn_meta,
+                    flash_meta,
+                },
+            seq_indices,
+        } = metadata?;
+        let image_hashes = input_seqs
+            .iter()
+            .flat_map(|seq| {
+                seq.image_hashes()
+                    .map(|h| {
+                        let cached = seq.count_prefix_cached_mm_items();
+                        if cached < h.len() {
+                            h[cached..].to_vec()
+                        } else {
+                            vec![]
+                        }
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    anyhow::Error::msg("packed LLaVA prefill requires logical query lengths")
+                })?;
+            let layout = llava_packed_layout(input_seqs, query_lens)?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "LLaVA packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
+        } else {
+            None
+        };
+        Ok(InputProcessorOutput {
+            inputs: Box::new(ModelInputs {
                 input_ids: input,
                 seqlen_offsets: positions,
                 context_lens,
                 position_ids,
-                pixel_values: pixel_values.clone(),
-                model_specific_args: Box::new(LLaVAVisionSpecificArgs { image_hashes }),
+                pixel_values,
+                model_specific_args: Box::new(LLaVAVisionSpecificArgs {
+                    image_hashes,
+                    packed_layout,
+                }),
                 paged_attn_meta,
                 flash_meta,
-            });
-            InputProcessorOutput {
-                inputs,
-                seq_indices,
-            }
+                recurrent_batch_kind: if is_prompt {
+                    crate::pipeline::RecurrentBatchKind::Prefill
+                } else {
+                    crate::pipeline::RecurrentBatchKind::Decode
+                },
+                adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
+            }),
+            seq_indices,
         })
     }
 }
@@ -432,5 +700,25 @@ impl ImagePreProcessor for LLaVAInputProcessor {
             image_sizes_all: None,
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_markers_use_suffix_local_coordinates() {
+        let features =
+            build_mm_features_from_ranges(&[(1, 2), (5, 2)], &[11, 13], MultimodalKind::Image);
+        let tokens = restore_llava_image_markers(&[7, 0, 0, 8], &features, 4..8, 0..4, 1).unwrap();
+        assert_eq!(tokens, vec![7, -1, 0, 8]);
+    }
+
+    #[test]
+    fn image_markers_reject_partial_or_missing_placeholders() {
+        let features = build_mm_features_from_ranges(&[(5, 2)], &[13], MultimodalKind::Image);
+        assert!(restore_llava_image_markers(&[0, 8], &features, 6..8, 0..2, 1).is_err());
+        assert!(restore_llava_image_markers(&[0, 0, 8], &features, 5..8, 0..3, 2).is_err());
     }
 }

@@ -42,7 +42,6 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// - [`GgufLoraModelBuilder`]
 /// - [`GgufXLoraModelBuilder`]
 /// - [`AnyMoeModelBuilder`]
-/// - [`TextSpeculativeBuilder`]
 ///
 /// [`ModelBuilder`]: crate::ModelBuilder
 /// [`TextModelBuilder`]: crate::TextModelBuilder
@@ -56,7 +55,6 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
 /// [`GgufLoraModelBuilder`]: crate::GgufLoraModelBuilder
 /// [`GgufXLoraModelBuilder`]: crate::GgufXLoraModelBuilder
 /// [`AnyMoeModelBuilder`]: crate::AnyMoeModelBuilder
-/// [`TextSpeculativeBuilder`]: crate::TextSpeculativeBuilder
 ///
 pub struct Model {
     pub(crate) runner: Arc<MistralRs>,
@@ -101,6 +99,141 @@ impl Model {
     /// Look up a file by id. Returns the full body, so callers with a wire-truncated `File` can fetch the real bytes here.
     pub fn find_file(&self, id: &str) -> Option<Arc<mistralrs_core::File>> {
         self.runner.find_file(id)
+    }
+
+    /// Load a local LoRA adapter directory under a new alias.
+    pub async fn load_lora_adapter(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter(None, alias, adapter_dir)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter using an explicit atomic publication policy.
+    pub async fn load_lora_adapter_with_policy(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        policy: LoraAdapterLoadPolicy,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter_with_policy(None, alias, adapter_dir, policy)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter under a new alias on a selected model.
+    pub async fn load_lora_adapter_with_model(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        model_id: &str,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter(Some(model_id), alias, adapter_dir)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter on a selected model using an atomic publication policy.
+    pub async fn load_lora_adapter_with_model_and_policy(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        model_id: &str,
+        policy: LoraAdapterLoadPolicy,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter_with_policy(Some(model_id), alias, adapter_dir, policy)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an adapter alias while allowing in-flight requests to finish.
+    pub async fn unload_lora_adapter(&self, alias: &str) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter(None, alias)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an alias only if it still points at the expected generation.
+    pub async fn unload_lora_adapter_if_generation(
+        &self,
+        alias: &str,
+        expected_generation: AdapterGenerationId,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter_if_generation(None, alias, Some(expected_generation))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an adapter alias from a selected model in a multi-model engine.
+    pub async fn unload_lora_adapter_with_model(
+        &self,
+        alias: &str,
+        model_id: &str,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter(Some(model_id), alias)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Conditionally unregister an alias from a selected model.
+    pub async fn unload_lora_adapter_with_model_if_generation(
+        &self,
+        alias: &str,
+        model_id: &str,
+        expected_generation: AdapterGenerationId,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter_if_generation(Some(model_id), alias, Some(expected_generation))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// List the loaded adapter aliases on the default model.
+    pub async fn list_lora_adapters(&self) -> crate::error::Result<Vec<LoraAdapterInfo>> {
+        self.runner
+            .list_lora_adapters(None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// List the loaded adapter aliases on a selected model.
+    pub async fn list_lora_adapters_with_model(
+        &self,
+        model_id: &str,
+    ) -> crate::error::Result<Vec<LoraAdapterInfo>> {
+        self.runner
+            .list_lora_adapters(Some(model_id))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Return loaded aliases and complete resident-generation capacity usage.
+    pub async fn lora_adapter_status(&self) -> crate::error::Result<LoraRuntimeStatus> {
+        self.runner
+            .lora_adapter_status(None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Return dynamic LoRA capacity usage for a selected model.
+    pub async fn lora_adapter_status_with_model(
+        &self,
+        model_id: &str,
+    ) -> crate::error::Result<LoraRuntimeStatus> {
+        self.runner
+            .lora_adapter_status(Some(model_id))
+            .await
+            .map_err(Into::into)
     }
 
     // ========================================================================
@@ -148,6 +281,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -156,9 +291,11 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -209,6 +346,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -217,9 +356,11 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -235,6 +376,7 @@ impl Model {
                 .as_result()?;
             match resp {
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Done(response) => break response,
                 _ => return Err(SdkError::UnexpectedResponse { expected: "Done" }),
@@ -287,6 +429,8 @@ impl Model {
             return_raw_logits: true,
             web_search_options: request.take_web_search_options(),
             enable_code_execution: request.enable_code_execution(),
+            enable_shell: request.enable_shell(),
+            shell_options: request.take_shell_options(),
             code_execution_permission: request.code_execution_permission(),
             code_execution_approval_notifier: None,
             agent_permission: request.agent_permission(),
@@ -295,9 +439,11 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
+            input_files: request.take_input_files(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -311,6 +457,7 @@ impl Model {
                 .as_result()?;
             match resp {
                 ResponseOk::AgenticToolCallProgress { .. } => continue,
+                ResponseOk::BlockDenoisingProgress(_) => continue,
                 ResponseOk::File(_) => continue,
                 ResponseOk::Raw {
                     logits_chunks,
@@ -457,6 +604,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -465,9 +614,11 @@ impl Model {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
+            adapter: None,
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -528,6 +679,8 @@ impl Model {
             return_raw_logits: false,
             web_search_options: None,
             enable_code_execution: false,
+            enable_shell: false,
+            shell_options: None,
             code_execution_permission: None,
             code_execution_approval_notifier: None,
             agent_permission: None,
@@ -536,9 +689,11 @@ impl Model {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
+            adapter: None,
             truncate_sequence: false,
             session_id: None,
             files: None,
+            input_files: Vec::new(),
         }));
 
         self.runner.get_sender(model_id)?.send(request).await?;
@@ -612,6 +767,8 @@ impl Model {
                     return_raw_logits: false,
                     web_search_options: None,
                     enable_code_execution: false,
+                    enable_shell: false,
+                    shell_options: None,
                     code_execution_permission: None,
                     code_execution_approval_notifier: None,
                     agent_permission: None,
@@ -620,9 +777,11 @@ impl Model {
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
+                    adapter: None,
                     truncate_sequence,
                     session_id: None,
                     files: None,
+                    input_files: Vec::new(),
                 }));
 
                 runner
@@ -699,6 +858,77 @@ impl Model {
         let request = Request::ReIsq(isq_type);
 
         Ok(self.runner.get_sender(model_id)?.send(request).await?)
+    }
+
+    /// Begin online calibration: collect activation statistics from live traffic on every
+    /// ISQ-tracked layer. The model must have been loaded with ISQ.
+    pub async fn begin_calibration(&self) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Start, None).await
+    }
+
+    /// Begin online calibration on a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn begin_calibration_with_model(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Start, model_id)
+            .await
+    }
+
+    /// Report per-layer calibration collection progress.
+    pub async fn calibration_status(&self) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Status, None).await
+    }
+
+    /// Report calibration progress for a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn calibration_status_with_model(
+        &self,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Status, model_id)
+            .await
+    }
+
+    /// Requantize from the source weights with the collected statistics and hot-swap the
+    /// layers into the live model. Returns the pre-apply status. `save_cimatrix` optionally
+    /// writes the collected importance matrix to a `.cimatrix` file for reuse.
+    pub async fn apply_calibration(
+        &self,
+        save_cimatrix: Option<PathBuf>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Apply { save_cimatrix }, None)
+            .await
+    }
+
+    /// Apply calibration on a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    pub async fn apply_calibration_with_model(
+        &self,
+        save_cimatrix: Option<PathBuf>,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        self.send_calibration(CalibrationAction::Apply { save_cimatrix }, model_id)
+            .await
+    }
+
+    async fn send_calibration(
+        &self,
+        action: CalibrationAction,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<CalibrationStatus> {
+        let (tx, mut rx) = channel(1);
+        let request = Request::Calibration(CalibrationRequest {
+            action,
+            response: tx,
+        });
+        self.runner.get_sender(model_id)?.send(request).await?;
+
+        rx.recv()
+            .await
+            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+            .map_err(|e| SdkError::Inference(e.into()))
     }
 
     // ========================================================================

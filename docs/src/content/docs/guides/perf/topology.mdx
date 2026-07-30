@@ -1,0 +1,81 @@
+---
+title: Configure model topology
+description: Per-layer placement and quantization via a YAML topology file.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Topology is a per-layer placement and [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) mechanism. A YAML file specifies, per layer range, the device and quantization to use.
+
+Most cases do not need topology. Defaults work for typical hardware; `mistralrs tune` covers common optimization.
+
+## Config
+
+A YAML file keyed by `start-end` layer-range selectors:
+
+```yaml
+0-16:
+  device: cuda[0]
+  isq: q4k
+16-32:
+  device: cuda[1]
+  isq: q4k
+32-40:
+  device: cpu
+  isq: q8_0
+```
+
+Layers outside any range use defaults. `device` is a CUDA (`cuda[N]`), Metal (`metal[N]`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
+
+Range selectors match the decoder layer index (the `N` in weight names like `model.layers.N.self_attn.q_proj`). A single layer can be selected with a bare index (`12:`).
+
+Selectors wrapped in slashes are regexes instead of ranges:
+
+- They match against the full weight name, so they can target specific weights instead of whole layers.
+- When multiple regexes match the same weight, the later entry wins.
+
+```yaml
+/model\.layers\.\d+\.self_attn\..*/:
+  isq: q8_0
+/lm_head\..*/:
+  device: cpu
+```
+
+Topology ISQ pins also apply when producing [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
+
+## Loading a topology file
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs serve --topology topology.yaml -m <model>
+```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(which=Which.Plain(model_id="<model>", topology="topology.yaml"))
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let model = mistralrs::ModelBuilder::new("<model>")
+    .with_topology_from_path("topology.yaml")?
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>
+
+## Notes
+
+Range selectors only address numbered decoder layers (the `N` in `model.layers.N.*`). To target embedding layers, the LM head, or pre/post-norm weights, use a regex selector, e.g. `/lm_head\..*/` as shown above; a device-only regex match relocates the matched weight even when no `isq` is set.
+
+For an introduction to per-layer quantization tradeoffs, see [the quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).

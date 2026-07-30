@@ -12,7 +12,6 @@ model_id = input("Please enter the original model ID: ")
 display_model_id = input(
     "Please enter the model ID where this model card will be displayed: "
 )
-is_multimodal = input("Is this a multimodal model (yes/no): ").strip().lower() == "yes"
 
 output = f"""---
 tags:
@@ -43,7 +42,7 @@ print(
     " NOTE: If multiple quantizations were used: enter the quantization names, and then in the next prompt, the topology file used."
 )
 
-output += f"\n## Examples\n"
+output += "\n## Examples\n"
 
 output += "|Quantization type(s)|Example|\n|--|--|\n"
 
@@ -72,12 +71,7 @@ try:
         else:
             output += f"|{quants.strip().upper()}|"
 
-        if is_multimodal:
-            cmd = "multimodal-plain"
-        else:
-            cmd = "plain"
-
-        output += f"`./mistralrs-server -i {cmd} -m {display_model_id} -f {file}`|\n"
+        output += f"`mistralrs run -m {display_model_id} --from-uqff {file}`|\n"
         n += 1
         print()
 except KeyboardInterrupt:

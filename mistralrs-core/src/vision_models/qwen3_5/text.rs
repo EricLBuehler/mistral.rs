@@ -6,26 +6,28 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Embedding;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 
-use super::config::{LayerType, TextConfig};
+use super::{
+    config::{LayerType, TextConfig},
+    packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
+};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
+    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
-    models::gdn::{GatedDeltaNet, GdnConfig, GdnLayerCache, GdnWeightMode},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        extract_logits,
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, NormalLoadingMetadata,
+        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
+        RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -71,7 +73,6 @@ struct FullAttention {
     num_kv_heads: usize,
     head_dim: usize,
     rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-    rot_dim: usize,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -102,7 +103,7 @@ impl FullAttention {
             comm,
             vb_sa.pp("q_proj"),
         )?;
-        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm);
+        let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
         let k_proj = ColumnParallelLayer::new_with_shard(
             cfg.hidden_size,
             num_kv_heads * head_dim,
@@ -134,8 +135,6 @@ impl FullAttention {
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
-        let rot_dim = cfg.rot_dim();
-
         Ok(Self {
             q_proj,
             k_proj,
@@ -147,10 +146,9 @@ impl FullAttention {
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
             rotary_emb,
-            rot_dim,
             paged_attn,
             sdpa_params: SdpaParams {
-                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm),
+                n_kv_groups: mistralrs_quant::compute_n_kv_groups(num_kv_heads, num_heads, comm)?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
                 sliding_window: None,
@@ -170,9 +168,8 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let q_gate = self.q_proj.forward(x)?;
-        let k = self.k_proj.forward(x)?;
-        let v = self.v_proj.forward(x)?;
+        let (q_gate, k, v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
         // Split q_gate into q and gate
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
         let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
@@ -196,23 +193,15 @@ impl FullAttention {
             (q, k, v)
         };
 
-        // Apply QK norm
-        q = q.apply(&self.q_norm)?;
-        k = k.apply(&self.k_norm)?;
-
-        // Apply partial MRoPE: split into rotated and pass-through portions
-        if self.rot_dim < self.head_dim {
-            let mut q_rot = q.narrow(D::Minus1, 0, self.rot_dim)?;
-            let q_pass = q.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-            let mut k_rot = k.narrow(D::Minus1, 0, self.rot_dim)?;
-            let k_pass = k.narrow(D::Minus1, self.rot_dim, self.head_dim - self.rot_dim)?;
-
-            self.rotary_emb.forward(cos_sin, &mut q_rot, &mut k_rot)?;
-            q = Tensor::cat(&[q_rot, q_pass], D::Minus1)?;
-            k = Tensor::cat(&[k_rot, k_pass], D::Minus1)?;
-        } else {
-            self.rotary_emb.forward(cos_sin, &mut q, &mut k)?;
-        }
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            cos_sin,
+            &q,
+            &k,
+            self.q_norm.weight(),
+            self.k_norm.weight(),
+            self.q_norm.eps(),
+            self.k_norm.eps(),
+        )?;
 
         // Standard attention
         let mut y = match &self.paged_attn {
@@ -330,10 +319,6 @@ impl Mlp {
         let res = self.down_proj.forward(&activated)?;
         Ok(res)
     }
-
-    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
-        vec![&mut self.gate_proj, &mut self.up_proj, &mut self.down_proj]
-    }
 }
 
 // ====================== Decoder Layer ======================
@@ -382,14 +367,24 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<Tensor> {
+    fn forward_linear(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+        packed_query_lens: Option<&[usize]>,
+    ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache)?;
+        let gdn_out = if let Some(query_lens) = packed_query_lens {
+            forward_packed_gdn(gdn, &x, cache, batch_kind, query_lens)?
+        } else {
+            gdn.forward(&x, cache, batch_kind)?
+        };
         let x = (gdn_out + residual)?;
         let residual = &x;
         let normed = self.post_attention_layernorm.forward(&x)?;
@@ -401,7 +396,7 @@ impl DecoderLayer {
 // ====================== Text Model ======================
 
 pub struct Qwen3_5TextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
     layer_types: Vec<LayerType>,
@@ -423,16 +418,20 @@ impl Qwen3_5TextModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
-        } else {
-            vb.pp("model").pp("language_model")
-        };
+        let vb_m =
+            if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+                vb.pp("language_model").pp("model")
+            } else {
+                vb.pp("model").pp("language_model")
+            };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -503,7 +502,7 @@ impl Qwen3_5TextModel {
                     layer_idx,
                     normal_loading_metadata.loading_isq,
                     &comm,
-                    GdnWeightMode::MergedWithFallback,
+                    GdnInputProjectionKind::Split,
                 )?),
             };
 
@@ -557,13 +556,7 @@ impl Qwen3_5TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(candle_nn::Linear::new(
-                mapper.cast_nm_device(
-                    embed_tokens.embeddings(),
-                    normal_loading_metadata.loading_isq,
-                )?,
-                None,
-            ))?
+            embed_tokens.clone()
         };
 
         // Create pipeline hybrid cache
@@ -586,16 +579,20 @@ impl Qwen3_5TextModel {
                     cfg.linear_key_head_dim,
                     cfg.linear_value_head_dim,
                 ],
+                recurrent_dtype: Some(DType::F32),
             },
         };
+        let layer_devices = (0..hybrid_cache_config.layer_types.len())
+            .map(|layer_idx| {
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| {
+            HybridCache::new(hybrid_cache_config, vb_m.dtype(), &layer_devices).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
@@ -627,7 +624,7 @@ impl Qwen3_5TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -637,24 +634,26 @@ impl Qwen3_5TextModel {
         attention_mask: &AttentionMask,
         position_ids: &Tensor,
         _seqlen_offsets: &[usize],
-        context_lens: Vec<(usize, usize)>,
-        metadata: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_params: &FlashParams,
+        ctx: &ModelForwardContext<'_>,
         visual_pos_masks: Option<&Tensor>,
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
-        let state_indices = hybrid_cache.state_indices().cloned();
-        if self
+        let recurrent_metadata = ctx.recurrent_metadata().cloned();
+        let has_linear_attention = self
             .layer_types
             .iter()
-            .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && state_indices.is_none()
-        {
+            .any(|lt| matches!(lt, LayerType::LinearAttention));
+        if has_linear_attention && recurrent_metadata.is_none() {
             candle_core::bail!(
-                "Hybrid recurrent state indices are required for linear-attention layers."
+                "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
+        let packed_query_lens = if has_linear_attention {
+            packed_gdn_query_lens(&xs, ctx)?
+        } else {
+            None
+        };
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
         let cos_sin = {
@@ -710,52 +709,46 @@ impl Qwen3_5TextModel {
                             &attention_mask.get(xs.device()),
                             &cos_sin,
                             kv_cache,
-                            metadata
-                                .as_ref()
-                                .map(|(kv_cache, meta)| (kv_cache[i].clone(), *meta)),
-                            flash_params,
+                            ctx.paged_layer(i),
+                            ctx.flash_params(),
                         )?;
                     }
                 }
                 LayerType::LinearAttention => {
+                    let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                        "checked above: linear-attention layers require recurrent metadata",
+                    );
+                    let indices = hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "Hybrid cache layer {i} is missing recurrent state indices"
+                        ))
+                    })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let indices = state_indices.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent indices",
-                        );
-                        let indices_vec: Vec<u32> = indices.to_vec1()?;
-                        if indices_vec.is_empty() {
-                            candle_core::bail!("Hybrid recurrent state indices are empty.");
-                        }
-
-                        let first_offset = pool.get_seqlen_offset(indices_vec[0] as usize);
-                        if indices_vec
-                            .iter()
-                            .any(|&idx| pool.get_seqlen_offset(idx as usize) != first_offset)
-                        {
-                            candle_core::bail!(
-                                "Hybrid recurrent seqlen offsets diverged within a batch for layer {i}."
-                            );
-                        }
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
+                        let conv_state = pool.gather_conv_state(&indices)?;
+                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
 
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
                             recurrent_state,
-                            seqlen_offset: first_offset,
                         };
 
-                        xs = layer.forward_linear(&xs, &mut gdn_cache)?;
+                        xs = layer.forward_linear(
+                            &xs,
+                            &mut gdn_cache,
+                            recurrent_metadata.batch_kind(),
+                            packed_query_lens.as_deref(),
+                        )?;
 
-                        pool.scatter_conv_state(indices, &gdn_cache.conv_state)?;
-                        pool.scatter_recurrent_state(indices, &gdn_cache.recurrent_state)?;
-
-                        let delta = gdn_cache.seqlen_offset.saturating_sub(first_offset);
-                        for &idx in &indices_vec {
-                            let updated = pool.get_seqlen_offset(idx as usize) + delta;
-                            pool.set_seqlen_offset(idx as usize, updated);
-                        }
+                        pool.scatter_conv_state_with_host_indices(
+                            &indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.conv_state,
+                        )?;
+                        pool.scatter_recurrent_state_with_host_indices(
+                            &indices,
+                            recurrent_metadata.state_indices_host(),
+                            &gdn_cache.recurrent_state,
+                        )?;
                     } else {
                         candle_core::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
@@ -775,7 +768,7 @@ impl Qwen3_5TextModel {
         }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = ctx.logits(&xs)?;
         self.lm_head.forward(&xs)
     }
 
@@ -808,33 +801,6 @@ impl Qwen3_5TextModel {
 }
 
 impl IsqModel for Qwen3_5TextModel {
-    fn get_layers(
-        &mut self,
-    ) -> (
-        Vec<(&mut Arc<dyn QuantMethod>, Option<usize>)>,
-        &dyn DeviceMapper,
-    ) {
-        let mut tensors = Vec::new();
-        tensors.push((&mut self.lm_head, None));
-        for (i, layer) in self.layers.iter_mut().enumerate() {
-            match &mut layer.layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    tensors.push((&mut attn.q_proj, Some(i)));
-                    tensors.push((&mut attn.k_proj, Some(i)));
-                    tensors.push((&mut attn.v_proj, Some(i)));
-                    tensors.push((&mut attn.o_proj, Some(i)));
-                }
-                LayerImpl::LinearAttention(gdn) => {
-                    tensors.push((&mut gdn.out_proj, Some(i)));
-                }
-            }
-            for l in layer.mlp.get_isq_layers() {
-                tensors.push((l, Some(i)));
-            }
-        }
-        (tensors, &*self.mapper)
-    }
-
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
         let uvb_lm = uvb.pp("model").pp("language_model");
@@ -854,14 +820,6 @@ impl IsqModel for Qwen3_5TextModel {
                     uvb_l.pp("self_attn").pp("k_norm").add(&attn.k_norm);
                 }
                 LayerImpl::LinearAttention(gdn) => {
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_qkvz")
-                        .add_tensor("weight", gdn.in_proj_qkvz.weight().clone());
-                    uvb_l
-                        .pp("linear_attn")
-                        .pp("in_proj_ba")
-                        .add_tensor("weight", gdn.in_proj_ba.weight().clone());
                     uvb_l
                         .pp("linear_attn")
                         .add_tensor("conv1d.weight", gdn.conv1d_weight.clone());

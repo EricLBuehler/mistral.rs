@@ -3,7 +3,7 @@ use std::{fs, io::Read, ops::Range, path::Path};
 use candle_core::Device;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use mistralrs_quant::IsqType;
+use mistralrs_quant::{ImmediateIsqOverride, IsqType};
 use regex::Regex;
 use serde::Deserialize;
 
@@ -237,12 +237,33 @@ impl Topology {
             .collect()
     }
 
-    pub fn requires_post_quantization(&self) -> bool {
-        self.layers.iter().any(|layer| {
-            layer
-                .as_ref()
-                .is_some_and(|layer| layer.isq.is_some() || layer.device.is_some())
-        })
+    /// Compile all topology entries into immediate ISQ overrides: patterns first (later declarations win), then ranges.
+    pub fn immediate_overrides(&self) -> Vec<ImmediateIsqOverride> {
+        let mut overrides = self
+            .patterns
+            .iter()
+            .rev()
+            .filter(|(_, topo)| topo.isq.is_some() || topo.device.is_some())
+            .map(|(regex, topo)| ImmediateIsqOverride {
+                predicate: Some(regex.clone()),
+                layer_range: None,
+                ty: topo.isq,
+                device: topo.device.clone(),
+            })
+            .collect::<Vec<_>>();
+        for (index, layer) in self.layers.iter().enumerate() {
+            let Some(layer) = layer else { continue };
+            if layer.isq.is_none() && layer.device.is_none() {
+                continue;
+            }
+            overrides.push(ImmediateIsqOverride {
+                predicate: None,
+                layer_range: Some(index..index + 1),
+                ty: layer.isq,
+                device: layer.device.clone(),
+            });
+        }
+        overrides
     }
 }
 

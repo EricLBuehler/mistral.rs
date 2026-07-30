@@ -1,0 +1,67 @@
+# cmd: /home/ericbuehler/mistral.rs/target/release/mistralrs bench --cpu --prompt-len 128,512,2048,4096,8192 --depth 128,512,2048,4096,8192 --gen-len 256 --iterations 2 --warmup 1 -m LiquidAI/LFM2.5-230M --from-uqff /home/ericbuehler/hf_models/bench_v090/lfm25-uqff-q6k/q6k-0.uqff
+# env: {'CANDLE_CPU_MASK': '5-9,15-19'}
+# wall_s: 65.5
+# rc: 0
+=== stdout ===
+[2m2026-07-05T08:54:57.398003Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Loading model for benchmarking...
+[2m2026-07-05T08:54:58.001493Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m DType selected is F32.
+[2m2026-07-05T08:54:58.151136Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::loaders::auto_device_map[0m[2m:[0m Using automatic device mapping parameters: text[max_seq_len: 4096, max_batch_size: 1].
+[2m2026-07-05T08:54:58.151164Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Model has 14 repeating layers.
+[2m2026-07-05T08:54:58.151167Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Loading model according to the following repeating layer mappings:
+[2m2026-07-05T08:54:58.184973Z[0m [32m INFO[0m [2mmistralrs_quant::utils::log[0m[2m:[0m Layers 0-13: cpu (122 GB)
+[2m2026-07-05T08:54:58.218455Z[0m [32m INFO[0m [2mmistralrs_core::pipeline::normal[0m[2m:[0m Loading UQFF model weights.
+[2m2026-07-05T08:54:59.060193Z[0m [32m INFO[0m [2mmistralrs_server_core::mistralrs_for_server_builder[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:54:59.060221Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m mistral.rs version: 0.8.23
+[2m2026-07-05T08:54:59.060223Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m git revision: 568059fe620c05ab4f1eb9633d25f6b3742b1e1e
+[2m2026-07-05T08:54:59.060340Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline input modalities are [📝 Text]
+[2m2026-07-05T08:54:59.060347Z[0m [32m INFO[0m [2mmistralrs_core[0m[2m:[0m Pipeline output modalities are [📝 Text]
+[2m2026-07-05T08:54:59.061963Z[0m [32m INFO[0m [2mmistralrs_core::kv_cache[0m[2m:[0m Using f16 KV cache on CPU (set MISTRALRS_CPU_KV_F32=1 for f32).
+[2m2026-07-05T08:54:59.188216Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Model loaded.
+[2m2026-07-05T08:54:59.188232Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 1 warmup iteration(s)...
+[2m2026-07-05T08:54:59.285420Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Warmup complete.
+[2m2026-07-05T08:54:59.285440Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Running 2 iteration(s) with prompt lengths [128, 512, 2048, 4096, 8192], 256 generation tokens, decode depths [128, 512, 2048, 4096, 8192]...
+[2m2026-07-05T08:54:59.285444Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 1/2...
+[2m2026-07-05T08:55:04.061005Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 538.80, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:09.061160Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 819.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:14.062849Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 1715.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:19.062939Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 614.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:24.063028Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 870.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:30.880979Z[0m [32m INFO[0m [2mmistralrs::commands::bench[0m[2m:[0m Iteration 2/2...
+[2m2026-07-05T08:55:34.067420Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 2228.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:39.067898Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 819.60, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:49.068469Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 2330.00, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+[2m2026-07-05T08:55:54.068969Z[0m [32m INFO[0m [2mmistralrs_core::engine::logger[0m[2m:[0m Throughput (T/s) 870.40, Prefix cache hitrate 0.00%, 1 running, 0 waiting
+
+Benchmark Results
+=================
+
+Model: LiquidAI/LFM2.5-230M
+Iterations: 2
+
+┌─────────────────────────────┬────────────────┬──────────────────────┐
+│ Test                        ┆ T/s            ┆ Latency              │
+╞═════════════════════════════╪════════════════╪══════════════════════╡
+│ Prefill (128 tokens)        ┆ 1209.0 ± 124.3 ┆ 107.00 ms (prefill)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (512 tokens)        ┆ 1486.6 ± 23.7  ┆ 344.50 ms (prefill)  │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (2048 tokens)       ┆ 1540.4 ± 5.2   ┆ 1329.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (4096 tokens)       ┆ 1298.1 ± 10.9  ┆ 3155.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Prefill (8192 tokens)       ┆ 944.8 ± 2.9    ┆ 8670.50 ms (prefill) │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d128)  ┆ 379.2 ± 8.7    ┆ 2.64 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d512)  ┆ 471.8 ± 18.7   ┆ 2.12 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d2048) ┆ 418.7 ± 17.4   ┆ 2.39 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d4096) ┆ 289.3 ± 10.8   ┆ 3.46 ms/T            │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ Decode (256 tokens @ d8192) ┆ 272.5 ± 2.2    ┆ 3.67 ms/T            │
+└─────────────────────────────┴────────────────┴──────────────────────┘
+
+
+=== stderr ===
+

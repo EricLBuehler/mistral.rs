@@ -2,7 +2,8 @@
 """
 Upload script for mistralrs Python wheels to PyPI.
 
-Supports both PyPI and TestPyPI, with automatic package name detection.
+Supports both PyPI and TestPyPI. CUDA wheels use local versions and are release assets, so they are
+skipped by default.
 
 Usage:
     python scripts/upload_wheels.py ./wheels --dry-run       # Verify
@@ -29,19 +30,11 @@ TESTPYPI_URL = "https://test.pypi.org/legacy/"
 # Valid package name prefixes (wheel names use underscores)
 VALID_PACKAGE_PREFIXES = {
     "mistralrs",
-    "mistralrs_cuda",
-    "mistralrs_metal",
-    "mistralrs_accelerate",
-    "mistralrs_mkl",
 }
 
 # Mapping from wheel name prefix to PyPI package name
 WHEEL_TO_PYPI = {
     "mistralrs": "mistralrs",
-    "mistralrs_cuda": "mistralrs-cuda",
-    "mistralrs_metal": "mistralrs-metal",
-    "mistralrs_accelerate": "mistralrs-accelerate",
-    "mistralrs_mkl": "mistralrs-mkl",
 }
 
 
@@ -90,13 +83,19 @@ def parse_wheel_filename(wheel_path: Path) -> WheelInfo:
     )
 
 
-def find_wheels(directory: Path) -> list[WheelInfo]:
+def find_wheels(directory: Path, include_local_versions: bool = False) -> list[WheelInfo]:
     """Find all wheel files in directory (recursively)."""
     wheels = []
 
     for wheel_path in directory.rglob("*.whl"):
         try:
             info = parse_wheel_filename(wheel_path)
+            if "+" in info.version and not include_local_versions:
+                print(
+                    f"Warning: Skipping {wheel_path.name}: local-version wheels are release assets",
+                    file=sys.stderr,
+                )
+                continue
             wheels.append(info)
         except ValueError as e:
             print(f"Warning: Skipping {wheel_path.name}: {e}", file=sys.stderr)
@@ -206,7 +205,7 @@ Examples:
   python scripts/upload_wheels.py ./wheels --token pypi-xxx
 
   # Upload specific packages only
-  python scripts/upload_wheels.py ./wheels -p mistralrs-cuda
+  python scripts/upload_wheels.py ./wheels -p mistralrs
         """,
     )
 
@@ -233,6 +232,11 @@ Examples:
         nargs="+",
         help="Only upload specific packages",
     )
+    parser.add_argument(
+        "--include-local-versions",
+        action="store_true",
+        help="Include local-version wheels; these are normally GitHub release assets, not PyPI files",
+    )
 
     args = parser.parse_args()
 
@@ -241,7 +245,7 @@ Examples:
         return 1
 
     # Find wheels
-    wheels = find_wheels(args.directory)
+    wheels = find_wheels(args.directory, args.include_local_versions)
 
     if not wheels:
         print(f"No wheels found in {args.directory}")

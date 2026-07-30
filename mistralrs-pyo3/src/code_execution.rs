@@ -101,6 +101,7 @@ impl From<&mistralrs_core::AgentToolSource> for AgentToolSourcePy {
 pub enum AgentToolKindPy {
     CodeExecution,
     WebSearch,
+    Shell,
     File,
     Custom,
     External,
@@ -111,6 +112,7 @@ impl From<&mistralrs_core::AgentToolKind> for AgentToolKindPy {
         match value {
             mistralrs_core::AgentToolKind::CodeExecution => Self::CodeExecution,
             mistralrs_core::AgentToolKind::WebSearch => Self::WebSearch,
+            mistralrs_core::AgentToolKind::Shell => Self::Shell,
             mistralrs_core::AgentToolKind::File => Self::File,
             mistralrs_core::AgentToolKind::Custom => Self::Custom,
             mistralrs_core::AgentToolKind::External => Self::External,
@@ -272,6 +274,84 @@ impl CodeExecutionConfig {
             self.working_directory,
             self.sandbox_policy,
             self.permission
+        )
+    }
+}
+
+/// Pass to `Runner(shell_config=...)` to enable shell tools.
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct ShellConfig {
+    pub(crate) shell_path: Option<PathBuf>,
+    pub(crate) timeout_secs: Option<u64>,
+    pub(crate) working_directory: Option<PathBuf>,
+    pub(crate) sandbox_policy: Option<SandboxPolicy>,
+    pub(crate) permission: Option<mistralrs_core::AgentPermission>,
+}
+
+#[pymethods]
+impl ShellConfig {
+    #[new]
+    #[pyo3(signature = (
+        shell_path = None,
+        timeout_secs = None,
+        working_directory = None,
+        sandbox_policy = None,
+        permission = None,
+    ))]
+    fn new(
+        shell_path: Option<PathBuf>,
+        timeout_secs: Option<u64>,
+        working_directory: Option<PathBuf>,
+        sandbox_policy: Option<SandboxPolicy>,
+        permission: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            shell_path,
+            timeout_secs,
+            working_directory,
+            sandbox_policy,
+            permission: parse_agent_permission(permission)?,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ShellConfig(shell_path={:?}, timeout_secs={:?}, working_directory={:?}, sandbox_policy={:?}, permission={:?})",
+            self.shell_path,
+            self.timeout_secs,
+            self.working_directory,
+            self.sandbox_policy,
+            self.permission
+        )
+    }
+}
+
+/// Local skill directory mounted into the shell tool for a request.
+#[pyclass]
+#[derive(Clone, Debug)]
+pub struct ShellSkillMount {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) source_path: PathBuf,
+}
+
+#[pymethods]
+impl ShellSkillMount {
+    #[new]
+    #[pyo3(signature = (name, description, source_path))]
+    fn new(name: String, description: String, source_path: PathBuf) -> Self {
+        Self {
+            name,
+            description,
+            source_path,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ShellSkillMount(name={:?}, description={:?}, source_path={:?})",
+            self.name, self.description, self.source_path
         )
     }
 }
@@ -576,6 +656,29 @@ impl From<CodeExecutionConfig> for mistralrs_core::CodeExecutionConfig {
             sandbox_policy: cfg.sandbox_policy.map(Into::into),
             permission: cfg.permission.unwrap_or(default.permission),
             approval_callback,
+        }
+    }
+}
+
+impl From<ShellConfig> for mistralrs_core::ShellConfig {
+    fn from(cfg: ShellConfig) -> Self {
+        let default = mistralrs_core::ShellConfig::default();
+        mistralrs_core::ShellConfig {
+            shell_path: cfg.shell_path.unwrap_or(default.shell_path),
+            timeout_secs: cfg.timeout_secs.unwrap_or(default.timeout_secs),
+            working_directory: cfg.working_directory.or(default.working_directory),
+            sandbox_policy: cfg.sandbox_policy.map(Into::into),
+            permission: cfg.permission.unwrap_or(default.permission),
+        }
+    }
+}
+
+impl From<ShellSkillMount> for mistralrs_core::ShellSkillMount {
+    fn from(skill: ShellSkillMount) -> Self {
+        mistralrs_core::ShellSkillMount {
+            name: skill.name,
+            description: skill.description,
+            source_path: skill.source_path,
         }
     }
 }

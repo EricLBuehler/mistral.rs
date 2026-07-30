@@ -1,0 +1,14 @@
+{
+  "model": "sonnet",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:1234",
+    "ANTHROPIC_API_KEY": "not-used",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "default",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "default",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "default",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION": "default",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "mistral.rs default",
+    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by mistral.rs",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+  }
+}
