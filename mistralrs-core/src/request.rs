@@ -197,10 +197,12 @@ pub struct WebSearchOptions {
     pub search_content_types: Option<Vec<WebSearchContentType>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub image_settings: Option<WebSearchImageSettings>,
-    /// Override the description for the search tool.
+    /// Override the description for the search tool in trusted, in-process use.
+    /// Servers accepting untrusted requests should strip this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_description: Option<String>,
-    /// Override the description for the extraction tool.
+    /// Override the description for the extraction tool in trusted, in-process use.
+    /// Servers accepting untrusted requests should strip this field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extract_description: Option<String>,
 }
