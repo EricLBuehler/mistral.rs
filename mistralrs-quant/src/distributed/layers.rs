@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+use candle_core::DType;
 use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
@@ -7,13 +9,14 @@ use crate::{
     blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
     distributed,
     gptq::gptq_linear,
-    lora::merge_lora_weights,
-    make_dummy_or_error,
+    lora::maybe_wrap_dynamic_lora_with_key,
+    make_dummy_or_error, maybe_wrap_dynamic_lora,
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
-    utils::isq::{apply_immediate_isq_sharded, spawn_pending_isq},
-    AfqLayer, BnbLinear, DistributedKind, MXFP4Layer, QuantMethod, QuantMethodConfig,
-    QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    utils::isq::apply_immediate_isq_sharded,
+    AfqLayer, BnbLinear, DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard,
+    ShardedVarBuilder, UnquantLinear,
 };
 
 use super::Comm;
@@ -74,6 +77,11 @@ impl RowParallelLayer {
 
         let base_vb = vb.clone();
         if let Some(weight) = load_uqff_linear_shard(config, shard, &base_vb)? {
+            let weight = maybe_wrap_dynamic_lora(
+                &base_vb,
+                weight,
+                LoraLinearSpec::row(in_dim, out_dim, shard),
+            )?;
             if world_size == 1 {
                 // Bias is embedded in the layer when the input dim is not actually sharded.
                 return Ok(weight);
@@ -100,7 +108,6 @@ impl RowParallelLayer {
             vb
         };
 
-        let mut lora_merged = false;
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -157,8 +164,6 @@ impl RowParallelLayer {
                 make_dummy_or_error("row_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
-                let (weight, merged) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
-                lora_merged = merged;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -166,6 +171,11 @@ impl RowParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
+        let weight = maybe_wrap_dynamic_lora(
+            &base_vb,
+            weight,
+            LoraLinearSpec::row(in_dim, out_dim, shard),
+        )?;
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
         let bias = if bias && vb.contains_tensor("bias") {
@@ -179,10 +189,8 @@ impl RowParallelLayer {
             bias,
             all_reduce: distributed::SumAllReduce::new(comm),
         });
-        // merged weights diverge from the source checkpoint; no shard means no from-source requant
-        let tracked_shard = if lora_merged { None } else { Some(shard) };
         let this: Arc<dyn QuantMethod> =
-            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
+            apply_immediate_isq_sharded(this_unquant, base_vb, Some(shard))?;
         Ok(this)
     }
 
@@ -224,13 +232,17 @@ impl RowParallelLayer {
                 .contiguous()?;
 
             let weight = shard.apply_to(&weight)?;
-            let (weight, _) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
             ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         };
+        let weight = maybe_wrap_dynamic_lora(
+            &base_vb,
+            weight,
+            LoraLinearSpec::row(in_dim, out_dim, shard),
+        )?;
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
         let bias = if bias && vb.contains_tensor("bias") {
@@ -311,16 +323,63 @@ impl QuantMethod for RowParallelLayer {
     }
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
-        self.weight.unquant_weight_bias()
+        if self.all_reduce.is_noop() {
+            self.weight.unquant_weight_bias()
+        } else {
+            None
+        }
+    }
+
+    fn is_dynamic_lora_active(&self) -> bool {
+        self.weight.is_dynamic_lora_active()
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        self.weight.preserve_dynamic_lora(replacement)
     }
 
     fn has_bias(&self) -> bool {
         self.bias.is_some() || self.weight.has_bias()
     }
 
-    #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        self.weight.get_qtensor()
+        if self.all_reduce.is_noop() {
+            self.weight.get_qtensor()
+        } else {
+            None
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        if self.all_reduce.is_noop() {
+            self.weight
+                .prepare_gguf_affine_raw(flat_batch, dtype, device)
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if self.all_reduce.is_noop() {
+            self.weight.try_gguf_affine_forward_raw(a)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        if self.all_reduce.is_noop() {
+            self.weight.afq_inner()
+        } else {
+            None
+        }
     }
 
     fn apply_isq(
@@ -391,9 +450,29 @@ impl ColumnParallelLayer {
         shard: Shard,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
+        let site_key = LoraSiteKey::new(vb.prefix());
+        Self::new_with_shard_and_key(in_dim, out_dim, config, bias, comm, shard, vb, site_key)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_shard_and_key(
+        in_dim: usize,
+        out_dim: usize,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        shard: Shard,
+        vb: ShardedVarBuilder,
+        site_key: LoraSiteKey,
+    ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
         if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
-            return Ok(layer);
+            return maybe_wrap_dynamic_lora_with_key(
+                &base_vb,
+                layer,
+                site_key,
+                LoraLinearSpec::column(in_dim, out_dim, shard),
+            );
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -402,7 +481,6 @@ impl ColumnParallelLayer {
             vb
         };
 
-        let mut lora_merged = false;
         let weight = if let Some(quant_conf) = &config {
             // GPTQ and BNB do not support tensor parallelism
             if matches!(
@@ -459,8 +537,6 @@ impl ColumnParallelLayer {
                 make_dummy_or_error("column_parallel_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", shard)?;
-                let (weight, merged) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
-                lora_merged = merged;
 
                 let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                     Linear::new(weight, None),
@@ -468,6 +544,12 @@ impl ColumnParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
+        let weight = maybe_wrap_dynamic_lora_with_key(
+            &base_vb,
+            weight,
+            site_key,
+            LoraLinearSpec::column(in_dim, out_dim, shard),
+        )?;
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
         let bias = if bias && vb.contains_tensor("bias") {
@@ -477,10 +559,8 @@ impl ColumnParallelLayer {
         };
 
         let this_unquant = Arc::new(Self { weight, bias });
-        // merged weights diverge from the source checkpoint; no shard means no from-source requant
-        let tracked_shard = if lora_merged { None } else { Some(shard) };
         let this: Arc<dyn QuantMethod> =
-            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
+            apply_immediate_isq_sharded(this_unquant, base_vb, Some(shard))?;
         Ok(this)
     }
 
@@ -538,13 +618,17 @@ impl ColumnParallelLayer {
                 .contiguous()?;
 
             let weight = shard.apply_to(&weight)?;
-            let (weight, _) = merge_lora_weights(&vb, weight, in_dim, out_dim, shard)?;
 
             let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
                 Linear::new(weight, None),
             ))?;
             Arc::new(layer) as Arc<dyn QuantMethod>
         };
+        let weight = maybe_wrap_dynamic_lora(
+            &base_vb,
+            weight,
+            LoraLinearSpec::column(in_dim, out_dim, shard),
+        )?;
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
         let bias = if bias && vb.contains_tensor("bias") {
@@ -569,7 +653,8 @@ impl ColumnParallelLayer {
     ) -> Result<Vec<Arc<dyn QuantMethod>>> {
         let mut vec_layers = Vec::<Arc<dyn QuantMethod>>::new();
         for chunk_idx in 0..chunks {
-            let layer = ColumnParallelLayer::new_with_shard(
+            let site_key = LoraSiteKey::with_slice(vb.prefix(), chunk_idx, chunks)?;
+            let layer = ColumnParallelLayer::new_with_shard_and_key(
                 in_dim,
                 out_dim,
                 config,
@@ -581,6 +666,7 @@ impl ColumnParallelLayer {
                     chunks * comm.world_size(),
                 ),
                 vb.clone(),
+                site_key,
             )?;
             vec_layers.push(layer);
         }
@@ -648,13 +734,40 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.unquant_weight_bias()
     }
 
+    fn is_dynamic_lora_active(&self) -> bool {
+        self.weight.is_dynamic_lora_active()
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        self.weight.preserve_dynamic_lora(replacement)
+    }
+
     fn has_bias(&self) -> bool {
         self.bias.is_some() || self.weight.has_bias()
     }
 
-    #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.weight.get_qtensor()
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        self.weight
+            .prepare_gguf_affine_raw(flat_batch, dtype, device)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        self.weight.try_gguf_affine_forward_raw(a)
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        self.weight.afq_inner()
     }
 
     fn apply_isq(
@@ -708,49 +821,28 @@ pub struct ReplicatedLayer(Arc<dyn QuantMethod>);
 
 impl ReplicatedLayer {
     pub fn from_linear(lin: Linear, vb: ShardedVarBuilder) -> Result<Arc<dyn QuantMethod>> {
+        let (out_dim, in_dim) = lin.weight().dims2()?;
+        let spec = LoraLinearSpec::replicated(in_dim, out_dim);
         if let Some(layer) = load_uqff_linear(&None, &vb)? {
-            return Ok(layer);
+            return maybe_wrap_dynamic_lora(&vb, layer, spec);
         }
 
         let dev = lin.weight().device().clone();
-        if let Some(params) = crate::get_immediate_isq() {
-            if let Some(immediate_isq) = params.ty {
-                let lin = if !dev.is_cpu() {
-                    Linear::new(lin.weight().to_device(&Device::Cpu)?, lin.bias().cloned())
-                } else {
-                    lin
-                };
-                let layer: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-                let module_key = vb.prefix();
-                let layer =
-                    spawn_pending_isq(layer, Some(immediate_isq), dev, &params, module_key.clone());
-                vb.tracker().add_module(crate::TrackedModule {
-                    key: module_key,
-                    ct: layer.clone(),
-                    ty: Some(immediate_isq),
-                    shard: None,
-                });
-                return Ok(layer);
-            }
-            if params.capture != crate::IsqCaptureMode::Immediate {
-                let layer: Arc<dyn QuantMethod> =
-                    Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
-                let module_key = vb.prefix();
-                let layer = spawn_pending_isq(layer, None, dev, &params, module_key.clone());
-                vb.tracker().add_module(crate::TrackedModule {
-                    key: module_key,
-                    ct: layer.clone(),
-                    ty: params.ty,
-                    shard: None,
-                });
-                return Ok(layer);
-            }
-        }
-
-        Ok(Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(lin),
-        )?))
+        let vb = vb.set_device(dev.clone());
+        let lin = if should_apply_immediate_isq(&vb) && !dev.is_cpu() {
+            Linear::new(
+                lin.weight().to_device(&Device::Cpu)?,
+                lin.bias()
+                    .map(|bias| bias.to_device(&Device::Cpu))
+                    .transpose()?,
+            )
+        } else {
+            lin
+        };
+        let layer: Arc<dyn QuantMethod> =
+            Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lin))?);
+        let layer = maybe_wrap_dynamic_lora(&vb, layer, spec)?;
+        apply_immediate_isq_sharded(layer, vb, None)
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -763,7 +855,11 @@ impl ReplicatedLayer {
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
         if let Some(layer) = load_uqff_linear(config, &base_vb)? {
-            return Ok(layer);
+            return maybe_wrap_dynamic_lora(
+                &base_vb,
+                layer,
+                LoraLinearSpec::replicated(in_dim, out_dim),
+            );
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -772,7 +868,6 @@ impl ReplicatedLayer {
             vb
         };
 
-        let mut lora_merged = false;
         let layer = if let Some(quant_conf) = &config {
             match quant_conf {
                 QuantizedConfig::GptqAwq { .. } => {
@@ -814,9 +909,6 @@ impl ReplicatedLayer {
                 make_dummy_or_error("replicated_linear", &vb, &["weight"])?
             } else {
                 let weight = vb.get_with_hints((out_dim, in_dim), "weight", Default::default())?;
-                let (weight, merged) =
-                    merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?;
-                lora_merged = merged;
 
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
@@ -829,16 +921,12 @@ impl ReplicatedLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
+        let layer =
+            maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
 
         let this_unquant = Arc::new(Self(layer));
-        // merged weights diverge from the source checkpoint; no shard means no from-source requant
-        let tracked_shard = if lora_merged {
-            None
-        } else {
-            Some(crate::Shard::default())
-        };
         let this: Arc<dyn QuantMethod> =
-            apply_immediate_isq_sharded(this_unquant, base_vb, tracked_shard)?;
+            apply_immediate_isq_sharded(this_unquant, base_vb, Some(crate::Shard::default()))?;
         Ok(this)
     }
 
@@ -919,8 +1007,6 @@ impl ReplicatedLayer {
                         .contiguous()?;
                 }
 
-                weight = merge_lora_weights(&vb, weight, in_dim, out_dim, Default::default())?.0;
-
                 let bias = if bias {
                     Some(vb.get_with_hints((out_dim,), "bias", Default::default())?)
                 } else {
@@ -932,6 +1018,8 @@ impl ReplicatedLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
+        let layer =
+            maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
 
         let this_unquant = Arc::new(Self(layer));
         let this: Arc<dyn QuantMethod> = apply_immediate_isq_sharded(this_unquant, base_vb, None)?;
@@ -949,6 +1037,14 @@ impl QuantMethod for ReplicatedLayer {
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         self.0.forward_raw(a)
+    }
+
+    fn embedding_forward(&self, ids: &Tensor, output_dtype: candle_core::DType) -> Result<Tensor> {
+        self.0.embedding_forward(ids, output_dtype)
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        self.0.embedding_forward_raw(ids)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -991,13 +1087,39 @@ impl QuantMethod for ReplicatedLayer {
         self.0.unquant_weight_bias()
     }
 
+    fn is_dynamic_lora_active(&self) -> bool {
+        self.0.is_dynamic_lora_active()
+    }
+
+    fn preserve_dynamic_lora(&self, replacement: Arc<dyn QuantMethod>) -> Arc<dyn QuantMethod> {
+        self.0.preserve_dynamic_lora(replacement)
+    }
+
     fn has_bias(&self) -> bool {
         self.0.has_bias()
     }
 
-    #[cfg(feature = "cuda")]
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.0.get_qtensor()
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        self.0.prepare_gguf_affine_raw(flat_batch, dtype, device)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        self.0.try_gguf_affine_forward_raw(a)
+    }
+
+    fn afq_inner(&self) -> Option<crate::AfqInner> {
+        self.0.afq_inner()
     }
 
     fn apply_isq(
@@ -1423,7 +1545,97 @@ pub fn compute_n_kv_groups(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_tp_head_layout;
+    use std::collections::HashMap;
+
+    use regex::Regex;
+
+    use super::{validate_tp_head_layout, ReplicatedLayer};
+    use crate::{
+        create_isq_executor, set_immediate_isq_config, ImmediateIsqConfig, ImmediateIsqOverride,
+        IsqCaptureMode, IsqExecutorConfig, IsqType, ShardedSafeTensors,
+    };
+
+    fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
+        let ty = Some(ty);
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        let promoted = Regex::new(r"^model\.embed_tokens\.weight$").unwrap();
+        set_immediate_isq_config(
+            ImmediateIsqConfig::new(ty, vec![promoted.clone()], IsqCaptureMode::Immediate)
+                .with_promoted_predicates(vec![promoted])
+                .with_overrides(overrides),
+            executor,
+        );
+    }
+
+    fn tracked_from_linear() -> crate::TrackedModule {
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::<String, candle_core::Tensor>::new(),
+            candle_core::DType::F32,
+            candle_core::Device::Cpu,
+        )
+        .pp("model")
+        .pp("embed_tokens");
+        let tracker = vb.tracker().clone();
+        let linear = candle_nn::Linear::new(
+            candle_core::Tensor::zeros(
+                (64, 256),
+                candle_core::DType::F32,
+                &candle_core::Device::Cpu,
+            )
+            .unwrap(),
+            None,
+        );
+        let _ = ReplicatedLayer::from_linear(linear, vb).unwrap();
+        let tracked = tracker.get()[0].clone();
+        crate::clear_immediate_isq();
+        tracked
+    }
+
+    #[test]
+    fn replicated_from_linear_uses_sensitive_default() {
+        install_immediate(IsqType::AFQ4, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ6));
+    }
+
+    #[test]
+    fn replicated_from_linear_preserves_explicit_type() {
+        install_immediate(
+            IsqType::AFQ4,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::AFQ2),
+                device: None,
+            }],
+        );
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::AFQ2));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q4k_sensitive_default() {
+        install_immediate(IsqType::Q4K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q6K));
+    }
+
+    #[test]
+    fn replicated_from_linear_promotes_q6k_sensitive_default() {
+        install_immediate(IsqType::Q6K, Vec::new());
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q8_0));
+    }
+
+    #[test]
+    fn replicated_from_linear_preserves_explicit_q_type() {
+        install_immediate(
+            IsqType::Q4K,
+            vec![ImmediateIsqOverride {
+                predicate: Some(Regex::new(r"^model\.embed_tokens\.weight$").unwrap()),
+                layer_range: None,
+                ty: Some(IsqType::Q4_0),
+                device: None,
+            }],
+        );
+        assert_eq!(tracked_from_linear().ty, Some(IsqType::Q4_0));
+    }
 
     #[test]
     fn tp_head_layout_accepts_partitioned_kv_heads() {

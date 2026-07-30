@@ -95,70 +95,65 @@ impl MarlinMatMul {
                 "Marlin INT4xF16 matmul kernels were not compiled, please raise an issue."
             )
         }
-        if x.dtype() == DType::F16 {
-            unsafe {
-                if self.is_awq {
-                    marlin_awq_4bit_f16(
-                        in_ptr,
-                        qw_ptr as *const i32,
-                        qs_ptr,
-                        qzeros_ptr,
-                        out_ptr as *const core::ffi::c_void,
-                        size_m as i32,
-                        size_k as i32,
-                        size_n as i32,
-                        workspace_ptr,
-                        groupsize,
-                        dev.cuda_stream().cu_stream() as i64,
-                    );
-                } else {
-                    marlin_gptq_4bit_f16(
-                        in_ptr,
-                        qw_ptr as *const i32,
-                        qs_ptr,
-                        qzeros_ptr,
-                        out_ptr as *const core::ffi::c_void,
-                        size_m as i32,
-                        size_k as i32,
-                        size_n as i32,
-                        workspace_ptr,
-                        groupsize,
-                        dev.cuda_stream().cu_stream() as i64,
-                    );
-                }
+        let status = unsafe {
+            match (x.dtype(), self.is_awq) {
+                (DType::F16, true) => marlin_awq_4bit_f16(
+                    in_ptr,
+                    qw_ptr as *const i32,
+                    qs_ptr,
+                    qzeros_ptr,
+                    out_ptr as *const core::ffi::c_void,
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
+                    workspace_ptr,
+                    groupsize,
+                    dev.cuda_stream().cu_stream() as i64,
+                ),
+                (DType::F16, false) => marlin_gptq_4bit_f16(
+                    in_ptr,
+                    qw_ptr as *const i32,
+                    qs_ptr,
+                    qzeros_ptr,
+                    out_ptr as *const core::ffi::c_void,
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
+                    workspace_ptr,
+                    groupsize,
+                    dev.cuda_stream().cu_stream() as i64,
+                ),
+                (DType::BF16, true) => marlin_awq_4bit_bf16(
+                    in_ptr,
+                    qw_ptr as *const i32,
+                    qs_ptr,
+                    qzeros_ptr,
+                    out_ptr as *const core::ffi::c_void,
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
+                    workspace_ptr,
+                    groupsize,
+                    dev.cuda_stream().cu_stream() as i64,
+                ),
+                (DType::BF16, false) => marlin_gptq_4bit_bf16(
+                    in_ptr,
+                    qw_ptr as *const i32,
+                    qs_ptr,
+                    qzeros_ptr,
+                    out_ptr as *const core::ffi::c_void,
+                    size_m as i32,
+                    size_k as i32,
+                    size_n as i32,
+                    workspace_ptr,
+                    groupsize,
+                    dev.cuda_stream().cu_stream() as i64,
+                ),
+                (dtype, _) => candle::bail!("Marlin does not support {dtype:?} activations"),
             }
-        } else if x.dtype() == DType::BF16 {
-            unsafe {
-                if self.is_awq {
-                    marlin_awq_4bit_bf16(
-                        in_ptr,
-                        qw_ptr as *const i32,
-                        qs_ptr,
-                        qzeros_ptr,
-                        out_ptr as *const core::ffi::c_void,
-                        size_m as i32,
-                        size_k as i32,
-                        size_n as i32,
-                        workspace_ptr,
-                        groupsize,
-                        dev.cuda_stream().cu_stream() as i64,
-                    );
-                } else {
-                    marlin_gptq_4bit_bf16(
-                        in_ptr,
-                        qw_ptr as *const i32,
-                        qs_ptr,
-                        qzeros_ptr,
-                        out_ptr as *const core::ffi::c_void,
-                        size_m as i32,
-                        size_k as i32,
-                        size_n as i32,
-                        workspace_ptr,
-                        groupsize,
-                        dev.cuda_stream().cu_stream() as i64,
-                    );
-                }
-            }
+        };
+        if status != 0 {
+            candle::bail!("Marlin matmul failed with CUDA status {status}");
         }
 
         drop(out_guard);

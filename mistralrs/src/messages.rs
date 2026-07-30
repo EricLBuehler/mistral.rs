@@ -24,8 +24,8 @@ pub trait RequestLike {
     fn take_messages(&mut self) -> RequestMessage;
     /// Take any custom logits processors, if configured.
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>>;
-    /// Take any active adapter names (LoRA / X-LoRA), if configured.
-    fn take_adapters(&mut self) -> Option<Vec<String>>;
+    /// Take the adapter selection, if configured.
+    fn take_adapter(&mut self) -> Option<AdapterSelection>;
     /// Whether log-probabilities should be returned.
     fn return_logprobs(&self) -> bool;
     /// Whether web search should be enabled for this request.
@@ -257,7 +257,7 @@ impl RequestLike for TextMessages {
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
     }
-    fn take_adapters(&mut self) -> Option<Vec<String>> {
+    fn take_adapter(&mut self) -> Option<AdapterSelection> {
         None
     }
     fn return_logprobs(&self) -> bool {
@@ -518,7 +518,7 @@ impl RequestLike for MultimodalMessages {
     fn take_logits_processors(&mut self) -> Option<Vec<Arc<dyn CustomLogitsProcessor>>> {
         None
     }
-    fn take_adapters(&mut self) -> Option<Vec<String>> {
+    fn take_adapter(&mut self) -> Option<AdapterSelection> {
         None
     }
     fn return_logprobs(&self) -> bool {
@@ -554,7 +554,7 @@ pub struct RequestBuilder {
     audios: Vec<AudioInput>,
     videos: Vec<VideoInput>,
     logits_processors: Vec<Arc<dyn CustomLogitsProcessor>>,
-    adapters: Vec<String>,
+    adapter: Option<AdapterSelection>,
     return_logprobs: bool,
     constraint: Constraint,
     tools: Vec<Tool>,
@@ -591,7 +591,7 @@ impl From<TextMessages> for RequestBuilder {
             audios: Vec::new(),
             videos: Vec::new(),
             logits_processors: Vec::new(),
-            adapters: Vec::new(),
+            adapter: None,
             return_logprobs: false,
             constraint: Constraint::None,
             tools: Vec::new(),
@@ -624,7 +624,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             audios: value.audios,
             videos: value.videos,
             logits_processors: Vec::new(),
-            adapters: Vec::new(),
+            adapter: None,
             return_logprobs: false,
             constraint: Constraint::None,
             tools: Vec::new(),
@@ -658,7 +658,7 @@ impl RequestBuilder {
             audios: Vec::new(),
             videos: Vec::new(),
             logits_processors: Vec::new(),
-            adapters: Vec::new(),
+            adapter: None,
             return_logprobs: false,
             constraint: Constraint::None,
             tools: Vec::new(),
@@ -958,9 +958,9 @@ impl RequestBuilder {
         self
     }
 
-    /// Activate the given LoRA/X-LoRA adapter layers by name.
-    pub fn set_adapters(mut self, adapters: Vec<String>) -> Self {
-        self.adapters = adapters;
+    /// Activate an adapter alias or exact immutable generation.
+    pub fn set_adapter(mut self, adapter: impl Into<AdapterSelection>) -> Self {
+        self.adapter = Some(adapter.into());
         self
     }
 
@@ -1203,14 +1203,8 @@ impl RequestLike for RequestBuilder {
         }
     }
 
-    fn take_adapters(&mut self) -> Option<Vec<String>> {
-        if self.adapters.is_empty() {
-            None
-        } else {
-            let mut other = Vec::new();
-            std::mem::swap(&mut other, &mut self.adapters);
-            Some(other)
-        }
+    fn take_adapter(&mut self) -> Option<AdapterSelection> {
+        self.adapter.take()
     }
 
     fn return_logprobs(&self) -> bool {
@@ -1444,5 +1438,26 @@ impl EmbeddingRequestBuilder {
             inputs: self.inputs,
             truncate_sequence: self.truncate_sequence,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_builder_accepts_alias_and_exact_generation() {
+        let mut alias = RequestBuilder::new().set_adapter("production");
+        assert_eq!(
+            serde_json::to_value(alias.take_adapter().unwrap()).unwrap(),
+            serde_json::json!("production")
+        );
+
+        let generation = AdapterGenerationId::from_bytes([0x5a; 32]);
+        let mut exact = RequestBuilder::new().set_adapter(AdapterSelection::generation(generation));
+        assert_eq!(
+            exact.take_adapter().unwrap().resolved_generation(),
+            Some(generation)
+        );
     }
 }

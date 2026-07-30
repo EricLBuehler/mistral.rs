@@ -102,6 +102,10 @@ pub enum Command {
         /// Can be specified multiple times: --audio audio1.wav --audio audio2.mp3
         #[arg(long, requires = "input")]
         audio: Vec<String>,
+
+        /// LoRA adapter alias to use for requests. Omit to run the base model.
+        #[arg(long)]
+        adapter: Option<String>,
     },
 
     /// Generate shell completions
@@ -136,7 +140,8 @@ pub enum Command {
 
     /// Recommend quantization + device mapping for a model.
     /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
-    /// the recommendation toward a specific quantization target.
+    /// the recommendation toward a specific quantization target. Adapter options
+    /// are rejected because adapter memory is not included in the estimate.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -171,7 +176,7 @@ pub enum Command {
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks for plain model generation.
+    /// Run performance benchmarks for base or LoRA model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -183,15 +188,19 @@ pub enum Command {
         #[command(flatten)]
         runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt. Accepts comma-separated values for sweeps.
+        /// LoRA adapter alias to benchmark. Omit to benchmark the base model.
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "512")]
         prompt_len: Vec<usize>,
 
-        /// Number of tokens to generate
+        /// Output tokens per decode request. Values below 2 skip decode metrics.
         #[arg(long, default_value = "128")]
         gen_len: usize,
 
-        /// Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps.
+        /// Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "4")]
         depth: Vec<usize>,
 
@@ -199,7 +208,7 @@ pub enum Command {
         #[arg(long, default_value = "3")]
         iterations: usize,
 
-        /// Number of warmup runs (discarded)
+        /// Number of warmup runs per benchmark case (discarded)
         #[arg(long, default_value = "1")]
         warmup: usize,
     },
@@ -456,7 +465,7 @@ pub enum ModelType {
         #[command(flatten)]
         format: FormatOptions,
 
-        #[command(flatten)]
+        #[arg(skip)]
         adapter: AdapterOptions,
 
         #[command(flatten)]
@@ -933,4 +942,122 @@ fn default_max_seqs() -> usize {
 
 fn default_prefix_cache_n() -> usize {
     16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_parses_explicit_lora_preloads_and_request_selection() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--enable-lora",
+            "--lora",
+            "code=org/code-lora",
+            "--lora",
+            "math=./math-lora",
+            "--adapter",
+            "code",
+        ])
+        .unwrap();
+
+        let Command::Run {
+            default_model,
+            adapter,
+            ..
+        } = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(adapter.as_deref(), Some("code"));
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.adapter.lora.len(), 2);
+        assert_eq!(default_model.adapter.lora[1].alias, "math");
+    }
+
+    #[test]
+    fn auto_lora_parses_multimodal_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "Qwen/Qwen3.6-35B-A3B",
+            "--enable-lora",
+            "--max-edge",
+            "2048",
+            "--max-num-images",
+            "5",
+            "--max-image-length",
+            "1536",
+        ])
+        .unwrap();
+
+        let Command::Serve { default_model, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.multimodal.max_edge, Some(2048));
+        assert_eq!(default_model.multimodal.max_num_images, Some(5));
+        assert_eq!(default_model.multimodal.max_image_length, Some(1536));
+    }
+
+    #[test]
+    fn lora_preload_requires_an_explicit_alias() {
+        let result = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--lora",
+            "org/code-lora",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("expected an invalid LoRA preload"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("expected ALIAS=SOURCE"));
+    }
+
+    #[test]
+    fn legacy_raw_lora_does_not_conflict_with_default_runtime_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/raw-model",
+            "--format",
+            "gguf",
+            "-f",
+            "model.gguf",
+            "--legacy-lora",
+            "org/legacy-lora",
+            "--legacy-lora-order",
+            "order.json",
+        ]);
+        if let Err(error) = cli {
+            panic!("{error}");
+        }
+    }
+
+    #[test]
+    fn explicit_multimodal_does_not_advertise_lora_options() {
+        let result = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "multimodal",
+            "-m",
+            "org/vision-model",
+            "--lora",
+            "code=org/code-lora",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("expected explicit multimodal LoRA options to be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("unexpected argument '--lora'"));
+    }
 }

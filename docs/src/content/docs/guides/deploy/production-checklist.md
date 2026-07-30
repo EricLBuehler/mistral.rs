@@ -46,6 +46,17 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 
 - [ ] Sessions are in-memory with a 30-minute idle TTL and 128-entry capacity; they do not survive restarts. Export with `GET /v1/sessions/{id}` before shutdown and re-import with `PUT /v1/sessions/{id}` if persistence is required. See [sessions](/mistral.rs/guides/agents/persist-sessions/).
 
+## Dynamic LoRA
+
+- [ ] Declare adapters that must survive restart as preloads. Runtime changes do not survive a restart and must otherwise be replayed.
+- [ ] Pin remote adapter revisions, preferably to commit SHAs. The CLI accepts `--lora-modules '{"name":"production","path":"org/adapter","revision":"<commit>"}'`.
+- [ ] Keep HTTP mutation behind authentication and set `MISTRALRS_LORA_ADAPTER_ROOT` to an operator-owned directory. Read-only discovery does not need mutation enabled.
+- [ ] Size `--lora-max-adapters` and `--lora-max-bytes` with enough headroom to replace an adapter without interrupting in-flight requests.
+- [ ] Use `expected_generation` on replacement and unload operations, then verify the published generation through `GET /v1/lora_adapters`.
+- [ ] Keep live mutation out of tensor-parallel deployments; preload adapters instead.
+
+See [LoRA and X-LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for rollout, rollback, errors, and the vLLM migration table.
+
 ## Multi-model
 
 - [ ] For serving several models from one process, use `mistralrs from-config` with `[[models]]` entries and decide the default model id. See [multiple models](/mistral.rs/guides/serve/multiple-models/).

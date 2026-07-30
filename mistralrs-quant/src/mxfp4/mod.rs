@@ -85,20 +85,21 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        #[cfg(feature = "metal")]
-        if self.blocks.device().is_metal() {
-            use crate::afq::ops;
-            use crate::{AfqBits, AfqGroupSize};
-            return ops::afq_dequantize_op(
-                &self.blocks,
-                &self.scales,
-                &self.scales.clone(),
-                AfqGroupSize::Low,
-                AfqBits::Mxfp4,
-            );
-        }
-        // CPU fallback
         self.dequantize_weights()
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let (_, k_half) = self.blocks.dims2()?;
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(k_half * 2);
+
+        let ids = ids
+            .to_device(self.blocks.device())?
+            .flatten_all()?
+            .contiguous()?;
+        let blocks = self.blocks.index_select(&ids, 0)?;
+        let scales = self.scales.index_select(&ids, 0)?;
+        Self::dequantize_rows(&blocks, &scales)?.reshape(output_shape)
     }
 
     #[allow(unused_variables)]
@@ -602,6 +603,48 @@ impl MXFP4Layer {
             .to_dtype(DType::BF16)
     }
 
+    fn dequantize_rows(blocks: &Tensor, scales: &Tensor) -> Result<Tensor> {
+        use rayon::prelude::*;
+
+        let (num_rows, k_half) = blocks.dims2()?;
+        let k = k_half * 2;
+        let num_blocks_per_row = k / MXFP4_BLOCK_SIZE;
+        let half_block = MXFP4_BLOCK_SIZE / 2;
+        let blocks_data = blocks
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<u8>()?;
+        let scales_data = scales
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<u8>()?;
+        let mut weights = vec![0f32; num_rows * k];
+
+        weights
+            .par_chunks_mut(k)
+            .enumerate()
+            .for_each(|(row, weights_row)| {
+                let blocks_row = row * k_half;
+                let scales_row = row * num_blocks_per_row;
+                for blk in 0..num_blocks_per_row {
+                    let scale = scales_data[scales_row + blk] as usize;
+                    let dequant = &Self::DEQUANT_LUT[scale];
+                    let block_start = blocks_row + blk * half_block;
+                    let output_start = blk * MXFP4_BLOCK_SIZE;
+                    for byte_i in 0..half_block {
+                        let packed = blocks_data[block_start + byte_i];
+                        weights_row[output_start + byte_i * 2] = dequant[(packed & 0x0F) as usize];
+                        weights_row[output_start + byte_i * 2 + 1] =
+                            dequant[((packed >> 4) & 0x0F) as usize];
+                    }
+                }
+            });
+
+        Tensor::from_vec(weights, (num_rows, k), &Device::Cpu)?
+            .to_device(blocks.device())?
+            .to_dtype(DType::BF16)
+    }
+
     /// CPU forward pass: blocked dequant + matmul to avoid full weight allocation.
     /// Processes MXFP4_BLOCK_SIZE (32) input columns at a time, dequantizing only
     /// the needed weight slice before accumulating partial results.
@@ -819,5 +862,90 @@ impl QuantizedSerde for MXFP4Layer {
     }
     fn isq_type_from_uqff(_reader: &UqffReader, _prefix: &str) -> Result<IsqType> {
         Ok(IsqType::MXFP4)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_HIDDEN_SIZE: usize = 64;
+    const TEST_VOCAB_SIZE: usize = 7;
+
+    fn test_layer() -> Result<Arc<dyn QuantMethod>> {
+        let values = (0..TEST_VOCAB_SIZE * TEST_HIDDEN_SIZE)
+            .map(|index| ((index % 29) as f32 - 14.0) / 3.0)
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(values, (TEST_VOCAB_SIZE, TEST_HIDDEN_SIZE), &Device::Cpu)?;
+        MXFP4Layer::quantize(&weight, None, &Device::Cpu)
+    }
+
+    fn expected_embedding(layer: &dyn QuantMethod, ids: &Tensor) -> Result<Tensor> {
+        let weight = layer.dequantize_w()?;
+        let mut shape = ids.dims().to_vec();
+        shape.push(TEST_HIDDEN_SIZE);
+        let ids = ids
+            .to_device(weight.device())?
+            .flatten_all()?
+            .contiguous()?;
+        weight.index_select(&ids, 0)?.reshape(shape)
+    }
+
+    #[test]
+    fn embedding_selects_quantized_rows() -> Result<()> {
+        let layer = test_layer()?;
+        let ids = Tensor::from_vec(vec![6u32, 1, 6, 3, 0, 4], (2, 3), &Device::Cpu)?;
+
+        let output = layer.embedding_forward(&ids, DType::F32)?;
+        let expected = expected_embedding(layer.as_ref(), &ids)?.to_dtype(DType::F32)?;
+
+        assert_eq!(output.dims(), &[2, 3, TEST_HIDDEN_SIZE]);
+        assert_eq!(output.dtype(), DType::F32);
+        assert!(output.device().is_cpu());
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<f32>()?,
+            expected.flatten_all()?.to_vec1::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_loaded_embedding_selects_quantized_rows() -> Result<()> {
+        let layer = test_layer()?;
+        let mut tensors = crate::uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("test.embedding", IsqType::MXFP4)?);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "mistralrs-mxfp4-embedding-uqff-{}-{stamp}.uqff",
+            std::process::id()
+        ));
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+
+        let reader = UqffReader::open(std::slice::from_ref(&path))?;
+        let loaded = reader
+            .load_linear("test.embedding", &Device::Cpu, Shard::default())?
+            .unwrap();
+        let ids = Tensor::from_vec(vec![5u32, 2, 1, 5], (2, 2), &Device::Cpu)?;
+        let output = loaded.embedding_forward(&ids, DType::BF16)?;
+        let expected = expected_embedding(layer.as_ref(), &ids)?;
+        drop(reader);
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(output.dims(), &[2, 2, TEST_HIDDEN_SIZE]);
+        assert_eq!(output.dtype(), DType::BF16);
+        assert!(output.device().is_cpu());
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<half::bf16>()?,
+            expected.flatten_all()?.to_vec1::<half::bf16>()?
+        );
+        Ok(())
     }
 }

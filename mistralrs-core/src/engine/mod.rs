@@ -1,6 +1,6 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{compute_block_hashes, BlockHash},
+    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -184,6 +184,19 @@ struct HybridPagedPrefixValidator {
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
 }
 
+impl HybridPagedPrefixValidator {
+    fn reset_recurrent_state(&self, slot_idx: usize) {
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        if !pipeline.cache().is_hybrid() {
+            return;
+        }
+        let mut hybrid_cache = pipeline.cache().hybrid();
+        if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
+            tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
+        }
+    }
+}
+
 impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
     fn validate_prefix_cache_hit(
         &mut self,
@@ -192,17 +205,20 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         cached_tokens: usize,
         block_size: usize,
     ) -> usize {
-        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
-            return 0;
-        }
-
         let Some(slot_idx) = seq.recurrent_state_idx() else {
             return 0;
         };
+
+        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
+            self.reset_recurrent_state(slot_idx);
+            return 0;
+        }
+
         let max_blocks = cached_tokens / block_size;
         let Some((n_blocks, snapshots)) = get_mut_arcmutex!(self.prefix_cacher)
             .get_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
+            self.reset_recurrent_state(slot_idx);
             return 0;
         };
 
@@ -217,8 +233,20 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         {
             n_blocks * block_size
         } else {
+            if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
+                tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
+            }
             0
         }
+    }
+
+    fn release_recurrent_state(&mut self, slot_idx: usize) -> bool {
+        let pipeline = get_mut_arcmutex!(self.pipeline);
+        if !pipeline.cache().is_hybrid() {
+            return false;
+        }
+        pipeline.cache().hybrid().free_seq(slot_idx);
+        true
     }
 }
 
@@ -277,7 +305,27 @@ impl Engine {
             config
         };
 
+        let (
+            requires_uniform_prompt_batch,
+            requires_uniform_completion_batch,
+            requires_uniform_media_batch,
+            supports_packed_prefill,
+        ) = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            (
+                pipeline.requires_uniform_prompt_batch(),
+                pipeline.requires_uniform_completion_batch(),
+                pipeline.requires_uniform_media_batch(),
+                pipeline.supports_packed_prefill(),
+            )
+        };
         let scheduler = config.into_scheduler();
+        get_mut_arcmutex!(scheduler)
+            .set_requires_uniform_prompt_batch(requires_uniform_prompt_batch);
+        get_mut_arcmutex!(scheduler)
+            .set_requires_uniform_completion_batch(requires_uniform_completion_batch);
+        get_mut_arcmutex!(scheduler).set_requires_uniform_media_batch(requires_uniform_media_batch);
+        get_mut_arcmutex!(scheduler).set_supports_packed_prefill(supports_packed_prefill);
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
         // This ensures PagedAttention prefix caching respects the same setting
@@ -338,6 +386,40 @@ impl Engine {
         scheduler.free_finished_sequence_groups();
     }
 
+    fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
+        let Request::Normal(request) = request else {
+            return Ok(());
+        };
+        let Some(selection) = request.adapter.as_mut() else {
+            return Ok(());
+        };
+        if selection.is_pinned() {
+            return Ok(());
+        }
+
+        let runtime = get_mut_arcmutex!(self.pipeline)
+            .adapter_runtime()
+            .ok_or_else(|| {
+                "request selected an adapter, but this pipeline has no dynamic LoRA runtime"
+                    .to_string()
+            })?;
+        selection.pin(&runtime).map_err(|err| err.to_string())
+    }
+
+    async fn prepare_request_for_dispatch(&self, mut request: Request) -> Option<Request> {
+        if let Err(error) = self.resolve_adapter_generation(&mut request) {
+            if let Request::Normal(request) = request {
+                request
+                    .response
+                    .send(crate::Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| tracing::warn!("Receiver disconnected"));
+            }
+            return None;
+        }
+        Some(request)
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -370,6 +452,9 @@ impl Engine {
 
                 match next_request {
                     Ok(request) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -418,6 +503,9 @@ impl Engine {
 
                 match event {
                     WaitEvent::Request(Some(request)) => {
+                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                            continue;
+                        };
                         self.replicate_request_to_daemons(&request);
                         if matches!(request, Request::Terminate) {
                             break 'lp;
@@ -588,12 +676,13 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         for seq in scheduled.prompt.iter_mut() {
-                            match seq.sequence_stepping_type() {
-                                SeqStepType::OneShot => {
-                                    seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
-                                }
-                                SeqStepType::PromptAndDecode => {
-                                    seq.set_state(SequenceState::RunningCompletion)
+                            if !seq.is_finished_paged_attn() {
+                                match seq.sequence_stepping_type() {
+                                    SeqStepType::OneShot => seq
+                                        .set_state(SequenceState::Done(StopReason::GeneratedImage)),
+                                    SeqStepType::PromptAndDecode => {
+                                        seq.set_state(SequenceState::RunningCompletion)
+                                    }
                                 }
                             }
                             seq.finish_prompt_timing(prompt_exec_time);
@@ -713,6 +802,8 @@ impl Engine {
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
+                                    full_mm_prefix_ranges_by_seq_id: HashMap::new(),
+                                    enable_packed_prefill: pipeline.supports_packed_prefill(),
                                     is_final_prompt_chunk: true,
                                 };
 
@@ -802,11 +893,13 @@ impl Engine {
                                     }
 
                                     let num_blocks = encoded_len / block_size;
+                                    let adapter_key =
+                                        adapter_generation_key(seq.adapter_generation());
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
                                         seq.mm_features(),
-                                        &[],
+                                        adapter_key.as_slice(),
                                     );
                                     if block_hashes.len() < num_blocks {
                                         continue;

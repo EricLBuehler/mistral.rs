@@ -1,25 +1,44 @@
 //! Load and run a model with a LoRA adapter.
 //!
-//! Run with: `cargo run --release --example lora -p mistralrs`
+//! > This example targets the current source API. The crates.io release does not
+//! > include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
+//! > until the next release.
+//!
+//! Run with:
+//!
+//! ~~~bash
+//! cargo run --release --example lora -p mistralrs
+//! ~~~
 
 use anyhow::Result;
-use mistralrs::{LoraModelBuilder, TextMessageRole, TextMessages, TextModelBuilder};
+use mistralrs::{
+    LoraModelBuilder, RequestBuilder, TextMessageRole, TextMessages, TextModelBuilder,
+};
+
+const BASE_MODEL: &str = "Qwen/Qwen2.5-0.5B-Instruct";
+const BASE_REVISION: &str = "7ae557604adf67be50417f59c2c2f167def9a775";
+const ADAPTER: &str = "closestfriend/brie-qwen2.5-0.5b";
+const ADAPTER_REVISION: &str = "acad7d767bece1486f2e6644820f784b3bcb6b5e";
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let model = LoraModelBuilder::from_text_model_builder(
-        TextModelBuilder::new("meta-llama/Llama-3.2-1B-Instruct").with_logging(),
-        vec!["danielhanchen/llama-3.2-lora".to_string()],
+        TextModelBuilder::new(BASE_MODEL)
+            .with_hf_revision(BASE_REVISION)
+            .with_logging(),
     )
+    .with_adapter_revision("philosophy", ADAPTER, ADAPTER_REVISION)
     .build()
     .await?;
 
     let messages = TextMessages::new().add_message(
         TextMessageRole::User,
-        "Hello! How are you? Please write generic binary search function in Rust.",
+        "Explain Heidegger's idea of being-in-the-world using one concrete everyday example.",
     );
 
-    let response = model.send_chat_request(messages).await?;
+    let response = model
+        .send_chat_request(RequestBuilder::from(messages).set_adapter("philosophy"))
+        .await?;
 
     println!("{}", response.choices[0].message.content.as_ref().unwrap());
     dbg!(
