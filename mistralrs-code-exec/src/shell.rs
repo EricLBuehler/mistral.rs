@@ -4,11 +4,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use mistralrs_mcp::{
+use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
+use mistralrs_tool_types::{
     CalledFunction, ShellOptions, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
     ToolOutput,
 };
-use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -36,7 +36,7 @@ pub struct ShellConfig {
     #[serde(default)]
     pub sandbox_policy: Option<SandboxPolicy>,
     #[serde(default)]
-    pub permission: mistralrs_mcp::AgentPermission,
+    pub permission: mistralrs_tool_types::AgentPermission,
 }
 
 impl std::fmt::Debug for ShellConfig {
@@ -58,7 +58,7 @@ impl Default for ShellConfig {
             timeout_secs: default_shell_timeout_secs(),
             working_directory: None,
             sandbox_policy: None,
-            permission: mistralrs_mcp::AgentPermission::Auto,
+            permission: mistralrs_tool_types::AgentPermission::Auto,
         }
     }
 }
@@ -197,8 +197,8 @@ impl ShellManager {
             self.network_mode(),
         );
 
-        let callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
-            move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
+        let callback: Arc<mistralrs_tool_types::MultimodalToolCallback> = Arc::new(
+            move |func: &CalledFunction, tc: &mistralrs_tool_types::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let ctx = ctx.clone();
                 let session_id = tc
@@ -256,8 +256,8 @@ impl ShellManager {
 
         let sessions = Arc::clone(&self.sessions);
         let ctx = self.spawn_ctx();
-        let surface_outputs_callback: Arc<mistralrs_mcp::MultimodalToolCallback> = Arc::new(
-            move |func: &CalledFunction, tc: &mistralrs_mcp::ToolCallContext| {
+        let surface_outputs_callback: Arc<mistralrs_tool_types::MultimodalToolCallback> = Arc::new(
+            move |func: &CalledFunction, tc: &mistralrs_tool_types::ToolCallContext| {
                 let sessions = Arc::clone(&sessions);
                 let ctx = ctx.clone();
                 let session_id = tc
@@ -409,7 +409,7 @@ async fn session_for<'a>(
 
 fn mount_input_files(
     session: &mut ShellSession,
-    files: &[mistralrs_mcp::ToolInputFile],
+    files: &[mistralrs_tool_types::ToolInputFile],
 ) -> anyhow::Result<()> {
     let key = files
         .iter()

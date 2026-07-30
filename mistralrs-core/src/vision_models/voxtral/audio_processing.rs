@@ -2,9 +2,10 @@
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use mistralrs_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
+
+use crate::AudioInput;
 
 use super::config::AudioEncodingArgs;
 
@@ -56,6 +57,12 @@ impl VoxtralAudioProcessor {
     /// to match the reference implementation.
     /// Returns [1, T, num_mel_bins] tensor.
     pub fn process_audio(&self, audio: &AudioInput, device: &Device) -> Result<Tensor> {
+        if cfg!(not(feature = "audio")) {
+            let _ = (audio, device);
+            anyhow::bail!(
+                "Enable the `audio` feature in your Cargo.toml dependency (or rebuild with `--features audio`) to use Voxtral audio processing."
+            );
+        }
         let mono = audio.to_mono();
 
         // Resample if necessary

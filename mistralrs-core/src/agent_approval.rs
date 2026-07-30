@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use mistralrs_mcp::AgentToolMetadata;
+use mistralrs_tool_types::AgentToolMetadata;
 
 #[derive(Clone, Debug)]
 pub struct AgentToolApproval {

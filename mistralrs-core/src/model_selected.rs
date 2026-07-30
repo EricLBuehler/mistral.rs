@@ -7,8 +7,11 @@ use crate::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
         NormalLoaderType, UqffWriteConfig,
     },
-    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
+    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
 };
+
+#[cfg(feature = "audio")]
+use crate::SpeechLoaderType;
 
 // Default value functions for serde deserialization
 fn default_model_dtype() -> ModelDType {
@@ -39,6 +42,7 @@ fn parse_diffusion_arch(x: &str) -> Result<DiffusionLoaderType, String> {
     x.parse()
 }
 
+#[cfg(feature = "audio")]
 fn parse_speech_arch(x: &str) -> Result<SpeechLoaderType, String> {
     x.parse()
 }
@@ -718,6 +722,7 @@ pub enum ModelSelected {
         dtype: ModelDType,
     },
 
+    #[cfg(feature = "audio")]
     Speech {
         /// Model ID to load from. This may be a HF hub repo or a local path.
         #[arg(short, long)]

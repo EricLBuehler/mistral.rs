@@ -1,5 +1,5 @@
-use mistralrs_mcp::{Function, Tool, ToolType};
 use mistralrs_sandbox::{EffectiveProtection, NetworkMode};
+use mistralrs_tool_types::{Function, Tool, ToolType};
 use serde_json::json;
 use std::collections::HashMap;
 

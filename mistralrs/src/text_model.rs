@@ -32,6 +32,7 @@ pub struct TextModelBuilder {
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
+    #[cfg(feature = "mcp")]
     pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
@@ -149,6 +150,7 @@ impl TextModelBuilder {
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            #[cfg(feature = "mcp")]
             mcp_client_config: None,
             code_exec_config: None,
             shell_config: None,
@@ -164,6 +166,7 @@ impl TextModelBuilder {
 
     /// Configure MCP client to connect to external MCP servers and automatically
     /// register their tools for use in automatic tool calling.
+    #[cfg(feature = "mcp")]
     pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
         self.mcp_client_config = Some(config);
         self

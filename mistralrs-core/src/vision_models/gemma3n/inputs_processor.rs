@@ -335,6 +335,17 @@ impl InputsProcessor for Gemma3nImageProcessor {
         let preprocessor_config: &PreProcessorConfig =
             config.downcast_ref().expect("Downcast failed.");
 
+        // Keep the model usable without audio, but error if audio is attempted.
+        #[cfg(not(feature = "audio"))]
+        if input_seqs
+            .iter()
+            .any(|seq| seq.has_audios() || seq.get_toks().contains(&AUDIO_TOKEN_ID))
+        {
+            return Err(anyhow::Error::msg(
+                "Audio inputs are not supported in this build (mistralrs-core compiled without the audio feature). Enable the `audio` feature in your Cargo.toml dependency (or rebuild with `--features audio`).",
+            ));
+        }
+
         if is_prompt {
             self.prepare_prompt_plans(&tokenizer, input_seqs, paged_attn_metadata.as_mut())
                 .map_err(anyhow::Error::new)?;

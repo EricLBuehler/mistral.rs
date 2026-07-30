@@ -1,5 +1,5 @@
-use mistralrs_mcp::Tool;
-use mistralrs_mcp::ToolType;
+use mistralrs_tool_types::Tool;
+use mistralrs_tool_types::ToolType;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub enum ToolChoice {

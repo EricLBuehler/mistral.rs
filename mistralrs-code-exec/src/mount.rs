@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use mistralrs_mcp::ToolInputFile;
+use mistralrs_tool_types::ToolInputFile;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MountedInputFile {

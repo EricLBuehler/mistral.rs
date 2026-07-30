@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use strum::IntoEnumIterator;
 
 use crate::pipeline::SupportedModality;
+#[cfg(feature = "audio")]
 use crate::speech_models::SpeechLoaderType;
 use crate::{DiffusionLoaderType, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType};
 
@@ -355,6 +356,7 @@ impl DiffusionLoaderType {
     }
 }
 
+#[cfg(feature = "audio")]
 impl SpeechLoaderType {
     pub fn arch_metadata(&self) -> ArchMetadata {
         match self {
@@ -551,11 +553,14 @@ pub fn render_supported_models_markdown() -> String {
         DiffusionLoaderType::iter().map(|t| (variant_name(&t), t.arch_metadata())),
     );
 
-    md.push_str("## Speech\n\n");
-    simple_table(
-        &mut md,
-        SpeechLoaderType::iter().map(|t| (variant_name(&t), t.arch_metadata())),
-    );
+    #[cfg(feature = "audio")]
+    {
+        md.push_str("## Speech\n\n");
+        simple_table(
+            &mut md,
+            SpeechLoaderType::iter().map(|t| (variant_name(&t), t.arch_metadata())),
+        );
+    }
 
     md.push_str("## Embedding\n\n");
     simple_table(
@@ -576,9 +581,11 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/../docs/src/content/docs/reference/supported-models.md"
     );
+    #[cfg(feature = "audio")]
     const REGEN_HINT: &str =
         "cargo test -p mistralrs-core regenerate_supported_models -- --ignored";
 
+    #[cfg(feature = "audio")]
     #[test]
     fn supported_models_matches_committed() {
         let rendered = render_supported_models_markdown();

@@ -1,10 +1,9 @@
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use mistralrs_audio::AudioInput;
 use rubato::Resampler;
 use rustfft::{num_complex::Complex32, FftPlanner};
 
-use crate::vision_models::preprocessor_config::PreProcessorConfig;
+use crate::{vision_models::preprocessor_config::PreProcessorConfig, AudioInput};
 
 const DEFAULT_MAX_AUDIO_SAMPLES: usize = 480_000;
 const DEFAULT_PAD_TO_MULTIPLE_OF: usize = 128;
@@ -419,8 +418,8 @@ impl AudioProcessor {
 
 #[cfg(test)]
 mod tests {
+    use crate::AudioInput;
     use candle_core::Device;
-    use mistralrs_audio::AudioInput;
 
     use crate::vision_models::preprocessor_config::PreProcessorConfig;
 

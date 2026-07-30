@@ -8,11 +8,11 @@ use std::{
 use mistralrs_code_exec::{
     CodeExecutionApproval, CodeExecutionConfig, CodeExecutionManager, CodeExecutionPermission,
 };
-use mistralrs_mcp::{
+use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
+use mistralrs_tool_types::{
     CalledFunction, CodeExecutionPermission as RequestCodeExecutionPermission, ToolCallContext,
     ToolCallbackKind,
 };
-use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 
 static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -25,7 +25,7 @@ fn which(prog: &str) -> Option<PathBuf> {
 }
 
 fn exec_json(
-    callbacks: &std::collections::HashMap<String, mistralrs_mcp::ToolCallbackWithTool>,
+    callbacks: &std::collections::HashMap<String, mistralrs_tool_types::ToolCallbackWithTool>,
     session_id: &str,
     code: &str,
 ) -> String {
@@ -33,7 +33,7 @@ fn exec_json(
 }
 
 fn exec_json_with_permission(
-    callbacks: &std::collections::HashMap<String, mistralrs_mcp::ToolCallbackWithTool>,
+    callbacks: &std::collections::HashMap<String, mistralrs_tool_types::ToolCallbackWithTool>,
     session_id: &str,
     code: &str,
     code_execution_permission: Option<RequestCodeExecutionPermission>,
@@ -64,13 +64,13 @@ fn exec_json_with_permission(
     };
 
     match result {
-        mistralrs_mcp::ToolOutput::Multimodal { text, .. } => text,
-        mistralrs_mcp::ToolOutput::Text(t) => t,
+        mistralrs_tool_types::ToolOutput::Multimodal { text, .. } => text,
+        mistralrs_tool_types::ToolOutput::Text(t) => t,
     }
 }
 
 fn reset_json(
-    callbacks: &std::collections::HashMap<String, mistralrs_mcp::ToolCallbackWithTool>,
+    callbacks: &std::collections::HashMap<String, mistralrs_tool_types::ToolCallbackWithTool>,
     session_id: &str,
 ) -> String {
     let reset = callbacks

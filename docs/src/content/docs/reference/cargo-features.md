@@ -34,6 +34,8 @@ For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer
 
 | Feature | Crates | Purpose |
 |---|---|---|
+| `audio` | `mistralrs`, `mistralrs-core` | Audio input decoding and speech-model support. Enabled by default for compatibility. |
+| `mcp` | `mistralrs`, `mistralrs-core` | Model Context Protocol client integration. Enabled by default for compatibility. |
 | `code-execution` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | Python code execution tool. In `mistralrs-cli` defaults. |
 | `ring` | as above | Multi-machine ring distributed inference. |
 | `swagger-ui` | `mistralrs-server-core` | Mounts Swagger UI on the HTTP server. On by default in `mistralrs-server-core`. |
@@ -59,9 +61,52 @@ In a consumer crate depending on `mistralrs`:
 mistralrs = { version = "0.8", features = ["cuda", "nccl", "flash-attn", "cudnn"] }
 ```
 
+### Minimal in-process builds
+
+The `mistralrs-core` and top-level `mistralrs` crates expose default-on `audio` and `mcp`
+features. The top-level crate forwards both features to `mistralrs-core`. Disable defaults
+when an in-process application does not need either subsystem:
+
+```toml
+[dependencies]
+mistralrs = { version = "0.9", default-features = false, features = ["metal"] }
+```
+
+The same pattern works for a direct core dependency:
+
+```toml
+[dependencies]
+mistralrs-core = { version = "0.9", default-features = false, features = ["metal"] }
+```
+
+Enable one subsystem without the other when needed:
+
+```toml
+[dependencies]
+mistralrs = { version = "0.9", default-features = false, features = ["metal", "mcp"] }
+```
+
+With `audio` disabled, the runtime dependency graph excludes `mistralrs-audio`, `symphonia`,
+and `hound`. Phi-4 Multimodal and Gemma 3n remain available for text and image inputs;
+attempting an audio path reports that the `audio` feature is required. Some DSP crates used
+by the models' non-audio internals remain unconditional dependencies.
+
+With `mcp` disabled, the graph excludes `mistralrs-mcp` and `rust-mcp-schema`. Generic tool
+calling and code-execution types remain available through a small shared types crate; only MCP
+client configuration and connectivity APIs are removed from the public surface.
+
+To inspect a minimal dependency graph:
+
+```bash
+cargo tree -p mistralrs-core --no-default-features -e normal
+cargo check -p mistralrs-core --no-default-features
+```
+
 ## Default features
 
-`mistralrs-cli`'s default feature is `code-execution`. `mistralrs-server-core`'s default feature is `swagger-ui`. To exclude defaults, use `--no-default-features`.
+`mistralrs-core` and `mistralrs` enable `audio` and `mcp` by default. `mistralrs-cli`'s default
+feature is `code-execution`. `mistralrs-server-core`'s default feature is `swagger-ui`. To exclude
+a crate's defaults, use `--no-default-features`.
 
 No crate enables an accelerator feature by default. Opt in to the accelerator matching your hardware.
 

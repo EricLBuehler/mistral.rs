@@ -1,6 +1,7 @@
+#[cfg(feature = "audio")]
+use crate::AudioInput;
 use either::Either;
 use indexmap::IndexMap;
-use mistralrs_audio::AudioInput;
 use mistralrs_quant::IsqType;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
@@ -85,6 +86,7 @@ pub enum RequestMessage {
     MultimodalChat {
         #[serde(skip)] // TODO
         images: Vec<image::DynamicImage>,
+        #[cfg(feature = "audio")]
         #[serde(skip)] // TODO
         audios: Vec<AudioInput>,
         #[serde(skip)]
@@ -318,17 +320,18 @@ pub struct NormalRequest {
     #[serde(default)]
     pub enable_shell: bool,
     #[serde(default)]
-    pub shell_options: Option<mistralrs_mcp::ShellOptions>,
+    pub shell_options: Option<mistralrs_tool_types::ShellOptions>,
     #[serde(default)]
     pub code_execution_permission: Option<CodeExecutionPermission>,
     #[serde(skip)]
-    pub code_execution_approval_notifier: Option<Arc<mistralrs_mcp::CodeExecutionApprovalNotifier>>,
+    pub code_execution_approval_notifier:
+        Option<Arc<mistralrs_tool_types::CodeExecutionApprovalNotifier>>,
     #[serde(default)]
     pub agent_permission: Option<AgentPermission>,
     #[serde(skip)]
     pub agent_approval_handler: Option<AgentToolApprovalHandler>,
     #[serde(skip)]
-    pub agent_approval_notifier: Option<Arc<mistralrs_mcp::AgentToolApprovalNotifier>>,
+    pub agent_approval_notifier: Option<Arc<mistralrs_tool_types::AgentToolApprovalNotifier>>,
     pub max_tool_rounds: Option<usize>,
     /// URL to POST `{"name": ..., "arguments": ...}` to when no server-side callback is registered. Expects `{"content": "..."}` back.
     pub tool_dispatch_url: Option<String>,
