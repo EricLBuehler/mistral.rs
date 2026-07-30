@@ -43,8 +43,10 @@ use crate::{
         create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
         JsonError, ModelErrorMessage,
     },
+    lora_adapters::resolve_lora_adapter_model,
     openai::{
-        ChatCompletionRequest, Message, MessageContent, OpenAiTool, OpenAiToolSurface, ToolCall,
+        AdapterSelection, ChatCompletionRequest, Message, MessageContent, OpenAiTool,
+        OpenAiToolSurface, ToolCall,
     },
     responses_types::{
         content::{Annotation, OutputContent},
@@ -452,6 +454,10 @@ pub struct OpenResponsesCreateRequest {
     #[serde(default = "default_model")]
     pub model: String,
 
+    /// Adapter alias or exact generation to activate for this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<AdapterSelection>,
+
     /// The input for the response - can be a string or array of input items
     pub input: OpenResponsesInput,
 
@@ -625,7 +631,7 @@ fn default_1usize() -> usize {
 }
 
 /// OpenResponses streaming event format
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum OpenResponsesStreamEvent {
     /// Response created event
@@ -1229,6 +1235,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Emit response.completed
                         let seq = self.streaming_state.next_sequence_number();
                         let mut response = self.build_current_response(ResponseStatus::Completed);
+                        response.adapter_generation = chat_chunk.adapter_generation.clone();
                         response.completed_at = Some(
                             SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
@@ -1275,6 +1282,7 @@ impl futures::Stream for OpenResponsesStreamer {
                     let response = chat_response_to_response_resource(
                         &chat_resp,
                         self.streaming_state.response_id.clone(),
+                        self.streaming_state.model.clone(),
                         self.metadata.clone(),
                         &self.request_context,
                         &self.shell_output_items,
@@ -1460,14 +1468,15 @@ fn output_text_with_file_annotations(
 fn chat_response_to_response_resource(
     chat_resp: &ChatCompletionResponse,
     request_id: String,
+    model: String,
     metadata: Option<Value>,
     request_ctx: &RequestContext,
     shell_output_items: &[OutputItem],
     files: &[mistralrs_core::File],
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource =
-        ResponseResource::new(request_id.clone(), chat_resp.model.clone(), created_at);
+    let mut resource = ResponseResource::new(request_id.clone(), model, created_at);
+    resource.adapter_generation = chat_resp.adapter_generation.clone();
 
     let mut output_items = shell_output_items.to_vec();
     let mut output_text_parts = Vec::new();
@@ -1701,6 +1710,7 @@ async fn parse_openresponses_request(
     let chat_request = ChatCompletionRequest {
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
+        adapter: oairequest.adapter,
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
         top_logprobs: oairequest.top_logprobs,
@@ -1764,14 +1774,27 @@ async fn parse_openresponses_request(
     tag = "Mistral.rs",
     path = "/v1/responses",
     request_body = OpenResponsesCreateRequest,
-    responses((status = 200, description = "Response created"))
+    responses((
+        status = 200,
+        description = "Response resource or server-sent response events",
+        content(
+            (ResponseResource = "application/json"),
+            (OpenResponsesStreamEvent = "text/event-stream")
+        )
+    ))
 )]
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
     Extension(skill_store): Extension<Arc<SkillStore>>,
-    Json(oairequest): Json<OpenResponsesCreateRequest>,
+    Json(mut oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
+    let requested_model = oairequest.model.clone();
+    if let Err(error) =
+        resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
+    {
+        return OpenResponsesResponder::ValidationError(Box::new(JsonError::new(error)));
+    }
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
     let store = oairequest.store.unwrap_or(true);
@@ -1784,7 +1807,7 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let model_name = oairequest.model.clone();
+    let model_name = requested_model;
 
     // Handle background processing
     if background {
@@ -1794,7 +1817,7 @@ pub async fn create_response(
         // Return immediately with queued response
         let response = ResponseResource::new(
             task_id.clone(),
-            model_name,
+            model_name.clone(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -1843,18 +1866,17 @@ pub async fn create_response(
                 return;
             }
 
-            // Wait for a terminal response. Files are reachable via GET /v1/files/{id}.
-            let mut terminal_received = false;
+            // Wait for response. Files are reachable via GET /v1/files/{id}.
             let mut shell_output_items = Vec::new();
             let mut pending_shell_calls = HashMap::new();
             let mut files = Vec::new();
-            while let Some(response) = bg_rx.recv().await {
-                match response {
-                    Response::AgenticToolCallProgress {
+            let response = loop {
+                match bg_rx.recv().await {
+                    Some(Response::AgenticToolCallProgress {
                         round,
                         tool_name,
                         phase,
-                    } => {
+                    }) => {
                         record_shell_progress_items(
                             &mut pending_shell_calls,
                             &mut shell_output_items,
@@ -1862,91 +1884,85 @@ pub async fn create_response(
                             &tool_name,
                             &phase,
                         );
+                        continue;
                     }
-                    Response::BlockDenoisingProgress(_) => {}
-                    Response::File(file) => files.push(file),
+                    Some(Response::BlockDenoisingProgress(_)) => continue,
+                    Some(Response::File(file)) => {
+                        files.push(file);
+                        continue;
+                    }
                     // Defensive drain for any streaming chunks that reach the background channel.
-                    Response::Chunk(_) => {}
-                    Response::Done(chat_resp) => {
-                        terminal_received = true;
-                        let response = chat_response_to_response_resource(
-                            &chat_resp,
-                            task_id.clone(),
-                            metadata_clone,
-                            &request_context,
-                            &shell_output_items,
-                            &files,
-                        );
-
-                        // Store if requested
-                        if store {
-                            let cache = get_response_cache();
-                            let _ = cache.store_response(task_id.clone(), response.clone());
-
-                            if let Some(mut history) = conversation_history {
-                                for choice in &chat_resp.choices {
-                                    if let Some(content) = &choice.message.content {
-                                        history.push(Message {
-                                            content: Some(MessageContent::from_text(
-                                                content.clone(),
-                                            )),
-                                            role: choice.message.role.clone(),
-                                            name: None,
-                                            tool_calls: None,
-                                            tool_call_id: None,
-                                        });
-                                    }
-                                }
-                                let _ = cache.store_conversation_history(task_id.clone(), history);
-                            }
-                        }
-
-                        task_manager.mark_completed(&task_id, response);
-                        break;
-                    }
-                    Response::ModelError(msg, _partial_resp) => {
-                        terminal_received = true;
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("model_error", msg.to_string()),
-                        );
-                        break;
-                    }
-                    Response::ValidationError(e) => {
-                        terminal_received = true;
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("validation_error", e.to_string()),
-                        );
-                        break;
-                    }
-                    Response::InternalError(e) => {
-                        terminal_received = true;
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("internal_error", e.to_string()),
-                        );
-                        break;
-                    }
-                    _ => {
-                        terminal_received = true;
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("unknown_error", "Unexpected response type"),
-                        );
-                        break;
-                    }
+                    Some(Response::Chunk(_)) => continue,
+                    other => break other,
                 }
-            }
+            };
 
-            if !terminal_received {
-                task_manager.mark_failed(
-                    &task_id,
-                    ResponseError::new(
-                        "channel_closed",
-                        "Response channel closed before a terminal message",
-                    ),
-                );
+            match response {
+                Some(Response::Done(chat_resp)) => {
+                    let response = chat_response_to_response_resource(
+                        &chat_resp,
+                        task_id.clone(),
+                        model_name.clone(),
+                        metadata_clone,
+                        &request_context,
+                        &shell_output_items,
+                        &files,
+                    );
+
+                    // Store if requested
+                    if store {
+                        let cache = get_response_cache();
+                        let _ = cache.store_response(task_id.clone(), response.clone());
+
+                        if let Some(mut history) = conversation_history {
+                            for choice in &chat_resp.choices {
+                                if let Some(content) = &choice.message.content {
+                                    history.push(Message {
+                                        content: Some(MessageContent::from_text(content.clone())),
+                                        role: choice.message.role.clone(),
+                                        name: None,
+                                        tool_calls: None,
+                                        tool_call_id: None,
+                                    });
+                                }
+                            }
+                            let _ = cache.store_conversation_history(task_id.clone(), history);
+                        }
+                    }
+
+                    task_manager.mark_completed(&task_id, response);
+                }
+                Some(Response::ModelError(msg, _partial_resp)) => {
+                    task_manager
+                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
+                }
+                Some(Response::ValidationError(e)) => {
+                    task_manager.mark_failed(
+                        &task_id,
+                        ResponseError::new("validation_error", e.to_string()),
+                    );
+                }
+                Some(Response::InternalError(e)) => {
+                    task_manager.mark_failed(
+                        &task_id,
+                        ResponseError::new("internal_error", e.to_string()),
+                    );
+                }
+                None => {
+                    task_manager.mark_failed(
+                        &task_id,
+                        ResponseError::new(
+                            "channel_closed",
+                            "Response channel closed before a terminal message",
+                        ),
+                    );
+                }
+                _ => {
+                    task_manager.mark_failed(
+                        &task_id,
+                        ResponseError::new("unknown_error", "Unexpected response type"),
+                    );
+                }
             }
         });
 
@@ -1960,6 +1976,13 @@ pub async fn create_response(
         };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
+        if matches!(
+            &e,
+            mistralrs_core::MistralRsError::LoraAdapter(_)
+                | mistralrs_core::MistralRsError::ModelNotFound(_)
+        ) {
+            return OpenResponsesResponder::ValidationError(Box::new(e));
+        }
         return handle_error(state, e.into());
     }
 
@@ -2016,6 +2039,7 @@ pub async fn create_response(
                 let response = chat_response_to_response_resource(
                     &chat_resp,
                     request_id.clone(),
+                    model_name.clone(),
                     metadata,
                     &request_context,
                     &shell_output_items,
@@ -2049,6 +2073,7 @@ pub async fn create_response(
                 let mut response = chat_response_to_response_resource(
                     &partial_resp,
                     request_id.clone(),
+                    model_name,
                     metadata,
                     &request_context,
                     &shell_output_items,
@@ -2079,7 +2104,7 @@ pub async fn create_response(
     tag = "Mistral.rs",
     path = "/v1/responses/{response_id}",
     params(("response_id" = String, Path, description = "The ID of the response to retrieve")),
-    responses((status = 200, description = "Response object"))
+    responses((status = 200, description = "Response object", body = ResponseResource))
 )]
 pub async fn get_response(
     State(_state): ExtractedMistralRsState,
@@ -2154,7 +2179,7 @@ pub async fn delete_response(
     tag = "Mistral.rs",
     path = "/v1/responses/{response_id}/cancel",
     params(("response_id" = String, Path, description = "The ID of the response to cancel")),
-    responses((status = 200, description = "Response cancelled"))
+    responses((status = 200, description = "Response cancelled", body = ResponseResource))
 )]
 pub async fn cancel_response(
     State(_state): ExtractedMistralRsState,
@@ -2213,5 +2238,45 @@ mod tests {
             panic!("expected one output text content part");
         };
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn response_resource_preserves_the_request_facing_model() {
+        let chat_response = ChatCompletionResponse {
+            id: "chatcmpl_test".to_string(),
+            choices: Vec::new(),
+            created: 1,
+            model: "base-model".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "chat.completion".to_string(),
+            usage: mistralrs_core::Usage {
+                completion_tokens: 0,
+                prompt_tokens: 0,
+                total_tokens: 0,
+                avg_tok_per_sec: 0.0,
+                avg_prompt_tok_per_sec: 0.0,
+                avg_compl_tok_per_sec: 0.0,
+                total_time_sec: 0.0,
+                total_prompt_time_sec: 0.0,
+                total_completion_time_sec: 0.0,
+            },
+            adapter_generation: Some("generation".to_string()),
+            agentic_tool_calls: None,
+            files: None,
+            session_id: None,
+        };
+
+        let response = chat_response_to_response_resource(
+            &chat_response,
+            "resp_test".to_string(),
+            "base-model::production".to_string(),
+            None,
+            &RequestContext::default(),
+            &[],
+            &[],
+        );
+
+        assert_eq!(response.model, "base-model::production");
+        assert_eq!(response.adapter_generation.as_deref(), Some("generation"));
     }
 }

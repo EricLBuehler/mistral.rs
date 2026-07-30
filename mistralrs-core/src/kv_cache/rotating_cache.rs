@@ -280,7 +280,12 @@ impl RotatingCache {
         };
 
         if seq_len >= self.max_seq_len {
-            // src alone covers the whole window: overwrite at the front
+            if self.capacity_seq_len < self.max_seq_len {
+                self.capacity_seq_len = self.max_seq_len;
+                let mut shape = src.dims().to_vec();
+                shape[self.dim] = self.capacity_seq_len;
+                self.all_data = Some(Tensor::zeros(shape, src.dtype(), src.device())?);
+            }
             let to_copy = src
                 .narrow(self.dim, seq_len - self.max_seq_len, self.max_seq_len)?
                 .contiguous()?;
@@ -289,10 +294,11 @@ impl RotatingCache {
             self.write_pos = self.max_seq_len;
         } else {
             if self.write_pos + seq_len > self.capacity_seq_len {
+                let keep_len = retained_len.min(self.max_seq_len - seq_len);
+                let keep_start = window_start + retained_len - keep_len;
                 let max_capacity = self.max_capacity();
                 if self.capacity_seq_len < max_capacity {
-                    // grow toward window + slack, moving the window to the front
-                    let needed = (retained_len + seq_len).max(self.write_pos + seq_len);
+                    let needed = keep_len + seq_len;
                     let n_blocks = needed
                         .div_ceil(NormalCache::CACHE_GROW_SIZE)
                         .max(self.capacity_seq_len / NormalCache::CACHE_GROW_SIZE + 1);
@@ -302,24 +308,20 @@ impl RotatingCache {
                     shape[self.dim] = self.capacity_seq_len;
                     let old = self.all_data.take().unwrap();
                     let ad = Tensor::zeros(shape, src.dtype(), src.device())?;
-                    if retained_len > 0 {
-                        let retained = old
-                            .narrow(self.dim, window_start, retained_len)?
-                            .contiguous()?;
+                    if keep_len > 0 {
+                        let retained = old.narrow(self.dim, keep_start, keep_len)?.contiguous()?;
                         ad.slice_set(&retained, self.dim, 0)?;
                     }
                     self.all_data = Some(ad);
-                } else if retained_len > 0 {
-                    // out of slack: one bulk relocation of the window to the front,
-                    // amortized over the slack length instead of every token
+                } else if keep_len > 0 {
                     let ad = self.all_data.as_mut().unwrap();
                     let retained = ad
-                        .narrow(self.dim, window_start, retained_len)?
+                        .narrow(self.dim, keep_start, keep_len)?
                         .copy()?
                         .contiguous()?;
                     ad.slice_set(&retained, self.dim, 0)?;
                 }
-                self.write_pos = retained_len;
+                self.write_pos = keep_len;
             }
             let ad = self.all_data.as_mut().unwrap();
             ad.slice_set(&src.contiguous()?, self.dim, self.write_pos)?;
@@ -498,6 +500,43 @@ mod tests {
             vec![2., 3., 4., 5.]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn grows_small_initial_capacity_for_large_first_prefill() -> candle_core::Result<()> {
+        let mut cache = RotatingCache::new(2, 1024, 512);
+        let values = (0_u16..1024).map(f32::from).collect::<Vec<_>>();
+
+        let result = cache.append(&make_src(&values)?)?;
+
+        assert_eq!(result.flatten_all()?.to_vec1::<f32>()?, values);
+        assert_eq!(cache.capacity_seq_len, 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn compacts_full_window_before_large_append() -> candle_core::Result<()> {
+        let mut cache = RotatingCache::new(2, 1024, 512);
+        let first = (0_u16..512).map(f32::from).collect::<Vec<_>>();
+        let second = (512_u16..1024).map(f32::from).collect::<Vec<_>>();
+        let third = (1024_u16..1624).map(f32::from).collect::<Vec<_>>();
+
+        let _ = cache.append(&make_src(&first)?)?;
+        let _ = cache.append(&make_src(&second)?)?;
+        let result = cache.append(&make_src(&third)?)?;
+
+        let expected_result = (0_u16..1624).map(f32::from).collect::<Vec<_>>();
+        assert_eq!(result.flatten_all()?.to_vec1::<f32>()?, expected_result);
+        let expected_retained = (600_u16..1624).map(f32::from).collect::<Vec<_>>();
+        assert_eq!(
+            cache
+                .current_data()?
+                .unwrap()
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            expected_retained
+        );
         Ok(())
     }
 }

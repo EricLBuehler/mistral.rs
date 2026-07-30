@@ -1,4 +1,4 @@
-use candle_core::{Result, Tensor};
+use candle_core::{DType, DeviceLocation, Result, Tensor};
 use mistralrs_quant::MatMul;
 
 use crate::{
@@ -39,12 +39,16 @@ pub(crate) fn sinks_attn(
         (k, v)
     };
 
-    // Detect varlen: flash_params has cu_seqlens_k AND batch > 1
     let is_varlen = b_sz > 1
+        && kv_layout_is_packed(k.dims())
+        && kv_layout_is_packed(v.dims())
         && flash_params.is_some_and(|fp| {
-            fp.k_meta(sdpa_params.sliding_window)
-                .cumulative_seqlens
-                .contains_key(&q.device().location())
+            let location = q.device().location();
+            fp.cumulative_seqlens_q.contains_key(&location)
+                && fp
+                    .k_meta(sdpa_params.sliding_window)
+                    .cumulative_seqlens
+                    .contains_key(&location)
         });
 
     if is_varlen {
@@ -59,8 +63,38 @@ pub(crate) fn sinks_attn(
         );
     }
 
-    // Non-varlen path
     sinks_attn_regular(q, k, v, sinks, mask, sdpa_params, window_size)
+}
+
+pub(crate) fn sinks_backend_is_available(query: &Tensor, head_size: usize) -> bool {
+    sinks_backend_supports(query.dtype(), query.device().location(), head_size)
+}
+
+pub(crate) fn sinks_backend_supports(
+    dtype: DType,
+    location: DeviceLocation,
+    head_size: usize,
+) -> bool {
+    if !sinks_kernel_supports(dtype, head_size) {
+        return false;
+    }
+
+    match location {
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        DeviceLocation::Cuda { .. } => true,
+        #[cfg(feature = "metal")]
+        DeviceLocation::Metal { .. } => true,
+        _ => false,
+    }
+}
+
+fn sinks_kernel_supports(dtype: DType, head_size: usize) -> bool {
+    matches!(dtype, DType::F16 | DType::BF16 | DType::F32)
+        && matches!(head_size, 64 | 80 | 96 | 112 | 128 | 192 | 256)
+}
+
+fn kv_layout_is_packed(dims: &[usize]) -> bool {
+    matches!(dims, [_, _, _] | [1, _, _, _])
 }
 
 /// Non-varlen sinks attention: Q [B, H, q_len, D], K/V [B, kv_H, kv_len, D]
@@ -74,6 +108,10 @@ fn sinks_attn_regular(
     sdpa_params: &SdpaParams,
     window_size: usize,
 ) -> Result<Tensor> {
+    if mask.is_some() {
+        return sinks_attn_cpu(q, k, v, sinks, mask, sdpa_params);
+    }
+
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     if q.device().is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks(
@@ -131,6 +169,9 @@ fn sinks_attn_varlen(
     let cu_seqlens_k = &flash_params
         .k_meta(sdpa_params.sliding_window)
         .cumulative_seqlens[&device.location()];
+    if cu_seqlens_q.dim(0)? != q.dim(0)? + 1 || cu_seqlens_k.dim(0)? != q.dim(0)? + 1 {
+        candle_core::bail!("sinks varlen metadata does not match the query batch");
+    }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     if device.is_cuda() {
@@ -236,4 +277,44 @@ fn sinks_attn_cpu_varlen(
     }
 
     Tensor::cat(&outputs, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{kv_layout_is_packed, sinks_backend_supports, sinks_kernel_supports};
+    use candle_core::{DType, DeviceLocation};
+
+    #[test]
+    fn packed_kv_layout_rejects_regular_batched_tensors() {
+        assert!(kv_layout_is_packed(&[17, 4, 64]));
+        assert!(kv_layout_is_packed(&[1, 4, 17, 64]));
+        assert!(!kv_layout_is_packed(&[2, 4, 17, 64]));
+        assert!(!kv_layout_is_packed(&[4, 17]));
+    }
+
+    #[test]
+    fn fused_sinks_accepts_only_compiled_kernel_shapes() {
+        assert!(sinks_kernel_supports(DType::F32, 64));
+        assert!(sinks_kernel_supports(DType::BF16, 256));
+        assert!(!sinks_kernel_supports(DType::F16, 320));
+        assert!(!sinks_kernel_supports(DType::U32, 128));
+    }
+
+    #[test]
+    fn fused_sinks_backend_capability_includes_device_and_build() {
+        assert!(!sinks_backend_supports(DType::F16, DeviceLocation::Cpu, 64));
+        assert_eq!(
+            sinks_backend_supports(DType::BF16, DeviceLocation::Cuda { gpu_id: 0 }, 128),
+            cfg!(all(feature = "cuda", target_family = "unix"))
+        );
+        assert_eq!(
+            sinks_backend_supports(DType::F32, DeviceLocation::Metal { gpu_id: 0 }, 256),
+            cfg!(feature = "metal")
+        );
+        assert!(!sinks_backend_supports(
+            DType::F16,
+            DeviceLocation::Cuda { gpu_id: 0 },
+            72
+        ));
+    }
 }
