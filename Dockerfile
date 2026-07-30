@@ -4,7 +4,7 @@
 # release workflow (extracted from the published tarball) and copied in - the image is not
 # compiled here. Build via .github/workflows/release.yml.
 
-FROM debian:bookworm-slim AS runtime
+FROM ubuntu:24.04 AS runtime
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -22,6 +22,8 @@ HEREDOC
 # TARGETARCH (amd64/arm64) is set by buildx; the release workflow stages dist/<arch>/.
 ARG TARGETARCH
 COPY --chmod=755 dist/${TARGETARCH}/mistralrs /usr/local/bin/mistralrs
+# Catch a missing binary or an incompatible GLIBC baseline while building the image.
+RUN mistralrs --help >/dev/null
 # Chat templates for models that ship without one
 COPY chat_templates /chat_templates
 
