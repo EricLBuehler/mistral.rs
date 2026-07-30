@@ -11,10 +11,13 @@ use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::attention::sliding_window_left;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
+        block_aligned_sliding_window_start,
         plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
         AttentionBackendKind, _PAD_SLOT_ID,
     },
@@ -47,24 +50,13 @@ fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result
     Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
 }
 
-fn block_aligned_window_start(full_len: usize, window: usize, block_size: usize) -> usize {
-    let window_start = full_len.saturating_sub(window);
-    (window_start / block_size) * block_size
-}
-
 fn block_aligned_window_len_for_query(
     full_len: usize,
     query_len: usize,
     window: usize,
     block_size: usize,
 ) -> usize {
-    let block_start = block_aligned_window_start(full_len, window, block_size);
-    let query_start = full_len.saturating_sub(query_len);
-    if block_start <= query_start {
-        full_len - block_start
-    } else {
-        full_len
-    }
+    full_len - block_aligned_sliding_window_start(full_len, query_len, window, block_size)
 }
 
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
@@ -189,6 +181,144 @@ fn new_token_lens_from_slot_mapping(
         .collect())
 }
 
+fn query_layout_is_dense(query_lens: &[usize], batch_size: usize, seq_len: usize) -> bool {
+    query_lens.iter().sum::<usize>() == batch_size * seq_len
+}
+
+fn validate_varlen_segment_partition(
+    query_lens: &[usize],
+    segment_lens: &[usize],
+) -> Result<usize> {
+    if query_lens.is_empty()
+        || query_lens.contains(&0)
+        || segment_lens.is_empty()
+        || segment_lens.contains(&0)
+    {
+        candle_core::bail!("packed varlen segments contain an empty sequence");
+    }
+    let mut segment_index = 0usize;
+    for &query_len in query_lens {
+        let mut remaining = query_len;
+        while remaining > 0 {
+            let segment = segment_lens.get(segment_index).copied().ok_or_else(|| {
+                candle_core::Error::msg("packed varlen segments do not cover every query")
+            })?;
+            if segment > remaining {
+                candle_core::bail!("packed varlen segment crosses a logical query boundary");
+            }
+            remaining -= segment;
+            segment_index += 1;
+        }
+    }
+    if segment_index != segment_lens.len() {
+        candle_core::bail!("packed varlen segments contain trailing queries");
+    }
+    Ok(segment_lens.iter().copied().max().unwrap_or(0))
+}
+
+fn decode_query_rows(query: &Tensor, kv_lens: &[usize]) -> Result<usize> {
+    let query_rows = query.dim(0)?;
+    if query_rows != kv_lens.len() {
+        candle_core::bail!(
+            "decode gather has {query_rows} query rows for {} KV rows",
+            kv_lens.len()
+        );
+    }
+    Ok(query_rows)
+}
+
+fn pad_packed_query(query: &Tensor, query_lens: &[usize]) -> Result<Tensor> {
+    let (batch, heads, total_tokens, head_size) = query.dims4()?;
+    if batch != 1 || query_lens.is_empty() || query_lens.contains(&0) {
+        candle_core::bail!("packed sinks query has invalid logical dimensions");
+    }
+    let logical_tokens = query_lens.iter().try_fold(0usize, |total, &len| {
+        total
+            .checked_add(len)
+            .ok_or_else(|| candle_core::Error::msg("packed sinks query length overflow"))
+    })?;
+    if logical_tokens != total_tokens {
+        candle_core::bail!(
+            "packed sinks query has {total_tokens} tokens for {logical_tokens} logical tokens"
+        );
+    }
+
+    let max_query_len = query_lens.iter().copied().max().unwrap_or(0);
+    let mut offset = 0usize;
+    let mut rows = Vec::with_capacity(query_lens.len());
+    for &query_len in query_lens {
+        let row = query.narrow(2, offset, query_len)?;
+        offset += query_len;
+        if query_len == max_query_len {
+            rows.push(row);
+        } else {
+            let padding = Tensor::zeros(
+                (1, heads, max_query_len - query_len, head_size),
+                query.dtype(),
+                query.device(),
+            )?;
+            rows.push(Tensor::cat(&[&row, &padding], 2)?);
+        }
+    }
+    Tensor::cat(&rows, 0)
+}
+
+fn repack_padded_query(output: &Tensor, query_lens: &[usize]) -> Result<Tensor> {
+    let (batch, _, max_query_len, _) = output.dims4()?;
+    if batch != query_lens.len()
+        || query_lens.is_empty()
+        || query_lens.contains(&0)
+        || query_lens.iter().any(|&len| len > max_query_len)
+    {
+        candle_core::bail!("padded sinks output has invalid logical dimensions");
+    }
+
+    let mut rows = Vec::with_capacity(query_lens.len());
+    for (batch_idx, &query_len) in query_lens.iter().enumerate() {
+        rows.push(output.narrow(0, batch_idx, 1)?.narrow(2, 0, query_len)?);
+    }
+    Tensor::cat(&rows, 2)
+}
+
+fn should_use_gather_path(
+    has_block_tables: bool,
+    has_cached_prefix: bool,
+    has_noncausal_mm_context: bool,
+    mask_is_prefill: bool,
+    single_token_first_prompt: bool,
+    write_cache: bool,
+) -> bool {
+    if write_cache {
+        (has_cached_prefix || has_noncausal_mm_context || mask_is_prefill) && has_block_tables
+    } else {
+        (has_cached_prefix
+            || has_noncausal_mm_context
+            || mask_is_prefill
+            || single_token_first_prompt)
+            && has_block_tables
+    }
+}
+
+fn select_optional_view<'a, T>(
+    use_full: bool,
+    full: Option<&'a T>,
+    regular: Option<&'a T>,
+) -> Option<&'a T> {
+    if use_full {
+        full
+    } else {
+        regular
+    }
+}
+
+fn noncausal_mm_view_is_valid(
+    has_noncausal_mm_context: bool,
+    has_block_tables: bool,
+    has_mm_prefix_ranges: bool,
+) -> bool {
+    !has_noncausal_mm_context || has_block_tables && has_mm_prefix_ranges
+}
+
 fn unpack_gathered_kv(
     packed: &Tensor,
     kv_lens: &[usize],
@@ -230,6 +360,47 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     }
 }
 
+fn prefix_attention_output_layout(
+    output: Tensor,
+    attention_mask: &AttentionMask,
+) -> Result<Tensor> {
+    if matches!(attention_mask, AttentionMask::None) {
+        output.transpose(1, 2)?.contiguous()
+    } else {
+        Ok(output)
+    }
+}
+
+fn should_reconstruct_prefix_mask(
+    attention_mask: &AttentionMask,
+    prefix_causal: bool,
+    has_noncausal_mm_context: bool,
+    has_padding_or_window: bool,
+) -> bool {
+    matches!(attention_mask, AttentionMask::None)
+        && (prefix_causal || has_noncausal_mm_context || has_padding_or_window)
+}
+
+fn should_use_packed_prefix_mask(
+    packed: bool,
+    query_layout_is_dense: bool,
+    attention_mask: &AttentionMask,
+    dense_flash_causal: bool,
+) -> bool {
+    packed
+        && query_layout_is_dense
+        && matches!(attention_mask, AttentionMask::CausalFlash)
+        && !dense_flash_causal
+}
+
+fn prefix_prefill_is_causal(
+    has_multi_token_query: bool,
+    declared_causal: bool,
+    has_mm_prefix_ranges: bool,
+) -> bool {
+    has_multi_token_query && (declared_causal || has_mm_prefix_ranges)
+}
+
 type SeqMmPrefixRanges = Vec<Vec<(usize, usize)>>;
 
 #[allow(clippy::too_many_arguments)]
@@ -249,8 +420,10 @@ fn prefix_gather_causal_mask(
         let prefix_len = kv_len.saturating_sub(q_len);
         for q_idx in 0..q_max {
             for kv_idx in 0..kv_max {
-                let masked = if q_idx >= q_len || kv_idx >= kv_len {
-                    q_idx >= q_len || kv_idx != 0
+                let masked = if q_idx >= q_len {
+                    kv_idx != 0
+                } else if kv_idx >= kv_len {
+                    true
                 } else {
                     let q_pos = prefix_len + q_idx;
                     let future = kv_idx > q_pos;
@@ -272,6 +445,45 @@ fn prefix_gather_causal_mask(
     Ok(AttentionMask::Custom(
         Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
     ))
+}
+
+fn packed_prefix_gather_causal_mask(
+    query_lens: &[usize],
+    kv_lens: &[usize],
+    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
+    sliding_window: Option<usize>,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    let total_q = query_lens.iter().sum::<usize>();
+    let total_kv = kv_lens.iter().sum::<usize>();
+    let mut mask = vec![f32::NEG_INFINITY; total_q * total_kv];
+    let mut q_offset = 0usize;
+    let mut kv_offset = 0usize;
+    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens).enumerate() {
+        let prefix_len = kv_len.saturating_sub(q_len);
+        for q_idx in 0..q_len {
+            let q_pos = prefix_len + q_idx;
+            for kv_idx in 0..kv_len {
+                let future = kv_idx > q_pos;
+                let too_old = sliding_window
+                    .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
+                let mm_prefix = mm_prefix_ranges
+                    .and_then(|ranges| ranges.get(batch_idx))
+                    .is_some_and(|ranges| {
+                        ranges.iter().any(|&(start, end)| {
+                            q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
+                        })
+                    });
+                if !(future || too_old) || mm_prefix {
+                    mask[(q_offset + q_idx) * total_kv + kv_offset + kv_idx] = 0.0;
+                }
+            }
+        }
+        q_offset += q_len;
+        kv_offset += kv_len;
+    }
+    Tensor::from_vec(mask, (1usize, 1usize, total_q, total_kv), device)?.to_dtype(dtype)
 }
 
 fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmPrefixRanges>> {
@@ -296,9 +508,46 @@ fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmP
     Ok(Some(ranges))
 }
 
-fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
-    query.device().is_cpu()
-        || (query.device().is_cuda() && crate::using_flash_attn() && query.dtype() != DType::F32)
+fn packed_varlen_flash_is_usable(
+    device_is_cuda: bool,
+    flash_attn_enabled: bool,
+    dtype: DType,
+    head_size: usize,
+    has_softcap: bool,
+    has_sliding_window: bool,
+) -> bool {
+    device_is_cuda
+        && flash_attn_enabled
+        && matches!(dtype, DType::F16 | DType::BF16)
+        && crate::attention::flash_backend_supports_sdpa(head_size, has_softcap, has_sliding_window)
+}
+
+fn supports_packed_varlen_sdpa(query: &Tensor, head_size: usize, sdpa_params: &SdpaParams) -> bool {
+    packed_varlen_flash_is_usable(
+        query.device().is_cuda(),
+        crate::using_flash_attn(),
+        query.dtype(),
+        head_size,
+        sdpa_params.softcap.is_some(),
+        sdpa_params.sliding_window.is_some(),
+    )
+}
+
+fn supports_sinks_varlen_sdpa(query: &Tensor, head_size: usize) -> bool {
+    crate::attention::sinks_backend_is_available(query, head_size)
+}
+
+fn should_use_decode_gather_varlen(
+    supports_general_varlen: bool,
+    has_sinks: bool,
+    supports_sinks_varlen: bool,
+    query_rows: usize,
+) -> bool {
+    if has_sinks {
+        supports_sinks_varlen && query_rows > 1
+    } else {
+        supports_general_varlen
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -364,24 +613,40 @@ impl PagedForwardCtx<'_> {
     }
 
     fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
-        if self.sdpa_params.sliding_window.is_some() {
-            self.input_metadata.mm_prefix_ranges.as_ref()?.get(dev)
-        } else {
-            None
-        }
+        select_optional_view(
+            self.use_full,
+            self.input_metadata.full_mm_prefix_ranges.as_ref(),
+            self.input_metadata.mm_prefix_ranges.as_ref(),
+        )?
+        .get(dev)
+    }
+
+    fn has_noncausal_mm_context(&self) -> bool {
+        select_optional_view(
+            self.use_full,
+            self.input_metadata.full_mm_prefix_ranges.as_ref(),
+            self.input_metadata.mm_prefix_ranges.as_ref(),
+        )
+        .is_some()
     }
 
     fn use_gather_path(&self, attention_mask: &AttentionMask, write_cache: bool) -> bool {
         let has_block_tables = self.input_metadata.block_tables.is_some();
         let has_cached_prefix = self.input_metadata.num_cached_tokens.is_some();
-        let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
+        let mask_is_prefill = !matches!(attention_mask, AttentionMask::None)
+            && (!write_cache
+                || self.input_metadata.query_lens.is_some()
+                    && !self.input_metadata.is_first_prompt_chunk);
         let single_token_first_prompt =
             self.input_metadata.is_first_prompt_chunk && self.dims.seq_len == 1;
-        if write_cache {
-            has_cached_prefix && has_block_tables
-        } else {
-            (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
-        }
+        should_use_gather_path(
+            has_block_tables,
+            has_cached_prefix,
+            self.has_noncausal_mm_context(),
+            mask_is_prefill,
+            single_token_first_prompt,
+            write_cache,
+        )
     }
 }
 
@@ -567,12 +832,28 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
+        let dev = tensors.query.device().location();
+        let block_tables = ctx.block_tables(&dev);
+        let mm_prefix_ranges = ctx.mm_prefix_ranges(&dev);
+        if !noncausal_mm_view_is_valid(
+            ctx.has_noncausal_mm_context(),
+            block_tables.is_some(),
+            mm_prefix_ranges.is_some(),
+        ) {
+            let view = if ctx.use_full { "full" } else { "sliding" };
+            candle_core::bail!(
+                "noncausal multimodal prefix attention is missing {view} cache metadata for {dev:?}"
+            );
+        }
         if !ctx.use_gather_path(tensors.attention_mask, write_cache) {
             return Ok(None);
         }
 
-        let dev = tensors.query.device().location();
-        let block_tables = ctx.block_tables(&dev).unwrap();
+        let block_tables = block_tables.ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "paged prefix attention is missing block tables for {dev:?}"
+            ))
+        })?;
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let k_flat = tensors.key.transpose(1, 2)?.reshape((
                 (),
@@ -612,19 +893,30 @@ impl PagedAttention {
                 ctx.dims.seq_len,
             )?,
         };
-        let full_kv_lens =
-            if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
-                num_cached_tokens
-                    .iter()
-                    .zip(query_lens.iter())
-                    .map(|(&cached, &query_len)| cached + query_len)
-                    .collect::<Vec<_>>()
-            } else {
-                query_lens.clone()
-            };
+        let full_kv_lens = if let Some(lens) = ctx
+            .input_metadata
+            .full_paged_context_lens_cpu
+            .as_deref()
+            .filter(|lens| lens.len() == query_lens.len())
+        {
+            lens.to_vec()
+        } else if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
+            num_cached_tokens
+                .iter()
+                .zip(query_lens.iter())
+                .map(|(&cached, &query_len)| cached + query_len)
+                .collect::<Vec<_>>()
+        } else {
+            query_lens.clone()
+        };
         let block_size =
             cache_block_size(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())?;
-        let kv_lens = if let Some(window) = ctx.sdpa_params.sliding_window {
+        let kv_lens = if let Some(lens) = ctx
+            .context_lens_cpu()
+            .filter(|lens| lens.len() == query_lens.len())
+        {
+            lens.to_vec()
+        } else if let Some(window) = ctx.sdpa_params.sliding_window {
             if !ctx.use_full {
                 full_kv_lens
                     .iter()
@@ -648,13 +940,23 @@ impl PagedAttention {
         } else {
             cumulative_seqlens_from_lengths(&kv_lens, device)?
         };
-        let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
+        let query_layout_is_dense =
+            query_layout_is_dense(&query_lens, ctx.dims.batch_size, ctx.dims.seq_len);
+        let declared_causal = ctx.flash_params.map_or(
+            ctx.input_metadata.prompt_chunk_attention_policy
+                == crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+            |params| params.causal,
+        );
+        let prefix_causal = prefix_prefill_is_causal(
+            query_lens.iter().any(|&len| len > 1),
+            declared_causal,
+            mm_prefix_ranges.is_some(),
+        );
         let causality_known = !tensors.attention_mask.is_custom() || ctx.flash_params.is_some();
         let attention_backend = AttentionBackendKind::from_cache(
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let mm_prefix_ranges = ctx.mm_prefix_ranges(&device.location());
         let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
@@ -662,31 +964,29 @@ impl PagedAttention {
             has_custom_mask: tensors.attention_mask.is_custom(),
             causality_known,
             head_size: ctx.dims.head_size,
-            query_lens_match_seq_len,
+            has_softcap: ctx.sdpa_params.softcap.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+            query_layout_is_dense,
             block_size,
             attention_backend,
         });
         match prefill_plan {
             #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
             PrefixPrefillPlan::FlashAttentionPaged => {
-                let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
-                let prefill_causal = query_lens.iter().any(|&len| len > 1)
-                    && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
-                return self
-                    .run_flash_attention_paged_prefill(
-                        ctx,
-                        tensors.query,
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        block_tables,
-                        &query_lens,
-                        &kv_lens,
-                        &cu_kv,
-                        block_size,
-                        prefill_causal,
-                        mm_prefix_ranges,
-                    )
-                    .map(Some);
+                let output = self.run_flash_attention_paged_prefill(
+                    ctx,
+                    tensors.query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    block_tables,
+                    &query_lens,
+                    &kv_lens,
+                    &cu_kv,
+                    block_size,
+                    prefix_causal,
+                    mm_prefix_ranges,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
             }
             PrefixPrefillPlan::GatherSdpa => {}
         }
@@ -706,9 +1006,43 @@ impl PagedAttention {
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
         let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
+        let has_padding_or_window = query_lens.iter().any(|&len| len != ctx.dims.seq_len)
+            || kv_lens.iter().any(|&len| len != max_kv)
+            || ctx.sdpa_params.sliding_window.is_some();
+        let dense_flash_causal = query_layout_is_dense
+            && mm_prefix_ranges.is_none()
+            && tensors.query.device().is_cuda()
+            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params);
+        if should_use_packed_prefix_mask(
+            ctx.flash_params.is_some_and(|params| params.packed),
+            query_layout_is_dense,
+            tensors.attention_mask,
+            dense_flash_causal,
+        ) {
+            let mask = packed_prefix_gather_causal_mask(
+                &query_lens,
+                &kv_lens,
+                mm_prefix_ranges_cpu.as_deref(),
+                ctx.sdpa_params.sliding_window,
+                tensors.query.dtype(),
+                device,
+            )?;
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let output = Sdpa.run_attention_noflash(
+                tensors.query,
+                &k_4d,
+                &v_4d,
+                Some(&mask),
+                ctx.sdpa_params,
+                false,
+            )?;
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
         let adjusted_mask = match tensors.attention_mask {
             AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
             AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
+            AttentionMask::CausalFlash if dense_flash_causal => AttentionMask::CausalFlash,
             AttentionMask::CausalFlash => prefix_gather_causal_mask(
                 &query_lens,
                 &kv_lens,
@@ -719,10 +1053,32 @@ impl PagedAttention {
                 tensors.query.dtype(),
                 device,
             )?,
+            AttentionMask::None
+                if should_reconstruct_prefix_mask(
+                    tensors.attention_mask,
+                    prefix_causal,
+                    ctx.has_noncausal_mm_context(),
+                    has_padding_or_window,
+                ) =>
+            {
+                prefix_gather_causal_mask(
+                    &query_lens,
+                    &kv_lens,
+                    mm_prefix_ranges_cpu.as_deref(),
+                    ctx.dims.seq_len,
+                    max_kv,
+                    ctx.sdpa_params.sliding_window,
+                    tensors.query.dtype(),
+                    device,
+                )?
+            }
             other => other.clone(),
         };
 
-        if supports_packed_varlen_sdpa(tensors.query) {
+        if query_layout_is_dense
+            && !adjusted_mask.is_custom()
+            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params)
+        {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(
@@ -742,7 +1098,6 @@ impl PagedAttention {
             cu_q_map.insert(device.location(), cu_q);
             let mut cu_kv_map = HashMap::new();
             cu_kv_map.insert(device.location(), cu_kv);
-            let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
             let prefix_flash_params = FlashParams {
                 max_q: u32::try_from(query_lens.iter().copied().max().unwrap_or(0))
                     .map_err(candle_core::Error::wrap)?,
@@ -753,31 +1108,30 @@ impl PagedAttention {
                     cumulative_seqlens: cu_kv_map,
                 },
                 sliding_k: None,
-                causal: query_lens.iter().any(|&len| len > 1)
-                    && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                causal: prefix_causal,
+                packed: ctx.flash_params.is_some_and(|params| params.packed),
+                varlen_segment_lens: None,
             };
             if simple_full_causal {
-                return Sdpa
-                    .run_attention_noflash(
-                        tensors.query,
-                        &k_4d,
-                        &v_4d,
-                        None,
-                        ctx.sdpa_params,
-                        prefix_flash_params.causal,
-                    )
-                    .map(Some);
-            }
-            return Sdpa
-                .run_attention(
+                let output = Sdpa.run_attention_noflash(
                     tensors.query,
                     &k_4d,
                     &v_4d,
-                    &adjusted_mask,
-                    Some(&prefix_flash_params),
+                    None,
                     ctx.sdpa_params,
-                )
-                .map(Some);
+                    prefix_flash_params.causal,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+            }
+            let output = Sdpa.run_attention(
+                tensors.query,
+                &k_4d,
+                &v_4d,
+                &adjusted_mask,
+                Some(&prefix_flash_params),
+                ctx.sdpa_params,
+            )?;
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
         }
 
         let k_batched = unpack_gathered_kv(
@@ -794,15 +1148,15 @@ impl PagedAttention {
             ctx.dims.head_size,
             device,
         )?;
-        Sdpa.run_attention(
+        let output = Sdpa.run_attention(
             tensors.query,
             &k_batched,
             &v_batched,
             &adjusted_mask,
             None,
             ctx.sdpa_params,
-        )
-        .map(Some)
+        )?;
+        prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
     }
 
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -849,7 +1203,7 @@ impl PagedAttention {
             query_lens.iter().copied().max().unwrap_or(0),
             kv_lens.iter().copied().max().unwrap_or(0),
             ctx.sdpa_params.softmax_scale,
-            ctx.sdpa_params.sliding_window,
+            sliding_window_left(ctx.sdpa_params.sliding_window),
             window_size_right,
             block_size,
             ctx.sdpa_params.softcap,
@@ -873,21 +1227,40 @@ impl PagedAttention {
     ) -> Result<Option<Tensor>> {
         let single_token_first_prompt =
             write_cache && ctx.input_metadata.is_first_prompt_chunk && ctx.dims.seq_len == 1;
-        let Some(att) = (if matches!(tensors.attention_mask, AttentionMask::None)
-            && !single_token_first_prompt
+        let custom_decode = tensors.attention_mask.is_custom()
+            && ctx.input_metadata.query_lens.is_none()
+            && !ctx.input_metadata.is_first_prompt_chunk;
+        if custom_decode
+            || matches!(tensors.attention_mask, AttentionMask::None) && !single_token_first_prompt
         {
-            None
+            return Ok(None);
+        }
+
+        let att = if ctx.flash_params.is_some_and(|params| params.packed)
+            && ctx.sdpa_params.sinks.is_some()
+        {
+            let query_lens = ctx.input_metadata.query_lens.as_deref().ok_or_else(|| {
+                candle_core::Error::msg("packed sinks prefill is missing logical query lengths")
+            })?;
+            let padded_query = pad_packed_query(tensors.query, query_lens)?;
+            let padded_output = Sdpa.run_attention(
+                &padded_query,
+                tensors.key,
+                tensors.value,
+                tensors.attention_mask,
+                ctx.flash_params,
+                ctx.sdpa_params,
+            )?;
+            repack_padded_query(&padded_output, query_lens)?
         } else {
-            Some(Sdpa.run_attention(
+            Sdpa.run_attention(
                 tensors.query,
                 tensors.key,
                 tensors.value,
                 tensors.attention_mask,
                 ctx.flash_params,
                 ctx.sdpa_params,
-            )?)
-        }) else {
-            return Ok(None);
+            )?
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
@@ -996,16 +1369,32 @@ impl PagedAttention {
         let dev = query.device().location();
         let key_cache_ref = key_cache.as_ref().unwrap();
         let value_cache_ref = value_cache.as_ref().unwrap();
+        if tensors.attention_mask.is_custom() {
+            return self.run_decode_gather_sdpa(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+            );
+        }
         let attention_backend = AttentionBackendKind::from_cache(key_cache_ref, value_cache_ref);
         match DecodePlan::choose(DecodePlanInput {
             attention_backend,
             head_size: ctx.dims.head_size,
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
         })? {
-            DecodePlan::GatherSdpa => {
-                self.run_decode_gather_sdpa(ctx, &query, key_cache_ref, value_cache_ref, &dev)
-            }
+            DecodePlan::GatherSdpa => self.run_decode_gather_sdpa(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+            ),
             #[cfg(all(feature = "cuda", target_family = "unix"))]
             DecodePlan::FlashInfer(plan) => {
                 self.run_flashinfer_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev, plan)
@@ -1023,6 +1412,7 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         dev: &DeviceLocation,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let block_tables = ctx.block_tables(dev).unwrap();
         let kv_lens: Vec<usize> = match ctx.context_lens_cpu() {
@@ -1045,6 +1435,7 @@ impl PagedAttention {
                 }
             }
         };
+        let query_rows = decode_query_rows(query, &kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache,
@@ -1055,18 +1446,17 @@ impl PagedAttention {
             &cu_kv,
             query.dtype(),
         )?;
-        let q_4d = query.reshape((
-            ctx.dims.batch_size,
-            ctx.dims.attention_heads,
-            1,
-            ctx.dims.head_size,
-        ))?;
+        let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
 
-        if supports_packed_varlen_sdpa(query) {
-            let cu_q = cumulative_seqlens_from_lengths(
-                &vec![1usize; ctx.dims.batch_size],
-                query.device(),
-            )?;
+        if !attention_mask.is_custom()
+            && should_use_decode_gather_varlen(
+                supports_packed_varlen_sdpa(query, ctx.dims.head_size, ctx.sdpa_params),
+                ctx.sdpa_params.sinks.is_some(),
+                supports_sinks_varlen_sdpa(query, ctx.dims.head_size),
+                query_rows,
+            )
+        {
+            let cu_q = cumulative_seqlens_from_lengths(&vec![1usize; query_rows], query.device())?;
             let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let mut cu_q_map = HashMap::new();
@@ -1083,6 +1473,8 @@ impl PagedAttention {
                 },
                 sliding_k: None,
                 causal: false,
+                packed: false,
+                varlen_segment_lens: None,
             };
             return Sdpa.run_attention(
                 &q_4d,
@@ -1108,11 +1500,30 @@ impl PagedAttention {
             ctx.dims.head_size,
             query.device(),
         )?;
+        let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        let decode_mask = match attention_mask {
+            AttentionMask::Custom(mask) => AttentionMask::Custom(adjust_kv_mask(mask, max_kv)?),
+            _ if ctx.sdpa_params.sliding_window.is_some()
+                || kv_lens.iter().any(|&kv_len| kv_len != max_kv) =>
+            {
+                prefix_gather_causal_mask(
+                    &vec![1; query_rows],
+                    &kv_lens,
+                    None,
+                    1,
+                    max_kv,
+                    ctx.sdpa_params.sliding_window,
+                    query.dtype(),
+                    query.device(),
+                )?
+            }
+            _ => AttentionMask::None,
+        };
         Sdpa.run_attention(
             &q_4d,
             &k_batched,
             &v_batched,
-            &AttentionMask::None,
+            &decode_mask,
             None,
             ctx.sdpa_params,
         )
@@ -1148,7 +1559,7 @@ impl PagedAttention {
             fi_meta.kv_chunk_size,
             fi_meta.block_valid_mask,
             ctx.sdpa_params.softmax_scale,
-            ctx.sdpa_params.sliding_window,
+            sliding_window_left(ctx.sdpa_params.sliding_window),
             ctx.sdpa_params.softcap,
             fi_meta
                 .tmp_v
@@ -1233,6 +1644,62 @@ impl PagedAttention {
             write_cache,
         })?;
 
+        if let Some((flash_params, segment_lens)) = flash_params.and_then(|params| {
+            params
+                .varlen_segment_lens
+                .as_deref()
+                .map(|segment_lens| (params, segment_lens))
+        }) {
+            let query_lens = input_metadata.query_lens.as_deref().ok_or_else(|| {
+                candle_core::Error::msg("packed varlen segments are missing logical query lengths")
+            })?;
+            let max_segment = validate_varlen_segment_partition(query_lens, segment_lens)?;
+            let token_count = query_lens.iter().sum::<usize>();
+            let location = query.device().location();
+            let cu_q = flash_params
+                .cumulative_seqlens_q
+                .get(&location)
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed varlen segments are missing query offsets for the layer device",
+                    )
+                })?;
+            let cu_k = flash_params
+                .logical_k
+                .cumulative_seqlens
+                .get(&location)
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed varlen segments are missing key offsets for the layer device",
+                    )
+                })?;
+            if !write_cache
+                || input_metadata.num_cached_tokens.is_some()
+                || input_metadata.has_noncausal_mm_context
+                || !flash_params.packed
+                || !flash_params.causal
+                || flash_params.sliding_k.is_some()
+                || sdpa_params.sliding_window.is_some()
+                || !matches!(attention_mask, AttentionMask::CausalFlash)
+                || !query.device().is_cuda()
+                || !crate::using_flash_attn()
+                || query.dtype() == DType::F32
+                || ctx.dims.batch_size != 1
+                || ctx.dims.seq_len != token_count
+                || key.dim(0)? != 1
+                || key.dim(2)? != token_count
+                || value.dim(0)? != 1
+                || value.dim(2)? != token_count
+                || ctx.slot_mapping.dim(0)? != token_count
+                || flash_params.max_q as usize != max_segment
+                || flash_params.logical_k.max as usize != max_segment
+                || cu_q.dims1()? != segment_lens.len() + 1
+                || cu_k.dims1()? != segment_lens.len() + 1
+            {
+                candle_core::bail!("packed varlen segment metadata is not safe for direct prefill");
+            }
+        }
+
         if let Some(out) = self.try_prefix_gather_prefill(
             &ctx,
             tensors,
@@ -1309,5 +1776,493 @@ impl PagedAttention {
             flash_params,
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn varlen_segments_partition_each_logical_query() {
+        assert_eq!(
+            validate_varlen_segment_partition(&[3, 2], &[2, 1, 2]).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn varlen_segments_reject_boundary_crossing_and_trailing_segments() {
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 1, 2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 0], &[2, 1]).is_err());
+    }
+
+    #[test]
+    fn ragged_decode_mask_excludes_padding() {
+        let mask =
+            prefix_gather_causal_mask(&[1, 1], &[2, 4], None, 1, 4, None, DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        );
+    }
+
+    #[test]
+    fn ragged_prompt_mask_keeps_padding_rows_finite() {
+        let mask =
+            prefix_gather_causal_mask(&[2], &[2], None, 4, 2, None, DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                f32::NEG_INFINITY
+            ]
+        );
+    }
+
+    #[test]
+    fn sliding_mask_uses_window_as_token_capacity() {
+        let mask =
+            prefix_gather_causal_mask(&[1], &[6], None, 1, 6, Some(4), DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+
+        assert_eq!(
+            mask.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn sliding_mask_moves_with_each_chunked_query_row() {
+        let mask =
+            prefix_gather_causal_mask(&[3], &[8], None, 3, 8, Some(4), DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.squeeze(0).unwrap().squeeze(0).unwrap();
+
+        for (row, visible_start) in [2, 3, 4].into_iter().enumerate() {
+            let values = mask.get(row).unwrap().to_vec1::<f32>().unwrap();
+            for (column, value) in values.into_iter().enumerate() {
+                let visible = column >= visible_start && column <= row + 5;
+                assert_eq!(value == 0.0, visible);
+            }
+        }
+    }
+
+    #[test]
+    fn sliding_mask_handles_unit_window_and_query_longer_than_window() {
+        let unit =
+            prefix_gather_causal_mask(&[1], &[3], None, 1, 3, Some(1), DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(unit) = unit else {
+            panic!("expected custom mask");
+        };
+        assert_eq!(
+            unit.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0]
+        );
+
+        let chunk =
+            prefix_gather_causal_mask(&[5], &[7], None, 5, 7, Some(2), DType::F32, &Device::Cpu)
+                .unwrap();
+        let AttentionMask::Custom(chunk) = chunk else {
+            panic!("expected custom mask");
+        };
+        let chunk = chunk.squeeze(0).unwrap().squeeze(0).unwrap();
+        for row in 0..5 {
+            let values = chunk.get(row).unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(values.iter().filter(|&&value| value == 0.0).count(), 2);
+        }
+    }
+
+    #[test]
+    fn noncausal_media_range_overrides_both_sliding_window_edges() {
+        let mask = prefix_gather_causal_mask(
+            &[2],
+            &[8],
+            Some(&[vec![(1, 8)]]),
+            2,
+            8,
+            Some(3),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.squeeze(0).unwrap().squeeze(0).unwrap();
+
+        assert_eq!(
+            mask.get(0).unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            mask.get(1).unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn packed_query_layout_is_dense_without_rectangular_lengths() {
+        assert!(query_layout_is_dense(&[3, 5], 1, 8));
+        assert!(query_layout_is_dense(&[5, 5], 2, 5));
+        assert!(!query_layout_is_dense(&[3, 5], 2, 5));
+    }
+
+    #[test]
+    fn packed_prefix_selects_block_diagonal_mask_before_padded_mask() {
+        assert!(should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::CausalFlash,
+            false
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::CausalFlash,
+            true
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            false,
+            true,
+            &AttentionMask::CausalFlash,
+            false
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::None,
+            false
+        ));
+    }
+
+    #[test]
+    fn cached_suffix_reconstructs_mask_and_decode_layout() {
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            true,
+            false,
+            false
+        ));
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            false,
+            true,
+            false
+        ));
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            false,
+            false,
+            true
+        ));
+        assert!(!should_reconstruct_prefix_mask(
+            &AttentionMask::CausalFlash,
+            true,
+            false,
+            true
+        ));
+
+        let output =
+            Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5], (1, 2, 3, 1), &Device::Cpu).unwrap();
+        let output = prefix_attention_output_layout(output, &AttentionMask::None).unwrap();
+        assert_eq!(output.dims(), &[1, 3, 2, 1]);
+        assert_eq!(
+            output.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            vec![0, 3, 1, 4, 2, 5]
+        );
+    }
+
+    #[test]
+    fn single_token_suffix_mask_excludes_padding_and_sliding_history() {
+        let mask = prefix_gather_causal_mask(
+            &[1, 1],
+            &[3, 5],
+            None,
+            1,
+            5,
+            Some(3),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        assert_eq!(
+            mask.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![
+                0.0,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        );
+    }
+
+    #[test]
+    fn gathered_decode_counts_each_query_token_as_a_row() {
+        let query = Tensor::zeros((6, 4, 8), DType::F32, &Device::Cpu).unwrap();
+
+        assert_eq!(
+            decode_query_rows(&query, &[7, 8, 9, 10, 11, 12]).unwrap(),
+            6
+        );
+        assert!(decode_query_rows(&query, &[7, 8]).is_err());
+    }
+
+    #[test]
+    fn packed_sinks_query_round_trips_through_padded_varlen_layout() {
+        let query =
+            Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5], (1, 1, 6, 1), &Device::Cpu).unwrap();
+        let padded = pad_packed_query(&query, &[2, 4]).unwrap();
+
+        assert_eq!(padded.dims(), &[2, 1, 4, 1]);
+        assert_eq!(
+            padded.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            vec![0, 1, 0, 0, 2, 3, 4, 5]
+        );
+        let repacked = repack_padded_query(&padded, &[2, 4]).unwrap();
+        assert_eq!(
+            repacked.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            query.flatten_all().unwrap().to_vec1::<u32>().unwrap()
+        );
+    }
+
+    #[test]
+    fn packed_sinks_query_rejects_inconsistent_lengths() {
+        let query = Tensor::zeros((1, 2, 5, 4), DType::F32, &Device::Cpu).unwrap();
+
+        assert!(pad_packed_query(&query, &[2, 2]).is_err());
+        assert!(pad_packed_query(&query, &[5, 0]).is_err());
+    }
+
+    #[test]
+    fn sinks_decode_uses_varlen_without_general_flash_support() {
+        assert!(should_use_decode_gather_varlen(false, true, true, 2));
+        assert!(!should_use_decode_gather_varlen(false, true, true, 1));
+        assert!(!should_use_decode_gather_varlen(false, true, false, 2));
+        assert!(!should_use_decode_gather_varlen(true, true, false, 2));
+        assert!(!should_use_decode_gather_varlen(false, false, true, 2));
+        assert!(should_use_decode_gather_varlen(true, false, false, 1));
+    }
+
+    #[test]
+    fn packed_varlen_requires_a_compatible_flash_backend() {
+        assert!(!packed_varlen_flash_is_usable(
+            false,
+            true,
+            DType::F16,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            false,
+            DType::F16,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F32,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            640,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            512,
+            true,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            320,
+            false,
+            true
+        ));
+        assert_eq!(
+            packed_varlen_flash_is_usable(true, true, DType::F16, 128, false, false),
+            cfg!(any(feature = "flash-attn", feature = "flash-attn-v3"))
+        );
+    }
+
+    #[test]
+    fn uncached_noncausal_prompt_uses_gather_path() {
+        assert!(should_use_gather_path(true, false, true, true, false, true));
+        assert!(!should_use_gather_path(
+            true, false, false, false, false, true
+        ));
+    }
+
+    #[test]
+    fn uncached_later_prompt_mask_uses_gather_path() {
+        assert!(should_use_gather_path(
+            true, false, false, true, false, true
+        ));
+        assert!(!should_use_gather_path(
+            false, false, false, true, false, true
+        ));
+    }
+
+    #[test]
+    fn exact_mm_ranges_keep_the_direct_prefix_path_causal() {
+        assert!(prefix_prefill_is_causal(true, false, true));
+        assert!(prefix_prefill_is_causal(true, true, false));
+        assert!(!prefix_prefill_is_causal(true, false, false));
+        assert!(!prefix_prefill_is_causal(false, true, true));
+    }
+
+    #[test]
+    fn full_mm_range_view_does_not_reuse_sliding_ranges() {
+        let regular = 7;
+        let selected = select_optional_view(true, None, Some(&regular));
+
+        assert_eq!(selected, None);
+        assert_eq!(
+            select_optional_view(false, Some(&11), Some(&regular)),
+            Some(&regular)
+        );
+    }
+
+    #[test]
+    fn noncausal_mm_context_requires_the_selected_cache_view() {
+        assert!(noncausal_mm_view_is_valid(false, false, false));
+        assert!(noncausal_mm_view_is_valid(true, true, true));
+        assert!(!noncausal_mm_view_is_valid(true, false, true));
+        assert!(!noncausal_mm_view_is_valid(true, true, false));
+    }
+
+    #[test]
+    fn packed_custom_mask_preserves_boundaries_and_mm_prefixes() {
+        let mask = packed_prefix_gather_causal_mask(
+            &[2, 3],
+            &[2, 3],
+            Some(&[vec![(0, 2)], vec![]]),
+            Some(2),
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+        assert_eq!(
+            mask[0],
+            vec![
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY
+            ]
+        );
+        assert_eq!(
+            mask[2],
+            vec![
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY
+            ]
+        );
+        assert_eq!(
+            mask[4],
+            vec![
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0
+            ]
+        );
+    }
+
+    #[test]
+    fn overlapping_mm_ranges_do_not_merge_attention_groups() {
+        let mask = packed_prefix_gather_causal_mask(
+            &[6],
+            &[6],
+            Some(&[vec![(0, 4), (2, 6)]]),
+            None,
+            DType::F32,
+            &Device::Cpu,
+        )
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+        assert_eq!(
+            mask[0],
+            vec![0.0, 0.0, 0.0, 0.0, f32::NEG_INFINITY, f32::NEG_INFINITY]
+        );
+        assert_eq!(mask[3], vec![0.0; 6]);
     }
 }

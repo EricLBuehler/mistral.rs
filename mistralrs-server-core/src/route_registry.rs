@@ -34,6 +34,12 @@ pub const COMPLETIONS_ROUTE: RouteInfo =
     RouteInfo::new("/v1/completions", "POST", RouteKind::OpenAi);
 pub const EMBEDDINGS_ROUTE: RouteInfo = RouteInfo::new("/v1/embeddings", "POST", RouteKind::OpenAi);
 pub const MODELS_ROUTE: RouteInfo = RouteInfo::new("/v1/models", "GET", RouteKind::OpenAi);
+pub const LOAD_LORA_ADAPTER_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/load_lora_adapter", "POST", RouteKind::MistralRs);
+pub const UNLOAD_LORA_ADAPTER_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/unload_lora_adapter", "POST", RouteKind::MistralRs);
+pub const LIST_LORA_ADAPTERS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/lora_adapters", "GET", RouteKind::MistralRs);
 pub const UNLOAD_MODEL_ROUTE: RouteInfo =
     RouteInfo::new("/v1/models/unload", "POST", RouteKind::MistralRs);
 pub const RELOAD_MODEL_ROUTE: RouteInfo =
@@ -111,6 +117,7 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     ROOT_ROUTE,
     HEALTH_ROUTE,
     MODELS_ROUTE,
+    LIST_LORA_ADAPTERS_ROUTE,
     UNLOAD_MODEL_ROUTE,
     RELOAD_MODEL_ROUTE,
     MODEL_STATUS_ROUTE,
@@ -140,6 +147,9 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     CALIBRATION_APPLY_ROUTE,
 ];
 
+pub const RUNTIME_LORA_API_ROUTES: &[RouteInfo] =
+    &[LOAD_LORA_ADAPTER_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE];
+
 #[cfg(feature = "swagger-ui")]
 pub const MISTRALRS_SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/api-doc/openapi.json", "GET", RouteKind::Docs),
@@ -147,3 +157,19 @@ pub const MISTRALRS_SWAGGER_ROUTES: &[RouteInfo] = &[
     RouteInfo::new("/docs/", "GET", RouteKind::Docs),
     RouteInfo::new("/docs/{*rest}", "GET", RouteKind::Docs),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_registry_matches_lora_route_visibility() {
+        assert!(MISTRALRS_API_ROUTES.contains(&LIST_LORA_ADAPTERS_ROUTE));
+        assert!(!MISTRALRS_API_ROUTES.contains(&LOAD_LORA_ADAPTER_ROUTE));
+        assert!(!MISTRALRS_API_ROUTES.contains(&UNLOAD_LORA_ADAPTER_ROUTE));
+        assert_eq!(
+            RUNTIME_LORA_API_ROUTES,
+            &[LOAD_LORA_ADAPTER_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE]
+        );
+    }
+}

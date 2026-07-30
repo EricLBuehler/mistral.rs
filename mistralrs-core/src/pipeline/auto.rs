@@ -9,7 +9,10 @@ use super::{
 };
 use crate::utils::progress::ProgressScopeGuard;
 use crate::Ordering;
-use crate::{DeviceMapSetting, IsqType, PagedAttentionConfig, Pipeline, TryIntoDType};
+use crate::{
+    DeviceMapSetting, IsqType, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig, Pipeline,
+    TryIntoDType,
+};
 use anyhow::Result;
 use candle_core::Device;
 use hf_hub::{
@@ -32,6 +35,7 @@ pub struct AutoLoader {
     embedding_builder: Mutex<Option<EmbeddingLoaderBuilder>>,
     loader: Mutex<Option<Box<dyn Loader>>>,
     hf_cache_path: Option<PathBuf>,
+    dynamic_lora_enabled: bool,
 }
 
 pub struct AutoLoaderBuilder {
@@ -46,7 +50,8 @@ pub struct AutoLoaderBuilder {
     xlora_model_id: Option<String>,
     xlora_order: Option<Ordering>,
     tgt_non_granular_index: Option<usize>,
-    lora_adapter_ids: Option<Vec<String>>,
+    lora_adapters: Option<Vec<LoraAdapterSpec>>,
+    lora_runtime_config: Option<LoraRuntimeConfig>,
     hf_cache_path: Option<PathBuf>,
 }
 
@@ -74,7 +79,8 @@ impl AutoLoaderBuilder {
             xlora_model_id: None,
             xlora_order: None,
             tgt_non_granular_index: None,
-            lora_adapter_ids: None,
+            lora_adapters: None,
+            lora_runtime_config: None,
             hf_cache_path: None,
         }
     }
@@ -93,8 +99,13 @@ impl AutoLoaderBuilder {
         self
     }
 
-    pub fn with_lora(mut self, adapters: Vec<String>) -> Self {
-        self.lora_adapter_ids = Some(adapters);
+    pub fn with_lora(
+        mut self,
+        adapters: Vec<LoraAdapterSpec>,
+        runtime_config: LoraRuntimeConfig,
+    ) -> Self {
+        self.lora_adapters = Some(adapters);
+        self.lora_runtime_config = Some(runtime_config);
         self
     }
 
@@ -116,7 +127,8 @@ impl AutoLoaderBuilder {
             xlora_model_id,
             xlora_order,
             tgt_non_granular_index,
-            lora_adapter_ids,
+            lora_adapters,
+            lora_runtime_config,
             hf_cache_path,
         } = self;
 
@@ -132,8 +144,9 @@ impl AutoLoaderBuilder {
             normal_builder =
                 normal_builder.with_xlora(id, ord, no_kv_cache, tgt_non_granular_index);
         }
-        if let Some(ref adapters) = lora_adapter_ids {
-            normal_builder = normal_builder.with_lora(adapters.clone());
+        if let (Some(adapters), Some(runtime_config)) = (lora_adapters.clone(), lora_runtime_config)
+        {
+            normal_builder = normal_builder.with_lora(adapters, runtime_config);
         }
         if let Some(ref path) = hf_cache_path {
             normal_builder = normal_builder.hf_cache_path(path.clone());
@@ -146,8 +159,9 @@ impl AutoLoaderBuilder {
             Some(model_id.clone()),
             jinja_explicit,
         );
-        if let Some(ref adapters) = lora_adapter_ids {
-            multimodal_builder = multimodal_builder.with_lora(adapters.clone());
+        if let (Some(adapters), Some(runtime_config)) = (lora_adapters.clone(), lora_runtime_config)
+        {
+            multimodal_builder = multimodal_builder.with_lora(adapters, runtime_config);
         }
         if let Some(ref path) = hf_cache_path {
             multimodal_builder = multimodal_builder.hf_cache_path(path.clone());
@@ -155,9 +169,6 @@ impl AutoLoaderBuilder {
 
         let mut embedding_builder =
             EmbeddingLoaderBuilder::new(embedding_cfg, tokenizer_json, Some(model_id.clone()));
-        if let Some(ref adapters) = lora_adapter_ids {
-            embedding_builder = embedding_builder.with_lora(adapters.clone());
-        }
         if let Some(ref path) = hf_cache_path {
             embedding_builder = embedding_builder.hf_cache_path(path.clone());
         }
@@ -169,6 +180,7 @@ impl AutoLoaderBuilder {
             embedding_builder: Mutex::new(Some(embedding_builder)),
             loader: Mutex::new(None),
             hf_cache_path,
+            dynamic_lora_enabled: lora_adapters.is_some(),
         })
     }
 }
@@ -192,6 +204,13 @@ enum Detected {
     Embedding(Option<EmbeddingLoaderType>),
     Diffusion(DiffusionLoaderType),
     Speech(crate::speech_models::SpeechLoaderType),
+}
+
+fn supports_dynamic_lora(detected: &Detected) -> bool {
+    matches!(
+        detected,
+        Detected::Normal(_) | Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe)
+    )
 }
 
 impl AutoLoader {
@@ -399,7 +418,13 @@ impl AutoLoader {
         if guard.is_some() {
             return Ok(());
         }
-        match self.detect(artifacts)? {
+        let detected = self.detect(artifacts)?;
+        if self.dynamic_lora_enabled && !supports_dynamic_lora(&detected) {
+            anyhow::bail!(
+                "dynamic LoRA is supported for text models and the Qwen3.5/3.6 MoE text submodel; vision-tower adapters and other multimodal architectures are not supported"
+            );
+        }
+        match detected {
             Detected::Normal(tp) => {
                 let builder = self
                     .normal_builder
@@ -407,7 +432,7 @@ impl AutoLoader {
                     .unwrap()
                     .take()
                     .expect("builder taken");
-                let loader = builder.build(Some(tp)).expect("build normal");
+                let loader = builder.build(Some(tp))?;
                 *guard = Some(loader);
             }
             Detected::Multimodal(tp) => {
@@ -522,5 +547,55 @@ impl Loader for AutoLoader {
             .as_ref()
             .map(|l| l.get_kind())
             .unwrap_or(ModelKind::Normal)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn detector() -> AutoLoader {
+        AutoLoader {
+            model_id: "Qwen/Qwen3.6-35B-A3B".to_string(),
+            normal_builder: Mutex::new(None),
+            multimodal_builder: Mutex::new(None),
+            embedding_builder: Mutex::new(None),
+            loader: Mutex::new(None),
+            hf_cache_path: None,
+            dynamic_lora_enabled: true,
+        }
+    }
+
+    #[test]
+    fn qwen3_5_moe_auto_detection_routes_dynamic_lora_to_multimodal() {
+        let detected = detector()
+            .detect(&ConfigArtifacts {
+                contents: Some(
+                    r#"{"architectures":["Qwen3_5MoeForConditionalGeneration"]}"#.to_string(),
+                ),
+                sentence_transformers_present: false,
+                repo_files: Vec::new(),
+                remote_access_issue: None,
+            })
+            .unwrap();
+
+        assert!(matches!(
+            detected,
+            Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe)
+        ));
+    }
+
+    #[test]
+    fn dynamic_lora_auto_detection_is_narrowly_gated() {
+        assert!(supports_dynamic_lora(&Detected::Normal(
+            NormalLoaderType::Qwen3Moe
+        )));
+        assert!(supports_dynamic_lora(&Detected::Multimodal(
+            MultimodalLoaderType::Qwen3_5Moe
+        )));
+        assert!(!supports_dynamic_lora(&Detected::Multimodal(
+            MultimodalLoaderType::Qwen3VLMoE
+        )));
+        assert!(!supports_dynamic_lora(&Detected::Embedding(None)));
     }
 }

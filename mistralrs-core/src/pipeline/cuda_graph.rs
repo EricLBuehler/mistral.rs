@@ -3,6 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
+#[cfg(target_family = "unix")]
+use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
         FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
@@ -17,6 +19,8 @@ use crate::pipeline::{
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
+// Matches the standard CUDA paged-attention V2 partition size.
+const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 
 pub(crate) struct CudaGraphHandle {
@@ -99,6 +103,8 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
+    max_context_len: Option<usize>,
+    full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
     state_key: Option<Vec<u32>>,
 }
@@ -160,7 +166,7 @@ impl CudaDecodeGraphKey {
     pub(crate) fn new(
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
-        _block_size: usize,
+        block_size: usize,
     ) -> candle_core::Result<Self> {
         let mut tensors = Vec::new();
         push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
@@ -266,6 +272,14 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
+            max_context_len: graph_context_len(
+                metadata.max_context_len,
+                bucket_context_len(metadata.block_tables.as_ref(), block_size),
+            ),
+            full_max_context_len: graph_context_len(
+                metadata.full_max_context_len,
+                bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
+            ),
             tensors,
             state_key: None,
         })
@@ -546,15 +560,22 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_context_lens_cpu: metadata.paged_context_lens_cpu.clone(),
             full_paged_context_lens_cpu: metadata.full_paged_context_lens_cpu.clone(),
             slot_mappings: tensor_map_from_var_map(&self.slot_mappings),
-            max_context_len: bucket_context_len_from_vars(&self.block_tables, block_size),
+            max_context_len: graph_context_len(
+                metadata.max_context_len,
+                bucket_context_len_from_vars(&self.block_tables, block_size),
+            ),
             full_block_tables: option_tensor_map_from_var_map(&self.full_block_tables),
             full_context_lens: option_tensor_map_from_var_map(&self.full_context_lens),
-            full_max_context_len: bucket_context_len_from_vars(&self.full_block_tables, block_size),
+            full_max_context_len: graph_context_len(
+                metadata.full_max_context_len,
+                bucket_context_len_from_vars(&self.full_block_tables, block_size),
+            ),
             is_first_prompt_chunk: metadata.is_first_prompt_chunk,
             is_final_prompt_chunk: metadata.is_final_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
+            full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
             prefill_head_dim: metadata.prefill_head_dim,
@@ -582,11 +603,12 @@ pub(crate) struct CudaDecodeGraphEntry {
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
+    suspended: bool,
 }
 
 impl CudaDecodeGraphState {
     pub(crate) fn disabled(&self) -> bool {
-        self.disabled
+        self.disabled || self.suspended
     }
 
     pub(crate) fn disable(&mut self) {
@@ -596,6 +618,16 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    pub(crate) fn suspend(&mut self) {
+        self.suspended = true;
+        self.clear();
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.suspended = false;
+        self.clear();
     }
 
     pub(crate) fn replay(
@@ -728,6 +760,32 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn cuda_decode_graph_supported_for_model(
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+) -> bool {
+    let Some(metadata) = model_metadata else {
+        return false;
+    };
+    #[cfg(target_family = "unix")]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !DecodePlan::requires_host_context_lengths(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                metadata.k_head_dim_for_layer(layer_idx),
+            )
+        })
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !matches!(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                AttentionBackendKind::FlashInfer
+            )
+        })
+    }
 }
 
 pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
@@ -978,6 +1036,29 @@ fn bucket_context_len_from_vars(map: &Option<CudaGraphVarMap>, block_size: usize
         .map(|blocks| blocks * block_size)
 }
 
+fn bucket_context_len(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    block_size: usize,
+) -> Option<usize> {
+    map.and_then(|map| map.values().next())
+        .and_then(|tensor| tensor.dims().last().copied())
+        .map(|blocks| blocks * block_size)
+}
+
+fn graph_context_len(actual: Option<usize>, capacity: Option<usize>) -> Option<usize> {
+    match (actual, capacity) {
+        (Some(actual), Some(capacity)) => Some(
+            actual
+                .div_ceil(PAGED_ATTENTION_PARTITION_SIZE)
+                .max(1)
+                .saturating_mul(PAGED_ATTENTION_PARTITION_SIZE)
+                .min(capacity),
+        ),
+        (Some(actual), None) => Some(actual),
+        (None, capacity) => capacity,
+    }
+}
+
 fn var_map_from_tensor_map(
     map: &HashMap<DeviceLocation, Tensor>,
 ) -> candle_core::Result<CudaGraphVarMap> {
@@ -1057,4 +1138,37 @@ fn copy_rope_positions(
         dst.set(&positions)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_context_len_tracks_paged_attention_partitions() {
+        assert_eq!(graph_context_len(Some(1), Some(2048)), Some(512));
+        assert_eq!(graph_context_len(Some(512), Some(2048)), Some(512));
+        assert_eq!(graph_context_len(Some(513), Some(2048)), Some(1024));
+        assert_eq!(graph_context_len(Some(1537), Some(2048)), Some(2048));
+    }
+
+    #[test]
+    fn graph_context_len_preserves_nonstandard_metadata() {
+        assert_eq!(graph_context_len(Some(513), None), Some(513));
+        assert_eq!(graph_context_len(None, Some(2048)), Some(2048));
+        assert_eq!(graph_context_len(None, None), None);
+    }
+
+    #[test]
+    fn graph_suspension_does_not_clear_permanent_disable() {
+        let mut state = CudaDecodeGraphState::default();
+        state.suspend();
+        assert!(state.disabled());
+        state.resume();
+        assert!(!state.disabled());
+        state.disable();
+        state.suspend();
+        state.resume();
+        assert!(state.disabled());
+    }
 }

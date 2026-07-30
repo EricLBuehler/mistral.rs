@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     softcap, ColumnParallelLayer, QuantMethod, RowParallelLayer, ShardedVarBuilder,
 };
@@ -11,9 +11,7 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, MlpLayer},
     attention::{AttentionMask, SdpaParams},
     device_map::DeviceMapper,
-    layers::{
-        embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, ScaledEmbedding, Sdpa,
-    },
+    layers::{embedding, Gemma3RotaryEmbedding, GemmaRmsNorm, Mlp, RotaryEmbedding, Sdpa},
     layers_masker::BidirectionalMasker,
     paged_attention::AttentionImplementation,
     pipeline::{
@@ -353,7 +351,9 @@ impl DecoderLayer {
 }
 
 pub struct EmbeddingGemma {
-    embed_tokens: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
+    dtype: DType,
     layers: Vec<DecoderLayer>,
     norm: GemmaRmsNorm,
     device: Device,
@@ -383,16 +383,15 @@ impl EmbeddingGemma {
         }
 
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb.dtype();
+        let embed_tokens_scale = (cfg.hidden_size as f64).sqrt();
 
-        let embed_tokens = ScaledEmbedding::new(
-            (cfg.hidden_size as f64).sqrt(),
-            embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                mapper.set_nm_device(vb.pp("embed_tokens"), false),
-                &cfg.quantization_config,
-            )?,
-        );
+        let embed_tokens = embedding(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            &cfg.quantization_config,
+        )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -466,6 +465,8 @@ impl EmbeddingGemma {
 
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale,
+            dtype,
             layers,
             norm,
             device: normal_loading_metadata.real_device,
@@ -476,7 +477,7 @@ impl EmbeddingGemma {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     pub fn forward_embeds(
