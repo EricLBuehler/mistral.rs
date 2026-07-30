@@ -1,10 +1,12 @@
 use std::{
     cell::RefCell,
-    fs::{self, File},
+    fs,
     io::{Cursor, Read},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+use cap_std::{ambient_authority, fs::Dir};
 use either::Either;
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
@@ -198,54 +200,145 @@ pub(crate) fn parse_embedding_response(response: Response) -> Result<Vec<f32>, S
     }
 }
 
-pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
+#[derive(Debug)]
+enum MediaSource {
+    Local(PathBuf),
+    Url(url::Url),
+}
+
+struct LocalMediaRoot {
+    dir: Dir,
+    path: PathBuf,
+}
+
+impl LocalMediaRoot {
+    fn current() -> std::io::Result<Self> {
+        // Capture the directory itself before asking the OS for its path.  The
+        // retained capability remains attached to this directory even if the
+        // cwd path is subsequently renamed or replaced.
+        let dir = Dir::open_ambient_dir(".", ambient_authority())?;
+        let path = std::env::current_dir()?;
+        Ok(Self { dir, path })
+    }
+}
+
+fn windows_drive_prefix(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+fn windows_drive_relative_path(source: &str) -> bool {
+    if !windows_drive_prefix(source) {
+        return false;
+    }
+    !matches!(source.as_bytes().get(2), Some(b'/' | b'\\'))
+}
+
+fn windows_unc_path(source: &str) -> bool {
+    source.starts_with("\\\\") || source.starts_with("//")
+}
+
+fn parse_media_source(source: &str) -> Result<MediaSource, String> {
+    // `url` treats `C:\\...` as a URL whose scheme is `c`. Recognize Windows
+    // paths first so the parser behaves consistently on every build host.
+    if windows_drive_relative_path(source) {
+        return Err(format!(
+            "Drive-relative local media path `{source}` is not allowed; use an absolute path such as `C:\\media\\file` or a path relative to the current working directory"
+        ));
+    }
+    if windows_drive_prefix(source) || windows_unc_path(source) {
+        return Ok(MediaSource::Local(PathBuf::from(source)));
+    }
+
+    match url::Url::parse(source) {
+        Ok(url) if url.scheme() == "file" => url
+            .to_file_path()
+            .map(MediaSource::Local)
+            .map_err(|_| format!("Could not parse file path: {url}")),
+        Ok(url) => Ok(MediaSource::Url(url)),
+        Err(_) => Ok(MediaSource::Local(PathBuf::from(source))),
+    }
+}
+
+fn read_local_media_file_from(root: &LocalMediaRoot, path: &Path) -> std::io::Result<Vec<u8>> {
+    let relative_path = if path.is_absolute() {
+        path.strip_prefix(&root.path).map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "local media sandbox denied `{}`: absolute paths must remain inside the current working directory `{}`",
+                    path.display(),
+                    root.path.display()
+                ),
             )
         })?
+    } else {
+        path
     };
 
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        // Read from http
-        match reqwest::blocking::get(url.clone()) {
-            Ok(http_resp) => http_resp.bytes()?.to_vec(),
-            Err(e) => return Err(PyApiErr::from(format!("{e}"))),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            // Read from local file
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
+    // Resolve and open the user-controlled path relative to one directory
+    // capability. This prevents `..` and symlink escapes without a
+    // check-then-open race.
+    let mut file = root.dir.open(relative_path).map_err(|source| {
+        let context = if matches!(
+            source.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::InvalidInput
+        ) {
+            "local media sandbox denied"
         } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
+            "could not open local media path"
+        };
+        std::io::Error::new(
+            source.kind(),
+            format!(
+                "{context} `{}` relative to current working directory `{}`: {source}",
+                path.display(),
+                root.path.display()
+            ),
+        )
+    })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_media_bytes_from(root: &LocalMediaRoot, source: &str) -> PyApiResult<Vec<u8>> {
+    match parse_media_source(source).map_err(PyApiErr::from)? {
+        MediaSource::Local(path) => read_local_media_file_from(root, &path).map_err(|e| {
+            PyApiErr::from(format!(
+                "Could not open local media path `{}`: {e}",
+                path.display()
+            ))
+        }),
+        MediaSource::Url(url) if url.scheme() == "http" || url.scheme() == "https" => {
+            reqwest::blocking::get(url)
+                .map_err(PyApiErr::from)?
+                .bytes()
+                .map(|bytes| bytes.to_vec())
+                .map_err(PyApiErr::from)
         }
-    } else if url.scheme() == "data" {
-        // Decode with base64
-        let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
-        data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
-    } else {
-        return Err(PyApiErr::from(format!(
+        MediaSource::Url(url) if url.scheme() == "data" => {
+            let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
+            data_url
+                .decode_to_vec()
+                .map(|(bytes, _)| bytes)
+                .map_err(|e| format!("{e}").into())
+        }
+        MediaSource::Url(url) => Err(PyApiErr::from(format!(
             "Unsupported URL scheme: {}",
             url.scheme()
-        )));
-    };
+        ))),
+    }
+}
+
+fn read_media_bytes(source: &str) -> PyApiResult<Vec<u8>> {
+    let root = LocalMediaRoot::current()
+        .map_err(|e| format!("Could not open current working directory sandbox: {e}"))?;
+    read_media_bytes_from(&root, source)
+}
+
+pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
+    let bytes = read_media_bytes(url_unparsed)?;
 
     image::load_from_memory(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
 }
@@ -253,53 +346,7 @@ pub(crate) fn parse_image_url(url_unparsed: &str) -> PyApiResult<DynamicImage> {
 /// Parses and loads an audio file from a URL, file path, or data URL.
 /// Mirrors `parse_image_url` but returns an `AudioInput`.
 pub(crate) fn parse_audio_url(url_unparsed: &str) -> PyApiResult<AudioInput> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
-            )
-        })?
-    };
-
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        match reqwest::blocking::get(url.clone()) {
-            Ok(http_resp) => http_resp
-                .bytes()
-                .map_err(|e| PyApiErr::from(format!("{e}")))?
-                .to_vec(),
-            Err(e) => return Err(PyApiErr::from(format!("{e}"))),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
-        } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
-        }
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
-        data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
-    } else {
-        return Err(PyApiErr::from(format!(
-            "Unsupported URL scheme: {}",
-            url.scheme()
-        )));
-    };
+    let bytes = read_media_bytes(url_unparsed)?;
 
     AudioInput::from_bytes(&bytes).map_err(|e| PyApiErr::from(format!("{e}")))
 }
@@ -313,53 +360,7 @@ const DEFAULT_FPS: f64 = 24.0;
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg on `$PATH`.
 pub(crate) fn parse_video_url(url_unparsed: &str) -> PyApiResult<VideoInput> {
-    let url = if let Ok(url) = url::Url::parse(url_unparsed) {
-        url
-    } else if File::open(url_unparsed).is_ok() {
-        url::Url::from_file_path(std::path::absolute(url_unparsed)?)
-            .map_err(|_| format!("Could not parse file path: {url_unparsed}"))?
-    } else {
-        url::Url::parse(url_unparsed).map_err(|_| {
-            format!(
-                "Invalid source '{}': not a valid URL (http/https/data) and file not found. \
-                 Use a full URL, a data URL, or a file path that exists.",
-                url_unparsed
-            )
-        })?
-    };
-
-    let bytes = if url.scheme() == "http" || url.scheme() == "https" {
-        match reqwest::blocking::get(url.clone()) {
-            Ok(http_resp) => http_resp
-                .bytes()
-                .map_err(|e| PyApiErr::from(format!("{e}")))?
-                .to_vec(),
-            Err(e) => return Err(PyApiErr::from(format!("{e}"))),
-        }
-    } else if url.scheme() == "file" {
-        let path = url
-            .to_file_path()
-            .map_err(|_| format!("Could not parse file path: {url}"))?;
-
-        if let Ok(mut f) = File::open(&path) {
-            let metadata = fs::metadata(&path)?;
-            let mut buffer = vec![0; metadata.len() as usize];
-            f.read_exact(&mut buffer)?;
-            buffer
-        } else {
-            return Err(PyApiErr::from(format!(
-                "Could not open file at path: {url}"
-            )));
-        }
-    } else if url.scheme() == "data" {
-        let data_url = data_url::DataUrl::process(url.as_str()).map_err(|e| format!("{e}"))?;
-        data_url.decode_to_vec().map_err(|e| format!("{e}"))?.0
-    } else {
-        return Err(PyApiErr::from(format!(
-            "Unsupported URL scheme: {}",
-            url.scheme()
-        )));
-    };
+    let bytes = read_media_bytes(url_unparsed)?;
 
     let lower = url_unparsed.to_lowercase();
     let is_gif = lower.ends_with(".gif")
@@ -566,5 +567,200 @@ fn parse_fps_fraction(s: &str) -> Option<f64> {
         }
     } else {
         s.parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod local_media_path_tests {
+    use super::*;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture {
+        base: PathBuf,
+        root: PathBuf,
+        outside_file: PathBuf,
+        sandbox: Option<LocalMediaRoot>,
+    }
+
+    impl Fixture {
+        fn new(name: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+            let base = std::env::temp_dir().join(format!(
+                "mistralrs-local-media-{name}-{}-{nonce}-{id}",
+                std::process::id()
+            ));
+            let root = base.join("root").join("a").join("b").join("c");
+            let outside = base.join("root").join("outside");
+            fs::create_dir_all(&root).unwrap();
+            fs::create_dir_all(&outside).unwrap();
+
+            fs::write(root.join("inside.bin"), b"inside").unwrap();
+            let outside_file = outside.join("outside.bin");
+            fs::write(&outside_file, b"outside").unwrap();
+
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&outside_file, root.join("escape.bin")).unwrap();
+
+            Self {
+                base,
+                sandbox: Some(LocalMediaRoot {
+                    dir: Dir::open_ambient_dir(&root, ambient_authority()).unwrap(),
+                    path: root.clone(),
+                }),
+                root,
+                outside_file,
+            }
+        }
+
+        fn read(&self, path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
+            read_local_media_file_from(self.sandbox.as_ref().unwrap(), path.as_ref())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            self.sandbox.take();
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn assert_denied(result: std::io::Result<Vec<u8>>) {
+        let error = result.expect_err("expected local media path to be denied");
+        assert!(
+            error.to_string().contains("local media sandbox denied"),
+            "denial should identify the cwd sandbox: {error}"
+        );
+    }
+
+    #[test]
+    fn blocks_absolute_path_outside_root() {
+        let fixture = Fixture::new("absolute-outside");
+        assert_denied(fixture.read(&fixture.outside_file));
+    }
+
+    #[test]
+    fn blocks_parent_traversal_outside_root() {
+        let fixture = Fixture::new("traversal");
+        assert_denied(fixture.read("../../../outside/outside.bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn blocks_symlink_escape_from_inside_root() {
+        let fixture = Fixture::new("symlink");
+        assert_denied(fixture.read("escape.bin"));
+    }
+
+    #[test]
+    fn allows_relative_path_inside_root() {
+        let fixture = Fixture::new("relative-inside");
+        assert_eq!(fixture.read("inside.bin").unwrap(), b"inside");
+    }
+
+    #[test]
+    fn allows_absolute_path_inside_root() {
+        let fixture = Fixture::new("absolute-inside");
+        assert_eq!(
+            fixture.read(fixture.root.join("inside.bin")).unwrap(),
+            b"inside"
+        );
+    }
+
+    #[test]
+    fn reads_relative_source_through_media_dispatch() {
+        let fixture = Fixture::new("media-dispatch");
+        assert_eq!(
+            read_media_bytes_from(fixture.sandbox.as_ref().unwrap(), "inside.bin").unwrap(),
+            b"inside"
+        );
+    }
+
+    #[test]
+    fn parses_file_url_as_a_local_path() {
+        let fixture = Fixture::new("file-url");
+        let url = url::Url::from_file_path(fixture.root.join("inside.bin")).unwrap();
+        let MediaSource::Local(path) = parse_media_source(url.as_str()).unwrap() else {
+            panic!("file URL must be handled as a local path");
+        };
+        assert_eq!(fixture.read(path).unwrap(), b"inside");
+    }
+
+    #[test]
+    fn blocks_file_url_outside_root() {
+        let fixture = Fixture::new("outside-file-url");
+        let url = url::Url::from_file_path(&fixture.outside_file).unwrap();
+        let MediaSource::Local(path) = parse_media_source(url.as_str()).unwrap() else {
+            panic!("file URL must be handled as a local path");
+        };
+        assert_denied(fixture.read(path));
+    }
+
+    #[test]
+    fn parses_remote_url_without_local_file_access() {
+        let MediaSource::Url(url) = parse_media_source("https://example.com/media.png").unwrap()
+        else {
+            panic!("remote URL must remain a URL");
+        };
+        assert_eq!(url.scheme(), "https");
+    }
+
+    #[test]
+    fn parses_windows_drive_absolute_paths_as_local() {
+        assert!(matches!(
+            parse_media_source(r"C:\media\image.png").unwrap(),
+            MediaSource::Local(_)
+        ));
+        assert!(matches!(
+            parse_media_source("D:/media/image.png").unwrap(),
+            MediaSource::Local(_)
+        ));
+    }
+
+    #[test]
+    fn parses_windows_unc_paths_as_local() {
+        assert!(matches!(
+            parse_media_source(r"\\server\share\image.png").unwrap(),
+            MediaSource::Local(_)
+        ));
+        assert!(matches!(
+            parse_media_source("//server/share/image.png").unwrap(),
+            MediaSource::Local(_)
+        ));
+    }
+
+    #[test]
+    fn rejects_windows_drive_relative_paths() {
+        for source in [r"C:image.png", "D:"] {
+            let error = parse_media_source(source).expect_err("drive-relative path must fail");
+            assert!(
+                error.contains("Drive-relative"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retained_capability_ignores_cwd_root_substitution() {
+        let fixture = Fixture::new("root-substitution");
+        let moved_root = fixture.base.join("original-root");
+
+        fs::rename(&fixture.root, &moved_root).unwrap();
+        fs::create_dir_all(&fixture.root).unwrap();
+        fs::write(fixture.root.join("inside.bin"), b"replacement").unwrap();
+
+        // The path now names an attacker-controlled replacement, but reads
+        // continue through the already-open directory capability.
+        assert_eq!(fixture.read("inside.bin").unwrap(), b"inside");
     }
 }
