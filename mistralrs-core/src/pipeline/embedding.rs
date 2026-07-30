@@ -3,9 +3,9 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, TokenSource,
+    get_model_paths, AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -17,7 +17,7 @@ use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::QuantizationConfigShim;
+use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
@@ -80,7 +80,6 @@ pub struct EmbeddingLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -108,7 +107,6 @@ pub struct EmbeddingLoaderBuilder {
     kind: ModelKind,
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -144,14 +142,6 @@ impl EmbeddingLoaderBuilder {
         self
     }
 
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
-        self.kind = ModelKind::Adapter {
-            adapter: AdapterKind::Lora,
-        };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
-        self
-    }
-
     pub(crate) fn with_load_context(mut self, load_context: EmbeddingLoadContext) -> Self {
         self.load_context = load_context;
         self
@@ -173,7 +163,6 @@ impl EmbeddingLoaderBuilder {
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapter_ids: self.lora_adapter_ids,
             load_context: self.load_context,
         })
     }
@@ -301,6 +290,7 @@ impl Loader for EmbeddingLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
+                    let quantization = AutoDeviceMapQuantization::uqff(reader);
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -311,6 +301,7 @@ impl Loader for EmbeddingLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -321,6 +312,8 @@ impl Loader for EmbeddingLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let weight_pack_factor = isq.pack_factor(dtype);
+                    let quantization =
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -331,6 +324,7 @@ impl Loader for EmbeddingLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -343,6 +337,11 @@ impl Loader for EmbeddingLoader {
                     // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                     let weight_pack_factor =
                         QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
+                    let quantization = self
+                        .config
+                        .topology
+                        .as_ref()
+                        .map(|topology| AutoDeviceMapQuantization::isq(None, Some(topology)));
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -353,6 +352,7 @@ impl Loader for EmbeddingLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        quantization.as_ref(),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -693,7 +693,12 @@ impl IsqPipelineMixin for EmbeddingPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
-        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
+        super::isq_flow::requantize_and_swap(
+            &self.tracked_modules,
+            dtype,
+            |module| module.default_type(dtype),
+            &|_| None,
+        )
     }
 
     fn begin_calibration(&mut self) -> Result<()> {

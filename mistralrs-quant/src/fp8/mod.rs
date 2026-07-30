@@ -91,6 +91,32 @@ impl FP8Linear {
             dtype,
         ))
     }
+
+    fn gather_quantized_rows(&self, ids: &Tensor) -> Result<Tensor> {
+        let weight = self.lin.weight();
+        let ids = ids.flatten_all()?;
+        if !weight.device().is_metal() {
+            return weight.index_select(&ids.to_device(weight.device())?, 0);
+        }
+
+        let ids = ids
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+
+        let row_count = weight.dim(0)?;
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = id as usize;
+            if id >= row_count {
+                candle_core::bail!("embedding index {id} is out of bounds for {row_count} rows");
+            }
+            let row = weight.narrow(0, id, 1)?.force_contiguous()?;
+            rows.push(crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?);
+        }
+        let rows = rows.iter().collect::<Vec<_>>();
+        Tensor::cat(&rows, 0)
+    }
 }
 
 impl QuantMethod for FP8Linear {
@@ -127,6 +153,21 @@ impl QuantMethod for FP8Linear {
     }
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
         Ok(self.dequantize(DType::F32)?.weight().clone())
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(self.lin.weight().dim(D::Minus1)?);
+        if ids.elem_count() == 0 && self.lin.weight().device().is_metal() {
+            let row = self.lin.weight().narrow(0, 0, 1)?.force_contiguous()?;
+            let row = crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?
+                .broadcast_mul(&self.dequant_w_scale)?;
+            return row.narrow(0, 0, 0)?.reshape(output_shape);
+        }
+        self.gather_quantized_rows(ids)?
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&self.dequant_w_scale)?
+            .reshape(output_shape)
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {

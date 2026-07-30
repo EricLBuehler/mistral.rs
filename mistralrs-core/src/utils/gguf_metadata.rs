@@ -277,6 +277,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         _config: &str,
         _dtype: DType,
         _weight_pack_factor: usize,
+        _quantization: Option<&crate::pipeline::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let size_in_bytes = match self.arch {

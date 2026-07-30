@@ -1,8 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind,
-    TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -164,7 +163,6 @@ pub struct GGUFLoader {
     tgt_non_granular_index: Option<usize>,
     config: GGUFSpecificConfig,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -278,7 +276,6 @@ impl GGUFLoaderBuilder {
             quantized_model_id: self.quantized_model_id,
             config: self.config,
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
         })
     }
 }
@@ -321,7 +318,6 @@ impl GGUFLoader {
             tgt_non_granular_index,
             config,
             jinja_explicit,
-            lora_adapter_ids: None,
         }
     }
 }
@@ -415,7 +411,7 @@ impl Loader for GGUFLoader {
             let layer_sizes_in_bytes =
                 model.layer_sizes_in_bytes("this is a dummy config!", dtype, 1, None)?;
             let non_mapped_size_in_bytes =
-                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1, None)?;
+                model.non_mapped_size_in_bytes("this is a dummy config!", dtype, 1, None, None)?;
             let total_model_size_in_bytes =
                 layer_sizes_in_bytes.iter().sum::<usize>() + non_mapped_size_in_bytes;
 
@@ -819,6 +815,14 @@ impl MetadataMixin for GGUFPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGUFPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        true
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -835,6 +839,7 @@ impl Pipeline for GGUFPipeline {
             flash_meta,
             flash_meta_full,
             recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {

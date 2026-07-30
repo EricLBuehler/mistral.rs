@@ -1,39 +1,110 @@
 ---
 title: LoRA and X-LoRA adapters
-description: Attach fine-tuned adapters to a base model without re-downloading the full weights.
+description: Preload, route, and hot-swap multiple LoRA adapters on one base model.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-LoRA (Low-Rank Adaptation) adapters add task-specific fine-tuning on top of a base model without modifying the base weights. X-LoRA loads several adapters at once and lets the model select among them per request.
+LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without modifying its weights. mistral.rs can keep multiple LoRA adapters loaded, select one independently for every request, and replace an adapter alias without interrupting in-flight requests. Dynamic LoRA supports text models. The CLI and server additionally support language-model adapters for Qwen3.5/3.6 MoE; vision-tower adapters are not supported.
 
-## Loading a LoRA
+X-LoRA is a separate adapter mode that mixes several adapters per token rather than selecting one adapter for a request.
 
-mistral.rs reads `adapter_config.json` from the LoRA repo for the targeted modules and rank. Pass multiple adapters as a semicolon-separated list.
+Raw GGUF/GGML LoRA remains supported through legacy mode, which requires `--legacy-lora` and `--legacy-lora-order`. X-LoRA remains supported through `--xlora` with `--xlora-order`. Neither mode supports dynamic per-request selection.
+
+:::caution[Current source API]
+This page documents the breaking dynamic LoRA API on the current source tree, which is newer than the published v0.9.0 CLI and Python packages and the crates.io Rust release. Until the next release, use a [current source build](/mistral.rs/developer/from-source/). If you are upgrading from mistral.rs 0.9.0 or older, see [the migration table](#migrating-from-mistralrs-090-and-older).
+:::
+
+| Mode | Configuration | Per-request behavior | Hot-swap |
+|---|---|---|---|
+| Dynamic LoRA | `--lora`, `Which.Lora`, `LoraModelBuilder` | Zero or one selected adapter | Yes |
+| Legacy raw GGUF/GGML LoRA | `--legacy-lora` with `--legacy-lora-order`, `Which.LoraGGUF`, `Which.LoraGGML` | One static adapter configuration | No |
+| X-LoRA | `--xlora` with `--xlora-order`, `Which.XLora` | Learned per-token mixture | No |
+
+## Legacy raw LoRA
+
+Use the ordering JSON published with the raw adapter when one is available. For a single adapter without a supplied file, the minimum shape is:
+
+```json
+{
+  "base_model_id": "org/base-model",
+  "order": ["adapter"]
+}
+```
+
+`base_model_id` must match the selected base model. Each `order` name must match the name used in that adapter's config and safetensors filenames. Preserve a publisher-provided `layers` mapping when present.
+
+## Enable and preload LoRA
+
+Give every preloaded adapter an explicit alias with `--lora ALIAS=SOURCE`. `SOURCE` can be a Hugging Face repository ID or local adapter directory. Repeat the option to preload more than one adapter:
+
+```bash
+mistralrs serve -m <base-model> \
+  --lora code=<code-lora-repo> \
+  --lora math=./math-adapter
+```
+
+The vLLM-compatible alias also accepts several modules after one option: `--lora-modules code=<code-lora-repo> math=./math-adapter`.
+
+Aliases are trimmed, case-sensitive, nonempty UTF-8 strings of at most 256 bytes.
+
+Preloading enables the dynamic LoRA runtime automatically. To start without an adapter and load one later, use `--enable-lora`:
+
+```bash
+mistralrs serve -m <base-model> --enable-lora
+```
+
+Remote adapters resolve from their own Hugging Face revision. `--lora ALIAS=SOURCE` uses `main`, regardless of the base model revision. Use `--lora-modules '{"name":"code","path":"org/adapter","revision":"<commit>"}'`, `LoraAdapter(alias=..., source=..., revision="...")` in Python, `LoraAdapterSpec::new(...).with_revision("...")` in Rust, or structured TOML to pin another branch, tag, pull request ref, or commit. A local adapter directory does not use the revision. The JSON form accepts vLLM's `base_model_name` as lineage metadata; it does not override or constrain `-m`, and model cards report the model actually selected by `-m`.
+
+`run` and `bench` use the base model unless `--adapter <alias>` selects a preloaded adapter. In interactive mode, `/adapter <alias>` changes the selection, `/adapter none` selects the base model, and `/adapter list` shows the available aliases. Use `/adapter use <alias>` when the alias itself is `none` or `list`.
+
+The runtime has three configurable admission limits:
+
+| CLI option | Default | Purpose |
+|---|---:|---|
+| `--lora-max-adapters` | 16 | Maximum loaded aliases and, independently, resident generations, including retired generations still used by in-flight requests. |
+| `--lora-max-rank` | 256 | Maximum accepted adapter rank. |
+| `--lora-max-bytes` | 8 GiB | Maximum memory used by loaded adapters. |
+
+`--lora-max-bytes` accepts raw bytes or `KB`, `MB`, `GB`, `KiB`, `MiB`, and `GiB` suffixes.
+
+An adapter that exceeds a limit is rejected. `--lora-max-bytes` applies only to adapters, not total model memory. Replacing an alias does not interrupt requests already using its previous generation, so leave enough capacity for both versions during a replacement.
+
+Python exposes the same limits as `Which.Lora(max_adapters=..., max_rank=..., max_bytes=...)`. Rust uses `LoraModelBuilder::with_runtime_config(LoraRuntimeConfig { ... })`.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-mistralrs run -m <base-model> --lora <lora-repo>
-```
-
-Multiple adapters:
-
-```bash
-mistralrs run -m <base-model> --lora "<lora-repo-1>;<lora-repo-2>"
+mistralrs run -m <base-model> \
+  --lora code=<code-lora-repo> \
+  --adapter code
 ```
 
 </TabItem>
 <TabItem label="Python">
 
 ```python
-from mistralrs import Runner, Which
+from mistralrs import ChatCompletionRequest, LoraAdapter, Runner, Which
 
 runner = Runner(
     which=Which.Lora(
         model_id="<base-model>",
-        adapter_model_ids=["<lora-repo-1>", "<lora-repo-2>"],
+        adapters=[
+            LoraAdapter(
+                alias="code",
+                source="<code-lora-repo>",
+                revision="<adapter-revision>",
+            )
+        ],
+    )
+)
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        adapter="code",
+        messages=[{"role": "user", "content": "Write a binary search."}],
     )
 )
 ```
@@ -42,24 +113,332 @@ runner = Runner(
 <TabItem label="Rust">
 
 ```rust
-use mistralrs::{LoraModelBuilder, TextModelBuilder};
+use mistralrs::{LoraModelBuilder, RequestBuilder, TextMessageRole, TextModelBuilder};
 
 let model = LoraModelBuilder::from_text_model_builder(
     TextModelBuilder::new("<base-model>"),
-    vec!["<lora-repo-1>", "<lora-repo-2>"],
 )
+.with_adapter_revision("code", "<code-lora-repo>", "<adapter-revision>")
 .build()
 .await?;
+
+let response = model
+    .send_chat_request(
+        RequestBuilder::new()
+            .set_adapter("code")
+            .add_message(TextMessageRole::User, "Write a binary search."),
+    )
+    .await?;
 ```
 
 </TabItem>
 </Tabs>
 
-Full examples: [lora-zephyr](/mistral.rs/examples/python/lora-zephyr/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust).
+## Routed MoE adapters
+
+Dynamic LoRA supports compatible adapters for the routed experts of selected text MoE models. They use the same aliases, per-request selection, preload limits, and hot-load API as dense LoRA.
+
+```bash
+mistralrs serve -m Qwen/Qwen3-30B-A3B \
+  --lora domain=<moe-lora-repo>
+```
+
+Routed expert LoRA is wired for these text model families:
+
+- DeepSeek V2, DeepSeek V3, and DeepSeek R1
+- GLM-4.7 and GLM-4.7-Flash
+- GPT-OSS
+- Hunyuan MoE
+- LFM2 and LFM2.5 MoE
+- Mixtral
+- Phi-3.5-MoE
+- Qwen3 MoE
+- Qwen3-Next and Qwen3-Coder-Next
+- Qwen3.5 and Qwen3.6 MoE through the CLI and server, language model only
+
+This list is narrower than general MoE model support. Granite MoE and multimodal MoE pipelines other than Qwen3.5/3.6 MoE are not supported. AnyMoE cannot be combined with dynamic per-request LoRA. Tensor parallelism supports preloaded adapters.
+
+Qwen3.5/3.6 text, image, and video requests may select a language-model adapter. Vision-tower adapters are not supported.
+
+For example, this starts Qwen3.6 MoE with a public compatible adapter:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.6-35B-A3B \
+  --lora domain=jeeejeee/qwen36-35ba3b-moe-all-linear-poken-lora
+```
+
+Use the default `auto` model selection for Qwen3.5/3.6 MoE LoRA. Image options such as `--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is enabled; the explicit `multimodal` model type does not accept adapters. This support is currently available through the CLI and server only, not Rust `LoraModelBuilder` or Python `Which.Lora`.
+
+## Select an adapter per request
+
+Loaded aliases appear as model cards in `GET /v1/models`, so vLLM-style clients can select an adapter through `model`:
+
+```bash
+curl http://localhost:1234/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "code",
+    "messages": [{"role":"user","content":"Write a binary search."}]
+  }'
+```
+
+The adapter model card identifies its base model through `parent`, exposes its current immutable `adapter_generation`, and uses the public adapter alias in `root` rather than a local filesystem path. The explicit mistral.rs `adapter` extension is useful when model and adapter routing should remain separate, especially in a multi-model server:
+
+```json
+{
+  "model": "default",
+  "adapter": "code",
+  "messages": [{"role": "user", "content": "Write a binary search."}]
+}
+```
+
+Use the stable qualified adapter card ID returned by `GET /v1/models`, such as `<base-model>::code`. A unique short alias such as `code` is also accepted for vLLM-style requests, but becomes ambiguous if another base model loads the same alias. Base model IDs take precedence. A request cannot select an adapter model in `model` and also send `adapter`.
+
+Inference responses preserve the request-facing `model` value in both streaming and non-streaming modes. When the explicit `adapter` field is used with a base model, `model` remains the base model and `adapter_generation` identifies the selected adapter.
+
+Chat Completions, Completions, and Responses accept either form. For `adapter`, pass an alias string, pass `{"generation":"<generation-id>"}` to require one exact resident generation, or omit the field to use the base model.
+
+Each request keeps the adapter generation it started with, so replacing or unloading the alias cannot change an in-flight sequence.
+
+Chat Completions and Completions expose the resolved `adapter_generation` on non-streaming responses and streaming chunks. A completed Responses resource exposes the same field. Capture it and send `{"generation":"<adapter_generation>"}` on a retry. To guarantee the generation even if the original request fails before returning metadata, read it from load or list first and use exact selection on the original request too. Exact selection fails after that generation is no longer resident.
+
+Sending `adapter` to a model without a dynamic LoRA runtime returns an error. An unknown alias is never silently treated as the base model.
+
+## Hot-load, list, and unload
+
+The Rust and Python SDKs can load an adapter directory while a single-process model is serving requests. The directory must contain `adapter_config.json` and one `adapter_model.safetensors` file. The adapter must target the loaded base model; mistral.rs checks compatibility but cannot prove that an adapter was trained from the correct base weights.
+
+Python lifecycle failures raise `LoraAdapterError`, a `ValueError` subclass with a stable `code` attribute. Core lifecycle failures share their codes with HTTP, so callers can branch on `error.code` without parsing message text. Python reports a malformed generation argument as `invalid_lora_generation`; HTTP rejects the same malformed JSON field as `invalid_request_body`.
+
+For an initially empty SDK runtime, build Rust's `LoraModelBuilder` without calling `with_adapter`, or use Python's `Which.Lora(model_id="<base-model>")`.
+
+<Tabs>
+<TabItem label="Python">
+
+```python
+loaded = runner.load_lora_adapter("production", "./production-adapter")
+status = runner.lora_adapter_status()
+print(loaded.alias, loaded.generation)
+print(status.resident_generations, status.resident_bytes)
+runner.unload_lora_adapter("production")
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::LoraAdapterLoadPolicy;
+
+let loaded = model
+    .load_lora_adapter("production", "./production-adapter")
+    .await?;
+
+let status = model.lora_adapter_status().await?;
+for adapter in status.adapters {
+    println!("{} {}", adapter.alias, adapter.generation);
+}
+println!("{} bytes resident", status.resident_bytes);
+
+let replaced = model
+    .load_lora_adapter_with_policy(
+        "production",
+        "./production-adapter-v2",
+        LoraAdapterLoadPolicy::CompareAndSwap(loaded.generation),
+    )
+    .await?;
+
+model
+    .unload_lora_adapter_if_generation("production", replaced.generation)
+    .await?;
+```
+
+</TabItem>
+<TabItem label="HTTP">
+
+```bash
+curl http://localhost:1234/v1/load_lora_adapter \
+  -H 'Content-Type: application/json' \
+  -d '{"lora_name":"production","lora_path":"/srv/adapters/production"}'
+
+curl http://localhost:1234/v1/lora_adapters
+
+curl http://localhost:1234/v1/unload_lora_adapter \
+  -H 'Content-Type: application/json' \
+  -d '{"lora_name":"production"}'
+```
+
+</TabItem>
+</Tabs>
+
+`GET /v1/lora_adapters` is always registered, including when runtime mutation is disabled. It reports loaded adapters, generation IDs, capacity, and configured limits for a model started with dynamic LoRA. A model without that runtime returns 409 with `lora_runtime_unavailable`. Source paths are included only while mutation is enabled. In a multi-model server, pass `model` in load and unload request bodies and `?model=<model-id>` when listing.
+
+Loading a new alias does not need `load_inplace`. To replace an existing alias, set `load_inplace` to `true`. Use `expected_generation` to make the swap compare-and-set rather than overwriting a generation that changed after it was inspected:
+
+```bash
+curl http://localhost:1234/v1/load_lora_adapter \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "lora_name": "production",
+    "lora_path": "/srv/adapters/production-v2",
+    "load_inplace": true,
+    "expected_generation": "<current-generation>"
+  }'
+```
+
+If the expected generation no longer matches, the request returns 409 and leaves the alias unchanged. Invalid files, capacity failures, and load failures also leave the previous alias in place.
+
+Unloading accepts the same optional compare-and-set guard:
+
+```bash
+curl http://localhost:1234/v1/unload_lora_adapter \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "lora_name": "production",
+    "expected_generation": "<current-generation>"
+  }'
+```
+
+A mismatch returns 409 without removing the newer alias. A successful unload prevents new requests from selecting the alias but does not interrupt requests already using it.
+
+Loads are serialized and non-queueing. A concurrent HTTP load returns 429 with code `lora_load_busy`; retry it with bounded backoff and jitter. A load can complete after the client disconnects, so query the list endpoint after a timeout. Repeating the default create request may return `lora_adapter_already_loaded` if the first request succeeded; treat the listed generation as authoritative. Replacing an alias with identical files returns the same generation.
+
+Tensor-parallel deployments support preloaded adapters but not live load or unload operations.
+
+### Enable HTTP mutation
+
+The read-only list route does not require mutation to be enabled. Runtime load and unload are available only when `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` is enabled. `MISTRALRS_LORA_ADAPTER_ROOT` restricts `lora_path` to a canonical directory tree:
+
+```bash
+MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING=1 \
+MISTRALRS_LORA_ADAPTER_ROOT=/srv/adapters \
+mistralrs serve -m <base-model> --enable-lora
+```
+
+:::caution[Runtime loading reads local files]
+The load endpoint reads paths from the server filesystem and consumes server memory. Set `MISTRALRS_LORA_ADAPTER_ROOT` in production and place authentication or an authenticated reverse proxy in front of load and unload. Relative `lora_path` values resolve beneath that root; without a root they resolve from the server working directory. The root, its ancestors, and its adapter directories must be operator-owned and not writable by API clients or other untrusted local users. Publish each complete adapter atomically at a new, content-versioned directory path, then leave that directory and its files unchanged while it may be loaded. Do not replace a selected directory path or modify its config or weights in place. Without an adapter root, an authorized client can request any readable adapter directory. Symlinks that resolve outside the configured root are rejected.
+:::
+
+## Production rollout and recovery
+
+A safe alias rollout is:
+
+1. Publish the new config and weights together at a new immutable directory path.
+2. Load that directory under a canary alias and test it through the normal inference API.
+3. Read the production alias generation from `GET /v1/lora_adapters`.
+4. Load the tested files under the production alias with `load_inplace: true` and that value as `expected_generation`.
+5. Retain the previous files or a rollback alias until old requests have drained.
+6. Unload temporary aliases and confirm `retired_generations` returns to zero.
+
+Runtime-loaded aliases do not survive a server restart or model reload; put required startup aliases in CLI, TOML, Python, or Rust preload configuration. `resident_bytes` covers adapters only, so leave additional memory headroom for the model and serving workload. Tensor-parallel deployments can preload adapters but cannot mutate them live.
+
+## Support matrix
+
+| Area | Support |
+|---|---|
+| Model category | Text models. The CLI and server also support language-model adapters for Qwen3.5/3.6 MoE. Rust `LoraModelBuilder` and Python `Which.Lora` do not support these models. Vision-tower adapters are unsupported. |
+| Request APIs | Chat Completions, Completions, and Responses. Qwen3.5/3.6 MoE image and video requests may select a text-submodel adapter. Not Embeddings, Anthropic Messages, other multimodal families, diffusion, or speech requests. |
+| Adapter files | PEFT `adapter_config.json` and one `adapter_model.safetensors` file. Pickle `.bin`, sharded adapter files, adapter tokenizers, and added vocabulary are not supported. |
+| Adapter formats | Standard LoRA and RS-LoRA, including compatible routed expert adapters. PEFT `rank_pattern`, `alpha_pattern`, `target_modules`, `target_parameters`, and `exclude_modules` are supported where applicable. |
+| Base weights | Plain and supported prequantized safetensors, in-situ quantization, and UQFF. |
+| CUDA | Ordinary and routed expert LoRA are supported. |
+| Metal and CPU | Ordinary and routed expert LoRA are supported. |
+| Tensor parallelism | Preloading is supported; live load and unload are not. |
+| Raw GGUF/GGML | Uses the legacy `--legacy-lora` path; per-request selection and hot-loading are unavailable. |
+| Speculative decoding | Dynamic LoRA attachment is not supported. |
+| Unsupported adapter variants | DoRA, aLoRA, QALoRA, BD-LoRA, Arrow, MonteCLoRA, adapter bias, `modules_to_save`, layer replication, non-expert `target_parameters`, weight tying, trainable-token indices, Megatron configuration, and adapters that modify embeddings or the output head. |
+| Base-transforming initializers | Configurations retaining `pissa`, `pissa_niter_*`, `olora`, `corda`, `loftq`, or `lora_ga` in `init_lora_weights` are rejected. Convert the result to an ordinary LoRA adapter for the original base before loading it. |
+
+Unsupported adapter contents are rejected rather than partially loaded.
+
+The default rank admission limit is 256. Change it with `--lora-max-rank`. Base and adapter requests can be served together.
+
+Use the same preload and benchmark shape to measure isolated adapter overhead against the base model:
+
+```bash
+mistralrs bench -m <base-model> --lora code=<adapter-repo> \
+  --prompt-len 128,512 --gen-len 128 --iterations 5
+mistralrs bench -m <base-model> --lora code=<adapter-repo> --adapter code \
+  --prompt-len 128,512 --gen-len 128 --iterations 5
+```
+
+The CLI benchmark reports TTFT and TPOT for one sequence. Its numbers do not characterize mixed-adapter server batching. Measure production workloads through the HTTP server with the same model, adapter ranks, prompt/decode lengths, concurrency, and sampling settings when comparing against another runtime.
+
+Full examples: [lora](/mistral.rs/examples/python/lora/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust), and [adapter-chat](/mistral.rs/examples/server/adapter-chat/) (HTTP).
+
+## Migrating from mistral.rs 0.9.0 and older
+
+Dynamic LoRA replaces the ordinary-LoRA API from mistral.rs 0.9.0 and older. The previous path loaded one or more adapters as one static stack; the current path assigns every adapter an alias and selects zero or one adapter for each request.
+
+| mistral.rs 0.9.0 and older | Current API |
+|---|---|
+| Plain/safetensors `--lora "repo-a;repo-b"` | Repeat `--lora alias=repo` and select one alias with `--adapter`, the request `adapter` field, or an adapter model ID. |
+| Raw GGUF/GGML `--lora <source>` | Use `--legacy-lora <source> --legacy-lora-order <ordering-file.json>`. The [ordering JSON](#legacy-raw-lora) is now required. Dynamic per-request selection is not available for raw adapters. |
+| Plain/safetensors TOML `lora = "repo"` | Use the structured `adapter.lora` list shown in the [TOML reference](/mistral.rs/reference/cli-toml-config/). |
+| Raw GGUF/GGML TOML LoRA fields | Use `legacy_lora` with `legacy_lora_order` under `[models.adapter]`. |
+| Python `Which.Lora(adapter_model_ids, model_id=...)` | `Which.Lora(model_id, adapters=[LoraAdapter(alias=..., source=...)])`. |
+| Rust `LoraModelBuilder::from_text_model_builder(builder, adapter_ids)` | Start with `LoraModelBuilder::from_text_model_builder(builder)`, then call `with_adapter` or `with_adapter_revision`. |
+| Rust `RequestBuilder::set_adapters(names)` | Use `set_adapter(alias)` for one dynamic adapter. |
+
+There is no direct dynamic-LoRA replacement for composing several ordinary adapters in one request. Use X-LoRA to mix adapters per token, or serve separately merged adapter weights when the intended composition is fixed.
+
+## Migrating from vLLM
+
+The lifecycle endpoint names and core `lora_name`/`lora_path` fields match vLLM, but response bodies, error envelopes, status codes, and extension fields are not wire-compatible. Regenerate or adapt clients instead of treating the lifecycle API as a drop-in replacement. The main mappings are:
+
+| vLLM | mistral.rs |
+|---|---|
+| `vllm serve BASE --enable-lora --lora-modules code=SOURCE` | `mistralrs serve -m BASE --lora-modules code=SOURCE`; `--lora` is the canonical spelling |
+| `--enable-lora` with no preload | `--enable-lora` |
+| `--max-lora-rank N` | Same spelling is accepted; `--lora-max-rank` is canonical |
+| `VLLM_ALLOW_RUNTIME_LORA_UPDATING=True` | `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING=1` |
+| Request with `"model":"code"` | A unique short alias works. For unambiguous routing, use the qualified model ID returned by `GET /v1/models`. |
+| `load_inplace: true` | Same; add `expected_generation` for compare-and-set safety |
+| Adapter discovery through `/v1/models` | `/v1/models` model cards plus detailed `GET /v1/lora_adapters` status |
+| `--max-loras` | No direct equivalent: it limits active adapters per vLLM batch, while `--lora-max-adapters` bounds resident generations and aliases |
+| `--max-cpu-loras` | No equivalent; use `--lora-max-bytes` to limit loaded adapters |
+| LoRA resolver plugins | No equivalent; use explicit remote preloads or the local-filesystem lifecycle endpoint |
+| `--lora-dtype` | No equivalent; LoRA uses the model execution dtype. |
+| `--fully-sharded-loras` | No equivalent. |
+| `--api-key` protection for mutation routes | No direct equivalent; use an authenticated reverse proxy. |
+| Adapter tokenizer or extra vocabulary | Unsupported; requests use the base tokenizer and vocabulary |
+| Multimodal LoRA | Through the CLI and server, Qwen3.5/3.6 MoE supports language-model LoRA on text, image, and video requests. The Rust `LoraModelBuilder` and Python `Which.Lora` do not support these models. Vision-tower LoRA and all other multimodal families are unsupported. |
+| Live updates with tensor parallelism | Preload adapters instead; runtime load and unload are unavailable |
+
+The explicit `adapter` request field is optional when an alias is used as `model`. Use it for exact-generation selection or to keep base-model and adapter routing separate.
+
+## Troubleshooting
+
+Common HTTP lifecycle errors use a stable `error.code`:
+
+| Code | Recovery |
+|---|---|
+| `lora_load_busy` | Retry with bounded exponential backoff and jitter. |
+| `lora_runtime_unavailable` | Target a model with a dynamic LoRA runtime. For `mistralrs serve`, use a preload or `--enable-lora`; also check tensor-parallel restrictions. |
+| `invalid_lora_name` | Send a nonempty alias no longer than 256 bytes. |
+| `lora_adapter_already_loaded` | Inspect the current generation, then retry with `load_inplace: true` if replacement is intended. |
+| `lora_adapter_not_found` | Refresh `/v1/lora_adapters`; an exact generation may already have left residency. |
+| `lora_generation_mismatch` | Refresh the alias generation and decide whether the newer version should be replaced or removed. |
+| `lora_generation_conflict` | Refresh status before retrying. |
+| `lora_rank_limit_exceeded` | Raise the admission limit or use a lower-rank adapter. |
+| `lora_alias_limit_exceeded` | Unload an unused alias. |
+| `lora_adapter_limit_exceeded` | Unload unused aliases or wait for retired in-flight generations to drain. |
+| `lora_byte_limit_exceeded` | Free adapter capacity or raise the limit only when device headroom permits. |
+| `lora_adapter_file_too_large` | Use a smaller adapter file. If you lowered `--lora-max-bytes`, raise it only when device headroom permits. |
+| `request_body_too_large` | Reduce the JSON request size. Embedded servers can raise their body limit for trusted clients. |
+| `invalid_lora_adapter` | Check the PEFT format, supported features, and base-model compatibility. |
+| `invalid_lora_load_policy` | Send `expected_generation` only together with `load_inplace: true`. |
+| `adapter_path_forbidden` or `adapter_file_forbidden` | Move the immutable directory below `MISTRALRS_LORA_ADAPTER_ROOT` and fix its permissions. |
+| `adapter_path_not_found`, `adapter_file_not_found`, `invalid_adapter_path`, `invalid_adapter_file`, or `model_not_found` | Correct the path or model ID before retrying. |
+| `malformed_json`, `invalid_request_body`, `invalid_content_type`, or `invalid_query` | Correct the request encoding before retrying. |
+| `adapter_storage_unavailable`, `lora_storage_unavailable`, or `lora_device_load_failed` | Recover storage or device capacity before retrying. |
+
+Python uses `invalid_lora_generation` when `expected_generation` is not a value returned by load, list, or inference. Pass generation values exactly as returned.
 
 ## X-LoRA
 
-X-LoRA loads multiple adapters with a learned scaling head that selects per-token weighting. The ordering file maps adapters to the scaler's output positions.
+X-LoRA mixes multiple adapters per token. It does not support the per-request selection or hot-loading APIs above.
+
+The ordering file defines the adapter order.
 
 <Tabs>
 <TabItem label="CLI">
@@ -71,11 +450,7 @@ mistralrs run \
   --xlora-order <ordering-file.json>
 ```
 
-Flag rules:
-
-- `--xlora` conflicts with `--lora`.
-- `--xlora-order` and `--tgt-non-granular-index` are only valid alongside `--xlora`.
-- `--tgt-non-granular-index <n>` controls how often the X-LoRA scaler recomputes. Without it, the scaler recomputes every token.
+`--xlora` and `--xlora-order` must be provided together. They conflict with dynamic LoRA and legacy raw GGUF/GGML LoRA. `--tgt-non-granular-index <n>` controls X-LoRA update granularity.
 
 </TabItem>
 <TabItem label="Python">
@@ -88,7 +463,6 @@ runner = Runner(
         model_id="<base-model>",
         xlora_model_id="<xlora-repo>",
         order="<ordering-file.json>",
-        # tgt_non_granular_index=...,
     )
 )
 ```
@@ -98,7 +472,7 @@ runner = Runner(
 
 ```rust
 use std::fs::File;
-use mistralrs::{XLoraModelBuilder, TextModelBuilder};
+use mistralrs::{TextModelBuilder, XLoraModelBuilder};
 
 let model = XLoraModelBuilder::from_text_model_builder(
     TextModelBuilder::new("<base-model>"),
@@ -116,10 +490,11 @@ Full examples: [xlora-zephyr](/mistral.rs/examples/python/xlora-zephyr/) (Python
 
 ## AnyMoE
 
-AnyMoE goes a step further than adapters: it composes several fine-tunes of the same base model into a MoE (Mixture of Experts) configuration at inference time, training only a small per-layer router.
+AnyMoE composes several compatible fine-tunes of the same base model into a MoE (Mixture of Experts) configuration.
 
 - It is exposed through the Rust SDK (`AnyMoeModelBuilder`) and the Python SDK (`AnyMoeConfig`, `AnyMoeExpertType`); it is not configurable via the CLI.
 - Expert checkpoints must share the base model architecture, and a small JSON calibration dataset is required to train the router.
-- The `AnyMoeConfig` docstrings in the [AnyMoE Python reference](/mistral.rs/reference/python/anymoe/) cover finding the `prefix`/`mlp` values from a model's `model.safetensors.index.json`.
+- Dynamic per-request LoRA cannot wrap an AnyMoE pipeline. LoRA-backed AnyMoE experts remain supported through the AnyMoE expert configuration.
+- See the [AnyMoE Python reference](/mistral.rs/reference/python/anymoe/) for configuration fields.
 
 Full examples: [anymoe](/mistral.rs/examples/python/anymoe/) (Python), [anymoe](/mistral.rs/examples/rust/advanced/anymoe/) and [anymoe-lora](/mistral.rs/examples/rust/advanced/anymoe-lora/) (Rust).

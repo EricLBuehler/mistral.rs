@@ -402,6 +402,7 @@ pub fn causal_conv1d_metal(
 
         let (x_buf, x_off) = metal_buffer_and_offset(&x)?;
         let (w_buf, w_off) = metal_buffer_and_offset(&weight)?;
+        let (prior_buf, prior_off) = metal_buffer_and_offset(&conv_state)?;
         let (out_buf, out_off) = metal_buffer_and_offset(&output)?;
 
         {
@@ -411,16 +412,17 @@ pub fn causal_conv1d_metal(
 
             encoder.set_input_buffer(0, Some(&x_buf), x_off);
             encoder.set_input_buffer(1, Some(&w_buf), w_off);
-            encoder.set_output_buffer(2, Some(&out_buf), out_off);
+            encoder.set_input_buffer(2, Some(&prior_buf), prior_off);
+            encoder.set_output_buffer(3, Some(&out_buf), out_off);
 
             let bs = batch_size as i32;
             let cd = conv_dim as i32;
             let sl = seq_len as i32;
             let ks = kernel_size as i32;
-            encoder.set_bytes(3, &bs);
-            encoder.set_bytes(4, &cd);
-            encoder.set_bytes(5, &sl);
-            encoder.set_bytes(6, &ks);
+            encoder.set_bytes(4, &bs);
+            encoder.set_bytes(5, &cd);
+            encoder.set_bytes(6, &sl);
+            encoder.set_bytes(7, &ks);
 
             let thread_groups = MTLSize {
                 width: conv_dim.div_ceil(256),
@@ -448,16 +450,17 @@ pub fn causal_conv1d_metal(
             encoder.set_compute_pipeline_state(&save_pipeline);
 
             encoder.set_input_buffer(0, Some(&x_buf), x_off);
-            encoder.set_output_buffer(1, Some(&cs_buf), cs_off);
+            encoder.set_input_buffer(1, Some(&prior_buf), prior_off);
+            encoder.set_output_buffer(2, Some(&cs_buf), cs_off);
 
             let bs = batch_size as i32;
             let cd = conv_dim as i32;
             let sl = seq_len as i32;
             let ks = kernel_size as i32;
-            encoder.set_bytes(2, &bs);
-            encoder.set_bytes(3, &cd);
-            encoder.set_bytes(4, &sl);
-            encoder.set_bytes(5, &ks);
+            encoder.set_bytes(3, &bs);
+            encoder.set_bytes(4, &cd);
+            encoder.set_bytes(5, &sl);
+            encoder.set_bytes(6, &ks);
 
             let thread_groups = MTLSize {
                 width: conv_dim.div_ceil(256),

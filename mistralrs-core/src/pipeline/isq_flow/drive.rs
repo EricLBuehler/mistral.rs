@@ -163,6 +163,7 @@ pub(crate) fn resolve_imatrix_map(
                 ctx.mapper,
                 None,
                 drive.sliding_window(),
+                false,
             )?;
             drive.calibration_forward(&inputs)?;
             drive.reset_cache();

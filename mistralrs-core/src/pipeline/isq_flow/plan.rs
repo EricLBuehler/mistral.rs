@@ -9,6 +9,23 @@ use crate::{device_map::DeviceMapper, TryIntoDType};
 
 use super::super::isq::{format_isq_types, IsqModelLoader, IsqOrganization};
 
+fn resolve_isq_predicates(
+    loader: &dyn IsqModelLoader,
+    config: &str,
+    organization: IsqOrganization,
+) -> Result<(Vec<regex::Regex>, Vec<regex::Regex>)> {
+    let promoted = loader.promoted_isq_predicates(config)?;
+    let mut selected = if matches!(organization, IsqOrganization::MoeExpertsOnly) {
+        loader.immediate_isq_predicates_moqe(config)?
+    } else {
+        loader.immediate_isq_predicates(config)?
+    };
+    if !matches!(organization, IsqOrganization::MoeExpertsOnly) {
+        selected.extend(promoted.iter().cloned());
+    }
+    Ok((selected, promoted))
+}
+
 pub(crate) struct IsqPlanInputs<'a> {
     pub in_situ_quant: Option<IsqType>,
     pub has_imatrix: bool,
@@ -80,6 +97,8 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
     } else {
         None
     };
+    let (immediate_predicates, promoted_predicates) =
+        resolve_isq_predicates(i.loader, i.config, i.organization)?;
 
     let mut immediate_ty = None;
     if allow_immediate_cli {
@@ -88,15 +107,15 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         } else {
             i.in_situ_quant
         };
-        let immediate_predicates = if matches!(i.organization, IsqOrganization::MoeExpertsOnly) {
-            i.loader.immediate_isq_predicates_moqe(i.config)?
-        } else {
-            i.loader.immediate_isq_predicates(i.config)?
-        };
         if let Some(types) = &write_types {
             info!("Preparing UQFF output for [{}].", format_isq_types(types));
         } else if let Some(ty) = i.in_situ_quant {
-            info!("Quantizing model weights to {ty}.");
+            let sensitive_ty = ty.promote_for_sensitive_tensor();
+            if sensitive_ty == ty || promoted_predicates.is_empty() {
+                info!("Quantizing model weights to {ty}.");
+            } else {
+                info!("Quantizing model weights to {ty}, with sensitive tensors using {sensitive_ty}.");
+            }
         }
         if immediate_predicates.is_empty() {
             tracing::warn!("No predicates for this model and ISQ setting detected. ISQ will not be applied to any weights!");
@@ -107,11 +126,10 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
             mistralrs_quant::IsqExecutorConfig::new(immediate_ty),
         );
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_executor(
-            immediate_ty,
-            immediate_predicates,
-            i.topology_overrides.clone(),
-            capture,
+        mistralrs_quant::set_immediate_isq_config(
+            mistralrs_quant::ImmediateIsqConfig::new(immediate_ty, immediate_predicates, capture)
+                .with_promoted_predicates(promoted_predicates.clone())
+                .with_overrides(i.topology_overrides.clone()),
             executor,
         );
     } else if !i.topology_overrides.is_empty() {
@@ -119,11 +137,14 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
             mistralrs_quant::IsqExecutorConfig::new(immediate_ty),
         );
         tracing::debug!("Using {num_threads} worker thread(s) for weight quantization.");
-        mistralrs_quant::set_immediate_isq_with_executor(
-            immediate_ty,
-            Vec::new(),
-            i.topology_overrides.clone(),
-            capture_mode(i.has_write_uqff, wants_imatrix),
+        mistralrs_quant::set_immediate_isq_config(
+            mistralrs_quant::ImmediateIsqConfig::new(
+                immediate_ty,
+                Vec::new(),
+                capture_mode(i.has_write_uqff, wants_imatrix),
+            )
+            .with_promoted_predicates(promoted_predicates)
+            .with_overrides(i.topology_overrides.clone()),
             executor,
         );
     }
@@ -169,5 +190,53 @@ fn capture_mode(has_write_uqff: bool, wants_imatrix: bool) -> mistralrs_quant::I
         mistralrs_quant::IsqCaptureMode::CaptureMatches
     } else {
         mistralrs_quant::IsqCaptureMode::Immediate
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Loader;
+
+    impl IsqModelLoader for Loader {
+        fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<regex::Regex>> {
+            Ok(vec![
+                regex::Regex::new(r"^model\.embed_tokens\.weight$")?,
+                regex::Regex::new(r"^lm_head\.weight$")?,
+            ])
+        }
+
+        fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<regex::Regex>> {
+            Ok(vec![regex::Regex::new(r"^model\.layers\.")?])
+        }
+
+        fn immediate_isq_predicates_moqe(&self, _config: &str) -> Result<Vec<regex::Regex>> {
+            Ok(vec![regex::Regex::new(r"^lm_head\.weight$")?])
+        }
+    }
+
+    fn matches(predicates: &[regex::Regex], name: &str) -> bool {
+        predicates.iter().any(|predicate| predicate.is_match(name))
+    }
+
+    #[test]
+    fn default_selection_includes_model_declared_promoted_tensors() -> Result<()> {
+        let (selected, promoted) = resolve_isq_predicates(&Loader, "", IsqOrganization::Default)?;
+        assert!(matches(&selected, "model.layers.0.self_attn.q_proj.weight"));
+        assert!(matches(&selected, "model.embed_tokens.weight"));
+        assert!(matches(&promoted, "model.embed_tokens.weight"));
+        Ok(())
+    }
+
+    #[test]
+    fn moqe_selection_does_not_add_embeddings_but_keeps_classification() -> Result<()> {
+        let (selected, promoted) =
+            resolve_isq_predicates(&Loader, "", IsqOrganization::MoeExpertsOnly)?;
+        assert!(matches(&selected, "lm_head.weight"));
+        assert!(!matches(&selected, "model.embed_tokens.weight"));
+        assert!(matches(&promoted, "model.embed_tokens.weight"));
+        assert!(matches(&promoted, "lm_head.weight"));
+        Ok(())
     }
 }
