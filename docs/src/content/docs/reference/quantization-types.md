@@ -11,7 +11,8 @@ For `run`, `serve`, and `bench`:
 - `--isq N` - force runtime ISQ and skip the [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
 
 For a GGUF repository, `--quant` selects a matching published file. To requantize GGUF weights
-instead, select an exact file with `-f` and pass `--isq`.
+instead, select an exact file with `-f` and pass `--isq`. See
+[GGUF support](/mistral.rs/reference/gguf-support/) for the accepted file formats.
 
 ## Numeric shorthands
 

@@ -1,13 +1,13 @@
 ---
 title: "mistralrs login"
-description: "Authenticate with HuggingFace Hub"
+description: "Authenticate with Hugging Face Hub"
 sidebar:
   order: 9
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Authenticate with HuggingFace Hub
+Authenticate with Hugging Face Hub
 
 ```
 mistralrs login [OPTIONS]

@@ -47,9 +47,9 @@ At 4 bits and below, an [importance matrix](#imatrix) recovers a meaningful amou
 `--quant` also accepts format names:
 
 ```bash
-mistralrs run --quant q4k -m google/gemma-4-E4B-it     # GGML K-quant
+mistralrs run --quant q4k -m google/gemma-4-E4B-it     # 4-bit K-quant
 mistralrs run --quant afq4 -m google/gemma-4-E4B-it    # AFQ, Metal-optimized
-mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # the GGUF standard 8-bit
+mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # 8-bit block quant
 ```
 
 How the numeric shorthands resolve per backend, plus the full type list and hardware
@@ -118,7 +118,7 @@ mistralrs serve -f /path/model-BF16.gguf --isq q4k
 
 To quantize once and reuse the result, write a UQFF file with `mistralrs quantize`. See the
 [UQFF guide](/mistral.rs/guides/quantization/uqff/). The command accepts safetensors sources and
-compatible GGUF inputs selected with either `-f` or `-m <repo> --quant <artifact>`.
+compatible GGUF inputs selected with either `-f` or `-m <repo> --quant <level-or-name>`.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -254,7 +254,8 @@ By default, these load directly with no ISQ conversion:
   [UQFF guide](/mistral.rs/guides/quantization/uqff/).
 - **GGUF**: load a local file directly with `-f <file.gguf>`, or select a published variant with
   `-m <gguf-repo> --quant <level>`. Add `--isq <type>` to an exact `-f` selection only when you
-  intentionally want to requantize it.
+  intentionally want to requantize it. See [GGUF support](/mistral.rs/reference/gguf-support/)
+  for compatible models and file formats.
 - **GPTQ, AWQ**: detected from the source repo's config and loaded directly; no `--quant` or
   `--isq` needed.
 

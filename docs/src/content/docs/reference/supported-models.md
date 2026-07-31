@@ -11,7 +11,7 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. Not listed? You can still try it: force a known architecture with `--arch`, load a [GGUF](/mistral.rs/guides/models/run-any-model/) build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156).
+3. Not listed? Check the [GGUF support reference](/mistral.rs/reference/gguf-support/) for a GGUF build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
@@ -102,7 +102,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 
 ## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/mistral.rs/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 

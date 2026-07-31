@@ -143,16 +143,6 @@ The first run downloads the weights from Hugging Face into the local cache, then
 
 `--quant 4` prefers a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) quantization from `mistralrs-community` when one is published, otherwise quantizes the weights as they load (in-situ). Omit it to load native precision (BF16 for Qwen3-4B, about 8 GB). See [Quantization](/mistral.rs/guides/quantization/quantize-a-model/) for the decision guide.
 
-Already have a GGUF? Pass the file directly, or let mistral.rs choose a published variant:
-
-```bash
-mistralrs run -f /path/to/model.gguf
-mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
-```
-
-The file suffix selects GGUF automatically. Compatible repositories also provide the tokenizer,
-configuration, chat template, and multimodal projector without extra flags.
-
 The model is ready when an empty prompt appears. Type a message and press Enter; the response streams a token at a time.
 
 ```
@@ -169,6 +159,22 @@ Commands available at the prompt:
 - `/temperature <float>`, `/topk <int>`, `/topp <float>`: adjust sampling
 
 With multimodal models, include image, audio, or video paths or URLs directly in the prompt. For one-shot use, pass `-i "your prompt"` (optionally with `--image`, `--video`, or `--audio`) to send a single request and exit. The full flag set is in the [CLI reference](/mistral.rs/reference/cli/run/).
+
+### Run GGUF models
+
+Already have a GGUF? Use an exact local file for chat, or select a published quantization and serve
+it directly:
+
+```bash
+mistralrs run -f /path/to/model.gguf
+mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
+```
+
+The filename selects GGUF automatically. From a recognized GGUF repository, mistral.rs discovers
+the tokenizer, configuration, chat template, and multimodal projector; explicit flags remain
+available as overrides. See [Run GGUF models](/mistral.rs/guides/models/run-gguf/) for loading and
+serving workflows, or [GGUF support](/mistral.rs/reference/gguf-support/) for the compatibility
+matrix.
 
 ## Serve an API
 
@@ -307,7 +313,8 @@ async fn main() -> anyhow::Result<()> {
 
 ## Next steps
 
-- [Run any model](/mistral.rs/guides/models/run-any-model/): Hugging Face ids, local files, GGUF, and quantization flags.
+- [Run models](/mistral.rs/guides/models/run-any-model/): Hugging Face IDs, local files, GGUF, and quantization flags.
+- [Run GGUF models](/mistral.rs/guides/models/run-gguf/): local files, Hub artifacts, multimodal input, LoRA, and overrides.
 - [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/): the canonical serving guide.
 - [Quantization](/mistral.rs/guides/quantization/quantize-a-model/): fit larger models on the same hardware.
 - [Agents & tools](/mistral.rs/guides/agents/): tool calling, web search, code execution, shell, OpenAI-compatible Skills, and MCP (Model Context Protocol).

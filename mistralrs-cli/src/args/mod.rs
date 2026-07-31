@@ -163,14 +163,14 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with HuggingFace Hub
+    /// Authenticate with Hugging Face Hub
     Login {
         /// Provide token directly (non-interactive)
         #[arg(long)]
         token: Option<String>,
     },
 
-    /// Manage the HuggingFace model cache
+    /// Manage the Hugging Face model cache
     Cache {
         #[command(subcommand)]
         cmd: CacheCommand,
@@ -547,7 +547,7 @@ pub struct GlobalOptions {
     #[serde(default)]
     pub log: Option<PathBuf>,
 
-    /// Token source for HuggingFace authentication.
+    /// Token source for Hugging Face authentication.
     /// Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
     #[serde(default = "default_token_source")]

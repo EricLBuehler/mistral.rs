@@ -15,5 +15,5 @@ mistralrs completions [OPTIONS] <SHELL>
 
 | Option | Default | Description |
 |---|---|---|
-| `<SHELL>` | required | Shell to generate completions for Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`. |
+| `<SHELL>` | required | Shell to generate completions for. Possible values: `bash`, `elvish`, `fish`, `powershell`, `zsh`. |
 

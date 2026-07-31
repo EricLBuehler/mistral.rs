@@ -19,7 +19,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
@@ -34,7 +34,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to UQFF and ISQ; GGUF files do not yet support IQ storage |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -43,10 +43,10 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -62,7 +62,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--max-tool-rounds <MAX_TOOL_ROUNDS>` |  | Default maximum tool-call rounds for the agentic loop. Per-request values from the HTTP API override this. Safety cap: 256 if unset |
 | `--tool-dispatch-url <TOOL_DISPATCH_URL>` |  | URL to POST tool calls to for server-side execution. For security, this is only configurable server-side (not per-request via HTTP API) |
 | `--disable-access-log` | `false` | Disable per-request HTTP access logs |
-| `--access-log-format <ACCESS_LOG_FORMAT>` | `text` | Format for HTTP access logs Possible values: `text`, `json`. |
+| `--access-log-format <ACCESS_LOG_FORMAT>` | `text` | Format for HTTP access logs. Possible values: `text`, `json`. |
 | `--access-log-health` | `false` | Include health, metrics, docs, and UI requests in HTTP access logs |
 | `--disable-request-id-header` | `false` | Disable the x-request-id response header |
 | `--disable-metrics` | `false` | Disable Prometheus HTTP metrics and the metrics recorder |
@@ -78,7 +78,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--mcp-config <MCP_CONFIG>` |  | Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset |
 | `--agent` | `false` | Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic tool loop with a per-session temp workdir. Equivalent to passing `--enable-search --enable-code-execution --enable-shell` together |
 | `--enable-search` | `false` | Enable web search (requires embedding model) |
-| `--search-embedding-model <SEARCH_EMBEDDING_MODEL>` |  | Search embedding model to use. Requires `--enable-search` or `--agent` Possible values: `embedding-gemma`. |
+| `--search-embedding-model <SEARCH_EMBEDDING_MODEL>` |  | Search embedding model to use. Requires `--enable-search` or `--agent`. Possible values: `embedding-gemma`. |
 | `--enable-code-execution` | `false` | Enable Python code execution tool (WARNING: allows arbitrary code execution) |
 | `--enable-shell` | `false` | Enable shell execution tool (WARNING: allows arbitrary command execution) |
 | `--code-exec-python <CODE_EXEC_PYTHON>` |  | Python interpreter path for code execution. Requires code execution to be on (via `--enable-code-execution` or `--agent`). Defaults to `python3` |
@@ -88,13 +88,13 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--shell-timeout <SHELL_TIMEOUT>` |  | Shell execution timeout in seconds (default: 600). Requires shell execution to be on |
 | `--shell-workdir <SHELL_WORKDIR>` |  | Root directory for per-session shell working directories. Defaults to temp dirs |
 | `--skills-dir <SKILLS_DIR>` |  | Directory for uploaded OpenAI-compatible Skills. Defaults to the system temp directory |
-| `--agent-permission <PERMISSION>` | `auto` | Agent action permission mode Possible values: `auto`, `ask`, `deny`. |
-| `--sandbox <MODE>` | `auto` | Sandbox mode Possible values: `auto`, `on`, `off`. |
-| `--sandbox-profile <PROFILE>` |  | Sandbox policy profile Possible values: `restricted`, `developer`. |
+| `--agent-permission <PERMISSION>` | `auto` | Agent action permission mode. Possible values: `auto`, `ask`, `deny`. |
+| `--sandbox <MODE>` | `auto` | Sandbox mode. Possible values: `auto`, `on`, `off`. |
+| `--sandbox-profile <PROFILE>` |  | Sandbox policy profile. Possible values: `restricted`, `developer`. |
 | `--sb-max-memory-mb <MEMORY_MB>` |  | Per-session memory cap in MiB (default: 2048) |
 | `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 600). Raised to at least enabled code/shell timeouts |
 | `--sb-max-procs <PROCS>` |  | Per-session process/thread cap (default: 64) |
-| `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session Possible values: `none`, `loopback`, `full`. |
+| `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session. Possible values: `none`, `loopback`, `full`. |
 
 ## mistralrs serve auto
 
@@ -106,11 +106,11 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
@@ -125,7 +125,7 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to UQFF and ISQ; GGUF files do not yet support IQ storage |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -134,10 +134,10 @@ mistralrs serve auto [OPTIONS] --model-id <MODEL_ID>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -157,11 +157,11 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
@@ -176,7 +176,7 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to UQFF and ISQ; GGUF files do not yet support IQ storage |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -185,10 +185,10 @@ mistralrs serve text [OPTIONS] --model-id <MODEL_ID>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -205,11 +205,11 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
@@ -219,7 +219,7 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
-| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to UQFF and ISQ; GGUF files do not yet support IQ storage |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -228,10 +228,10 @@ mistralrs serve multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |
@@ -251,14 +251,14 @@ mistralrs serve diffusion [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 
@@ -272,14 +272,14 @@ mistralrs serve speech [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 
@@ -293,16 +293,16 @@ mistralrs serve embedding [OPTIONS] --model-id <MODEL_ID>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
+| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
+| `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to UQFF and ISQ; GGUF files do not yet support IQ storage |
 | `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -311,10 +311,10 @@ mistralrs serve embedding [OPTIONS] --model-id <MODEL_ID>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable Possible values: `auto`, `on`, `off`. |
+| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA, disabled on Metal/CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
 | `--pa-context-len <CONTEXT_LEN>` |  | Allocate KV cache for this context length. If not specified, defaults to using 90% of available VRAM |
 | `--pa-memory-mb <MEMORY_MB>` |  | GPU memory to allocate in MBs (alternative to context-len) |
 | `--pa-memory-fraction <MEMORY_FRACTION>` |  | GPU memory utilization fraction 0.0-1.0 (alternative to context-len/memory-mb) |

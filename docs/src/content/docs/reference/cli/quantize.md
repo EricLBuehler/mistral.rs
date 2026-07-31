@@ -15,10 +15,10 @@ mistralrs quantize [OPTIONS] [COMMAND]
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
@@ -30,7 +30,7 @@ mistralrs quantize [OPTIONS] [COMMAND]
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` |  | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type) |
@@ -51,10 +51,10 @@ mistralrs quantize auto [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
@@ -66,7 +66,7 @@ mistralrs quantize auto [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -87,10 +87,10 @@ mistralrs quantize text [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
@@ -103,7 +103,7 @@ mistralrs quantize text [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -121,10 +121,10 @@ mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_P
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
@@ -136,7 +136,7 @@ mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_P
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -157,7 +157,7 @@ mistralrs quantize embedding [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUAN
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local model directory |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
@@ -167,7 +167,7 @@ mistralrs quantize embedding [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUAN
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |

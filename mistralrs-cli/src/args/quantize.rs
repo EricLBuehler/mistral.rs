@@ -83,7 +83,7 @@ pub enum QuantizeModelType {
 /// Model source options for quantization
 #[derive(Args, Clone)]
 pub struct QuantizeModelSourceOptions {
-    /// HuggingFace model ID or local model directory; optional when `-f` names local files
+    /// Hugging Face model ID or local model directory; optional when `-f` names local files
     #[arg(short = 'm', long)]
     pub model_id: Option<String>,
 
@@ -105,7 +105,7 @@ pub struct QuantizeModelSourceOptions {
 
 #[derive(Args, Clone)]
 pub struct QuantizePlainModelSourceOptions {
-    /// HuggingFace model ID or local model directory
+    /// Hugging Face model ID or local model directory
     #[arg(short = 'm', long)]
     pub model_id: String,
 
@@ -237,7 +237,7 @@ pub struct QuantizeDeviceOptions {
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
-    /// Custom HuggingFace cache directory
+    /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
 
@@ -291,7 +291,7 @@ pub struct QuantizeMultimodalOptions {
 /// These mirror the Auto variant's options and are used to construct QuantizeModelType::Auto.
 #[derive(clap::Args, Clone)]
 pub struct QuantizeDefaultOptions {
-    /// HuggingFace model ID or local model directory; optional when `-f` names local files
+    /// Hugging Face model ID or local model directory; optional when `-f` names local files
     #[arg(short = 'm', long)]
     pub model_id: Option<String>,
 
@@ -339,7 +339,7 @@ pub struct QuantizeDefaultOptions {
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
-    /// Custom HuggingFace cache directory
+    /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
 

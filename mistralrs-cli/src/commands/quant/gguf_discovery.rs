@@ -95,6 +95,25 @@ pub(crate) fn resolve_gguf_quant(
         return Ok(group);
     }
 
+    if let Some(bit_width) = preferences.bit_width {
+        let iq_matches = groups
+            .values()
+            .filter(|group| {
+                let Some(label) = group.label.as_deref().map(normalize_label) else {
+                    return false;
+                };
+                is_iq_quant(&label) && quant_bits(&label) == Some(bit_width)
+            })
+            .collect::<Vec<_>>();
+        if !iq_matches.is_empty() {
+            bail!(
+                "`--quant {requested}` only matched unsupported IQ GGUF artifacts: {}. Choose a \
+                 supported Q/K quant",
+                format_group_choices(&iq_matches)
+            );
+        }
+    }
+
     let available = format_available_groups(groups.values());
     bail!("No GGUF model files matched `--quant {requested}`. Available GGUF variants: {available}")
 }
@@ -157,7 +176,7 @@ fn resolve_gguf_quant_groups(
             .copied()
             .filter_map(|group| {
                 let label = normalize_label(group.label.as_deref()?);
-                (quant_bits(&label) == Some(bit_width))
+                (!is_iq_quant(&label) && quant_bits(&label) == Some(bit_width))
                     .then_some((quant_fallback_rank(&label), group))
             })
             .collect::<Vec<_>>();
@@ -407,6 +426,9 @@ fn quant_preferences(requested: &str) -> Result<QuantPreferences> {
     if lowered == "auto" {
         bail!("`--quant auto` does not select a GGUF artifact; choose a bit width or quant name");
     }
+    if is_iq_quant(&normalize_label(&lowered)) {
+        bail!("IQ GGUF formats are not supported; choose a supported Q/K quant");
+    }
     if lowered.chars().all(|ch| ch.is_ascii_digit())
         && !NUMERIC_QUANT_LEVELS.contains(&lowered.as_str())
     {
@@ -475,19 +497,22 @@ fn quant_bits(normalized: &str) -> Option<usize> {
     bit.to_digit(10).map(|bit| bit as usize)
 }
 
+fn is_iq_quant(normalized: &str) -> bool {
+    normalized
+        .strip_prefix("UD")
+        .unwrap_or(normalized)
+        .starts_with("IQ")
+}
+
 fn quant_fallback_rank(normalized: &str) -> usize {
     if normalized.starts_with('Q') {
         0
     } else if normalized.starts_with("UDQ") {
         1
-    } else if normalized.starts_with("IQ") {
-        2
-    } else if normalized.starts_with("UDIQ") {
-        3
     } else if normalized.starts_with("MXFP") {
-        4
+        2
     } else {
-        5
+        3
     }
 }
 
@@ -662,21 +687,30 @@ mod tests {
     }
 
     #[test]
-    fn explicit_iq_and_ud_names_do_not_cross_families() {
+    fn explicit_iq_is_rejected_and_ud_names_do_not_cross_families() {
         let listing = files(&[
             "model-IQ4_NL.gguf",
             "model-IQ4_XS.gguf",
             "model-Q4_K_M.gguf",
             "model-UD-Q4_K_XL.gguf",
         ]);
-        assert_eq!(
-            resolve_gguf_quant(&listing, "iq4_xs").unwrap().label,
-            "IQ4_XS"
-        );
+        let error = resolve_gguf_quant(&listing, "iq4_xs").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("IQ GGUF formats are not supported"));
         assert_eq!(
             resolve_gguf_quant(&listing, "ud-q4_k_xl").unwrap().label,
             "UD-Q4_K_XL"
         );
+    }
+
+    #[test]
+    fn numeric_width_does_not_fall_back_to_iq() {
+        let listing = files(&["model-IQ4_NL.gguf", "model-IQ4_XS.gguf"]);
+        let error = resolve_gguf_quant(&listing, "4").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("only matched unsupported IQ GGUF artifacts"));
     }
 
     #[test]

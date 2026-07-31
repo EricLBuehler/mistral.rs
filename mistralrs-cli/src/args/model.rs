@@ -22,7 +22,7 @@ const GIBIBYTE: u64 = 1 << 30;
 /// Model source options
 #[derive(Args, Clone, Deserialize)]
 pub struct ModelSourceOptions {
-    /// HuggingFace model ID or local path to model directory
+    /// Hugging Face model ID or local path to model directory
     #[arg(short = 'm', long)]
     pub model_id: String,
 
@@ -615,7 +615,8 @@ fn default_lora_max_bytes() -> u64 {
 pub struct QuantizationOptions {
     /// Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise
     /// prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level.
-    /// Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs`
+    /// Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to
+    /// UQFF and ISQ; GGUF files do not yet support IQ storage.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
@@ -664,7 +665,7 @@ pub struct DeviceOptions {
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
-    /// Custom HuggingFace cache directory
+    /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
 
