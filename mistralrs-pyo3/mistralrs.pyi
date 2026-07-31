@@ -858,8 +858,7 @@ class Runner:
 
     def send_re_isq(self, dtype: str, model_id: str | None = None) -> None:
         """
-        Re-ISQ a model that was loaded with ISQ. This includes compatible GGUF models
-        loaded with `in_situ_quant`; legacy GGUF and GGML models are not supported.
+        Re-ISQ a model that was loaded with `in_situ_quant`.
 
         Args:
             dtype: The ISQ dtype (e.g., "Q4K", "Q8_0").

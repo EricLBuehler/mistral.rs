@@ -18,11 +18,10 @@ mistralrs quantize [OPTIONS] [COMMAND]
 | `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` |  | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -55,11 +54,10 @@ mistralrs quantize auto [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -92,11 +90,10 @@ mistralrs quantize text [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `-a, --arch <ARCH>` |  | Model architecture (required for text models) |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
@@ -127,11 +124,10 @@ mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_P
 | `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
 | `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
@@ -156,20 +152,14 @@ mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_P
 Embedding model
 
 ```
-mistralrs quantize embedding [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
+mistralrs quantize embedding [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local model directory; optional when `-f` names local files |
+| `-m, --model-id <MODEL_ID>` | required | HuggingFace model ID or local model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified Possible values: `plain`, `gguf`, `ggml`. |
-| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |

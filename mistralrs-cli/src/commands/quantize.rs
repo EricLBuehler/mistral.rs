@@ -13,7 +13,7 @@ use mistralrs_core::{
 use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
 use crate::args::{
-    GlobalOptions, ModelFormat, QuantizeDeviceOptions, QuantizeModelSourceOptions,
+    GlobalOptions, QuantizeDeviceOptions, QuantizeModelFormat, QuantizeModelSourceOptions,
     QuantizeModelType, QuantizeMultimodalOptions, QuantizeQuantizationOptions,
 };
 
@@ -39,27 +39,34 @@ fn get_output_path(model_type: &QuantizeModelType) -> &PathBuf {
 
 /// Extract the model ID from the QuantizeModelType
 fn get_model_id(model_type: &QuantizeModelType) -> &str {
-    get_model_source(model_type)
-        .model_id
-        .as_deref()
-        .expect("quantize model source was normalized")
-}
-
-fn get_model_source(model_type: &QuantizeModelType) -> &QuantizeModelSourceOptions {
     match model_type {
         QuantizeModelType::Auto { model, .. }
         | QuantizeModelType::Text { model, .. }
-        | QuantizeModelType::Multimodal { model, .. }
-        | QuantizeModelType::Embedding { model, .. } => model,
+        | QuantizeModelType::Multimodal { model, .. } => model
+            .model_id
+            .as_deref()
+            .expect("quantize model source was normalized"),
+        QuantizeModelType::Embedding { model, .. } => &model.model_id,
     }
 }
 
-fn get_model_source_mut(model_type: &mut QuantizeModelType) -> &mut QuantizeModelSourceOptions {
+fn get_model_source(model_type: &QuantizeModelType) -> Option<&QuantizeModelSourceOptions> {
     match model_type {
         QuantizeModelType::Auto { model, .. }
         | QuantizeModelType::Text { model, .. }
-        | QuantizeModelType::Multimodal { model, .. }
-        | QuantizeModelType::Embedding { model, .. } => model,
+        | QuantizeModelType::Multimodal { model, .. } => Some(model),
+        QuantizeModelType::Embedding { .. } => None,
+    }
+}
+
+fn get_model_source_mut(
+    model_type: &mut QuantizeModelType,
+) -> Option<&mut QuantizeModelSourceOptions> {
+    match model_type {
+        QuantizeModelType::Auto { model, .. }
+        | QuantizeModelType::Text { model, .. }
+        | QuantizeModelType::Multimodal { model, .. } => Some(model),
+        QuantizeModelType::Embedding { .. } => None,
     }
 }
 
@@ -102,7 +109,9 @@ fn resolve_gguf_source(
         mistralrs_core::set_hf_cache_path(path);
     }
     let explicit_multimodal = matches!(model_type, QuantizeModelType::Multimodal { .. });
-    let model = get_model_source_mut(model_type);
+    let Some(model) = get_model_source_mut(model_type) else {
+        return Ok(());
+    };
     let model_id = model
         .model_id
         .as_deref()
@@ -110,7 +119,7 @@ fn resolve_gguf_source(
         .to_string();
     let requested = model.quant.clone();
     let exact_file = model.format.quantized_file.clone();
-    let explicit_gguf = matches!(model.format.format, Some(ModelFormat::Gguf));
+    let explicit_gguf = matches!(model.format.format, Some(QuantizeModelFormat::Gguf));
 
     let should_inspect = requested.is_some() || (explicit_gguf && exact_file.is_some());
     let files = should_inspect
@@ -146,11 +155,11 @@ fn resolve_gguf_source(
             "quantize: --quant {requested} -> input GGUF {} from `{model_id}`",
             artifact.label
         );
-        model.format.format = Some(ModelFormat::Gguf);
+        model.format.format = Some(QuantizeModelFormat::Gguf);
         model.format.quantized_file = Some(artifact.file_spec());
     }
 
-    if matches!(model.format.format, Some(ModelFormat::Gguf)) {
+    if matches!(model.format.format, Some(QuantizeModelFormat::Gguf)) {
         let quantized_file = model.format.quantized_file.as_ref().ok_or_else(|| {
             anyhow::anyhow!(
                 "GGUF input requires a model file. Pass `-f <model.gguf>`, or use \
@@ -228,7 +237,7 @@ pub async fn run_quantize(mut model_type: QuantizeModelType, global: GlobalOptio
     let file_mode = base_output.extension().is_some_and(|ext| ext == "uqff");
     let model_id = get_model_id(&model_type).to_string();
     let is_multimodal = matches!(&model_type, QuantizeModelType::Multimodal { .. })
-        || get_model_source(&model_type).format.mmproj.is_some();
+        || get_model_source(&model_type).is_some_and(|model| model.format.mmproj.is_some());
     let no_readme = get_no_readme(&model_type);
     let (flag_base_model, flag_repo_id) = get_readme_overrides(&model_type);
 
@@ -522,8 +531,8 @@ fn convert_to_model_selected(
             multimodal,
             ..
         } => {
-            match model.format.format.unwrap_or(ModelFormat::Plain) {
-                ModelFormat::Gguf => {
+            match model.format.format.unwrap_or(QuantizeModelFormat::Plain) {
+                QuantizeModelFormat::Gguf => {
                     let selected = convert_gguf_source(
                         model,
                         quantization,
@@ -533,13 +542,7 @@ fn convert_to_model_selected(
                     )?;
                     return Ok((selected, device.cpu, device.device_layers.clone()));
                 }
-                ModelFormat::Ggml => {
-                    anyhow::bail!(
-                        "GGML inputs cannot be requantized; use a compatible GGUF or safetensors \
-                         source"
-                    )
-                }
-                ModelFormat::Plain => {}
+                QuantizeModelFormat::Plain => {}
             }
             let model_selected = ModelSelected::Run {
                 model_id: model
@@ -579,19 +582,13 @@ fn convert_to_model_selected(
             device,
             ..
         } => {
-            match model.format.format.unwrap_or(ModelFormat::Plain) {
-                ModelFormat::Gguf => {
+            match model.format.format.unwrap_or(QuantizeModelFormat::Plain) {
+                QuantizeModelFormat::Gguf => {
                     let selected =
                         convert_gguf_source(model, quantization, device, None, write_uqff)?;
                     return Ok((selected, device.cpu, device.device_layers.clone()));
                 }
-                ModelFormat::Ggml => {
-                    anyhow::bail!(
-                        "GGML inputs cannot be requantized; use a compatible GGUF or safetensors \
-                         source"
-                    )
-                }
-                ModelFormat::Plain => {}
+                QuantizeModelFormat::Plain => {}
             }
             let model_selected = ModelSelected::Plain {
                 model_id: model
@@ -629,8 +626,8 @@ fn convert_to_model_selected(
             multimodal,
             ..
         } => {
-            match model.format.format.unwrap_or(ModelFormat::Plain) {
-                ModelFormat::Gguf => {
+            match model.format.format.unwrap_or(QuantizeModelFormat::Plain) {
+                QuantizeModelFormat::Gguf => {
                     if model.format.mmproj.is_none() {
                         anyhow::bail!(
                             "No companion projector was found for this multimodal GGUF; pass \
@@ -646,13 +643,7 @@ fn convert_to_model_selected(
                     )?;
                     return Ok((selected, device.cpu, device.device_layers.clone()));
                 }
-                ModelFormat::Ggml => {
-                    anyhow::bail!(
-                        "GGML is not supported for multimodal quantization; use a GGUF model with \
-                         `--mmproj`, or use plain safetensors"
-                    )
-                }
-                ModelFormat::Plain => {}
+                QuantizeModelFormat::Plain => {}
             }
             let model_selected = ModelSelected::MultimodalPlain {
                 model_id: model
@@ -692,14 +683,8 @@ fn convert_to_model_selected(
             quantization,
             ..
         } => {
-            if !matches!(model.format.format, None | Some(ModelFormat::Plain)) {
-                anyhow::bail!("Embedding models do not support GGUF or GGML inputs");
-            }
             let model_selected = ModelSelected::Embedding {
-                model_id: model
-                    .model_id
-                    .clone()
-                    .expect("quantize model source was normalized"),
+                model_id: model.model_id.clone(),
                 tokenizer_json: model
                     .tokenizer
                     .as_ref()
@@ -819,8 +804,8 @@ mod tests {
         ]);
 
         resolve_gguf_source(&mut model_type, &TokenSource::None).unwrap();
-        let source = get_model_source(&model_type);
-        assert_eq!(source.format.format, Some(ModelFormat::Gguf));
+        let source = get_model_source(&model_type).expect("GGUF model source");
+        assert_eq!(source.format.format, Some(QuantizeModelFormat::Gguf));
         assert_eq!(
             source.format.quantized_file.as_deref(),
             Some("model-Q4_K_M.gguf")
@@ -951,7 +936,11 @@ mod tests {
         let mut explicit = parse(&explicit_args);
         resolve_gguf_source(&mut explicit, &TokenSource::None).unwrap();
         assert_eq!(
-            get_model_source(&explicit).format.quantized_file.as_deref(),
+            get_model_source(&explicit)
+                .expect("GGUF model source")
+                .format
+                .quantized_file
+                .as_deref(),
             Some("model-Q4_K_M.gguf")
         );
 

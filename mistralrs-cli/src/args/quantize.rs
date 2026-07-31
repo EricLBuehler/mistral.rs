@@ -1,6 +1,6 @@
 //! Quantize command argument structs for UQFF generation
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
 use std::path::PathBuf;
 
@@ -67,7 +67,7 @@ pub enum QuantizeModelType {
     /// Embedding model
     Embedding {
         #[command(flatten)]
-        model: QuantizeModelSourceOptions,
+        model: QuantizePlainModelSourceOptions,
 
         #[command(flatten)]
         quantization: QuantizeQuantizationOptions,
@@ -96,11 +96,109 @@ pub struct QuantizeModelSourceOptions {
     pub dtype: ModelDType,
 
     #[command(flatten)]
-    pub format: FormatOptions,
+    pub format: QuantizeFormatOptions,
 
     /// Select an input GGUF artifact by bit width or quant name
     #[arg(long, conflicts_with = "quantized_file")]
     pub quant: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct QuantizePlainModelSourceOptions {
+    /// HuggingFace model ID or local model directory
+    #[arg(short = 'm', long)]
+    pub model_id: String,
+
+    /// Path to local tokenizer.json file
+    #[arg(short = 't', long)]
+    pub tokenizer: Option<PathBuf>,
+
+    /// Model data type
+    #[arg(long, default_value = "auto", value_parser = parse_dtype)]
+    pub dtype: ModelDType,
+}
+
+#[derive(Args, Clone, Default)]
+pub struct QuantizeFormatOptions {
+    /// Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted.
+    #[arg(long, value_enum)]
+    pub format: Option<QuantizeModelFormat>,
+
+    /// GGUF filename(s), separated by semicolons for multiple files
+    #[arg(short = 'f', long)]
+    pub quantized_file: Option<String>,
+
+    /// GGUF projector override; normally selected automatically (semicolon-separated for multiple)
+    #[arg(long)]
+    pub mmproj: Option<String>,
+
+    /// Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model
+    #[arg(long)]
+    pub tok_model_id: Option<String>,
+
+    #[doc(hidden)]
+    #[arg(skip)]
+    pub direct_file_only: bool,
+}
+
+impl QuantizeFormatOptions {
+    fn normalize(&mut self) -> anyhow::Result<()> {
+        let mut format = self.to_format_options();
+        format.normalize()?;
+        self.update_from_format_options(format)
+    }
+
+    fn derive_local_model_root(&mut self) -> anyhow::Result<String> {
+        let mut format = self.to_format_options();
+        let root = format.derive_local_model_root()?;
+        self.update_from_format_options(format)?;
+        Ok(root)
+    }
+
+    fn to_format_options(&self) -> FormatOptions {
+        FormatOptions {
+            format: self.format.map(Into::into),
+            quantized_file: self.quantized_file.clone(),
+            mmproj: self.mmproj.clone(),
+            tok_model_id: self.tok_model_id.clone(),
+            gqa: 1,
+            direct_file_only: self.direct_file_only,
+        }
+    }
+
+    fn update_from_format_options(&mut self, format: FormatOptions) -> anyhow::Result<()> {
+        self.format = match format.format {
+            None => None,
+            Some(ModelFormat::Plain) => Some(QuantizeModelFormat::Plain),
+            Some(ModelFormat::Gguf) => Some(QuantizeModelFormat::Gguf),
+            Some(ModelFormat::Ggml) => {
+                anyhow::bail!(
+                    "GGML inputs cannot be requantized; use a compatible GGUF or safetensors source"
+                )
+            }
+        };
+        self.quantized_file = format.quantized_file;
+        self.mmproj = format.mmproj;
+        self.tok_model_id = format.tok_model_id;
+        self.direct_file_only = format.direct_file_only;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum QuantizeModelFormat {
+    #[default]
+    Plain,
+    Gguf,
+}
+
+impl From<QuantizeModelFormat> for ModelFormat {
+    fn from(format: QuantizeModelFormat) -> Self {
+        match format {
+            QuantizeModelFormat::Plain => Self::Plain,
+            QuantizeModelFormat::Gguf => Self::Gguf,
+        }
+    }
 }
 
 /// Quantization options for UQFF generation (ISQ-related only, no from_uqff)
@@ -206,7 +304,7 @@ pub struct QuantizeDefaultOptions {
     pub dtype: ModelDType,
 
     #[command(flatten)]
-    pub format: FormatOptions,
+    pub format: QuantizeFormatOptions,
 
     /// Select an input GGUF artifact by bit width or quant name
     #[arg(long, conflicts_with = "quantized_file")]
@@ -350,20 +448,15 @@ fn normalize_quantize_model_type(model_type: &mut QuantizeModelType) -> anyhow::
     let model = match model_type {
         QuantizeModelType::Auto { model, .. }
         | QuantizeModelType::Text { model, .. }
-        | QuantizeModelType::Multimodal { model, .. }
-        | QuantizeModelType::Embedding { model, .. } => model,
+        | QuantizeModelType::Multimodal { model, .. } => model,
+        QuantizeModelType::Embedding { .. } => return Ok(()),
     };
 
     model.format.normalize()?;
     if model.quant.is_some() && model.format.quantized_file.is_some() {
         anyhow::bail!("`--quant` and `--quantized-file` are mutually exclusive");
     }
-    if model.quant.is_some()
-        && matches!(
-            model.format.format,
-            Some(ModelFormat::Plain | ModelFormat::Ggml)
-        )
-    {
+    if model.quant.is_some() && matches!(model.format.format, Some(QuantizeModelFormat::Plain)) {
         anyhow::bail!("`--quant` selects an input GGUF artifact and requires GGUF format");
     }
     let model_id = match model.model_id.take() {
@@ -386,7 +479,7 @@ fn parse_dtype(s: &str) -> Result<ModelDType, String> {
 mod tests {
     use std::{fs, path::Path};
 
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     use super::*;
     use crate::args::{Cli, Command};
@@ -435,7 +528,7 @@ mod tests {
             model.model_id.as_deref().map(Path::new),
             Some(root.as_path())
         );
-        assert_eq!(model.format.format, Some(ModelFormat::Gguf));
+        assert_eq!(model.format.format, Some(QuantizeModelFormat::Gguf));
         assert_eq!(model.format.quantized_file.as_deref(), Some("model.gguf"));
         assert!(model.format.direct_file_only);
         assert_eq!(quantization.in_situ_quant, ["q4k"]);
@@ -487,5 +580,27 @@ mod tests {
             Err(error) => error,
         };
         assert!(error.to_string().contains("cannot be used with"));
+    }
+
+    #[test]
+    fn help_only_advertises_supported_input_formats() {
+        let mut command = Cli::command();
+        let quantize = command
+            .find_subcommand_mut("quantize")
+            .expect("quantize subcommand");
+        let help = quantize.render_long_help().to_string();
+        let help_lower = help.to_ascii_lowercase();
+
+        assert!(help_lower.contains("possible values: plain, gguf"));
+        assert!(!help_lower.contains("ggml"));
+        assert!(!help.contains("--gqa"));
+
+        let embedding = quantize
+            .find_subcommand_mut("embedding")
+            .expect("embedding subcommand");
+        let embedding_help = embedding.render_long_help().to_string();
+        assert!(!embedding_help.contains("--format"));
+        assert!(!embedding_help.contains("--quantized-file"));
+        assert!(!embedding_help.contains("--quant"));
     }
 }

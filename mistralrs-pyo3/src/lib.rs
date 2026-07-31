@@ -2100,8 +2100,7 @@ impl Runner {
         })
     }
 
-    /// Re-ISQ a model that was loaded with ISQ. This includes compatible GGUF models
-    /// loaded with `in_situ_quant`; legacy GGUF and GGML models are not supported.
+    /// Re-ISQ a model that was loaded with `in_situ_quant`.
     #[pyo3(signature = (dtype, model_id = None))]
     fn send_re_isq(
         &self,

@@ -124,9 +124,9 @@ compatible GGUF inputs selected with either `-f` or `-m <repo> --quant <artifact
 <TabItem label="HTTP">
 
 There is no quantize-at-load HTTP request; a server quantizes via the `--quant`/`--isq` flags on
-the CLI tab. To re-quantize a model already running, `POST /re_isq` swaps every ISQ-eligible
-layer to a new type in place. The model must have been loaded with ISQ; this includes compatible
-GGUF sources loaded with `--isq`, but not legacy GGUF or GGML models:
+the CLI tab. To re-quantize a model already running, `POST /re_isq` changes its ISQ type without
+restarting the server. The model must have been loaded with ISQ; models loaded without ISQ are not
+supported:
 
 ```bash
 curl -X POST localhost:1234/re_isq \
