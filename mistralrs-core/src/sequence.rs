@@ -674,6 +674,7 @@ pub struct Sequence {
     sampler: Arc<Sampler>,
     stop_tokens: Vec<u32>,
     stop_strings: Vec<String>,
+    ignore_eos: bool,
     return_logprobs: bool,
     responder: Sender<Response>,
     response_index: usize,
@@ -794,6 +795,7 @@ impl Sequence {
         seq_preallocated_cache: Option<SeqPreallocatedCache>,
         //
         return_raw_logits: bool,
+        ignore_eos: bool,
         eos_tokens: Vec<u32>,
     ) -> Self {
         let prompt_len = tokens.len();
@@ -821,6 +823,7 @@ impl Sequence {
             sampler: sampler.into(),
             stop_tokens,
             stop_strings,
+            ignore_eos,
             max_len,
             return_logprobs,
             prompt_tok_per_sec: 0.,
@@ -1403,10 +1406,11 @@ impl Sequence {
             .tool_call_state
             .as_ref()
             .is_some_and(|state| state.required_tool_call_unsatisfied());
-        let is_eos = match eos_tok {
-            Some(eos_tok) => eos_tok.contains(&tok),
-            None => false,
-        };
+        let is_eos = !self.ignore_eos
+            && match eos_tok {
+                Some(eos_tok) => eos_tok.contains(&tok),
+                None => false,
+            };
         if is_eos && !required_tool_call_unsatisfied {
             Some(StopReason::Eos)
         } else if matches!(
@@ -1464,29 +1468,60 @@ impl Sequence {
     pub fn get_delta(
         &mut self,
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-        let new_decoded = self.peek_delta();
-        if matches!(new_decoded, Ok(Some(_))) {
-            self.stream_idx = self.completion_bytes.len();
+        let (new_decoded, consumed) = self.decode_streamable_delta();
+        if new_decoded.is_some() {
+            self.stream_idx += consumed;
         }
-        new_decoded
+        Ok(new_decoded)
+    }
+
+    pub fn get_final_delta(&mut self) -> String {
+        let is_first = self.stream_idx == 0;
+        let decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
+        self.stream_idx = self.completion_bytes.len();
+        if is_first {
+            decoded.trim_start().to_string()
+        } else {
+            decoded.to_string()
+        }
     }
 
     /// Peeks at the delta between the last two decoded sequences, but does not advance the stream index.
     pub fn peek_delta(&self) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        Ok(self.decode_streamable_delta().0)
+    }
+
+    fn decode_streamable_delta(&self) -> (Option<String>, usize) {
         let is_first = self.stream_idx == 0;
-        let new_decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
-        // Check if the sequence ends with valid utf8, if not skip it as it probably is a multi token sequence
-        if new_decoded.ends_with('�') {
-            return Ok(None);
+        let pending = &self.completion_bytes[self.stream_idx..];
+        let mut consumed = 0;
+        while consumed < pending.len() {
+            match std::str::from_utf8(&pending[consumed..]) {
+                Ok(_) => {
+                    consumed = pending.len();
+                    break;
+                }
+                Err(error) => {
+                    consumed += error.valid_up_to();
+                    let Some(invalid_len) = error.error_len() else {
+                        break;
+                    };
+                    consumed += invalid_len;
+                }
+            }
         }
+        if consumed == 0 {
+            return (None, 0);
+        }
+        let new_decoded = String::from_utf8_lossy(&pending[..consumed]);
 
         // The first token usually starts with a space. We don't want to add that to the delta.
         // Since we're using the completion_bytes, we need to take care of that ourselves.
         // Had we used HF's Tokenizer, it would have taken care of that for us.
         if is_first {
-            return Ok(Some(new_decoded.trim_start().to_string()));
+            return (Some(new_decoded.trim_start().to_string()), consumed);
         }
-        Ok(Some(new_decoded.to_string()))
+        (Some(new_decoded.to_string()), consumed)
     }
 
     pub fn timestamp(&self) -> u128 {
@@ -1834,6 +1869,14 @@ impl Sequence {
 
     pub fn eos_tokens(&self) -> &[u32] {
         &self.eos_tokens
+    }
+
+    pub(crate) fn effective_eos_tokens<'a>(
+        &self,
+        eos_tokens: &'a [u32],
+        disable_eos_stop: bool,
+    ) -> Option<&'a [u32]> {
+        (!disable_eos_stop && !self.ignore_eos).then_some(eos_tokens)
     }
 
     /// Get the active reasoning mode, if any.
@@ -2222,6 +2265,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             vec![],
         )
     }
@@ -2243,6 +2287,49 @@ mod tests {
             None,
             None,
         );
+    }
+
+    #[test]
+    fn ignore_eos_preserves_explicit_stops_and_length_limit() {
+        let eos_tokens = [42];
+        let mut seq = make_test_sequence();
+        seq.ignore_eos = true;
+
+        assert_eq!(seq.effective_eos_tokens(&eos_tokens, false), None);
+        assert_eq!(seq.is_done(42, Some(&eos_tokens), 1024), None);
+
+        seq.stop_tokens.push(42);
+        assert_eq!(
+            seq.is_done(42, Some(&eos_tokens), 1024),
+            Some(StopReason::StopTok(42))
+        );
+
+        seq.stop_tokens.clear();
+        seq.stop_strings.push("done".to_string());
+        seq.completion_bytes.extend_from_slice(b"done");
+        assert!(matches!(
+            seq.is_done(7, Some(&eos_tokens), 1024),
+            Some(StopReason::StopString { .. })
+        ));
+
+        seq.stop_strings.clear();
+        seq.max_len = Some(1);
+        assert_eq!(
+            seq.is_done(7, Some(&eos_tokens), 1024),
+            Some(StopReason::Length(1))
+        );
+    }
+
+    #[test]
+    fn engine_eos_override_applies_to_default_sequence() {
+        let eos_tokens = [42];
+        let seq = make_test_sequence();
+
+        assert_eq!(
+            seq.effective_eos_tokens(&eos_tokens, false),
+            Some(eos_tokens.as_slice())
+        );
+        assert_eq!(seq.effective_eos_tokens(&eos_tokens, true), None);
     }
 
     fn weather_tool() -> Tool {
@@ -2281,6 +2368,39 @@ mod tests {
         assert_eq!(required_tool_call_deadline_tokens(512), 1024);
         assert_eq!(required_tool_call_deadline_tokens(8192), 2048);
         assert_eq!(required_tool_call_deadline_tokens(32768), 4096);
+    }
+
+    #[test]
+    fn final_delta_flushes_incomplete_utf8() {
+        let mut seq = make_test_sequence();
+        seq.completion_bytes = vec![b'a', 0xe2, 0x82];
+
+        assert_eq!(seq.get_delta().unwrap(), Some("a".to_string()));
+        assert_eq!(seq.stream_idx, 1);
+        assert_eq!(seq.get_final_delta(), "\u{fffd}");
+        assert_eq!(seq.stream_idx, seq.completion_bytes.len());
+    }
+
+    #[test]
+    fn replacement_character_is_not_buffered() {
+        let mut seq = make_test_sequence();
+        seq.completion_bytes = "\u{fffd}".as_bytes().to_vec();
+
+        assert_eq!(seq.get_delta().unwrap(), Some("\u{fffd}".to_string()));
+        assert_eq!(seq.stream_idx, seq.completion_bytes.len());
+    }
+
+    #[test]
+    fn invalid_bytes_do_not_consume_a_trailing_incomplete_character() {
+        let mut seq = make_test_sequence();
+        seq.completion_bytes = vec![0xff, 0xe2];
+
+        assert_eq!(seq.get_delta().unwrap(), Some("\u{fffd}".to_string()));
+        assert_eq!(seq.stream_idx, 1);
+
+        seq.completion_bytes.extend([0x82, 0xac]);
+        assert_eq!(seq.get_delta().unwrap(), Some("\u{20ac}".to_string()));
+        assert_eq!(seq.stream_idx, seq.completion_bytes.len());
     }
 
     #[test]

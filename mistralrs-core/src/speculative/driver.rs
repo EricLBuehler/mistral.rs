@@ -141,11 +141,6 @@ where
     C: SpeculativeCacheAccess,
 {
     let general_metadata = target.get_metadata();
-    let eos_tok = if disable_eos_stop {
-        None
-    } else {
-        Some(&general_metadata.eos_tok[..])
-    };
     let use_async_pool = seqs.len() > 1;
 
     let mut active_indices = Vec::new();
@@ -156,6 +151,7 @@ where
     for (idx, (seq, logits)) in seqs.iter_mut().zip(logits.iter()).enumerate() {
         let base_len = seq.get_toks().len();
         let return_logprobs = seq.return_logprobs();
+        let eos_tok = seq.effective_eos_tokens(&general_metadata.eos_tok, disable_eos_stop);
         let anchor = sample_sequence(
             logits.clone(),
             seq,

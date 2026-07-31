@@ -708,6 +708,7 @@ fn interactive_fallback_sample_parameters() -> SamplingParams {
         repetition_penalty: None,
         max_len: None,
         stop_toks: None,
+        ignore_eos: false,
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),

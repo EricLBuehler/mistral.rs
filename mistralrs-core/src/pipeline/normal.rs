@@ -92,6 +92,7 @@ pub struct NormalPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     source_weight_files: Vec<std::path::PathBuf>,
+    source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
@@ -114,6 +115,7 @@ pub(crate) struct NormalPipelineBuildArgs {
     pub loaded_for_uqff_write: bool,
     pub tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     pub source_weight_files: Vec<PathBuf>,
+    pub source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
@@ -139,6 +141,7 @@ pub(crate) fn build_normal_pipeline(
         loaded_for_uqff_write,
         tracked_modules,
         source_weight_files,
+        source_weight_source,
         dynamic_lora,
     } = args;
 
@@ -224,6 +227,7 @@ pub(crate) fn build_normal_pipeline(
         mapper,
         tracked_modules,
         source_weight_files,
+        source_weight_source,
         dynamic_lora,
     })))
 }
@@ -313,6 +317,7 @@ impl NormalLoaderBuilder {
         no_kv_cache: bool,
         jinja_explicit: Option<String>,
     ) -> Self {
+        let hf_cache_path = config.hf_cache_path.clone();
         Self {
             config,
             chat_template,
@@ -321,6 +326,7 @@ impl NormalLoaderBuilder {
             kind: ModelKind::Normal,
             jinja_explicit,
             no_kv_cache,
+            hf_cache_path,
             ..Default::default()
         }
     }
@@ -1234,6 +1240,7 @@ impl Loader for NormalLoader {
             loaded_for_uqff_write: self.config.write_uqff.is_some(),
             tracked_modules,
             source_weight_files,
+            source_weight_source: weight_source,
             dynamic_lora,
         })
     }
@@ -1296,6 +1303,7 @@ impl IsqPipelineMixin for NormalPipeline {
         let result = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
+            self.source_weight_source.as_deref(),
             save_cimatrix.as_deref(),
         );
         #[cfg(feature = "cuda")]

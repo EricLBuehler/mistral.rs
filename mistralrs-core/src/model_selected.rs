@@ -402,6 +402,22 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// ISQ organization: `default` or `moqe`.
+        #[arg(long)]
+        organization: Option<IsqOrganization>,
+
+        /// UQFF path and quantization types to write.
+        #[arg(long)]
+        write_uqff: Option<UqffWriteConfig>,
+
+        /// Imatrix file to use while requantizing the GGUF weights.
+        #[arg(long)]
+        imatrix: Option<PathBuf>,
+
+        /// Calibration file used to generate an imatrix while requantizing the GGUF weights.
+        #[arg(long)]
+        calibration_file: Option<PathBuf>,
+
         /// Automatically resize and pad images to this maximum edge length.
         #[arg(short = 'e', long)]
         #[serde(default)]
@@ -424,6 +440,21 @@ pub enum ModelSelected {
         #[arg(long)]
         #[serde(default)]
         max_image_length: Option<usize>,
+
+        /// Cache path for Hugging Face models downloaded locally.
+        #[arg(long)]
+        #[serde(default)]
+        hf_cache_path: Option<PathBuf>,
+
+        /// Path to a local Matryoshka Transformer configuration CSV file.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.

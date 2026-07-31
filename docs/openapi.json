@@ -133,7 +133,7 @@
         },
         "responses": {
           "200": {
-            "description": "Reapply ISQ to a non GGUF or GGML model."
+            "description": "Reapply ISQ to a model that was loaded with ISQ."
           }
         }
       }
@@ -2828,6 +2828,11 @@
               }
             ]
           },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Ignore model EOS tokens while still honoring explicit stops and the token limit.",
+            "example": false
+          },
           "logit_bias": {
             "type": [
               "object",
@@ -3312,6 +3317,11 @@
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Ignore model EOS tokens while still honoring explicit stops and the token limit.",
+            "example": false
           },
           "logit_bias": {
             "type": [
@@ -5113,6 +5123,10 @@
                 "description": "Grammar for constrained generation (mistral.rs extension)"
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Continue generation past EOS until another stop condition is met"
           },
           "include": {
             "type": [
@@ -6987,6 +7001,11 @@
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Continue generation past EOS until another stop condition is met.",
+            "example": false
           },
           "input": {
             "$ref": "#/components/schemas/ResponsesMessages",

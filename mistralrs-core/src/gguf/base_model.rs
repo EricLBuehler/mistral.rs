@@ -194,6 +194,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_mismatch_from_any_projector_component() {
+        let model = metadata("https://huggingface.co/Qwen/Qwen3.5-4B");
+        let vision = metadata("https://huggingface.co/Qwen/Qwen3.5-4B");
+        let audio = metadata("https://huggingface.co/Qwen/Qwen3.5-9B");
+        let error = infer_hf_base_model_id([
+            ("model", &model),
+            ("vision projector", &vision),
+            ("audio projector", &audio),
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("audio projector"));
+        assert!(error.to_string().contains("metadata mismatch"));
+    }
+
+    #[test]
     fn rejects_ambiguous_base_models() {
         let mut model = metadata("https://huggingface.co/org/first");
         model.insert(BASE_MODEL_COUNT.to_string(), Value::U32(2));

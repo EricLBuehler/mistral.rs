@@ -394,6 +394,10 @@ pub enum Which {
         tokenizer_json = None,
         mmproj_filename = None,
         topology = None,
+        organization = None,
+        write_uqff = None,
+        imatrix = None,
+        calibration_file = None,
         max_edge = None,
         dtype = ModelDType::Auto,
         auto_map_params = None,
@@ -402,6 +406,9 @@ pub enum Which {
         max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
         max_rank = DEFAULT_LORA_MAX_RANK,
         max_bytes = DEFAULT_LORA_MAX_BYTES,
+        hf_cache_path = None,
+        matformer_config_path = None,
+        matformer_slice_name = None,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
@@ -411,6 +418,10 @@ pub enum Which {
         tokenizer_json: Option<String>,
         mmproj_filename: Option<Either<String, Vec<String>>>,
         topology: Option<String>,
+        organization: Option<IsqOrganization>,
+        write_uqff: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
         max_edge: Option<u32>,
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
@@ -419,6 +430,9 @@ pub enum Which {
         max_adapters: usize,
         max_rank: usize,
         max_bytes: u64,
+        hf_cache_path: Option<PathBuf>,
+        matformer_config_path: Option<PathBuf>,
+        matformer_slice_name: Option<String>,
     },
 
     #[pyo3(constructor = (

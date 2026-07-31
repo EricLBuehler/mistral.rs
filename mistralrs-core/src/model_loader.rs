@@ -601,7 +601,14 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             lora_adapters,
             lora_runtime_config,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
             max_edge,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
             ..
         } => {
             if lora_runtime_config.is_none() && !lora_adapters.is_empty() {
@@ -617,7 +624,15 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     .collect::<Vec<_>>(),
                 GGUFSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
+                    organization: organization.unwrap_or_default(),
+                    write_uqff,
+                    imatrix,
+                    calibration_file,
                     max_edge,
+                    max_model_len: args.max_model_len,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

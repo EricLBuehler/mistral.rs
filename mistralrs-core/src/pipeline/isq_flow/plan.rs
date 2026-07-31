@@ -84,8 +84,32 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
             "Writing UQFF (`write_uqff`) while loading from UQFF (`from_uqff`) is not supported."
         );
     }
+    if wants_imatrix && i.loading_from_uqff {
+        anyhow::bail!(
+            "Imatrix or calibration input cannot be combined with loading from UQFF; UQFF weights take precedence over applying ISQ."
+        );
+    }
+    let topology_overrides = if i.loading_from_uqff {
+        i.topology_overrides
+            .iter()
+            .filter_map(|override_entry| {
+                override_entry
+                    .device
+                    .as_ref()
+                    .map(|device| mistralrs_quant::ImmediateIsqOverride {
+                        predicate: override_entry.predicate.clone(),
+                        layer_range: override_entry.layer_range.clone(),
+                        ty: None,
+                        device: Some(device.clone()),
+                    })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        i.topology_overrides.clone()
+    };
 
-    let allow_immediate_cli = i.in_situ_quant.is_some() || i.has_write_uqff;
+    let allow_immediate_cli =
+        !i.loading_from_uqff && (i.in_situ_quant.is_some() || i.has_write_uqff);
     let write_types = if i.has_write_uqff {
         i.write_uqff_types.map(|types| {
             if types.is_empty() {
@@ -129,10 +153,10 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
         mistralrs_quant::set_immediate_isq_config(
             mistralrs_quant::ImmediateIsqConfig::new(immediate_ty, immediate_predicates, capture)
                 .with_promoted_predicates(promoted_predicates.clone())
-                .with_overrides(i.topology_overrides.clone()),
+                .with_overrides(topology_overrides.clone()),
             executor,
         );
-    } else if !i.topology_overrides.is_empty() {
+    } else if !topology_overrides.is_empty() {
         let (executor, num_threads) = mistralrs_quant::create_isq_executor(
             mistralrs_quant::IsqExecutorConfig::new(immediate_ty),
         );
@@ -144,17 +168,13 @@ pub(crate) fn resolve_and_install_isq_plan(i: IsqPlanInputs<'_>) -> Result<IsqLo
                 capture_mode(i.has_write_uqff, wants_imatrix),
             )
             .with_promoted_predicates(promoted_predicates)
-            .with_overrides(i.topology_overrides.clone()),
+            .with_overrides(topology_overrides.clone()),
             executor,
         );
     }
 
-    let use_immediate = allow_immediate_cli || !i.topology_overrides.is_empty();
-    let loading_isq = if use_immediate {
-        false
-    } else {
-        i.in_situ_quant.is_some()
-    };
+    let use_immediate = allow_immediate_cli || !topology_overrides.is_empty();
+    let loading_isq = !use_immediate && !i.loading_from_uqff && i.in_situ_quant.is_some();
 
     // Load onto the regular device if not using isq.
     // For immediate ISQ on discrete GPUs, load to CPU: the mapper will set the correct target
@@ -238,5 +258,121 @@ mod tests {
         assert!(matches(&promoted, "model.embed_tokens.weight"));
         assert!(matches(&promoted, "lm_head.weight"));
         Ok(())
+    }
+
+    #[test]
+    fn uqff_precedence_suppresses_isq_topology_overrides() -> Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let plan = resolve_and_install_isq_plan(IsqPlanInputs {
+            in_situ_quant: Some(IsqType::Q4K),
+            has_imatrix: false,
+            has_calibration: false,
+            write_uqff_types: None,
+            has_write_uqff: false,
+            loading_from_uqff: true,
+            organization: IsqOrganization::Default,
+            topology_overrides: vec![mistralrs_quant::ImmediateIsqOverride {
+                predicate: Some(regex::Regex::new(r"^model\.layers\.0\.")?),
+                layer_range: None,
+                ty: Some(IsqType::Q6K),
+                device: None,
+            }],
+            loader: &Loader,
+            config: "",
+            device: &Device::Cpu,
+        })?;
+
+        assert!(!plan.immediate_isq_installed);
+        assert!(!plan.loading_isq);
+        assert!(mistralrs_quant::get_immediate_isq().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_precedence_preserves_topology_device_overrides() -> Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let plan = resolve_and_install_isq_plan(IsqPlanInputs {
+            in_situ_quant: Some(IsqType::Q4K),
+            has_imatrix: false,
+            has_calibration: false,
+            write_uqff_types: None,
+            has_write_uqff: false,
+            loading_from_uqff: true,
+            organization: IsqOrganization::Default,
+            topology_overrides: vec![mistralrs_quant::ImmediateIsqOverride {
+                predicate: Some(regex::Regex::new(r"^model\.vision_proj\.weight$")?),
+                layer_range: None,
+                ty: Some(IsqType::Q6K),
+                device: Some(Device::Cpu),
+            }],
+            loader: &Loader,
+            config: "",
+            device: &Device::Cpu,
+        })?;
+
+        assert!(plan.immediate_isq_installed);
+        assert!(!plan.loading_isq);
+        let params = mistralrs_quant::get_immediate_isq().expect("device override is installed");
+        assert_eq!(params.ty, None);
+        assert!(params.predicates.is_empty());
+        assert_eq!(params.overrides.len(), 1);
+        assert_eq!(params.overrides[0].ty, None);
+        assert!(params.overrides[0]
+            .device
+            .as_ref()
+            .is_some_and(Device::is_cpu));
+        assert!(params.overrides[0]
+            .predicate
+            .as_ref()
+            .is_some_and(|predicate| predicate.is_match("model.vision_proj.weight")));
+        mistralrs_quant::clear_immediate_isq();
+        Ok(())
+    }
+
+    #[test]
+    fn quantized_prepared_sources_keep_immediate_isq_enabled() -> Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let plan = resolve_and_install_isq_plan(IsqPlanInputs {
+            in_situ_quant: Some(IsqType::Q4K),
+            has_imatrix: false,
+            has_calibration: false,
+            write_uqff_types: None,
+            has_write_uqff: false,
+            loading_from_uqff: false,
+            organization: IsqOrganization::Default,
+            topology_overrides: Vec::new(),
+            loader: &Loader,
+            config: "",
+            device: &Device::Cpu,
+        })?;
+
+        assert!(plan.immediate_isq_installed);
+        assert!(!plan.loading_isq);
+        assert!(mistralrs_quant::get_immediate_isq().is_some());
+        mistralrs_quant::clear_immediate_isq();
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_rejects_calibration_input() {
+        let result = resolve_and_install_isq_plan(IsqPlanInputs {
+            in_situ_quant: Some(IsqType::Q4K),
+            has_imatrix: false,
+            has_calibration: true,
+            write_uqff_types: None,
+            has_write_uqff: false,
+            loading_from_uqff: true,
+            organization: IsqOrganization::Default,
+            topology_overrides: Vec::new(),
+            loader: &Loader,
+            config: "",
+            device: &Device::Cpu,
+        });
+        let Err(err) = result else {
+            panic!("UQFF calibration input should be rejected");
+        };
+
+        assert!(err.to_string().contains("cannot be combined"));
+        assert!(err.to_string().contains("UQFF weights take precedence"));
     }
 }

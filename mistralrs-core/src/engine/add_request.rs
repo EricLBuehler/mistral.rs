@@ -714,6 +714,7 @@ impl Engine {
                 image_gen_save_file.clone(),
                 seq_preallocated_cache,
                 request.return_raw_logits,
+                request.sampling_params.ignore_eos,
                 eos_toks,
             );
             if let Some(adapter_lease) = &adapter_lease {

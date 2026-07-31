@@ -4,8 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::Module;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    apply_immediate_isq, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -367,6 +367,7 @@ impl GraniteParallelExperts {
             if let Some(weight) =
                 source.load_linear(&vb.prefix(), vb.device(), mistralrs_quant::Shard::default())?
             {
+                let weight = apply_immediate_isq(weight, vb)?;
                 return Ok(Self {
                     weights: GraniteParallelExpertWeights::Quantized(weight),
                     output_size,
@@ -402,9 +403,9 @@ impl GraniteParallelExperts {
                 .collect::<Vec<_>>();
             let rows = expert_ids.len();
             let expert_ids = Tensor::from_vec(expert_ids, (rows, 1), device)?;
-            return weight
-                .gather_forward(&x.unsqueeze(1)?, &expert_ids)?
-                .squeeze(1);
+            let routed_x = x.unsqueeze(1)?;
+            weight.process_routed_stats(&routed_x, &expert_ids)?;
+            return weight.gather_forward(&routed_x, &expert_ids)?.squeeze(1);
         }
         let GraniteParallelExpertWeights::Dense(weights) = &self.weights else {
             unreachable!()
@@ -481,10 +482,12 @@ impl GraniteMoE {
             self.input_linear.quantized(),
             self.output_linear.quantized(),
         ) {
+            input_linear.process_routed_stats(&x_flat, &topk.indices)?;
             let hidden = input_linear.gather_forward(&x_flat.unsqueeze(1)?, &topk.indices)?;
             let chunks = hidden.chunk(2, candle_core::D::Minus1)?;
             let hidden =
                 crate::ops::mul_and_act(&chunks[0], &chunks[1], crate::layers::Activation::Silu)?;
+            output_linear.process_routed_stats(&hidden, &topk.indices)?;
             let expert_outputs = output_linear.gather_forward(&hidden, &topk.indices)?;
             return expert_outputs
                 .broadcast_mul(&topk.values.to_dtype(dtype)?.unsqueeze(2)?)?
@@ -2734,19 +2737,15 @@ mod tests {
             },
             input_size: HIDDEN_SIZE,
         };
+        let packed_input = unquant_linear(input_weights, None)?;
+        let packed_output = unquant_linear(output_weights, None)?;
         let packed = GraniteMoE {
             input_linear: GraniteParallelExperts {
-                weights: GraniteParallelExpertWeights::Quantized(unquant_linear(
-                    input_weights,
-                    None,
-                )?),
+                weights: GraniteParallelExpertWeights::Quantized(packed_input.clone()),
                 output_size: EXPERT_INTERMEDIATE * 2,
             },
             output_linear: GraniteParallelExperts {
-                weights: GraniteParallelExpertWeights::Quantized(unquant_linear(
-                    output_weights,
-                    None,
-                )?),
+                weights: GraniteParallelExpertWeights::Quantized(packed_output.clone()),
                 output_size: HIDDEN_SIZE,
             },
             router: GraniteTopKGating {
@@ -2761,7 +2760,35 @@ mod tests {
             (2, 3, HIDDEN_SIZE),
             &device,
         )?;
-        assert_close(&packed.forward(&input)?, &dense.forward(&input)?)
+        packed_input.begin_track_stats()?;
+        packed_output.begin_track_stats()?;
+        let packed_output_tensor = packed.forward(&input)?;
+        assert_eq!(packed_input.stats_snapshot(), Some((1, 12)));
+        assert_eq!(packed_output.stats_snapshot(), Some((1, 12)));
+        assert_close(&packed_output_tensor, &dense.forward(&input)?)
+    }
+
+    #[test]
+    fn packed_expert_forward_records_routed_stats() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = unquant_linear(Tensor::ones((2, 2, 3), DType::F32, &device)?, None)?;
+        let experts = GraniteParallelExperts {
+            weights: GraniteParallelExpertWeights::Quantized(weight.clone()),
+            output_size: 2,
+        };
+        let input = Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.], [7., 8., 9.]], &device)?;
+
+        weight.begin_track_stats()?;
+        experts.forward(&input, &[1, 2])?;
+        assert_eq!(weight.stats_snapshot(), Some((1, 3)));
+        assert_eq!(
+            weight.end_track_stats()?.to_vec2::<f32>()?,
+            vec![
+                vec![1., 4., 9.],
+                vec![(16. + 49.) / 2., (25. + 64.) / 2., (36. + 81.) / 2.]
+            ]
+        );
+        Ok(())
     }
 
     #[test]

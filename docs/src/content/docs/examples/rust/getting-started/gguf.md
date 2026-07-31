@@ -9,16 +9,22 @@ sidebar:
 
 Load and run a standalone GGUF model from Hugging Face.
 
-Use `with_tok_model_id` only when the original model repo is needed for configuration or
-tokenizer assets.
+Configuration and tokenizer assets are discovered automatically. Use `with_tok_model_id`
+only to override that choice or when the source cannot be identified.
+
+`GgufModelBuilder` also supports ISQ, imatrix and calibration input, MoE expert-only
+quantization, UQFF output, multimodal projectors, and dynamic LoRA.
 
 Run with: `cargo run --release --example gguf -p mistralrs`
 
 ```rust
 //! Load and run a standalone GGUF model from Hugging Face.
 //!
-//! Use `with_tok_model_id` only when the original model repo is needed for configuration or
-//! tokenizer assets.
+//! Configuration and tokenizer assets are discovered automatically. Use `with_tok_model_id`
+//! only to override that choice or when the source cannot be identified.
+//!
+//! `GgufModelBuilder` also supports ISQ, imatrix and calibration input, MoE expert-only
+//! quantization, UQFF output, multimodal projectors, and dynamic LoRA.
 //!
 //! Run with: `cargo run --release --example gguf -p mistralrs`
 

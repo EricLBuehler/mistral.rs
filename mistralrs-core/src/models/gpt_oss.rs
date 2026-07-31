@@ -4,8 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder, UnquantLinear,
+    apply_immediate_isq, ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantMethodConfig,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -358,7 +358,7 @@ fn load_gpt_oss_expert_projection(
         if let Some(layer) =
             source.load_linear(&projection_vb.prefix(), vb.device(), Shard::default())?
         {
-            return Ok(layer);
+            return apply_immediate_isq(layer, projection_vb);
         }
     }
     let weight = projection_vb.get(shape, "weight")?;
@@ -367,9 +367,10 @@ fn load_gpt_oss_expert_projection(
     } else {
         None
     };
-    Ok(Arc::new(UnquantLinear::new(
-        QuantMethodConfig::Unquantized(Linear::new(weight, bias)),
-    )?))
+    let layer = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+        Linear::new(weight, bias),
+    ))?) as Arc<dyn QuantMethod>;
+    apply_immediate_isq(layer, projection_vb)
 }
 
 impl GptOssMoE {
@@ -501,10 +502,12 @@ impl GptOssMoE {
             .map(mistralrs_quant::LoraExpertExecution::current)
             .transpose()?
             .flatten();
+        let routed_input = xs_flat.unsqueeze(1)?;
 
         let activated = match &self.projections {
             GptOssExpertProjections::Interleaved { gate_up, .. } => {
-                let gate_up = gate_up.gather_forward(&xs_flat, &topk_ids)?;
+                gate_up.process_routed_stats(&xs_flat, &topk_ids)?;
+                let gate_up = gate_up.gather_forward(&routed_input, &topk_ids)?;
                 let (num_tokens, topk_dim, _) = gate_up.dims3()?;
                 if let Some(lora) = &expert_lora {
                     let (gate, up) = lora.add_gate_up_delta_owned(&xs_flat, gate_up, &topk_ids)?;
@@ -518,8 +521,10 @@ impl GptOssMoE {
                 }
             }
             GptOssExpertProjections::Split { gate, up, .. } => {
-                let mut gate = gate.gather_forward(&xs_flat, &topk_ids)?;
-                let mut up = up.gather_forward(&xs_flat, &topk_ids)?;
+                gate.process_routed_stats(&xs_flat, &topk_ids)?;
+                up.process_routed_stats(&xs_flat, &topk_ids)?;
+                let mut gate = gate.gather_forward(&routed_input, &topk_ids)?;
+                let mut up = up.gather_forward(&routed_input, &topk_ids)?;
                 if let Some(lora) = &expert_lora {
                     gate = lora.add_delta_owned(
                         mistralrs_quant::LoraExpertProjection::Gate,
@@ -546,6 +551,7 @@ impl GptOssMoE {
             GptOssExpertProjections::Interleaved { down, .. }
             | GptOssExpertProjections::Split { down, .. } => down,
         };
+        down.process_routed_stats(&activated, &topk_ids)?;
         let expert_out = down.gather_forward(&activated, &topk_ids)?;
         let expert_out = match &expert_lora {
             Some(lora) => lora.add_delta_owned(
@@ -962,3 +968,59 @@ impl NormalModel for Model {
 }
 
 impl AnyMoeBaseModelMixin for Model {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quant(weight: Tensor) -> Result<Arc<dyn QuantMethod>> {
+        let weight = candle_core::quantized::QTensor::quantize(
+            &weight,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        Ok(Arc::new(mistralrs_quant::GgufMatMul::new(
+            QuantMethodConfig::Gguf {
+                q_weight: Arc::new(weight),
+                b: None,
+            },
+        )?))
+    }
+
+    #[test]
+    fn split_expert_forward_records_routed_stats() -> Result<()> {
+        let device = Device::Cpu;
+        let gate = quant(Tensor::ones((2, 32, 32), DType::F32, &device)?)?;
+        let up = quant(Tensor::ones((2, 32, 32), DType::F32, &device)?)?;
+        let down = quant(Tensor::ones((2, 32, 32), DType::F32, &device)?)?;
+        let mut router = vec![0f32; 64];
+        router[0] = 1.0;
+        router[32] = -1.0;
+        let moe = GptOssMoE {
+            gate: Linear::new(Tensor::from_vec(router, (2, 32), &device)?, None),
+            gate_lora: None,
+            projections: GptOssExpertProjections::Split {
+                gate: gate.clone(),
+                up: up.clone(),
+                down: down.clone(),
+            },
+            expert_lora: None,
+            num_experts_per_tok: 1,
+            intermediate_size: 32,
+            alpha: 1.702,
+            limit: 7.0,
+        };
+        let mut input = vec![1f32; 64];
+        input[32] = -1.0;
+        let input = Tensor::from_vec(input, (1, 2, 32), &device)?;
+
+        gate.begin_track_stats()?;
+        up.begin_track_stats()?;
+        down.begin_track_stats()?;
+        moe.forward(&input, 0)?;
+
+        assert_eq!(gate.stats_snapshot(), Some((1, 2)));
+        assert_eq!(up.stats_snapshot(), Some((1, 2)));
+        assert_eq!(down.stats_snapshot(), Some((1, 2)));
+        Ok(())
+    }
+}

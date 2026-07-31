@@ -110,6 +110,7 @@ pub struct MultimodalPipeline {
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
     source_weight_files: Vec<std::path::PathBuf>,
+    source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
@@ -185,6 +186,7 @@ impl MultimodalLoaderBuilder {
         model_id: Option<String>,
         jinja_explicit: Option<String>,
     ) -> Self {
+        let hf_cache_path = config.hf_cache_path.clone();
         Self {
             config,
             chat_template,
@@ -192,7 +194,7 @@ impl MultimodalLoaderBuilder {
             model_id,
             jinja_explicit,
             kind: ModelKind::Normal,
-            hf_cache_path: None,
+            hf_cache_path,
             lora_adapters: None,
             lora_runtime_config: None,
         }
@@ -1192,6 +1194,7 @@ impl Loader for MultimodalLoader {
             generation_defaults,
             tracked_modules,
             source_weight_files,
+            source_weight_source: weight_source,
             mapper: pipeline_mapper,
             dynamic_lora,
         })))
@@ -1258,6 +1261,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
         let result = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
+            self.source_weight_source.as_deref(),
             save_cimatrix.as_deref(),
         );
         #[cfg(feature = "cuda")]

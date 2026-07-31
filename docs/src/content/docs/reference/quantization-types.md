@@ -5,10 +5,13 @@ description: Every runtime ISQ (in-situ quantization) type mistralrs supports, w
 
 ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
 
-Flag choice for normal CLI usage:
+For `run`, `serve`, and `bench`:
 
 - `--quant N` - normal usage.
 - `--isq N` - force runtime ISQ and skip the [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
+
+For a GGUF repository, `--quant` selects a matching published file. To requantize GGUF weights
+instead, select an exact file with `-f` and pass `--isq`.
 
 ## Numeric shorthands
 

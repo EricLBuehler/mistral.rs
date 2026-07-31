@@ -137,7 +137,7 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 |---|---|
 | `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
-| `[models.quantization]` | Quantization: `quant` (front-door, same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`. |
+| `[models.quantization]` | Quantization: `quant` (front-door, same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
 | `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
@@ -223,14 +223,14 @@ model_id = "unsloth/gemma-4-E4B-it-GGUF"
 quant = "4"
 ```
 
-Use format fields only when you want an exact artifact or asset source:
+Use the format overrides only when you want an exact artifact or asset source. The filename suffix
+still selects GGUF automatically:
 
 ```toml
 [[models]]
 model_id = "unsloth/gemma-4-E4B-it-GGUF"
 
 [models.format]
-format = "gguf"
 quantized_file = "gemma-4-E4B-it-Q4_K_M.gguf"
 mmproj = "mmproj-BF16.gguf"
 tok_model_id = "google/gemma-4-E4B-it"

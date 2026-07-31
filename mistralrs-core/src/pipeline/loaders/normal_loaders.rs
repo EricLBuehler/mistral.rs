@@ -1203,6 +1203,9 @@ impl IsqModelLoader for MixtralLoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.block_sparse_moe\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -2465,6 +2468,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.block_sparse_moe\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -2478,6 +2484,9 @@ impl IsqModelLoader for Phi3_5MoELoader {
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.block_sparse_moe\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
@@ -2681,6 +2690,7 @@ impl IsqModelLoader for DeepSeekV2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         if cfg.q_lora_rank.is_some() {
@@ -2742,7 +2752,10 @@ impl IsqModelLoader for DeepSeekV2Loader {
     }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ];
         let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
@@ -3025,6 +3038,7 @@ impl IsqModelLoader for DeepSeekV3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         if cfg.q_lora_rank.is_some() {
@@ -3086,7 +3100,10 @@ impl IsqModelLoader for DeepSeekV3Loader {
     }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ];
         let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
@@ -3790,6 +3807,7 @@ impl IsqModelLoader for HunYuanMoEV1Loader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -4210,6 +4228,7 @@ impl IsqModelLoader for GLM4MoeLiteLoader {
             // Q LoRA projections
             Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.q_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
         let cfg: crate::models::glm4_moe_lite::Glm4MoeLiteConfig = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -4263,7 +4282,10 @@ impl IsqModelLoader for GLM4MoeLiteLoader {
     }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ];
         let cfg: crate::models::glm4_moe_lite::Glm4MoeLiteConfig = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             if layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0 {
@@ -4549,6 +4571,7 @@ impl IsqModelLoader for GLM4MoeLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
         let cfg: crate::models::glm4_moe::Glm4MoeConfig = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
@@ -4602,7 +4625,10 @@ impl IsqModelLoader for GLM4MoeLoader {
     }
 
     fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![Regex::new(r"lm_head\.(weight|bias)$")?];
+        let mut data = vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ];
         let cfg: crate::models::glm4_moe::Glm4MoeConfig = serde_json::from_str(config)?;
         for layer_idx in 0..cfg.num_hidden_layers {
             if layer_idx >= cfg.first_k_dense_replace {
@@ -4898,6 +4924,7 @@ impl IsqModelLoader for Qwen3MoELoader {
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -5327,10 +5354,19 @@ impl IsqModelLoader for GraniteMoeHybridLoader {
             // MLP (GraniteMLP uses shared_mlp.input_linear and shared_mlp.output_linear)
             Regex::new(r"layers\.(\d+)\.shared_mlp\.input_linear\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.shared_mlp\.output_linear\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.(input_linear|output_linear)\.weight$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"layers\.(\d+)\.block_sparse_moe\.(input_linear|output_linear)\.weight$",
+        )?])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -5542,7 +5578,6 @@ impl IsqModelLoader for GptOssLoader {
     }
 
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        // Only attention layers are ISQ-able - MoE experts are already MXFP4 quantized
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
@@ -5550,10 +5585,19 @@ impl IsqModelLoader for GptOssLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+        )?])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -5775,6 +5819,7 @@ impl IsqModelLoader for Qwen3NextLoader {
             Regex::new(
                 r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
             )?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
             Regex::new(
                 r"layers\.(\d+)\.mlp\.shared_expert\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
             )?,
@@ -6216,6 +6261,9 @@ impl IsqModelLoader for Lfm2Loader {
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.feed_forward\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
 
@@ -6229,6 +6277,9 @@ impl IsqModelLoader for Lfm2Loader {
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.feed_forward\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
 
@@ -6420,6 +6471,207 @@ mod tests {
                 "{loader_name} promoted lookalike tensor {tensor}"
             );
         }
+    }
+
+    const FUSED_EXPERT_PROJECTIONS: &[&str] = &["gate_proj", "up_proj", "down_proj"];
+    const GRANITE_EXPERT_PROJECTIONS: &[&str] = &["input_linear", "output_linear"];
+
+    fn assert_expert_isq_predicates(
+        loader_name: &str,
+        loader: &dyn IsqModelLoader,
+        config: &str,
+        prefix: &str,
+        projections: &[&str],
+    ) -> Result<()> {
+        let predicate_sets = [
+            ("isq", loader.isq_layer_regexes(config)?),
+            ("immediate", loader.immediate_isq_predicates(config)?),
+            ("moqe", loader.isq_layer_regexes_moqe(config)?),
+            (
+                "immediate moqe",
+                loader.immediate_isq_predicates_moqe(config)?,
+            ),
+        ];
+        for (kind, predicates) in predicate_sets {
+            for projection in projections {
+                let key = format!("{prefix}.{projection}.weight");
+                assert!(
+                    predicates.iter().any(|predicate| predicate.is_match(&key)),
+                    "{loader_name} {kind} predicates did not match {key}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn deepseek_moe_config() -> String {
+        serde_json::json!({
+            "vocab_size": 32,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "moe_intermediate_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "n_shared_experts": 1,
+            "n_routed_experts": 2,
+            "num_experts_per_tok": 1,
+            "first_k_dense_replace": 0,
+            "moe_layer_freq": 1,
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 0.00001,
+            "rope_theta": 10000.0,
+            "rope_scaling": null,
+            "attention_bias": false,
+            "q_lora_rank": null,
+            "qk_rope_head_dim": 2,
+            "kv_lora_rank": 2,
+            "v_head_dim": 2,
+            "qk_nope_head_dim": 2,
+            "quantization_config": null,
+            "n_group": 1,
+            "topk_group": 1
+        })
+        .to_string()
+    }
+
+    fn glm4_moe_config() -> String {
+        serde_json::json!({
+            "vocab_size": 32,
+            "hidden_size": 8,
+            "intermediate_size": 16,
+            "moe_intermediate_size": 4,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "q_lora_rank": 2,
+            "kv_lora_rank": 2,
+            "qk_nope_head_dim": 2,
+            "qk_rope_head_dim": 2,
+            "v_head_dim": 2,
+            "partial_rotary_factor": 1.0,
+            "n_routed_experts": 2,
+            "n_shared_experts": 1,
+            "num_experts_per_tok": 1,
+            "first_k_dense_replace": 0,
+            "moe_layer_freq": 1,
+            "rms_norm_eps": 0.00001,
+            "rope_theta": 10000.0,
+            "max_position_embeddings": 128,
+            "head_dim": null,
+            "quantization_config": null
+        })
+        .to_string()
+    }
+
+    struct ExpertIsqCase<'a> {
+        name: &'static str,
+        loader: Box<dyn IsqModelLoader>,
+        config: &'a str,
+        prefix: &'static str,
+        projections: &'static [&'static str],
+    }
+
+    #[test]
+    fn normal_moe_loaders_match_canonical_expert_stacks() -> Result<()> {
+        let deepseek_config = deepseek_moe_config();
+        let glm4_config = glm4_moe_config();
+        let cases = [
+            ExpertIsqCase {
+                name: "MixtralLoader",
+                loader: Box::new(MixtralLoader),
+                config: "",
+                prefix: "model.layers.0.block_sparse_moe.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "Phi3_5MoELoader",
+                loader: Box::new(Phi3_5MoELoader),
+                config: "",
+                prefix: "model.layers.0.block_sparse_moe.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "DeepSeekV2Loader",
+                loader: Box::new(DeepSeekV2Loader),
+                config: &deepseek_config,
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "DeepSeekV3Loader",
+                loader: Box::new(DeepSeekV3Loader),
+                config: &deepseek_config,
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "HunYuanMoEV1Loader",
+                loader: Box::new(HunYuanMoEV1Loader),
+                config: "",
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "GLM4MoeLiteLoader",
+                loader: Box::new(GLM4MoeLiteLoader),
+                config: &glm4_config,
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "GLM4MoeLoader",
+                loader: Box::new(GLM4MoeLoader),
+                config: &glm4_config,
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "Qwen3MoELoader",
+                loader: Box::new(Qwen3MoELoader),
+                config: "",
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "Qwen3NextLoader",
+                loader: Box::new(Qwen3NextLoader),
+                config: "",
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "Lfm2Loader",
+                loader: Box::new(Lfm2Loader),
+                config: "",
+                prefix: "model.layers.0.feed_forward.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "GraniteMoeHybridLoader",
+                loader: Box::new(GraniteMoeHybridLoader),
+                config: "",
+                prefix: "model.layers.0.block_sparse_moe",
+                projections: GRANITE_EXPERT_PROJECTIONS,
+            },
+            ExpertIsqCase {
+                name: "GptOssLoader",
+                loader: Box::new(GptOssLoader),
+                config: "",
+                prefix: "model.layers.0.mlp.experts",
+                projections: FUSED_EXPERT_PROJECTIONS,
+            },
+        ];
+
+        for case in cases {
+            assert_expert_isq_predicates(
+                case.name,
+                case.loader.as_ref(),
+                case.config,
+                case.prefix,
+                case.projections,
+            )?;
+        }
+        Ok(())
     }
 
     #[test]

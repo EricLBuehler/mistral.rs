@@ -2162,11 +2162,12 @@ pub fn linear_no_bias(
             if let Some(layer) =
                 source.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return maybe_wrap_dynamic_lora(
+                let layer = maybe_wrap_dynamic_lora(
                     &base_vb,
                     layer,
                     LoraLinearSpec::replicated(in_dim, out_dim),
-                );
+                )?;
+                return apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()));
             }
         }
     }
@@ -2239,11 +2240,12 @@ pub fn linear(
             if let Some(layer) =
                 source.load_linear(&base_vb.prefix(), base_vb.device(), Shard::default())?
             {
-                return maybe_wrap_dynamic_lora(
+                let layer = maybe_wrap_dynamic_lora(
                     &base_vb,
                     layer,
                     LoraLinearSpec::replicated(in_dim, out_dim),
-                );
+                )?;
+                return apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()));
             }
         }
     }
@@ -2324,6 +2326,45 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    struct DenseWeightSource;
+
+    impl QuantizedWeightSource for DenseWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            name == "foo.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> Result<Option<Arc<dyn QuantMethod>>> {
+            if key != "foo" {
+                return Ok(None);
+            }
+            let weight = Tensor::zeros((3, 2), DType::F32, device)?;
+            Ok(Some(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+            )?)))
+        }
+
+        fn load_optional_tensor(&self, _name: &str, _device: &Device) -> Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
 
     fn empty_vb(make_dummy_regexes: Option<Vec<&str>>) -> ShardedVarBuilder {
         let backend: HashMap<String, Tensor> = HashMap::new();
@@ -2501,6 +2542,33 @@ mod tests {
         assert!(msg.contains("foo.weight"));
         assert!(msg.contains("temporary UQFF placeholders"));
 
+        Ok(())
+    }
+
+    #[test]
+    fn weight_source_linear_participates_in_immediate_isq_tracking() -> Result<()> {
+        let ty = Some(IsqType::Q8_0);
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        set_immediate_isq_config(
+            ImmediateIsqConfig::new(
+                ty,
+                vec![Regex::new(r"^foo\.weight$").unwrap()],
+                IsqCaptureMode::CaptureMatches,
+            ),
+            executor,
+        );
+
+        let vb = empty_vb(None)
+            .with_weight_source(Arc::new(DenseWeightSource))
+            .pp("foo");
+        let tracker = vb.tracker().clone();
+        let layer = linear_no_bias(2, 3, &None, vb);
+        clear_immediate_isq();
+
+        layer?.forward_raw(&Tensor::zeros((1, 2), DType::F32, &Device::Cpu)?)?;
+        assert_eq!(tracker.get().len(), 1);
+        assert_eq!(tracker.get()[0].key, "foo");
+        assert_eq!(tracker.get()[0].ty, ty);
         Ok(())
     }
 }

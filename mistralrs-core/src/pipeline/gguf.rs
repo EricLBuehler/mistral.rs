@@ -48,7 +48,7 @@ use crate::xlora_models::{XLoraQLlama, XLoraQPhi3};
 use crate::{
     distributed, get_mut_arcmutex, get_paths_gguf, DeviceMapSetting, LocalModelPaths,
     LoraAdapterSpec, LoraRuntimeConfig, MultimodalLoaderType, PagedAttentionConfig, Pipeline,
-    Topology, TryIntoDType,
+    Topology, TryIntoDType, UqffWriteConfig, GLOBAL_HF_CACHE,
 };
 use anyhow::{bail, Context, Result};
 use candle_core::{Device, Tensor};
@@ -130,7 +130,33 @@ pub struct GGUFLoader {
 /// Config for a GGUF loader.
 pub struct GGUFSpecificConfig {
     pub topology: Option<Topology>,
+    pub organization: crate::pipeline::IsqOrganization,
+    pub write_uqff: Option<UqffWriteConfig>,
+    pub imatrix: Option<PathBuf>,
+    pub calibration_file: Option<PathBuf>,
     pub max_edge: Option<u32>,
+    pub max_model_len: Option<usize>,
+    pub hf_cache_path: Option<PathBuf>,
+    pub matformer_config_path: Option<PathBuf>,
+    pub matformer_slice_name: Option<String>,
+}
+
+impl GGUFSpecificConfig {
+    fn multimodal_config(&self) -> MultimodalSpecificConfig {
+        MultimodalSpecificConfig {
+            topology: self.topology.clone(),
+            organization: self.organization,
+            write_uqff: self.write_uqff.clone(),
+            imatrix: self.imatrix.clone(),
+            calibration_file: self.calibration_file.clone(),
+            max_edge: self.max_edge,
+            max_model_len: self.max_model_len,
+            hf_cache_path: self.hf_cache_path.clone(),
+            matformer_config_path: self.matformer_config_path.clone(),
+            matformer_slice_name: self.matformer_slice_name.clone(),
+            ..Default::default()
+        }
+    }
 }
 
 struct NativeMultimodalLoadArgs<'a> {
@@ -140,6 +166,17 @@ struct NativeMultimodalLoadArgs<'a> {
     device: &'a Device,
     silent: bool,
     mapper: DeviceMapSetting,
+    in_situ_quant: Option<IsqType>,
+    paged_attn_config: Option<PagedAttentionConfig>,
+}
+
+struct NativeNormalLoadArgs<'a> {
+    paths: &'a dyn ModelPaths,
+    dtype: &'a dyn TryIntoDType,
+    device: &'a Device,
+    silent: bool,
+    mapper: DeviceMapSetting,
+    in_situ_quant: Option<IsqType>,
     paged_attn_config: Option<PagedAttentionConfig>,
 }
 
@@ -340,13 +377,17 @@ impl GGUFLoader {
 
     fn load_native_normal(
         &self,
-        paths: &dyn ModelPaths,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapSetting,
-        paged_attn_config: Option<PagedAttentionConfig>,
+        args: NativeNormalLoadArgs<'_>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let NativeNormalLoadArgs {
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        } = args;
         let archive = Arc::new(mistralrs_quant::GgufArchive::open(
             paths.get_weight_filenames(),
         )?);
@@ -459,6 +500,13 @@ impl GGUFLoader {
         let mut loader = NormalLoaderBuilder::new(
             NormalSpecificConfig {
                 topology: self.config.topology.clone(),
+                organization: self.config.organization,
+                write_uqff: self.config.write_uqff.clone(),
+                imatrix: self.config.imatrix.clone(),
+                calibration_file: self.config.calibration_file.clone(),
+                hf_cache_path: self.config.hf_cache_path.clone(),
+                matformer_config_path: self.config.matformer_config_path.clone(),
+                matformer_slice_name: self.config.matformer_slice_name.clone(),
                 ..Default::default()
             },
             None,
@@ -477,7 +525,7 @@ impl GGUFLoader {
             device,
             silent,
             mapper,
-            None,
+            in_situ_quant,
             paged_attn_config,
         )
     }
@@ -493,6 +541,7 @@ impl GGUFLoader {
             device,
             silent,
             mapper,
+            in_situ_quant,
             paged_attn_config,
         } = args;
         if !matches!(self.kind, ModelKind::GgufQuantized { .. }) && self.dynamic_lora.is_none() {
@@ -506,8 +555,8 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
-        let mmproj = mistralrs_quant::GgufArchive::open(mmproj_paths)?;
-        archive.merge_component(mmproj)?;
+        let mmproj = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
+        archive.merge_components(mmproj)?;
         let archive = Arc::new(archive);
 
         let (loader_type, bindings, rope_pairing) = match architecture.as_str() {
@@ -596,11 +645,7 @@ impl GGUFLoader {
             rope_pairing,
         };
         let mut loader = MultimodalLoaderBuilder::new(
-            MultimodalSpecificConfig {
-                topology: self.config.topology.clone(),
-                max_edge: self.config.max_edge,
-                ..Default::default()
-            },
+            self.config.multimodal_config(),
             None,
             None,
             Some(self.quantized_model_id.clone()),
@@ -616,7 +661,7 @@ impl GGUFLoader {
             device,
             silent,
             mapper,
-            None,
+            in_situ_quant,
             paged_attn_config,
         )
     }
@@ -641,11 +686,26 @@ impl GGUFLoader {
 
         let config_missing = paths.get_config_filename().as_os_str().is_empty();
         let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
-        let projector_archive = mistralrs_quant::GgufArchive::open(mmproj_paths)?;
-        let inferred_model_id = infer_hf_base_model_id([
-            ("model", model_archive.metadata()),
-            ("projector", projector_archive.metadata()),
-        ]);
+        let projector_archives = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
+        let projector_labels = projector_archives
+            .iter()
+            .enumerate()
+            .map(|(index, archive)| {
+                format!(
+                    "projector {} (`{}`)",
+                    index + 1,
+                    archive.shards()[0].path().display()
+                )
+            })
+            .collect::<Vec<_>>();
+        let inferred_model_id = infer_hf_base_model_id(
+            std::iter::once(("model", model_archive.metadata())).chain(
+                projector_labels
+                    .iter()
+                    .zip(&projector_archives)
+                    .map(|(label, archive)| (label.as_str(), archive.metadata())),
+            ),
+        );
         let inferred_model_id = match inferred_model_id {
             Ok(inferred_model_id) => inferred_model_id,
             Err(error) if config_missing => {
@@ -765,6 +825,13 @@ impl Loader for GGUFLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        let cache = self
+            .config
+            .hf_cache_path
+            .clone()
+            .map(hf_hub::Cache::new)
+            .unwrap_or_default();
+        GLOBAL_HF_CACHE.get_or_init(|| cache);
         let revision = revision.unwrap_or_else(|| "main".to_string());
         if self.mmproj_filenames.as_ref().is_some_and(|filenames| {
             filenames.is_empty() || filenames.iter().any(|filename| filename.trim().is_empty())
@@ -787,9 +854,6 @@ impl Loader for GGUFLoader {
         );
         let paths = paths?;
         if let Some(mmproj_filenames) = self.mmproj_filenames.as_ref() {
-            if in_situ_quant.is_some() {
-                bail!("in-situ quantization is not supported for GGUF models");
-            }
             let mmproj_paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
                 LocalModelPaths,
                 &token_source,
@@ -818,6 +882,7 @@ impl Loader for GGUFLoader {
                 device,
                 silent,
                 mapper,
+                in_situ_quant,
                 paged_attn_config,
             });
         }
@@ -845,20 +910,23 @@ impl Loader for GGUFLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        if in_situ_quant.is_some() {
-            anyhow::bail!(
-                "You are trying to in-situ quantize a GGUF model. This will not do anything."
-            );
-        }
         if matches!(self.kind, ModelKind::GgufQuantized { .. }) || self.dynamic_lora.is_some() {
-            return self.load_native_normal(
+            return self.load_native_normal(NativeNormalLoadArgs {
                 paths,
                 dtype,
                 device,
                 silent,
                 mapper,
+                in_situ_quant,
                 paged_attn_config,
-            );
+            });
+        }
+        if in_situ_quant.is_some()
+            || self.config.write_uqff.is_some()
+            || self.config.imatrix.is_some()
+            || self.config.calibration_file.is_some()
+        {
+            bail!("ISQ conversion is only supported by the native GGUF loading path");
         }
         if paged_attn_config.is_some() {
             warn!("Adapter models do not currently support PagedAttention, running without");
@@ -1235,12 +1303,12 @@ impl Pipeline for GGUFPipeline {
     }
 }
 
-// TODO
 impl AnyMoePipelineMixin for GGUFPipeline {}
 
 #[cfg(test)]
 mod tests {
-    use super::{preferred_hf_config, requires_multimodal_projector};
+    use super::{preferred_hf_config, requires_multimodal_projector, GGUFSpecificConfig};
+    use std::path::PathBuf;
 
     #[test]
     fn scopes_main_only_multimodal_architectures() {
@@ -1260,5 +1328,34 @@ mod tests {
             Some("params.json")
         );
         assert_eq!(preferred_hf_config(&[]), None);
+    }
+
+    #[test]
+    fn prepared_multimodal_config_preserves_runtime_context_cap() {
+        let config = GGUFSpecificConfig {
+            organization: crate::pipeline::IsqOrganization::MoeExpertsOnly,
+            imatrix: Some(PathBuf::from("model.imatrix")),
+            max_edge: Some(1024),
+            max_model_len: Some(8192),
+            hf_cache_path: Some(PathBuf::from("hf-cache")),
+            matformer_config_path: Some(PathBuf::from("matformer.csv")),
+            matformer_slice_name: Some("small".to_string()),
+            ..Default::default()
+        }
+        .multimodal_config();
+
+        assert_eq!(config.max_edge, Some(1024));
+        assert_eq!(config.max_model_len, Some(8192));
+        assert!(matches!(
+            config.organization,
+            crate::pipeline::IsqOrganization::MoeExpertsOnly
+        ));
+        assert_eq!(config.imatrix, Some(PathBuf::from("model.imatrix")));
+        assert_eq!(config.hf_cache_path, Some(PathBuf::from("hf-cache")));
+        assert_eq!(
+            config.matformer_config_path,
+            Some(PathBuf::from("matformer.csv"))
+        );
+        assert_eq!(config.matformer_slice_name.as_deref(), Some("small"));
     }
 }

@@ -195,15 +195,19 @@ impl FastExpertsWeights {
         };
 
         let device = experts_vb.device();
-        let load = |key: &str, shard: Shard| -> Result<Arc<dyn QuantMethod>> {
-            source
-                .load_linear(key, device, shard)?
-                .ok_or_else(|| candle_core::Error::Msg(format!("Missing expert weight `{key}`.")))
+        let load = |key: &str,
+                    predicate_vb: ShardedVarBuilder,
+                    shard: Shard|
+         -> Result<Arc<dyn QuantMethod>> {
+            let layer = source.load_linear(key, device, shard)?.ok_or_else(|| {
+                candle_core::Error::Msg(format!("Missing expert weight `{key}`."))
+            })?;
+            apply_immediate_isq_with_key(layer, predicate_vb, Some(key.to_string()), Some(shard))
         };
         Ok(Some(FastExpertsWeights {
-            fused_gate_proj: load(&keys.gate, gate_shard)?,
-            fused_up_proj: load(&keys.up, gate_shard)?,
-            fused_down_proj: load(&keys.down, down_shard)?,
+            fused_gate_proj: load(&keys.gate, experts_vb.pp("gate_proj"), gate_shard)?,
+            fused_up_proj: load(&keys.up, experts_vb.pp("up_proj"), gate_shard)?,
+            fused_down_proj: load(&keys.down, experts_vb.pp("down_proj"), down_shard)?,
             sharded,
         }))
     }

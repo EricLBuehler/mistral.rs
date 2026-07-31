@@ -605,6 +605,10 @@ fn parse_which(
             tokenizer_json,
             mmproj_filename,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
             max_edge,
             dtype: _,
             auto_map_params: _,
@@ -613,6 +617,9 @@ fn parse_which(
             max_adapters,
             max_rank,
             max_bytes,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => {
             let runtime_config = LoraRuntimeConfig {
                 max_adapters,
@@ -627,7 +634,15 @@ fn parse_which(
                 quantized_filename.map_left(|f| vec![f]).into_inner(),
                 GGUFSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
+                    organization: organization.map(Into::into).unwrap_or_default(),
+                    write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                    imatrix,
+                    calibration_file,
                     max_edge,
+                    max_model_len: None,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
                 },
                 no_kv_cache,
                 jinja_explicit,
@@ -1660,6 +1675,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -1886,6 +1902,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -2083,8 +2100,8 @@ impl Runner {
         })
     }
 
-    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
-    /// then nothing will happen.
+    /// Re-ISQ a model that was loaded with ISQ. This includes compatible GGUF models
+    /// loaded with `in_situ_quant`; legacy GGUF and GGML models are not supported.
     #[pyo3(signature = (dtype, model_id = None))]
     fn send_re_isq(
         &self,
@@ -2610,6 +2627,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -2731,6 +2749,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -3230,6 +3249,10 @@ mod lora_adapter_error_tests {
             tokenizer_json: None,
             mmproj_filename: None,
             topology: None,
+            organization: None,
+            write_uqff: None,
+            imatrix: None,
+            calibration_file: None,
             max_edge: None,
             dtype: mistralrs_core::ModelDType::Auto,
             auto_map_params: None,
@@ -3238,6 +3261,9 @@ mod lora_adapter_error_tests {
             max_adapters: mistralrs_core::DEFAULT_LORA_MAX_ADAPTERS,
             max_rank,
             max_bytes: mistralrs_core::DEFAULT_LORA_MAX_BYTES,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
         }
     }
 
@@ -3315,6 +3341,10 @@ mod lora_adapter_error_tests {
             tokenizer_json: None,
             mmproj_filename: Some(Either::Left("mmproj.gguf".to_string())),
             topology: None,
+            organization: None,
+            write_uqff: None,
+            imatrix: None,
+            calibration_file: None,
             max_edge: Some(1024),
             dtype: mistralrs_core::ModelDType::Auto,
             auto_map_params: None,
@@ -3327,6 +3357,9 @@ mod lora_adapter_error_tests {
             max_adapters: 4,
             max_rank: 64,
             max_bytes: 1_024,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
         };
 
         validate_gguf_runner_options(&which).unwrap();

@@ -156,6 +156,62 @@ tokenizer, and processor assets. It is also the fallback for a GGUF whose origin
 identified automatically. The corresponding explicit SDK options are
 `tok_model_id="<hf-id>"` in Python and `.with_tok_model_id("<hf-id>")` in Rust.
 
+### Requantize a GGUF with ISQ
+
+`--quant` chooses a published GGUF artifact without changing its weights. `--isq` takes an exact
+GGUF selected with `-f` and converts compatible weights to the requested format while loading.
+Start from a high-precision or higher-bit GGUF when possible to avoid compounding quantization loss.
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs run -f /path/model-BF16.gguf --isq q4k
+```
+
+Add `--imatrix <path>` or `--calibration-file <path>` when requantizing to a K-quant. The two
+importance-data options are mutually exclusive.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="/path/to/model-directory",
+        quantized_filename="model-BF16.gguf",
+        imatrix="model.imatrix",
+    ),
+    in_situ_quant="q4k",
+)
+```
+
+Use `calibration_file="calibration.txt"` instead of `imatrix` to collect importance data while
+loading. `Which.GGUF` also accepts `organization` and `write_uqff`, matching the other model
+selectors.
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use std::path::PathBuf;
+use mistralrs::{GgufModelBuilder, IsqType};
+
+let model = GgufModelBuilder::new("/path/to/model-directory", vec!["model-BF16.gguf"])
+    .with_isq(IsqType::Q4K)
+    .with_imatrix(PathBuf::from("model.imatrix"))
+    .build()
+    .await?;
+```
+
+`GgufModelBuilder` also supports automatic bit-width selection, calibration input, MoE expert-only
+quantization, and UQFF output through dedicated builder methods.
+
+</TabItem>
+</Tabs>
+
 ### GGUF with dynamic LoRA
 
 Dynamic LoRA works with supported GGUF models. Select the GGUF as usual, then preload one
@@ -182,8 +238,8 @@ runtime lifecycle endpoints, Python and Rust configuration, and the legacy mode.
 ### Multimodal GGUF
 
 On the CLI, supported multimodal GGUF models use the same commands. With `-m`, the CLI selects the
-best available companion projector for the requested model dtype, and mistral.rs finds the model's
-configuration and processor assets.
+best available companion projector for each input type at the requested model dtype, and
+mistral.rs finds the model's configuration and processor assets.
 Supported families include Gemma 3, Gemma 4, Qwen2-VL and Qwen2.5-VL, Qwen3-VL dense and MoE,
 Qwen3.5/Qwen3.6 dense and MoE, Idefics3/SmolVLM, Mistral 3/Pixtral, Llama 4, and LFM2-VL.
 

@@ -201,6 +201,18 @@ pub enum TomlModelSelected {
         /// Path to a topology YAML file.
         topology: Option<String>,
 
+        /// ISQ organization.
+        organization: Option<IsqOrganization>,
+
+        /// UQFF output configuration.
+        write_uqff: Option<UqffWriteConfig>,
+
+        /// Imatrix file used while requantizing.
+        imatrix: Option<PathBuf>,
+
+        /// Calibration file used to generate an imatrix while requantizing.
+        calibration_file: Option<PathBuf>,
+
         /// Automatically resize and pad images to this maximum edge length.
         max_edge: Option<u32>,
 
@@ -217,6 +229,15 @@ pub enum TomlModelSelected {
 
         /// Maximum expected image edge length for automatic device mapping.
         max_image_length: Option<usize>,
+
+        /// Cache path for Hugging Face models downloaded locally.
+        hf_cache_path: Option<PathBuf>,
+
+        /// Path to a local Matryoshka Transformer configuration CSV file.
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use.
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -909,12 +930,19 @@ fn loader_from_selected(
             quantized_filename,
             mmproj_filename,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
             max_edge,
             dtype: _,
             max_seq_len: _,
             max_batch_size: _,
             max_num_images: _,
             max_image_length: _,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
         } => {
             let mut builder = GGUFLoaderBuilder::new(
                 args.chat_template,
@@ -926,7 +954,15 @@ fn loader_from_selected(
                     .collect::<Vec<_>>(),
                 GGUFSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
+                    organization: organization.unwrap_or_default(),
+                    write_uqff,
+                    imatrix,
+                    calibration_file,
                     max_edge,
+                    max_model_len: None,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,
@@ -1300,6 +1336,9 @@ mod tests {
                 max_batch_size = 3
                 max_num_images = 4
                 max_image_length = 1152
+                hf_cache_path = "hf-cache"
+                matformer_config_path = "matformer.csv"
+                matformer_slice_name = "small"
             "#,
         )
         .unwrap();
@@ -1323,11 +1362,17 @@ mod tests {
                 tok_model_id,
                 mmproj_filename,
                 max_edge,
+                hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
                 ..
             } => {
                 assert!(tok_model_id.is_none());
                 assert_eq!(mmproj_filename.as_deref(), Some("mmproj.gguf"));
                 assert_eq!(max_edge, Some(1280));
+                assert_eq!(hf_cache_path, Some(PathBuf::from("hf-cache")));
+                assert_eq!(matformer_config_path, Some(PathBuf::from("matformer.csv")));
+                assert_eq!(matformer_slice_name.as_deref(), Some("small"));
             }
             _ => panic!("expected GGUF model"),
         }

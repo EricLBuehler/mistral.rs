@@ -62,6 +62,12 @@ enum ArtifactKind {
     Projector,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ProjectorRole {
+    Vision,
+    Audio,
+}
+
 pub(crate) fn has_gguf_model_files(files: &[String]) -> bool {
     files
         .iter()
@@ -188,9 +194,59 @@ pub(crate) fn resolve_gguf_projector(
         return Ok(None);
     }
 
-    let mut ranked = groups
+    let role_groups = groups
         .values()
-        .map(|group| (projector_rank(group.label.as_deref(), dtype), group))
+        .filter_map(|group| projector_role(group).map(|role| (role, group)))
+        .collect::<Vec<_>>();
+    if !role_groups.is_empty() {
+        if role_groups.len() != groups.len() {
+            bail!(
+                "Automatic GGUF projector selection cannot mix role-specific and generic \
+                 projectors: {}. Pass `--mmproj` to choose explicitly",
+                format_group_choices(&groups.values().collect::<Vec<_>>())
+            );
+        }
+
+        let mut selected = Vec::new();
+        for role in [ProjectorRole::Vision, ProjectorRole::Audio] {
+            let candidates = role_groups
+                .iter()
+                .filter_map(|(candidate_role, group)| (*candidate_role == role).then_some(*group))
+                .collect::<Vec<_>>();
+            if candidates.is_empty() {
+                continue;
+            }
+            selected.push((role, select_projector_group(&candidates, dtype)?));
+        }
+
+        let mut files = Vec::new();
+        let mut labels = Vec::new();
+        for (role, group) in selected {
+            let artifact = resolve_group(group)?;
+            let role = match role {
+                ProjectorRole::Vision => "vision",
+                ProjectorRole::Audio => "audio",
+            };
+            labels.push(format!("{role} {}", artifact.label));
+            files.extend(artifact.files);
+        }
+        return Ok(Some(ResolvedGgufArtifact {
+            label: labels.join(" + "),
+            files,
+        }));
+    }
+
+    let groups = groups.values().collect::<Vec<_>>();
+    resolve_group(select_projector_group(&groups, dtype)?).map(Some)
+}
+
+fn select_projector_group<'a>(
+    groups: &[&'a GgufGroup],
+    dtype: ModelDType,
+) -> Result<&'a GgufGroup> {
+    let mut ranked = groups
+        .iter()
+        .map(|group| (projector_rank(group.label.as_deref(), dtype), *group))
         .collect::<Vec<_>>();
     ranked.sort_by_key(|(rank, group)| (*rank, group.display.to_ascii_lowercase()));
     let best_rank = ranked[0].0;
@@ -205,7 +261,7 @@ pub(crate) fn resolve_gguf_projector(
             format_group_choices(&best)
         );
     }
-    resolve_group(best[0]).map(Some)
+    Ok(best[0])
 }
 
 pub(crate) fn list_local_files_recursive(root: &Path) -> Result<Vec<String>> {
@@ -505,6 +561,16 @@ fn is_projector(path: &str) -> bool {
     has_filename_token(path, "mmproj")
 }
 
+fn projector_role(group: &GgufGroup) -> Option<ProjectorRole> {
+    let vision = has_path_token(&group.display, "vision");
+    let audio = has_path_token(&group.display, "audio");
+    match (vision, audio) {
+        (true, false) => Some(ProjectorRole::Vision),
+        (false, true) => Some(ProjectorRole::Audio),
+        _ => None,
+    }
+}
+
 fn is_auxiliary_gguf(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let name = lower.rsplit('/').next().unwrap_or(&lower);
@@ -529,6 +595,13 @@ fn is_variant_artifact(group: &GgufGroup) -> bool {
 
 fn has_filename_token(path: &str, token: &str) -> bool {
     path.rsplit('/').next().is_some_and(|name| {
+        name.split(|ch: char| !ch.is_ascii_alphanumeric())
+            .any(|component| component.eq_ignore_ascii_case(token))
+    })
+}
+
+fn has_path_token(path: &str, token: &str) -> bool {
+    path.split('/').any(|name| {
         name.split(|ch: char| !ch.is_ascii_alphanumeric())
             .any(|component| component.eq_ignore_ascii_case(token))
     })
@@ -764,6 +837,57 @@ mod tests {
                 .label,
             "Q8_0"
         );
+    }
+
+    #[test]
+    fn independent_vision_and_audio_projectors_are_selected() {
+        let listing = files(&[
+            "model-vision-mmproj-F32.gguf",
+            "model-vision-mmproj-F16.gguf",
+            "model-audio-mmproj-Q8_0.gguf",
+            "model-audio-mmproj-BF16.gguf",
+        ]);
+        let selected = resolve_gguf_projector(&listing, ModelDType::Auto)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(selected.label, "vision F16 + audio BF16");
+        assert_eq!(
+            selected.files,
+            files(&[
+                "model-vision-mmproj-F16.gguf",
+                "model-audio-mmproj-BF16.gguf",
+            ])
+        );
+    }
+
+    #[test]
+    fn independent_projector_shards_remain_grouped() {
+        let listing = files(&[
+            "vision-mmproj-BF16-00002-of-00002.gguf",
+            "audio-mmproj-BF16.gguf",
+            "vision-mmproj-BF16-00001-of-00002.gguf",
+        ]);
+        let selected = resolve_gguf_projector(&listing, ModelDType::Auto)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            selected.files,
+            files(&[
+                "vision-mmproj-BF16-00001-of-00002.gguf",
+                "vision-mmproj-BF16-00002-of-00002.gguf",
+                "audio-mmproj-BF16.gguf",
+            ])
+        );
+    }
+
+    #[test]
+    fn generic_and_role_specific_projectors_require_an_override() {
+        let listing = files(&["mmproj-BF16.gguf", "audio-mmproj-BF16.gguf"]);
+        let error = resolve_gguf_projector(&listing, ModelDType::Auto).unwrap_err();
+        assert!(error.to_string().contains("role-specific and generic"));
+        assert!(error.to_string().contains("--mmproj"));
     }
 
     #[test]

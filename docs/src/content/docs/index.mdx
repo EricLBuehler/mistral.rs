@@ -82,9 +82,9 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [Quickstart](/mistral.rs/quickstart/)
   </Card>
   <Card title="Quantization" icon="puzzle">
-    `--quant` picks the best format at a given level, preferring prebuilt
-    [UQFF](/mistral.rs/reference/uqff-format/) and falling back to in-situ
-    quantization.
+    `--quant` selects a matching GGUF artifact from GGUF repositories. Other
+    models prefer prebuilt [UQFF](/mistral.rs/reference/uqff-format/) and fall
+    back to in-situ quantization.
     [Quantization guide](/mistral.rs/guides/quantization/quantize-a-model/)
   </Card>
   <Card title="Tuning and diagnostics" icon="seti:config">

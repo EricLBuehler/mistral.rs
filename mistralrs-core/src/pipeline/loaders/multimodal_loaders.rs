@@ -4721,6 +4721,9 @@ impl IsqModelLoader for VLlama4Loader {
                 r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+            Regex::new(
                 r"language_model\.model\.layers\.(\d+)\.feed_forward\.router\.(weight|bias)$",
             )?,
             Regex::new(
@@ -6352,6 +6355,9 @@ impl IsqModelLoader for Qwen3VLMoELoader {
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
+            Regex::new(
+                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -6375,6 +6381,9 @@ impl IsqModelLoader for Qwen3VLMoELoader {
             )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
         ])
     }
@@ -7134,6 +7143,9 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
+                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+            Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
             )?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
@@ -7164,6 +7176,9 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
             )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
@@ -7906,6 +7921,7 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
             Regex::new(r"layers\.(\d+)\.experts\.down_proj\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.(moe|experts)\.(gate_proj|up_proj|down_proj)\.weight$")?,
             Regex::new(r"per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.per_layer_projection\.(weight|bias)$")?,
@@ -7927,6 +7943,9 @@ impl IsqModelLoader for Gemma4Loader {
             Regex::new(r"model\.language_model\.layers\.(\d+)\.moe\.down_proj\.weight$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.experts\.gate_up_proj\.weight$")?,
             Regex::new(r"model\.language_model\.layers\.(\d+)\.experts\.down_proj\.weight$")?,
+            Regex::new(
+                r"model\.language_model\.layers\.(\d+)\.(moe|experts)\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
             Regex::new(r"model\.language_model\.per_layer_model_projection\.(weight|bias)$")?,
             Regex::new(
                 r"model\.language_model\.layers\.(\d+)\.per_layer_input_gate\.(weight|bias)$",
@@ -9039,6 +9058,31 @@ mod tests {
         regexes.iter().any(|regex| regex.is_match(name))
     }
 
+    fn assert_fused_moe_isq_predicates(
+        loader_name: &str,
+        loader: &dyn IsqModelLoader,
+        prefixes: &[&str],
+    ) -> Result<()> {
+        let predicate_sets = [
+            ("isq", loader.isq_layer_regexes("")?),
+            ("immediate", loader.immediate_isq_predicates("")?),
+            ("moqe", loader.isq_layer_regexes_moqe("")?),
+            ("immediate moqe", loader.immediate_isq_predicates_moqe("")?),
+        ];
+        for (kind, predicates) in predicate_sets {
+            for prefix in prefixes {
+                for projection in ["gate_proj", "up_proj", "down_proj"] {
+                    let key = format!("{prefix}.{projection}.weight");
+                    assert!(
+                        matches_any(&predicates, &key),
+                        "{loader_name} {kind} predicates did not match {key}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
     struct PromotedIsqCase {
         name: &'static str,
         architecture: &'static str,
@@ -9395,6 +9439,40 @@ mod tests {
             }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn multimodal_moe_loaders_match_canonical_fused_experts() -> Result<()> {
+        assert_fused_moe_isq_predicates(
+            "VLlama4Loader",
+            &VLlama4Loader,
+            &["language_model.model.layers.0.feed_forward.experts"],
+        )?;
+        assert_fused_moe_isq_predicates(
+            "Qwen3VLMoELoader",
+            &Qwen3VLMoELoader,
+            &[
+                "model.language_model.layers.0.mlp.experts",
+                "language_model.model.layers.0.mlp.experts",
+            ],
+        )?;
+        assert_fused_moe_isq_predicates(
+            "Qwen3_5MoeLoader",
+            &Qwen3_5MoeLoader,
+            &[
+                "model.language_model.layers.0.mlp.experts",
+                "language_model.model.layers.0.mlp.experts",
+            ],
+        )?;
+        assert_fused_moe_isq_predicates(
+            "Gemma4Loader",
+            &Gemma4Loader,
+            &[
+                "model.language_model.layers.0.moe",
+                "model.language_model.layers.0.experts",
+            ],
+        )?;
         Ok(())
     }
 

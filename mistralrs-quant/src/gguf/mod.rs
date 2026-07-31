@@ -646,6 +646,11 @@ impl QuantMethod for GgufMatMul {
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         if let Some(dtype) = dtype {
+            let bias = self
+                .b
+                .as_ref()
+                .map(|bias| bias.to_device(&device))
+                .transpose()?;
             // F8Q8 is not a GgmlDType, so intercept before try_into()
             if dtype == IsqType::F8Q8 {
                 let t = match &self.w {
@@ -654,10 +659,7 @@ impl QuantMethod for GgufMatMul {
                 };
                 let t = t.to_device(&device)?;
                 n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(Arc::new(crate::F8Q8Linear::from_weight(
-                    &t,
-                    self.b.clone(),
-                )?));
+                return Ok(Arc::new(crate::F8Q8Linear::from_weight(&t, bias)?));
             }
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
@@ -674,7 +676,7 @@ impl QuantMethod for GgufMatMul {
                         &device,
                         guard,
                     )?;
-                    return Ok(Arc::new(Self::from_qtensor(w, self.b.clone())));
+                    return Ok(Arc::new(Self::from_qtensor(w, bias)));
                 }
                 let dtype = dtype.try_into()?;
                 generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized, guard)
@@ -684,10 +686,13 @@ impl QuantMethod for GgufMatMul {
             };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: res,
-                b: self.b.clone(),
+                b: bias,
             })?))
         } else {
             let w = match &self.w {
+                QMatMul::QTensor(q) if q.device().same_device(&device) => {
+                    QMatMul::QTensor(q.clone())
+                }
                 QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
                     &q.dequantize(&device)?,
                     q.dtype(),
@@ -832,6 +837,27 @@ mod tests {
         for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
             assert_embedding_matches_dequantized_gather(&Device::Cpu, dtype)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn capture_on_same_device_preserves_packed_weight() -> Result<()> {
+        let weight = Tensor::ones((2, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let before = layer.get_qtensor().unwrap();
+        let captured = layer.apply_isq(
+            None,
+            Device::Cpu,
+            &AtomicUsize::new(0),
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let after = captured.get_qtensor().unwrap();
+
+        assert!(Arc::ptr_eq(&before, &after));
         Ok(())
     }
 

@@ -96,6 +96,7 @@ Select a GGUF model.
 
 Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
 With `mmproj_filename`, adapters apply to the language model.
+Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loading.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -105,6 +106,10 @@ With `mmproj_filename`, adapters apply to the language model.
 | `tokenizer_json` | `str \| None` | `None` |
 | `mmproj_filename` | `str \| list[str] \| None` | `None` |
 | `topology` | `str \| None` | `None` |
+| `organization` | `IsqOrganization \| None` | `None` |
+| `write_uqff` | `str \| None` | `None` |
+| `imatrix` | `str \| None` | `None` |
+| `calibration_file` | `str \| None` | `None` |
 | `max_edge` | `int \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
@@ -113,6 +118,9 @@ With `mmproj_filename`, adapters apply to the language model.
 | `max_adapters` | `int` | `16` |
 | `max_rank` | `int` | `256` |
 | `max_bytes` | `int` | `8589934592` |
+| `hf_cache_path` | `str \| None` | `None` |
+| `matformer_config_path` | `str \| None` | `None` |
+| `matformer_slice_name` | `str \| None` | `None` |
 
 ### `Which.XLoraGGUF`
 

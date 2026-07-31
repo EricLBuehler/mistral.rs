@@ -50,7 +50,15 @@ impl GgufXLoraModelBuilder {
         let gguf_model = self.gguf_model.clone();
         let config = GGUFSpecificConfig {
             topology: self.gguf_model.topology,
+            organization: self.gguf_model.organization,
+            write_uqff: self.gguf_model.write_uqff,
+            imatrix: self.gguf_model.imatrix,
+            calibration_file: self.gguf_model.calibration_file,
             max_edge: self.gguf_model.max_edge,
+            max_model_len: self.gguf_model.max_model_len,
+            hf_cache_path: self.gguf_model.hf_cache_path,
+            matformer_config_path: self.gguf_model.matformer_config_path,
+            matformer_slice_name: self.gguf_model.matformer_slice_name,
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);

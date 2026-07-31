@@ -645,11 +645,18 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
+            organization: quantization.isq_organization,
+            write_uqff: None,
+            imatrix: quantization.imatrix.clone(),
+            calibration_file: quantization.calibration_file.clone(),
             max_edge: multimodal.and_then(|options| options.max_edge),
             max_seq_len: device.max_seq_len,
             max_batch_size: device.max_batch_size,
             max_num_images: multimodal.and_then(|options| options.max_num_images),
             max_image_length: multimodal.and_then(|options| options.max_image_length),
+            hf_cache_path: device.hf_cache.clone(),
+            matformer_config_path: matformer.config_path.clone(),
+            matformer_slice_name: matformer.slice_name.clone(),
         }),
 
         (ModelFormat::Gguf, false, true, false) => Ok(ModelSelected::LoraGGUF {
@@ -888,6 +895,17 @@ fn model_dtype(model_type: &ModelType) -> mistralrs_core::ModelDType {
     }
 }
 
+fn device_options(model_type: &ModelType) -> &DeviceOptions {
+    match model_type {
+        ModelType::Auto { device, .. }
+        | ModelType::Text { device, .. }
+        | ModelType::Multimodal { device, .. }
+        | ModelType::Diffusion { device, .. }
+        | ModelType::Speech { device, .. }
+        | ModelType::Embedding { device, .. } => device,
+    }
+}
+
 pub(crate) fn model_id_mut(model_type: &mut ModelType) -> &mut String {
     match model_type {
         ModelType::Auto { model, .. } => &mut model.model_id,
@@ -915,6 +933,9 @@ pub(crate) async fn apply_quant_resolution(
     token_source: &mistralrs_core::TokenSource,
     matformer: &MatformerSelection,
 ) -> Result<()> {
+    if let Some(path) = device_options(model_type).hf_cache.clone() {
+        mistralrs_core::set_hf_cache_path(path);
+    }
     if let Some(format) = model_format_mut(model_type) {
         format.normalize()?;
     }
@@ -1507,6 +1528,52 @@ mod tests {
         assert_eq!(format.mmproj.as_deref(), Some("mmproj-F16.gguf"));
         assert!(quantization.quant.is_none());
         assert!(quantization.in_situ_quant.is_none());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_gguf_quant_selects_vision_and_audio_projectors() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        for file in [
+            "model-Q4_K_M.gguf",
+            "model-vision-mmproj-BF16.gguf",
+            "model-audio-mmproj-BF16.gguf",
+        ] {
+            fs::write(root.join(file), []).unwrap();
+        }
+
+        let mut model = test_model();
+        model.model_id = root.to_string_lossy().into_owned();
+        let mut model_type = ModelType::Auto {
+            model,
+            format: FormatOptions::default(),
+            adapter: AdapterOptions::default(),
+            quantization: QuantizationOptions {
+                quant: Some("4".to_string()),
+                ..QuantizationOptions::default()
+            },
+            device: DeviceOptions::default(),
+            cache: crate::args::CacheOptions::default(),
+            multimodal: MultimodalOptions::default(),
+        };
+
+        apply_quant_resolution(
+            &mut model_type,
+            &mistralrs_core::TokenSource::None,
+            &MatformerSelection::default(),
+        )
+        .await
+        .unwrap();
+
+        let ModelType::Auto { format, .. } = model_type else {
+            unreachable!()
+        };
+        assert_eq!(
+            format.mmproj.as_deref(),
+            Some("model-vision-mmproj-BF16.gguf;model-audio-mmproj-BF16.gguf")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2306,8 +2373,13 @@ mod tests {
                 ..FormatOptions::default()
             },
             adapter: AdapterOptions::default(),
-            quantization: QuantizationOptions::default(),
+            quantization: QuantizationOptions {
+                isq_organization: Some(IsqOrganization::MoeExpertsOnly),
+                imatrix: Some(PathBuf::from("model.imatrix")),
+                ..QuantizationOptions::default()
+            },
             device: DeviceOptions {
+                hf_cache: Some(PathBuf::from("hf-cache")),
                 max_seq_len: 8192,
                 max_batch_size: 3,
                 ..DeviceOptions::default()
@@ -2319,8 +2391,14 @@ mod tests {
                 max_image_length: Some(1152),
             },
         };
-        let selected =
-            convert_to_model_selected(&model_type, &MatformerSelection::default()).unwrap();
+        let selected = convert_to_model_selected(
+            &model_type,
+            &MatformerSelection {
+                config_path: Some(PathBuf::from("matformer.csv")),
+                slice_name: Some("small".to_string()),
+            },
+        )
+        .unwrap();
 
         match mistralrs_core::get_auto_device_map_params(&selected).unwrap() {
             AutoDeviceMapParams::Multimodal {
@@ -2342,7 +2420,12 @@ mod tests {
                 quantized_filename,
                 tokenizer_json,
                 mmproj_filename,
+                organization,
+                imatrix,
                 max_edge,
+                hf_cache_path,
+                matformer_config_path,
+                matformer_slice_name,
                 ..
             } => {
                 assert_eq!(tok_model_id.as_deref(), Some("org/tokenizer"));
@@ -2352,7 +2435,15 @@ mod tests {
                     mmproj_filename.as_deref(),
                     Some("mmproj-0.gguf;mmproj-1.gguf")
                 );
+                assert!(matches!(
+                    organization,
+                    Some(IsqOrganization::MoeExpertsOnly)
+                ));
+                assert_eq!(imatrix, Some(PathBuf::from("model.imatrix")));
                 assert_eq!(max_edge, Some(1280));
+                assert_eq!(hf_cache_path, Some(PathBuf::from("hf-cache")));
+                assert_eq!(matformer_config_path, Some(PathBuf::from("matformer.csv")));
+                assert_eq!(matformer_slice_name.as_deref(), Some("small"));
             }
             _ => panic!("expected GGUF model"),
         }

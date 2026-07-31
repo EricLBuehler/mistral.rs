@@ -127,12 +127,13 @@ impl EmbeddingLoaderBuilder {
         tokenizer_json: Option<String>,
         model_id: Option<String>,
     ) -> Self {
+        let hf_cache_path = config.hf_cache_path.clone();
         Self {
             config,
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
-            hf_cache_path: None,
+            hf_cache_path,
             ..Default::default()
         }
     }
@@ -717,6 +718,7 @@ impl IsqPipelineMixin for EmbeddingPipeline {
         super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
+            None,
             save_cimatrix.as_deref(),
         )
     }

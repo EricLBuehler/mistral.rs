@@ -35,7 +35,7 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
 | `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
+| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
@@ -89,7 +89,7 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
 | `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
+| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
@@ -140,7 +140,7 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
 | `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
+| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
@@ -183,7 +183,7 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
+| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
@@ -266,7 +266,7 @@ mistralrs tune embedding [OPTIONS] --model-id <MODEL_ID>
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
 | `--gqa <GQA>` | `1` | GQA value for GGML models |
 | `--quant <QUANT>` |  | Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or names such as `q4k` and `iq4_xs` |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ) |
+| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
 | `--from-uqff <FROM_UQFF>` |  | UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8) to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8). Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff) automatically finds q4k-1.uqff, etc. Use semicolons to separate different quantizations |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |

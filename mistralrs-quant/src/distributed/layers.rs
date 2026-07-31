@@ -82,24 +82,29 @@ impl RowParallelLayer {
                 weight,
                 LoraLinearSpec::row(in_dim, out_dim, shard),
             )?;
-            if world_size == 1 {
+            let layer = if world_size == 1 {
                 // Bias is embedded in the layer when the input dim is not actually sharded.
-                return Ok(weight);
-            }
-            // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
-            let bias = if bias {
-                base_vb
-                    .weight_source()
-                    .expect("weight source present")
-                    .load_optional_tensor(&format!("{}.bias", base_vb.prefix()), base_vb.device())?
+                weight
             } else {
-                None
+                // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
+                let bias = if bias {
+                    base_vb
+                        .weight_source()
+                        .expect("weight source present")
+                        .load_optional_tensor(
+                            &format!("{}.bias", base_vb.prefix()),
+                            base_vb.device(),
+                        )?
+                } else {
+                    None
+                };
+                Arc::new(Self {
+                    weight,
+                    bias,
+                    all_reduce: distributed::SumAllReduce::new(comm),
+                })
             };
-            return Ok(Arc::new(Self {
-                weight,
-                bias,
-                all_reduce: distributed::SumAllReduce::new(comm),
-            }));
+            return apply_immediate_isq_sharded(layer, base_vb, Some(shard));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -467,12 +472,13 @@ impl ColumnParallelLayer {
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
         if let Some(layer) = load_weight_source_linear_shard(config, shard, &base_vb)? {
-            return maybe_wrap_dynamic_lora_with_key(
+            let layer = maybe_wrap_dynamic_lora_with_key(
                 &base_vb,
                 layer,
                 site_key,
                 LoraLinearSpec::column(in_dim, out_dim, shard),
-            );
+            )?;
+            return apply_immediate_isq_sharded(layer, base_vb, Some(shard));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -832,7 +838,8 @@ impl ReplicatedLayer {
         let (out_dim, in_dim) = lin.weight().dims2()?;
         let spec = LoraLinearSpec::replicated(in_dim, out_dim);
         if let Some(layer) = load_weight_source_linear(&None, &vb)? {
-            return maybe_wrap_dynamic_lora(&vb, layer, spec);
+            let layer = maybe_wrap_dynamic_lora(&vb, layer, spec)?;
+            return apply_immediate_isq_sharded(layer, vb, Some(Shard::default()));
         }
 
         let dev = lin.weight().device().clone();
@@ -863,11 +870,12 @@ impl ReplicatedLayer {
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
         if let Some(layer) = load_weight_source_linear(config, &base_vb)? {
-            return maybe_wrap_dynamic_lora(
+            let layer = maybe_wrap_dynamic_lora(
                 &base_vb,
                 layer,
                 LoraLinearSpec::replicated(in_dim, out_dim),
-            );
+            )?;
+            return apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -1555,13 +1563,58 @@ pub fn compute_n_kv_groups(
 mod tests {
     use std::collections::HashMap;
 
+    use candle_core::{DType, Device, Tensor};
     use regex::Regex;
 
     use super::{validate_tp_head_layout, ReplicatedLayer};
     use crate::{
         create_isq_executor, set_immediate_isq_config, ImmediateIsqConfig, ImmediateIsqOverride,
-        IsqCaptureMode, IsqExecutorConfig, IsqType, ShardedSafeTensors,
+        IsqCaptureMode, IsqExecutorConfig, IsqType, QuantMethod, QuantMethodConfig,
+        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
     };
+
+    struct DenseWeightSource;
+
+    impl QuantizedWeightSource for DenseWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            name == "model.embed_tokens.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<std::sync::Arc<dyn QuantMethod>>> {
+            if key != "model.embed_tokens" {
+                return Ok(None);
+            }
+            let weight = Tensor::zeros((64, 32), DType::F32, device)?;
+            Ok(Some(std::sync::Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, None)),
+            )?)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
 
     fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
         let ty = Some(ty);
@@ -1643,6 +1696,25 @@ mod tests {
             }],
         );
         assert_eq!(tracked_from_linear().ty, Some(IsqType::Q4_0));
+    }
+
+    #[test]
+    fn replicated_weight_source_is_tracked_for_immediate_isq() {
+        install_immediate(IsqType::Q8_0, Vec::new());
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_weight_source(std::sync::Arc::new(DenseWeightSource))
+                .pp("model")
+                .pp("embed_tokens");
+        let tracker = vb.tracker().clone();
+        let layer = ReplicatedLayer::new(32, 64, &None, false, vb).unwrap();
+        crate::clear_immediate_isq();
+
+        layer
+            .forward_raw(&Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap())
+            .unwrap();
+        assert_eq!(tracker.get().len(), 1);
+        assert_eq!(tracker.get()[0].key, "model.embed_tokens");
     }
 
     #[test]

@@ -71,7 +71,7 @@ Full example: [Rust](/mistral.rs/examples/rust/quantization/uqff/),
 
 ## Producing a UQFF
 
-The `quantize` subcommand converts an unquantized model to UQFF:
+The `quantize` subcommand converts a supported model source to UQFF:
 
 ```bash
 mistralrs quantize \
@@ -81,6 +81,32 @@ mistralrs quantize \
 ```
 
 A one-time operation. The result loads directly afterward.
+
+GGUF inputs use the same file selection as `run`. For a local file, `-f` infers GGUF and makes
+`-m` optional:
+
+```bash
+mistralrs quantize \
+  -f /path/model-BF16.gguf \
+  --isq q4k \
+  -o model-q4k.uqff
+```
+
+For a GGUF repository, `--quant` selects the input artifact and `--isq` selects the output UQFF
+format:
+
+```bash
+mistralrs quantize \
+  -m <gguf-repo> \
+  --quant 8 \
+  --isq q4k \
+  -o output/
+```
+
+`--quant` and `-f` are mutually exclusive, and `--quant auto` does not select a GGUF artifact.
+Starting from a high-precision or higher-bit GGUF avoids compounding quantization loss. Supported
+multimodal repositories select their projector and supporting assets automatically; `--mmproj` and
+`--tok-model-id` override those choices.
 
 `--isq` can be repeated or comma-separated to produce multiple variants in one run; pass a
 directory as `-o` in that case. Numeric shorthands expand to all platform variants (`--isq 4`
@@ -97,8 +123,8 @@ Sensitive token embeddings and output heads follow the higher-precision defaults
 [quantization type reference](/mistral.rs/reference/quantization-types/). For example, AFQ4 uses
 AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
 type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
-precedence. The active model loader declares the exact tensors covered by this policy; similarly
-named tensors in vision, audio, or auxiliary subtrees are not promoted implicitly.
+precedence. This promotion applies to the language model's embeddings and output head, not its
+vision, audio, or other auxiliary components.
 
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.

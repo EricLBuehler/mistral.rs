@@ -1,7 +1,7 @@
 //! The online calibration lifecycle: begin/status/apply on a live model, with from-source
 //! requantization (dense via carried shards, expert stacks via the moe layout reader).
 
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::atomic::AtomicUsize};
 
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
@@ -70,6 +70,7 @@ pub(crate) fn calibration_status(modules: &[TrackedModule]) -> CalibrationStatus
 pub(crate) fn apply_calibration(
     modules: &[TrackedModule],
     source_files: &[std::path::PathBuf],
+    weight_source: Option<&dyn mistralrs_quant::QuantizedWeightSource>,
     save_cimatrix: Option<&std::path::Path>,
 ) -> Result<CalibrationStatus> {
     if modules.is_empty() {
@@ -104,7 +105,9 @@ pub(crate) fn apply_calibration(
         modules.len(),
         map.len()
     );
-    if source_files.is_empty() {
+    if let Some(source) = weight_source {
+        requantize_from_weight_source(modules, source, pool_ty, &map)?;
+    } else if source_files.is_empty() {
         tracing::warn!(
             "No source weights available; requantizing from resident quantized weights (reduced quality)."
         );
@@ -129,6 +132,70 @@ fn needs_distributed_wrapper(module: &TrackedModule) -> bool {
             module.ct.is_distributed(),
             Some(mistralrs_quant::DistributedKind::RowParallel)
         )
+}
+
+fn requantize_from_weight_source(
+    modules: &[TrackedModule],
+    source: &dyn mistralrs_quant::QuantizedWeightSource,
+    pool_ty: IsqType,
+    imatrix_map: &HashMap<String, Vec<f32>>,
+) -> Result<()> {
+    let mut from_source = Vec::new();
+    let mut fallback = Vec::new();
+    for module in modules {
+        if module.shard.is_some()
+            && !needs_distributed_wrapper(module)
+            && source.contains(&format!("{}.weight", module.key))
+        {
+            from_source.push(module);
+        } else {
+            fallback.push(module.clone());
+        }
+    }
+    info!(
+        "Requantizing from quantized source weights: {} layers ({} fall back to resident weights).",
+        from_source.len(),
+        fallback.len()
+    );
+    if !fallback.is_empty() {
+        tracing::warn!(
+            "{} layers cannot be reloaded from the source; requantizing from resident weights.",
+            fallback.len()
+        );
+    }
+
+    let guard = mistralrs_quant::QuantizeOntoGuard::new();
+    for module in from_source {
+        let resident = module.ct.resolve()?;
+        let (_, device) = resident.dtype_and_device();
+        let Some(source_layer) = source.load_linear(
+            &module.key,
+            &Device::Cpu,
+            module.shard.expect("source reload requires a shard"),
+        )?
+        else {
+            fallback.push(module.clone());
+            continue;
+        };
+        let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
+        let replacement = source_layer.apply_isq(
+            Some(ty),
+            device,
+            &AtomicUsize::new(0),
+            imatrix,
+            guard.clone().with_module_key(module.key.clone()),
+        )?;
+        module
+            .ct
+            .replace(resident.preserve_dynamic_lora(replacement));
+    }
+
+    if !fallback.is_empty() {
+        requantize_and_swap(&fallback, pool_ty, |m| m.resolve_type(pool_ty), &|key| {
+            imatrix_map.get(key).cloned()
+        })?;
+    }
+    Ok(())
 }
 
 /// Mmap-backed view of the original checkpoint for from-source requantization.
@@ -222,6 +289,12 @@ pub(crate) fn requantize_from_source(
         experts.len(),
         fallback.len()
     );
+    if !fallback.is_empty() {
+        tracing::warn!(
+            "{} layers cannot be reloaded from the source; requantizing from resident weights.",
+            fallback.len()
+        );
+    }
 
     let (executor, _) = mistralrs_quant::create_isq_executor(
         mistralrs_quant::IsqExecutorConfig::new(Some(pool_ty)),
@@ -338,12 +411,104 @@ pub(crate) fn requantize_from_source(
 mod tests {
     use super::*;
     use candle_core::DType;
+    use std::sync::Arc;
 
     const E: usize = 4;
     const INTER: usize = 8;
 
+    struct TestWeightSource {
+        weight: Tensor,
+    }
+
+    impl mistralrs_quant::QuantizedWeightSource for TestWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            name == "m.lin.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            shard: mistralrs_quant::Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            if key != "m.lin" {
+                return Ok(None);
+            }
+            let weight = shard.apply_to(&self.weight)?.to_device(device)?;
+            Ok(Some(Arc::new(mistralrs_quant::UnquantLinear::new(
+                mistralrs_quant::QuantMethodConfig::Unquantized(candle_nn::Linear::new(
+                    weight, None,
+                )),
+            )?)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
     fn write_st(path: &std::path::Path, tensors: Vec<(String, Tensor)>) {
         candle_core::safetensors::save(&tensors.into_iter().collect(), path).unwrap();
+    }
+
+    #[test]
+    fn calibration_prefers_quantized_source_over_checkpoint_paths() -> Result<()> {
+        use mistralrs_quant::{QuantMethod, Shard, TrackedModule};
+
+        let zeros = candle_core::quantized::QTensor::quantize(
+            &Tensor::zeros((2, 32), DType::F32, &Device::Cpu)?,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        let resident = Arc::new(mistralrs_quant::GgufMatMul::new(
+            mistralrs_quant::QuantMethodConfig::Gguf {
+                q_weight: Arc::new(zeros),
+                b: None,
+            },
+        )?) as Arc<dyn QuantMethod>;
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))?;
+        let ct = Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
+        let module = TrackedModule {
+            key: "m.lin".to_string(),
+            ct: ct.clone(),
+            ty: Some(IsqType::Q8_0),
+            promote_default: false,
+            shard: Some(Shard::default()),
+        };
+        let modules = [module];
+        begin_calibration(&modules)?;
+        ct.forward_raw(&Tensor::ones((1, 32), DType::F32, &Device::Cpu)?)?;
+
+        let source: Arc<dyn mistralrs_quant::QuantizedWeightSource> = Arc::new(TestWeightSource {
+            weight: Tensor::ones((2, 32), DType::F32, &Device::Cpu)?,
+        });
+        apply_calibration(
+            &modules,
+            &[std::path::PathBuf::from("not-a-safetensors-file.gguf")],
+            Some(source.as_ref()),
+            None,
+        )?;
+
+        let swapped = ct.resolve()?.dequantize_w()?;
+        let diff = (swapped - 1f64)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(diff < 0.01, "max diff {diff}");
+        Ok(())
     }
 
     #[test]

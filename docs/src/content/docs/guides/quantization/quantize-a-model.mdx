@@ -21,7 +21,8 @@ quantizes weights on the fly as they load, picking a hardware-appropriate format
 Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading just
 takes longer than a pre-quantized file.
 
-For a local model path, `--quant` skips the UQFF probe and applies ISQ directly.
+For a local safetensors model path, `--quant` skips the UQFF probe and applies ISQ directly. A
+local directory containing GGUF files instead selects a matching GGUF artifact.
 
 ## How much memory you save
 
@@ -54,8 +55,9 @@ mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # the GGUF standard 8-bit
 How the numeric shorthands resolve per backend, plus the full type list and hardware
 constraints, is in the [quantization types reference](/mistral.rs/reference/quantization-types/).
 
-Use `--isq` instead of `--quant` only when you want to force runtime ISQ and skip the UQFF
-lookup.
+For `run`, `serve`, and `bench`, use `--isq` instead of `--quant` only when you want to force
+runtime ISQ and skip the UQFF lookup. For GGUF, `--quant` selects an existing variant while
+`--isq` requantizes an exact file selected with `-f`.
 
 ## Letting mistral.rs decide
 
@@ -109,17 +111,22 @@ recommender. All flags: [CLI reference](/mistral.rs/reference/cli/tune/).
 ```bash
 mistralrs serve -m google/gemma-4-E4B-it --quant 4
 mistralrs serve -m google/gemma-4-E4B-it --isq q4k
+
+# Requantize an exact GGUF source instead of selecting a published variant.
+mistralrs serve -f /path/model-BF16.gguf --isq q4k
 ```
 
 To quantize once and reuse the result, write a UQFF file with `mistralrs quantize`. See the
-[UQFF guide](/mistral.rs/guides/quantization/uqff/).
+[UQFF guide](/mistral.rs/guides/quantization/uqff/). The command accepts safetensors sources and
+compatible GGUF inputs selected with either `-f` or `-m <repo> --quant <artifact>`.
 
 </TabItem>
 <TabItem label="HTTP">
 
 There is no quantize-at-load HTTP request; a server quantizes via the `--quant`/`--isq` flags on
 the CLI tab. To re-quantize a model already running, `POST /re_isq` swaps every ISQ-eligible
-layer to a new type in place (no effect on GGUF/GGML models):
+layer to a new type in place. The model must have been loaded with ISQ; this includes compatible
+GGUF sources loaded with `--isq`, but not legacy GGUF or GGML models:
 
 ```bash
 curl -X POST localhost:1234/re_isq \
@@ -142,6 +149,9 @@ runner = Runner(
 )
 ```
 
+Use `Which.GGUF(...)` with the same `in_situ_quant` argument to requantize a compatible GGUF.
+`Which.GGUF` also accepts `imatrix`, `calibration_file`, `organization`, and `write_uqff`.
+
 [Full example](/mistral.rs/examples/python/isq/)
 
 </TabItem>
@@ -159,6 +169,9 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
+`GgufModelBuilder` exposes the same ISQ, imatrix, calibration, MoE organization, and UQFF-writing
+options for compatible GGUF sources.
+
 [Full example](/mistral.rs/examples/rust/quantization/isq/)
 
 </TabItem>
@@ -166,9 +179,8 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
 
 ## What ISQ does
 
-ISQ runs at model load time: the engine reads each weight, produces its quantized form in
-parallel, and discards the source before moving on. First-run load is slower than pre-quantized
-formats (UQFF, GGUF), which have no conversion work to do. To skip the conversion on repeated
+ISQ converts the model during loading rather than requiring a prebuilt artifact. It adds load time
+but avoids keeping the complete source model in memory at once. To skip the conversion on repeated
 loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
 
 <details>
@@ -235,13 +247,14 @@ weights, and composes with any ISQ format.
 
 ## Pre-quantized formats
 
-These load directly, with no ISQ conversion:
+By default, these load directly with no ISQ conversion:
 
 - **UQFF**: the native pre-quantized format. Loaded automatically by `--quant` when a sibling
   UQFF repo exists, or explicitly via `--from-uqff`. See the
   [UQFF guide](/mistral.rs/guides/quantization/uqff/).
 - **GGUF**: load a local file directly with `-f <file.gguf>`, or select a published variant with
-  `-m <gguf-repo> --quant <level>`.
+  `-m <gguf-repo> --quant <level>`. Add `--isq <type>` to an exact `-f` selection only when you
+  intentionally want to requantize it.
 - **GPTQ, AWQ**: detected from the source repo's config and loaded directly; no `--quant` or
   `--isq` needed.
 

@@ -1101,6 +1101,10 @@ pub struct ChatCompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1398,6 +1402,10 @@ pub struct CompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Stream the response as server-sent events.
     pub stream: Option<bool>,
     /// Sampling temperature; higher values increase randomness.
@@ -1796,6 +1804,10 @@ pub struct ResponsesCreateRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Continue generation past EOS until another stop condition is met.
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -2009,6 +2021,29 @@ pub struct ResponsesDeltaContent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ignore_eos_defaults_false_and_accepts_true() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello"})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello"})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello"})).unwrap();
+        assert!(!chat.ignore_eos);
+        assert!(!completion.ignore_eos);
+        assert!(!responses.ignore_eos);
+
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "ignore_eos": true})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "ignore_eos": true})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "ignore_eos": true})).unwrap();
+        assert!(chat.ignore_eos);
+        assert!(completion.ignore_eos);
+        assert!(responses.ignore_eos);
+    }
 
     #[test]
     fn adapter_selection_accepts_alias_and_exact_generation() {

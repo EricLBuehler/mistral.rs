@@ -309,6 +309,27 @@ impl AsRef<[u8]> for GgufTensorData<'_> {
     }
 }
 
+fn parse_shards<I, P>(paths: I) -> Result<Vec<ParsedShard>>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    paths
+        .into_iter()
+        .map(|path| {
+            let path = path.as_ref().to_path_buf();
+            let file = File::open(&path)
+                .map_err(Error::wrap)
+                .map_err(|err| err.with_path(&path))?;
+            // The mapping is read-only and remains owned by the archive.
+            let mmap = unsafe { MmapOptions::new().map(&file) }
+                .map_err(Error::wrap)
+                .map_err(|err| err.with_path(&path))?;
+            ParsedShard::parse(path.clone(), mmap).map_err(|err| err.with_path(&path))
+        })
+        .collect()
+}
+
 pub struct GgufArchive {
     mappings: Vec<Mmap>,
     shards: Vec<GgufShardInfo>,
@@ -332,19 +353,50 @@ impl GgufArchive {
         I: IntoIterator<Item = P>,
         P: AsRef<Path>,
     {
-        let mut parsed = Vec::new();
-        for path in paths {
-            let path = path.as_ref().to_path_buf();
-            let file = File::open(&path)
-                .map_err(Error::wrap)
-                .map_err(|err| err.with_path(&path))?;
-            // The mapping is read-only and remains owned by the archive.
-            let mmap = unsafe { MmapOptions::new().map(&file) }
-                .map_err(Error::wrap)
-                .map_err(|err| err.with_path(&path))?;
-            parsed
-                .push(ParsedShard::parse(path.clone(), mmap).map_err(|err| err.with_path(&path))?);
+        Self::from_parsed(parse_shards(paths)?)
+    }
+
+    /// Opens independent GGUF components while keeping adjacent split shards in one archive.
+    pub fn open_components<I, P>(paths: I) -> Result<Vec<Self>>
+    where
+        I: IntoIterator<Item = P>,
+        P: AsRef<Path>,
+    {
+        let mut parsed = parse_shards(paths)?;
+        if parsed.is_empty() {
+            candle_core::bail!("at least one GGUF file is required");
         }
+
+        let mut components = Vec::new();
+        while !parsed.is_empty() {
+            let has_split_metadata = parsed[0].metadata.contains_key(SPLIT_NO)
+                || parsed[0].metadata.contains_key(SPLIT_COUNT);
+            let count = if has_split_metadata {
+                metadata_usize(&parsed[0].metadata, SPLIT_COUNT)?.ok_or_else(|| {
+                    Error::msg(format!(
+                        "GGUF shard `{}` is missing `{SPLIT_COUNT}`",
+                        parsed[0].path.display()
+                    ))
+                })?
+            } else {
+                1
+            };
+            if count == 0 {
+                candle_core::bail!("GGUF `{SPLIT_COUNT}` must be positive");
+            }
+            if count > parsed.len() {
+                candle_core::bail!(
+                    "{} GGUF shards remain, but split metadata declares {count}",
+                    parsed.len()
+                );
+            }
+            let component = parsed.drain(..count).collect::<Vec<_>>();
+            components.push(Self::from_parsed(component)?);
+        }
+        Ok(components)
+    }
+
+    fn from_parsed(mut parsed: Vec<ParsedShard>) -> Result<Self> {
         if parsed.is_empty() {
             candle_core::bail!("at least one GGUF file is required");
         }
@@ -1755,6 +1807,81 @@ mod tests {
             archive.metadata_value("clip.has_audio_encoder"),
             Some(Value::Bool(true))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn opens_split_and_independent_mmproj_components() -> Result<()> {
+        let main_file = write_test_gguf(&base_metadata(), &[], DEFAULT_ALIGNMENT);
+        let vision_first = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("clip".to_string())),
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+                (SPLIT_NO, Value::U16(0)),
+                (SPLIT_COUNT, Value::U16(2)),
+                (SPLIT_TENSORS_COUNT, Value::U32(2)),
+            ],
+            &[TestTensor {
+                name: "v.patch_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![1; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let vision_second = write_test_gguf(
+            &[
+                (SPLIT_NO, Value::U16(1)),
+                (SPLIT_COUNT, Value::U16(2)),
+                (SPLIT_TENSORS_COUNT, Value::U32(2)),
+            ],
+            &[TestTensor {
+                name: "mm.0.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![2; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+        let audio = write_test_gguf(
+            &[
+                ("general.architecture", Value::String("clip".to_string())),
+                (GENERAL_TYPE, Value::String(MMPROJ_TYPE.to_string())),
+            ],
+            &[TestTensor {
+                name: "a.position_embd.weight",
+                shape: vec![8],
+                dtype: 0,
+                data: vec![3; 32],
+                offset: None,
+            }],
+            DEFAULT_ALIGNMENT,
+        );
+
+        let components = GgufArchive::open_components([
+            vision_second.path(),
+            vision_first.path(),
+            audio.path(),
+        ])?;
+
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].shards().len(), 2);
+        assert!(components[0].contains_tensor("v.patch_embd.weight"));
+        assert!(components[0].contains_tensor("mm.0.weight"));
+        assert_eq!(components[1].shards().len(), 1);
+        assert!(components[1].contains_tensor("a.position_embd.weight"));
+
+        let mut archive = GgufArchive::open_file(main_file.path())?;
+        archive.merge_components(components)?;
+        assert_eq!(archive.shards().len(), 4);
+        assert_eq!(archive.tensor_info("v.patch_embd.weight")?.shard_index(), 1);
+        assert_eq!(archive.tensor_info("mm.0.weight")?.shard_index(), 2);
+        assert_eq!(
+            archive.tensor_info("a.position_embd.weight")?.shard_index(),
+            3
+        );
         Ok(())
     }
 

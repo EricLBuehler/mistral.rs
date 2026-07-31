@@ -219,6 +219,11 @@ pub use llguidance;
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
 
+/// Set the process-wide Hugging Face cache path before model discovery.
+pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
+    GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
+}
+
 /// Configuration for creating an engine instance
 #[derive(Clone)]
 pub struct EngineConfig {
@@ -2678,6 +2683,7 @@ impl MistralRs {
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .with_max_model_len(loader_config.max_model_len)
+            .with_no_kv_cache(unloaded_state.engine_config.no_kv_cache)
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 

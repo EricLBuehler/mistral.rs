@@ -73,6 +73,7 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
 | `input_files` | `list[InputFile] \| None` | `None` |
+| `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
@@ -108,6 +109,7 @@ about input data, sampling, and how to return the response.
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
+| `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 

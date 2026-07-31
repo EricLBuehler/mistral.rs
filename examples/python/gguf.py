@@ -1,7 +1,10 @@
 """Load and run a standalone GGUF model from Hugging Face.
 
-Set `tok_model_id` only when the original model repo is needed for configuration or tokenizer
-assets.
+Configuration and tokenizer assets are discovered automatically. Set `tok_model_id` only to
+override that choice or when the source cannot be identified.
+
+Pass `in_situ_quant` to `Runner` to requantize the selected GGUF while loading. The GGUF selector
+also accepts `imatrix`, `calibration_file`, `organization`, and `write_uqff`.
 """
 
 from mistralrs import Runner, Which, ChatCompletionRequest

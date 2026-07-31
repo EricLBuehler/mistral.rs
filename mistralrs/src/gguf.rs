@@ -1,10 +1,10 @@
 use candle_core::Device;
 use mistralrs_core::*;
 use mistralrs_core::{SearchCallback, Tool, ToolCallback};
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::model_builder_trait::{build_gguf_pipeline, build_model_from_pipeline};
-use crate::Model;
+use crate::{IsqBits, IsqSetting, Model};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -21,16 +21,27 @@ pub struct GgufModelBuilder {
     pub(crate) jinja_explicit: Option<String>,
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
+    pub(crate) hf_cache_path: Option<PathBuf>,
+    pub(crate) matformer_config_path: Option<PathBuf>,
+    pub(crate) matformer_slice_name: Option<String>,
+    pub(crate) write_uqff: Option<UqffWriteConfig>,
+    pub(crate) imatrix: Option<PathBuf>,
+    pub(crate) calibration_file: Option<PathBuf>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
     pub(crate) tool_callbacks: HashMap<String, ToolCallbackWithTool>,
+    pub(crate) mcp_client_config: Option<McpClientConfig>,
     pub(crate) device: Option<Device>,
 
     // Model running
     pub(crate) force_cpu: bool,
     pub(crate) topology: Option<Topology>,
     pub(crate) topology_path: Option<String>,
+    pub(crate) organization: IsqOrganization,
+    pub(crate) isq: Option<IsqSetting>,
     pub(crate) max_edge: Option<u32>,
+    pub(crate) max_model_len: Option<usize>,
+    pub(crate) dtype: ModelDType,
     pub(crate) throughput_logging: bool,
 
     // Other things
@@ -43,6 +54,7 @@ pub struct GgufModelBuilder {
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
     pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
     pub(crate) lora_runtime_config: LoraRuntimeConfig,
+    pub(crate) mtp_config: Option<MtpConfig>,
 }
 
 impl GgufModelBuilder {
@@ -70,18 +82,30 @@ impl GgufModelBuilder {
             topology: None,
             topology_path: None,
             max_edge: None,
+            max_model_len: None,
+            dtype: ModelDType::Auto,
             tok_model_id: None,
             device_mapping: None,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+            write_uqff: None,
+            imatrix: None,
+            calibration_file: None,
             jinja_explicit: None,
             throughput_logging: false,
             search_embedding_model: None,
             search_callback: None,
             tool_callbacks: HashMap::new(),
+            mcp_client_config: None,
             device: None,
             code_exec_config: None,
             shell_config: None,
             lora_adapters: None,
             lora_runtime_config: LoraRuntimeConfig::default(),
+            mtp_config: None,
+            organization: IsqOrganization::Default,
+            isq: None,
         }
     }
 
@@ -188,6 +212,12 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Configure MCP servers whose tools should be available to the model.
+    pub fn with_mcp_client(mut self, config: McpClientConfig) -> Self {
+        self.mcp_client_config = Some(config);
+        self
+    }
+
     /// Enable Python code execution.
     pub fn with_code_execution(mut self, config: mistralrs_core::CodeExecutionConfig) -> Self {
         self.code_exec_config = Some(config);
@@ -227,6 +257,84 @@ impl GgufModelBuilder {
     /// Automatically resize and pad images to this maximum edge length.
     pub fn with_max_edge(mut self, max_edge: u32) -> Self {
         self.max_edge = Some(max_edge);
+        self
+    }
+
+    /// Cap a multimodal model's runtime context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    /// Load the model in a certain dtype.
+    pub fn with_dtype(mut self, dtype: ModelDType) -> Self {
+        self.dtype = dtype;
+        self
+    }
+
+    /// Set the cache path for Hugging Face model assets.
+    pub fn from_hf_cache_path(mut self, path: PathBuf) -> Self {
+        self.hf_cache_path = Some(path);
+        self
+    }
+
+    /// Set the Matryoshka Transformer configuration.
+    pub fn with_matformer_config_path(mut self, path: PathBuf) -> Self {
+        self.matformer_config_path = Some(path);
+        self
+    }
+
+    /// Select a Matryoshka Transformer slice.
+    pub fn with_matformer_slice_name(mut self, name: String) -> Self {
+        self.matformer_slice_name = Some(name);
+        self
+    }
+
+    /// Use ISQ of a certain type.
+    pub fn with_isq(mut self, isq: IsqType) -> Self {
+        self.isq = Some(IsqSetting::Specific(isq));
+        self
+    }
+
+    /// Automatically select an ISQ type for the target platform and bit width.
+    pub fn with_auto_isq(mut self, bits: IsqBits) -> Self {
+        self.isq = Some(IsqSetting::Auto(bits));
+        self
+    }
+
+    /// Organize ISQ to quantize only MoE experts.
+    pub fn with_mixture_qexperts_isq(mut self) -> Self {
+        self.organization = IsqOrganization::MoeExpertsOnly;
+        self
+    }
+
+    /// Use an imatrix file while requantizing the GGUF weights.
+    pub fn with_imatrix(mut self, path: PathBuf) -> Self {
+        self.imatrix = Some(path);
+        self
+    }
+
+    /// Generate an imatrix from a calibration file while requantizing the GGUF weights.
+    pub fn with_calibration_file(mut self, path: PathBuf) -> Self {
+        self.calibration_file = Some(path);
+        self
+    }
+
+    /// Write the loaded weights as UQFF.
+    pub fn write_uqff(mut self, config: impl Into<UqffWriteConfig>) -> Self {
+        self.write_uqff = Some(config.into());
+        self
+    }
+
+    /// Attach an MTP assistant for speculative decoding.
+    pub fn with_mtp_config(mut self, mtp_config: MtpConfig) -> Self {
+        self.mtp_config = Some(mtp_config);
+        self
+    }
+
+    /// Attach an MTP assistant by model id or path.
+    pub fn with_mtp_model(mut self, model: impl Into<String>, n_predict: Option<usize>) -> Self {
+        self.mtp_config = Some(MtpConfig::new(model, n_predict));
         self
     }
 
@@ -337,7 +445,10 @@ impl GgufModelBuilder {
 #[cfg(test)]
 mod tests {
     use super::GgufModelBuilder;
-    use mistralrs_core::LoraRuntimeConfig;
+    use mistralrs_core::{
+        IsqOrganization, IsqType, LoraRuntimeConfig, McpClientConfig, ModelDType, MtpConfig,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn dynamic_lora_builder_distinguishes_disabled_and_empty_runtime() {
@@ -378,5 +489,53 @@ mod tests {
         assert_eq!(adapters.len(), 1);
         assert_eq!(adapters[0].alias, "vision-chat");
         assert_eq!(adapters[0].source, "org/language-lora");
+    }
+
+    #[test]
+    fn runtime_configuration_is_preserved() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
+            .with_dtype(ModelDType::F16)
+            .with_isq(IsqType::Q4K)
+            .with_mixture_qexperts_isq()
+            .with_imatrix(PathBuf::from("model.imatrix"))
+            .with_max_model_len(8192)
+            .from_hf_cache_path(PathBuf::from("hf-cache"))
+            .with_matformer_config_path(PathBuf::from("matformer.csv"))
+            .with_matformer_slice_name("small".to_string())
+            .with_mtp_model("org/mtp", Some(3));
+
+        assert_eq!(builder.dtype, ModelDType::F16);
+        assert!(builder.isq.is_some());
+        assert!(matches!(
+            builder.organization,
+            IsqOrganization::MoeExpertsOnly
+        ));
+        assert_eq!(builder.imatrix, Some(PathBuf::from("model.imatrix")));
+        assert_eq!(builder.max_model_len, Some(8192));
+        assert_eq!(builder.hf_cache_path, Some(PathBuf::from("hf-cache")));
+        assert_eq!(
+            builder.matformer_config_path,
+            Some(PathBuf::from("matformer.csv"))
+        );
+        assert_eq!(builder.matformer_slice_name.as_deref(), Some("small"));
+        let mtp = builder.mtp_config.unwrap();
+        assert_eq!(mtp.model, "org/mtp");
+        assert_eq!(mtp.n_predict, Some(3));
+    }
+
+    #[test]
+    fn explicit_mtp_configuration_is_preserved() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
+            .with_mtp_config(MtpConfig::new("local-mtp", None));
+
+        assert_eq!(builder.mtp_config.unwrap().model, "local-mtp");
+    }
+
+    #[test]
+    fn mcp_configuration_is_preserved() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
+            .with_mcp_client(McpClientConfig::default());
+
+        assert!(builder.mcp_client_config.is_some());
     }
 }

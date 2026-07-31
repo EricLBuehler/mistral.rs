@@ -619,7 +619,8 @@ pub struct QuantizationOptions {
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
-    /// In-situ quantization: accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.) and quantizes the selected model in-place (in-situ)
+    /// In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or
+    /// raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources.
     #[arg(long = "isq")]
     #[serde(rename = "isq", alias = "in_situ_quant")]
     pub in_situ_quant: Option<String>,

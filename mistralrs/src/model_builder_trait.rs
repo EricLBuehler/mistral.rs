@@ -484,22 +484,34 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    let default_device_map = if builder.mmproj_files.is_some() {
+        AutoDeviceMapParams::default_multimodal()
+    } else {
+        AutoDeviceMapParams::default_text()
+    };
     let device_map_setting = builder
         .device_mapping
         .clone()
-        .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()));
+        .unwrap_or(DeviceMapSetting::Auto(default_device_map));
     let paged_attn_requested = builder.paged_attn_cfg.is_some();
+    let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision,
         builder.token_source,
-        &ModelDType::Auto,
+        &builder.dtype,
         &device,
         !builder.with_logging,
         device_map_setting,
-        None,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -507,7 +519,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 
     let add_model_config = AddModelConfig {
         engine_config,
-        mcp_client_config: None,
+        mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: None,
         code_exec_config: builder.code_exec_config.clone(),
         shell_config: builder.shell_config.clone(),
@@ -823,7 +835,15 @@ pub async fn build_gguf_pipeline(
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
+        organization: builder.organization,
+        write_uqff: builder.write_uqff.clone(),
+        imatrix: builder.imatrix.clone(),
+        calibration_file: builder.calibration_file.clone(),
         max_edge: builder.max_edge,
+        max_model_len: builder.max_model_len,
+        hf_cache_path: builder.hf_cache_path.clone(),
+        matformer_config_path: builder.matformer_config_path.clone(),
+        matformer_slice_name: builder.matformer_slice_name.clone(),
     };
 
     maybe_initialize_logging(builder.with_logging);
@@ -858,16 +878,23 @@ pub async fn build_gguf_pipeline(
         .device_mapping
         .clone()
         .unwrap_or(DeviceMapSetting::Auto(default_device_map));
+    let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
     let pipeline = loader.load_model_from_hf(
         builder.hf_revision.clone(),
         builder.token_source.clone(),
-        &ModelDType::Auto,
+        &builder.dtype,
         &device,
         !builder.with_logging,
         device_map_setting.clone(),
-        None,
+        isq_type,
         builder.paged_attn_cfg,
     )?;
+    if let Some(mtp_config) = builder.mtp_config.clone() {
+        pipeline
+            .lock()
+            .await
+            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
+    }
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -932,34 +959,41 @@ pub async fn build_gguf_pipeline(
                 .lora_adapters
                 .as_ref()
                 .map(|_| builder.lora_runtime_config),
-            dtype: ModelDType::Auto,
+            dtype: builder.dtype,
             topology: builder.topology_path.clone(),
+            organization: Some(builder.organization),
+            write_uqff: builder.write_uqff.clone(),
+            imatrix: builder.imatrix.clone(),
+            calibration_file: builder.calibration_file.clone(),
             max_edge: builder.max_edge,
             max_seq_len,
             max_batch_size,
             max_num_images,
             max_image_length,
+            hf_cache_path: builder.hf_cache_path.clone(),
+            matformer_config_path: builder.matformer_config_path.clone(),
+            matformer_slice_name: builder.matformer_slice_name.clone(),
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),
-        dtype: ModelDType::Auto,
+        dtype: builder.dtype,
         device,
         device_map_setting,
-        isq: None,
+        isq: isq_type,
         paged_attn_config: builder.paged_attn_cfg,
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
-        max_model_len: None,
-        mtp_config: None,
+        max_model_len: builder.max_model_len,
+        mtp_config: builder.mtp_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
         engine_config,
-        mcp_client_config: None,
+        mcp_client_config: builder.mcp_client_config.clone(),
         loader_config: Some(loader_config),
-        code_exec_config: None,
-        shell_config: None,
+        code_exec_config: builder.code_exec_config.clone(),
+        shell_config: builder.shell_config.clone(),
     };
 
     Ok((pipeline, scheduler_config, add_model_config))
