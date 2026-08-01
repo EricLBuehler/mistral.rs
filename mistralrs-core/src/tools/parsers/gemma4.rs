@@ -13,6 +13,18 @@ use crate::Tool;
 /// Gemma 4 string delimiter token.
 const GEMMA4_STR_DELIM: &str = "<|\"|>";
 
+/// A Gemma 4 string may contain `<` (for example an HTML tool argument), but
+/// the exact `<|"|>` delimiter must remain available to close the string.
+/// Rust's regex syntax has no look-around, so this is the regular-language
+/// expansion for "any text that does not contain `<|"|>`". The final group
+/// permits a proper prefix of the delimiter at the end of the content.
+pub(super) const GEMMA4_STRING_CONTENT_REGEX: &str =
+    r#"([^<]|<[^|]|<\|[^"]|<\|"[^|]|<\|"\|[^>])*(<|<\||<\|"|<\|"\|)?"#;
+
+pub(super) fn gemma4_string_rule() -> String {
+    format!(r##"gemma_string: <|"|> /{GEMMA4_STRING_CONTENT_REGEX}/ <|"|>"##)
+}
+
 pub struct Gemma4Parser;
 
 impl ToolFormatParser for Gemma4Parser {
@@ -39,6 +51,7 @@ impl ToolFormatParser for Gemma4Parser {
             builder.build(&branches)
         } else {
             let tool_alts = crate::tools::grammar::lark_tool_name_alternatives(tools);
+            let gemma_string = gemma4_string_rule();
             // r##"..."## because the grammar contains `<|"|>` which has
             // a `"#` sequence that would close an r#"..."# literal.
             format!(
@@ -48,7 +61,7 @@ args: pair ("," pair)* |
 pair: KEY ":" value
 KEY: /[a-zA-Z_][a-zA-Z0-9_]*/
 value: gemma_string | number | "true" | "false" | "null" | array | object
-gemma_string: <|"|> /[^<]*/ <|"|>
+{gemma_string}
 number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/
 array: "[" (value ("," value)*)? "]"
 object: "{{" (pair ("," pair)*)? "}}"
@@ -416,6 +429,28 @@ mod tests {
     use super::*;
     use crate::tools::CalledFunctionParameters;
 
+    #[test]
+    fn gemma4_string_grammar_accepts_html_without_consuming_its_delimiter() {
+        let regex = regex::Regex::new(&format!("^(?:{GEMMA4_STRING_CONTENT_REGEX})$"))
+            .expect("Gemma 4 string-content regex must compile");
+
+        for content in [
+            "",
+            "Zurich",
+            r#"<iframe src="https://maps.example.test?a=1&b=2"></iframe>"#,
+            "a < b and c > d",
+            "proper delimiter prefixes: < <| <|\" <|\"|",
+        ] {
+            assert!(regex.is_match(content), "must accept {content:?}");
+        }
+        for content in ["<|\"|>", "before<|\"|>after"] {
+            assert!(
+                !regex.is_match(content),
+                "must reserve delimiter in {content:?}"
+            );
+        }
+    }
+
     /// Helper: parse through the full registry (same as the real code path).
     fn parse(msg: &str) -> String {
         crate::tools::parsers::process_model_specific_message(msg).unwrap()
@@ -444,6 +479,18 @@ mod tests {
         let msg = "<|tool_call>call:toggle{enabled:true}<tool_call|>";
         let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&parse(msg)).unwrap();
         assert_eq!(parsed[0].parameters["enabled"], true);
+    }
+
+    #[test]
+    fn tool_call_with_html_string() {
+        let msg = r#"<|tool_call>call:insert_after{id:<|"|>p1<|"|>,html:<|"|><iframe src="https://maps.example.test/route?a=1&b=2"></iframe><|"|>}<tool_call|>"#;
+        let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&parse(msg)).unwrap();
+        assert_eq!(parsed[0].name, "insert_after");
+        assert_eq!(parsed[0].parameters["id"], "p1");
+        assert_eq!(
+            parsed[0].parameters["html"],
+            r#"<iframe src="https://maps.example.test/route?a=1&b=2"></iframe>"#
+        );
     }
 
     #[test]
