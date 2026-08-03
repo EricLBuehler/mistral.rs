@@ -363,6 +363,11 @@ impl SpeechLoaderType {
                 modalities: &[Text, Audio],
                 examples: &[ex!("nari-labs/Dia-1.6B")],
             },
+            Self::PocketTts => ArchMetadata {
+                families: &["PocketTts"],
+                modalities: &[Text, Audio],
+                examples: &[ex!("kyutai/pocket-tts-without-voice-cloning")],
+            },
         }
     }
 }

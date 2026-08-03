@@ -1,16 +1,19 @@
 ---
 title: Speech models
-description: Voxtral for audio understanding, Dia for text-to-speech.
+description: Voxtral for audio understanding, Dia and pocket-tts for text-to-speech.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs supports two speech-related model families:
+mistral.rs supports these speech-related model families:
 
 - **Voxtral**: multimodal model accepting audio input. Used for transcription and audio understanding through `/v1/chat/completions`. It uses a Whisper-style audio encoder.
-- **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
+- **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`. GPU-oriented; expressive dialogue.
+- **pocket-tts**: dedicated text-to-speech model served via `/v1/audio/speech`. Kyutai-style Mimi codec + FlowLM transformer; runs fast on CPU.
 
-Voxtral is classified as a multimodal model (audio is one of its input modalities); Dia is classified as a dedicated speech model.
+Voxtral is classified as a multimodal model (audio is one of its input modalities); Dia and pocket-tts are classified as dedicated speech models.
+
+Both TTS models share the `/v1/audio/speech` contract, and multiple speech models can be loaded at once (e.g. pocket-tts on CPU and Dia on GPU) and selected per request by the `model` field.
 
 ## Voxtral: audio in, text out
 
@@ -174,3 +177,101 @@ speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16)?
 
 </TabItem>
 </Tabs>
+
+## pocket-tts: CPU-fast text-to-speech
+
+`/v1/audio/speech`, same OpenAI shape as Dia, but runs in seconds on CPU:
+
+```bash
+mistralrs serve -m kyutai/pocket-tts-without-voice-cloning
+```
+
+The architecture is auto-detected from the model id (or set it explicitly with `--speech-arch pockettts`). pocket-tts speaks with a stock voice; the default is `alba` and you can pick another with `--voice` (stock names: `alba`, `marius`, `javert`, `jean`, `fantine`, `cosette`, `eponine`, `azelma`).
+
+<Tabs>
+<TabItem label="HTTP">
+
+```bash
+curl http://localhost:1234/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "input": "Pocket TTS runs on the CPU in seconds.",
+    "response_format": "wav"
+  }' \
+  --output out.wav
+```
+
+- Output: raw audio bytes (24 kHz mono).
+- `response_format`: only `wav` and `pcm` are read; other formats return a validation error.
+- The voice is fixed at load time (`--voice`); the OpenAI `voice`/`speed` request fields are ignored.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+import struct
+import wave
+from pathlib import Path
+
+from mistralrs import Runner, SpeechLoaderType, Which
+
+runner = Runner(
+    which=Which.Speech(
+        model_id="kyutai/pocket-tts-without-voice-cloning",
+        arch=SpeechLoaderType.PocketTts,
+    )
+)
+
+response = runner.generate_audio("Pocket TTS runs on the CPU in seconds.")
+
+output_path = Path("out.wav")
+pcm_ints = [int(max(-32768, min(32767, sample * 32767))) for sample in response.pcm]
+with wave.open(output_path, "wb") as wav:
+    wav.setnchannels(response.channels)
+    wav.setsampwidth(2)
+    wav.setframerate(response.rate)
+    wav.writeframes(b"".join(struct.pack("<h", sample) for sample in pcm_ints))
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
+
+let model = SpeechModelBuilder::new(
+    "kyutai/pocket-tts-without-voice-cloning",
+    SpeechLoaderType::PocketTts,
+)
+.with_voice("alba")
+.build()
+.await?;
+
+let (pcm, rate, channels) = model
+    .generate_speech("Pocket TTS runs on the CPU in seconds.")
+    .await?;
+
+let mut output = std::fs::File::create("out.wav")?;
+speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16)?;
+```
+
+</TabItem>
+</Tabs>
+
+### Serving both TTS models from one binary
+
+With `mistralrs from-config`, load pocket-tts (CPU) and Dia (GPU) together and select per request by `model`:
+
+```toml
+command = "serve"
+default_model_id = "pockettts"
+
+[[models]]
+kind = "speech"
+model_id = "kyutai/pocket-tts-without-voice-cloning"
+# speech_arch = "pockettts"   # auto-detected from model_id
+# voice = "alba"
+[models.device]
+cpu = true
+```

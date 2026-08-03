@@ -91,6 +91,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | Architecture | Model families | Example |
 |---|---|---|
 | `Dia` | Dia | <details><summary><code>nari-labs/Dia-1.6B</code></summary><code>mistralrs run -m nari-labs/Dia-1.6B</code></details> |
+| `PocketTts` | PocketTts | <details><summary><code>kyutai/pocket-tts-without-voice-cloning</code></summary><code>mistralrs run -m kyutai/pocket-tts-without-voice-cloning</code></details> |
 
 ## Embedding
 

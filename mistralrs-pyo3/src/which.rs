@@ -183,12 +183,14 @@ impl From<DiffusionArchitecture> for DiffusionLoaderType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpeechLoaderType {
     Dia,
+    PocketTts,
 }
 
 impl From<SpeechLoaderType> for mistralrs_core::SpeechLoaderType {
     fn from(value: SpeechLoaderType) -> Self {
         match value {
             SpeechLoaderType::Dia => mistralrs_core::SpeechLoaderType::Dia,
+            SpeechLoaderType::PocketTts => mistralrs_core::SpeechLoaderType::PocketTts,
         }
     }
 }

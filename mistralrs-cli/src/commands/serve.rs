@@ -7,7 +7,6 @@ use tracing::{debug, info};
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
-    SpeechLoaderType,
 };
 use mistralrs_server_core::{
     approvals::ApprovalBroker,
@@ -26,6 +25,7 @@ use crate::args::{
     MultimodalOptions, QuantizationOptions, RuntimeOptions, SandboxMode, SandboxOptions,
     ServerOptions,
 };
+use crate::config::detect_speech_arch;
 use crate::ui::build_ui_router;
 
 /// Run the HTTP server with the specified model
@@ -446,10 +446,16 @@ pub(crate) fn convert_to_model_selected(
             dtype: model.dtype,
         }),
 
-        ModelType::Speech { model, device: _ } => Ok(ModelSelected::Speech {
+        ModelType::Speech {
+            model,
+            device: _,
+            arch,
+            voice,
+        } => Ok(ModelSelected::Speech {
             model_id: model.model_id.clone(),
             dac_model_id: None,
-            arch: SpeechLoaderType::Dia,
+            arch: arch.unwrap_or_else(|| detect_speech_arch(&model.model_id)),
+            voice: voice.clone(),
             dtype: model.dtype,
         }),
 

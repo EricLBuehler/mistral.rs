@@ -10,7 +10,10 @@ use crate::distributed::{use_ring, WorkerTransferData};
 use crate::pipeline::{ChatTemplate, EmbeddingModulePaths, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
+use crate::speech_models::{
+    DiaConfig, DiaPipeline, PocketTtsConfig, PocketTtsPipeline, SpeechGenerationOutput,
+    SpeechLoaderType, POCKETTTS_WEIGHTS_FILE,
+};
 use crate::utils::progress::ProgressScopeGuard;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
@@ -33,10 +36,40 @@ use std::sync::Arc;
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 
+const POCKETTTS_TOKENIZER_FILE: &str = "tokenizer.model";
+const POCKETTTS_DEFAULT_VOICE: &str = "alba";
+
 #[derive(Clone, Debug)]
 pub struct SpeechModelPaths {
     weights: Vec<PathBuf>,
     config: PathBuf,
+    tokenizer: Option<PathBuf>,
+    voice_prompt: Option<PathBuf>,
+}
+
+enum SpeechModel {
+    Dia(DiaPipeline),
+    PocketTts(PocketTtsPipeline),
+}
+
+impl SpeechModel {
+    fn generate(
+        &self,
+        prompt: &str,
+        cfg: &SpeechGenerationConfig,
+    ) -> candle_core::Result<SpeechGenerationOutput> {
+        match self {
+            Self::Dia(m) => m.generate(prompt, cfg),
+            Self::PocketTts(m) => m.generate(prompt, cfg),
+        }
+    }
+
+    fn device(&self) -> &Device {
+        match self {
+            Self::Dia(m) => m.device(),
+            Self::PocketTts(m) => m.device(),
+        }
+    }
 }
 
 impl ModelPaths for SpeechModelPaths {
@@ -143,7 +176,7 @@ impl InputsProcessor for SpeechInputsProcessor {
 
 pub struct SpeechPipeline {
     model_id: String,
-    model: DiaPipeline,
+    model: SpeechModel,
     metadata: Arc<GeneralMetadata>,
     dummy_cache: EitherCache,
     cfg: SpeechGenerationConfig,
@@ -154,6 +187,8 @@ pub struct SpeechLoader {
     pub dac_model_id: Option<String>,
     pub arch: SpeechLoaderType,
     pub cfg: Option<SpeechGenerationConfig>,
+    /// Speaker voice for pocket-tts (a stock name like `alba`). Ignored by Dia.
+    pub voice: Option<String>,
 }
 
 impl Loader for SpeechLoader {
@@ -170,17 +205,70 @@ impl Loader for SpeechLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            // Main weights first, DAC is the final one.
-            let mut weights = Vec::new();
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = match self.arch {
+            SpeechLoaderType::Dia => {
+                // Main weights first, DAC is the final one.
+                let mut weights = Vec::new();
 
-            // Main model
-            let config = {
+                // Main model
+                let config = {
+                    let api = ApiBuilder::new()
+                        .with_progress(!silent)
+                        .with_token(get_token(&token_source)?)
+                        .build()?;
+                    let revision = revision.clone().unwrap_or("main".to_string());
+                    let api = api.repo(Repo::with_revision(
+                        self.model_id.to_string(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = std::path::Path::new(&self.model_id);
+
+                    let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
+                    let config = api_get_file!(api, "config.json", &model_id, &revision);
+                    weights.push(weight);
+                    config
+                };
+
+                // DAC model
+                {
+                    let api = ApiBuilder::new()
+                        .with_progress(!silent)
+                        .with_token(get_token(&token_source)?)
+                        .build()?;
+                    let revision = revision.unwrap_or("main".to_string());
+
+                    let dac_model = self
+                        .dac_model_id
+                        .clone()
+                        .unwrap_or_else(|| "EricB/dac_44khz".to_string());
+
+                    let api = api.repo(Repo::with_revision(
+                        dac_model.clone(),
+                        RepoType::Model,
+                        revision.clone(),
+                    ));
+                    let model_id = std::path::Path::new(&dac_model);
+
+                    let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
+                    weights.push(weight);
+                }
+
+                Ok(Box::new(SpeechModelPaths {
+                    weights,
+                    config,
+                    tokenizer: None,
+                    voice_prompt: None,
+                }))
+            }
+            SpeechLoaderType::PocketTts => {
+                // pocket-tts ships weights + a SentencePiece tokenizer + a set of stock speaker
+                // embeddings under `embeddings/<voice>.safetensors`; the config is baked in.
                 let api = ApiBuilder::new()
                     .with_progress(!silent)
                     .with_token(get_token(&token_source)?)
                     .build()?;
-                let revision = revision.clone().unwrap_or("main".to_string());
+                let revision = revision.unwrap_or("main".to_string());
                 let api = api.repo(Repo::with_revision(
                     self.model_id.to_string(),
                     RepoType::Model,
@@ -188,40 +276,20 @@ impl Loader for SpeechLoader {
                 ));
                 let model_id = std::path::Path::new(&self.model_id);
 
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                let config = api_get_file!(api, "config.json", &model_id, &revision);
-                weights.push(weight);
-                config
-            };
+                let weight = api_get_file!(api, POCKETTTS_WEIGHTS_FILE, &model_id, &revision);
+                let tokenizer = api_get_file!(api, POCKETTTS_TOKENIZER_FILE, &model_id, &revision);
 
-            // DAC model
-            {
-                let api = ApiBuilder::new()
-                    .with_progress(!silent)
-                    .with_token(get_token(&token_source)?)
-                    .build()?;
-                let revision = revision.unwrap_or("main".to_string());
+                let voice = self.voice.as_deref().unwrap_or(POCKETTTS_DEFAULT_VOICE);
+                let voice_file = format!("embeddings/{voice}.safetensors");
+                let voice_prompt = api_get_file!(api, &voice_file, &model_id, &revision);
 
-                // Apply default here
-                let dac_model = self
-                    .dac_model_id
-                    .clone()
-                    .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
-                    });
-
-                let api = api.repo(Repo::with_revision(
-                    dac_model.clone(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = std::path::Path::new(&dac_model);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                weights.push(weight);
+                Ok(Box::new(SpeechModelPaths {
+                    weights: vec![weight.clone()],
+                    config: weight,
+                    tokenizer: Some(tokenizer),
+                    voice_prompt: Some(voice_prompt),
+                }))
             }
-
-            Ok(Box::new(SpeechModelPaths { weights, config }))
         };
         self.load_model_from_path(
             &paths?,
@@ -262,8 +330,6 @@ impl Loader for SpeechLoader {
             mistralrs_quant::IsqCaptureMode::Immediate,
         );
 
-        let cfg: DiaConfig = serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
-
         #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
             unsafe { dev.disable_event_tracking() };
@@ -283,28 +349,55 @@ impl Loader for SpeechLoader {
             DeviceMapSetting::dummy().into_mapper(usize::MAX, device, None, &available_devices)?;
         let dtype = mapper.get_min_dtype(dtype)?;
 
-        // Last weight is the dac.
-        let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
-        let vb = from_mmaped_safetensors(
-            model_weights,
-            Vec::new(),
-            Some(dtype),
-            device,
-            vec![None],
-            silent,
-            None,
-            |_| true,
-            Arc::new(|_| DeviceForLoadTensor::Base),
-        )?;
+        let model = match self.arch {
+            SpeechLoaderType::Dia => {
+                let cfg: DiaConfig =
+                    serde_json::from_str(&std::fs::read_to_string(&paths.config)?)?;
 
-        let dac_vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[paths.weights.last().unwrap()], dtype, device)?
+                // Last weight is the dac.
+                let model_weights = paths.weights[..paths.weights.len() - 1].to_vec();
+                let vb = from_mmaped_safetensors(
+                    model_weights,
+                    Vec::new(),
+                    Some(dtype),
+                    device,
+                    vec![None],
+                    silent,
+                    None,
+                    |_| true,
+                    Arc::new(|_| DeviceForLoadTensor::Base),
+                )?;
+
+                let dac_vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(
+                        &[paths.weights.last().unwrap()],
+                        dtype,
+                        device,
+                    )?
+                };
+
+                SpeechModel::Dia(DiaPipeline::new(&cfg, vb, dac_vb)?)
+            }
+            SpeechLoaderType::PocketTts => {
+                let cfg = PocketTtsConfig::b6369a24();
+                let tokenizer = paths
+                    .tokenizer
+                    .as_ref()
+                    .expect("pocket-tts requires a tokenizer path");
+                let voice_prompt = paths
+                    .voice_prompt
+                    .as_ref()
+                    .expect("pocket-tts requires a voice prompt path");
+                let vb = unsafe {
+                    VarBuilder::from_mmaped_safetensors(
+                        &paths.weights,
+                        candle_core::DType::F32,
+                        device,
+                    )?
+                };
+                SpeechModel::PocketTts(PocketTtsPipeline::new(&cfg, vb, tokenizer, voice_prompt)?)
+            }
         };
-
-        // Only Dia is supported for now.
-        assert_eq!(self.arch, SpeechLoaderType::Dia);
-
-        let model = DiaPipeline::new(&cfg, vb, dac_vb)?;
 
         Ok(Arc::new(Mutex::new(SpeechPipeline {
             model_id: self.model_id.clone(),
