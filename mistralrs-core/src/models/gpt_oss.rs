@@ -12,7 +12,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::{AttentionMask, SdpaParams},
+    attention::{sinks_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         self, embedding_with_legacy_tied_uqff, CausalMasker, GptOssRotaryEmbedding, RmsNorm,
@@ -759,13 +759,14 @@ impl Model {
 
         let sliding_window = self.cfg.sliding_window;
 
+        let force_custom_attention_mask = !ctx.flash_params().packed;
         let mask_cache = ctx.mask_cache(cache);
         let causal_mask = CausalMasker.make_causal_mask(
             input_ids,
             &mask_cache,
             xs.dtype(),
             &CausalMaskConfig {
-                force_custom: true,
+                force_custom: force_custom_attention_mask,
                 ..Default::default()
             },
         )?;
@@ -776,7 +777,7 @@ impl Model {
             xs.dtype(),
             &CausalMaskConfig {
                 sliding_window,
-                force_custom: true,
+                force_custom: force_custom_attention_mask,
             },
         )?;
 
@@ -869,6 +870,10 @@ impl NormalModel for Model {
 
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg_metadata
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        sinks_backend_supports(self.dtype, self.device.location(), self.cfg.head_dim())
     }
 
     #[cfg(feature = "cuda")]

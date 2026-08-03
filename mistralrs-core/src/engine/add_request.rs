@@ -720,11 +720,6 @@ impl Engine {
                 seq.bind_adapter(adapter_lease.clone());
             }
 
-            // Only "track" a new sequence if it is a traditional one
-            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
-                self.logger.add_new_sequence();
-            }
-
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if let Some(chat_template) = pipeline.get_chat_template() {
@@ -769,61 +764,86 @@ impl Engine {
                 }
             }
 
-            // Allocate recurrent state pool slot for hybrid models
-            {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
-                    let mut hybrid_cache = pipeline.cache().hybrid();
-                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
-                        seq.set_recurrent_state_idx(Some(slot_idx));
-                    }
-                }
-            }
-
             // Run the inputs processor to normalize multimodal prompts before prefix-cache lookup.
             // Rely on the sequence's attached modalities rather than just the top-level request
             // fields so historical images/audios in a reconstructed multi-turn conversation
             // still get their prompt rewrite and mm-feature setup before cache matching.
             if seq.has_images() || seq.has_audios() || seq.has_videos() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                let _ = pipeline.get_processor().inputs_processor().process_inputs(
-                    pipeline.tokenizer(),
-                    &mut [&mut seq],
-                    true,
-                    pipeline.get_metadata().is_xlora,
-                    &pipeline.device(),
-                    pipeline.get_metadata().no_kv_cache,
-                    None,
-                    false,
-                    pipeline.get_metadata().sliding_window,
-                    pipeline.get_input_processor_config(),
-                    None,
-                    pipeline.device_mapper(),
+                handle_seq_error!(
+                    pipeline
+                        .get_processor()
+                        .inputs_processor()
+                        .prepare_for_paged_prompt_planning(
+                            pipeline.tokenizer(),
+                            &mut [&mut seq],
+                            &pipeline.device(),
+                            pipeline.get_input_processor_config(),
+                            None,
+                        ),
+                    request.response
                 );
             }
 
-            let prefill_cache = handle_seq_error!(
-                get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
-                    seq.get_toks(),
-                    seq.adapter_generation(),
-                    seq.image_hashes(),
-                    seq.audio_hashes(),
-                    seq.video_hashes(),
-                ),
-                request.response
-            );
+            let prefill_cache = if seq.return_raw_logits {
+                None
+            } else {
+                handle_seq_error!(
+                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                        seq.get_toks(),
+                        seq.adapter_generation(),
+                        seq.mm_features(),
+                        seq.image_hashes(),
+                        seq.audio_hashes(),
+                        seq.video_hashes(),
+                    ),
+                    request.response
+                )
+            };
 
+            let recurrent_slot_allocation_failed = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                    let mut hybrid_cache = pipeline.cache().hybrid();
+                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                        seq.set_recurrent_state_idx(Some(slot_idx));
+                        false
+                    } else {
+                        true
+                    }
+                } else {
+                    false
+                }
+            };
+            if recurrent_slot_allocation_failed {
+                request
+                    .response
+                    .send(Response::InternalError(
+                        "Failed to allocate recurrent state for request."
+                            .to_string()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+
+            if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
+                self.logger.add_new_sequence();
+            }
             seq = match prefill_cache.clone() {
                 Some(MatchingCache::Normal {
                     normal,
                     recurrent_snapshots,
                     images_to_keep,
                     audios_to_keep,
-                    videos_to_keep,
+                    video_frames_to_keep,
                     toks,
                     offset,
                 }) => {
-                    self.logger.add_prefix_cache_hit();
+                    if seq.record_prefix_cache_hit() {
+                        self.logger.add_prefix_cache_hit();
+                    }
 
                     // Restore recurrent state for hybrid models
                     if let Some(snapshots) = recurrent_snapshots {
@@ -842,9 +862,15 @@ impl Engine {
                         }
                     }
 
-                    seq.keep_num_images(images_to_keep);
+                    let retain_prefix_cached_images = {
+                        let pipeline = get_mut_arcmutex!(self.pipeline);
+                        pipeline.get_processor().retain_prefix_cached_images()
+                    };
+                    if !retain_prefix_cached_images {
+                        seq.keep_num_images(images_to_keep);
+                    }
                     seq.keep_num_audios(audios_to_keep);
-                    seq.keep_num_videos(videos_to_keep);
+                    seq.keep_num_video_frames(video_frames_to_keep);
                     seq.prefill_v2_normal(normal, toks, offset)
                 }
                 None => seq,

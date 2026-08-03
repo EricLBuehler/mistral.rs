@@ -63,6 +63,39 @@ pub use uqff::{
     UQFF_REPORT_JSON, UQFF_VERSION_MAJOR, UQFF_VERSION_MINOR, UQFF_VERSION_PATCH,
 };
 
+#[doc(hidden)]
+pub fn gguf_affine_adjust_cache_bytes(
+    device: &Device,
+    dtype: DType,
+    available_bytes: usize,
+    requested_cache_bytes: usize,
+    minimum_cache_bytes: usize,
+    may_reduce_cache: bool,
+) -> Result<usize> {
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    {
+        gguf::gguf_affine_adjust_cache_bytes(
+            device,
+            dtype,
+            available_bytes,
+            requested_cache_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        )
+    }
+    #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
+    {
+        let _ = (
+            device,
+            dtype,
+            available_bytes,
+            minimum_cache_bytes,
+            may_reduce_cache,
+        );
+        Ok(requested_cache_bytes)
+    }
+}
+
 #[cfg(feature = "metal")]
 pub use afq::ops::{
     afq_gather_qmm_rhs_sorted, afq_gather_qmm_rhs_sorted_gate_up, metal_arg_sort_u32_1d,
@@ -116,15 +149,15 @@ pub use isq_executor::{
 pub use lora::{
     add_expert_delta_reference, apply_dynamic_lora_delta, linear_no_bias_static_lora,
     load_dynamic_lora_weights, maybe_wrap_dynamic_lora, plan_dynamic_lora_weights,
-    register_dynamic_lora_site, with_lora_execution, DynamicLoraLoadPlan, DynamicLoraWeights,
-    LoraAdapterWeights, LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats,
-    LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection,
-    LoraExpertProjectionNames, LoraExpertProjectionWeights, LoraExpertSiteHandle,
-    LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec,
-    LoraRuntimeId, LoraSiteHandle, LoraSiteKey, LoraSiteSlice, LoraSlotId, LoraTargetModules,
-    LoraWeights, RoutedLoraAdapterWeight, RoutedLoraInputMode, RoutedLoraMetadataLayout,
-    RoutedLoraProjectionLayout, StaticLoraConfig, ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE,
-    ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
+    register_dynamic_lora_site, with_lora_execution, with_lora_execution_repeated_row,
+    with_lora_execution_row_range, DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights,
+    LoraConfig, LoraExecution, LoraExecutionArena, LoraExecutionArenaStats, LoraExpertDelta,
+    LoraExpertExecution, LoraExpertInputMode, LoraExpertProjection, LoraExpertProjectionNames,
+    LoraExpertProjectionWeights, LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights,
+    LoraGateUpOrder, LoraLayerRegistry, LoraLinearSpec, LoraRuntimeId, LoraSiteHandle, LoraSiteKey,
+    LoraSiteSlice, LoraSlotId, LoraTargetModules, LoraWeights, RoutedLoraAdapterWeight,
+    RoutedLoraInputMode, RoutedLoraMetadataLayout, RoutedLoraProjectionLayout, StaticLoraConfig,
+    ROUTED_LORA_BASE_SLOT, ROUTED_LORA_BLOCK_SIZE, ROUTED_LORA_MAX_RANK, ROUTED_LORA_WMMA_RANK_CAP,
 };
 #[cfg(feature = "cuda")]
 pub use lora::{
@@ -1320,6 +1353,23 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn prepare_gguf_affine_raw(
+        &self,
+        _flat_batch: usize,
+        _dtype: DType,
+        _device: &Device,
+    ) -> Result<bool> {
+        Ok(false)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    #[doc(hidden)]
+    fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
+        Ok(None)
+    }
+
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
     /// Used by Metal fused QKV / gate-up paths.
     fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
@@ -1400,6 +1450,104 @@ impl Module for dyn QuantMethod {
 }
 
 #[cfg(feature = "cuda")]
+pub fn try_fused_quantized_ffn(
+    xs: &Tensor,
+    gate: &dyn QuantMethod,
+    up: &dyn QuantMethod,
+    down: &dyn QuantMethod,
+    activation: GluActivationType,
+) -> Result<Option<Tensor>> {
+    if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some()
+        || up.stats_snapshot().is_some()
+        || down.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() || down.is_dynamic_lora_active()
+    {
+        return Ok(None);
+    }
+    if gate.has_bias() || up.has_bias() || down.has_bias() {
+        return Ok(None);
+    }
+    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        return Ok(None);
+    }
+
+    let (flat_batch, k) = match xs.dims() {
+        [batch, k] => (*batch, *k),
+        [batch, rows, k] => (*batch * *rows, *k),
+        _ => return Ok(None),
+    };
+    if flat_batch < gguf::GGUF_AFFINE_MIN_BATCH {
+        return Ok(None);
+    }
+
+    let Some(gate_q) = gate.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(up_q) = up.get_qtensor() else {
+        return Ok(None);
+    };
+    let Some(down_q) = down.get_qtensor() else {
+        return Ok(None);
+    };
+    if gate_q.shape() != up_q.shape() {
+        return Ok(None);
+    }
+    let (intermediate, gate_cols) = gate_q.shape().dims2()?;
+    let (_, down_cols) = down_q.shape().dims2()?;
+    if gate_cols != k || down_cols != intermediate {
+        return Ok(None);
+    }
+    if !gate_q.device().same_device(xs.device())
+        || !up_q.device().same_device(xs.device())
+        || !down_q.device().same_device(xs.device())
+    {
+        return Ok(None);
+    }
+
+    #[cfg(has_marlin_kernels)]
+    {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let down_ready = down.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready && down_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            let intermediate = fused_glu(&gate_out, &up_out, activation)?;
+            drop(gate_out);
+            drop(up_out);
+            let out = down
+                .try_gguf_affine_forward_raw(&intermediate)?
+                .expect("prepared GGUF affine down projection");
+            return Ok(Some(out));
+        }
+    }
+
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    if gate_q.dtype() != up_q.dtype()
+        || !gguf::fast_mmq::supports(gate_q.dtype())
+        || !gguf::fast_mmq::supports(down_q.dtype())
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(gguf::fast_mmq::fused_ffn(
+        &gate_q, &up_q, &down_q, xs, activation,
+    )?))
+}
+
+#[cfg(feature = "cuda")]
 pub fn try_fused_quantized_gate_up(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -1407,6 +1555,12 @@ pub fn try_fused_quantized_gate_up(
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
     if !xs.device().is_cuda() {
+        return Ok(None);
+    }
+    if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
+        return Ok(None);
+    }
+    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() {
         return Ok(None);
     }
     if gate.has_bias() || up.has_bias() {
@@ -1422,12 +1576,6 @@ pub fn try_fused_quantized_gate_up(
     let Some(up_q) = up.get_qtensor() else {
         return Ok(None);
     };
-    if gate_q.dtype() != up_q.dtype() {
-        return Ok(None);
-    }
-    if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
-        return Ok(None);
-    }
     if gate_q.shape() != up_q.shape() {
         return Ok(None);
     }
@@ -1436,7 +1584,7 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, ncols) = gate_q.shape().dims2()?;
@@ -1444,9 +1592,39 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_glu(
-        &gate_q, &up_q, xs, activation,
-    )?))
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if gate_ready && up_ready {
+            let gate_out = gate
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine gate projection");
+            let up_out = up
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine up projection");
+            return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
+        }
+    }
+
+    if gate_q.dtype() != up_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    } else {
+        if !gguf::fast_mmq::supports(gate_q.dtype()) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_glu(
+            &gate_q, &up_q, xs, activation,
+        )?))
+    }
 }
 
 /// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
@@ -1482,6 +1660,13 @@ pub fn try_fused_quantized_qkv(
     if !xs.device().is_cuda() {
         return Ok(None);
     }
+    if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()
+    {
+        return Ok(None);
+    }
+    if q.is_dynamic_lora_active() || k.is_dynamic_lora_active() || v.is_dynamic_lora_active() {
+        return Ok(None);
+    }
     if q.has_bias() || k.has_bias() || v.has_bias() {
         return Ok(None);
     }
@@ -1498,16 +1683,12 @@ pub fn try_fused_quantized_qkv(
     let Some(v_q) = v.get_qtensor() else {
         return Ok(None);
     };
-    let dtype = q_q.dtype();
-    if dtype != k_q.dtype() || dtype != v_q.dtype() || !gguf::fast_mmvq::supports(dtype) {
-        return Ok(None);
-    }
 
     let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
         return Ok(None);
     };
     let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 || flat_batch > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    if flat_batch == 0 {
         return Ok(None);
     }
     let (_, q_cols) = q_q.shape().dims2()?;
@@ -1517,7 +1698,40 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
-    Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    #[cfg(has_marlin_kernels)]
+    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
+        let q_ready = q.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let k_ready = k.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        let v_ready = v.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
+        if q_ready && k_ready && v_ready {
+            let q_out = q
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine query projection");
+            let k_out = k
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine key projection");
+            let v_out = v
+                .try_gguf_affine_forward_raw(xs)?
+                .expect("prepared GGUF affine value projection");
+            return Ok(Some((q_out, k_out, v_out)));
+        }
+    }
+
+    let dtype = q_q.dtype();
+    if dtype != k_q.dtype() || dtype != v_q.dtype() {
+        return Ok(None);
+    }
+    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    } else {
+        if !gguf::fast_mmq::supports(dtype) {
+            return Ok(None);
+        }
+        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
+    }
 }
 
 /// Metal fused gate+up: single Metal kernel that does both matmuls with shared

@@ -120,7 +120,7 @@ use crate::paged_attention::block_hash::{
 };
 use crate::sequence::Sequence;
 
-use prompt_chunks::build_prompt_chunk_plan;
+use prompt_chunks::{build_prompt_chunk_plan, next_prompt_chunk_group};
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -130,6 +130,74 @@ use self::text_models_inputs_processor::{
 };
 
 const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+
+#[cfg(feature = "cuda")]
+pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices {
+        if let Device::Cuda(cuda) = device {
+            cuda.cuda_stream().context().synchronize()?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_lora_execution(
+    runtime: Option<&crate::DynamicLoraRuntime>,
+    input_ids: &Tensor,
+    paged_attn_meta: Option<&PagedAttentionInputMetadata>,
+    flash_meta: &FlashParams,
+    adapter_leases: &[Option<crate::AdapterLease>],
+) -> candle_core::Result<Option<Arc<mistralrs_quant::LoraExecution>>> {
+    let (batch, sequence_length) = input_ids.dims2()?;
+    let query_lens = if flash_meta.packed {
+        if batch != 1 {
+            candle_core::bail!("packed adapter routing requires a flat physical batch");
+        }
+        let query_lens = paged_attn_meta
+            .and_then(|metadata| metadata.query_lens.as_deref())
+            .ok_or_else(|| {
+                candle_core::Error::msg("packed adapter routing requires logical query lengths")
+            })?;
+        if adapter_leases.len() != query_lens.len() {
+            candle_core::bail!(
+                "adapter lease count {} does not match packed logical sequence count {}",
+                adapter_leases.len(),
+                query_lens.len()
+            );
+        }
+        let logical_tokens = query_lens.iter().sum::<usize>();
+        if logical_tokens != sequence_length {
+            candle_core::bail!(
+                "packed logical query lengths total {logical_tokens} does not match physical sequence length {sequence_length}"
+            );
+        }
+        Some(query_lens)
+    } else {
+        if adapter_leases.len() != batch {
+            candle_core::bail!(
+                "adapter lease count {} does not match model batch size {batch}",
+                adapter_leases.len()
+            );
+        }
+        None
+    };
+    if adapter_leases.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    let runtime = runtime.ok_or_else(|| {
+        candle_core::Error::msg("request selected an adapter on a pipeline without dynamic LoRA")
+    })?;
+    match query_lens {
+        Some(query_lens) => runtime
+            .ragged_execution(adapter_leases, query_lens)
+            .map(Some),
+        None => runtime.execution(adapter_leases, sequence_length).map(Some),
+    }
+}
 
 pub(crate) fn validate_lora_loader_config(
     adapters: Option<&[crate::LoraAdapterSpec]>,
@@ -502,6 +570,12 @@ impl<'a> ModelForwardContext<'a> {
         device: &Device,
         seq_len: usize,
     ) -> candle_core::Result<Option<&Tensor>> {
+        if self.flash_params.packed {
+            let positions = self.cache.rope_positions(device).ok_or_else(|| {
+                candle_core::Error::msg("packed prefill is missing RoPE positions")
+            })?;
+            return Ok(Some(positions));
+        }
         if self.cache.rope_positions(device).is_some() {
             return Ok(self.cache.rope_positions(device));
         }
@@ -541,8 +615,24 @@ impl<'a> ModelForwardContext<'a> {
     }
 
     pub(crate) fn logits(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
-        LogitsSelection::from_context_lens(logits, self.context_lens, &[logits.device().clone()])?
-            .select(logits)
+        let devices = [logits.device().clone()];
+        let selection = if self.flash_params.packed {
+            let query_lens = self
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    candle_core::Error::msg("packed prefill requires logical query lengths")
+                })?;
+            LogitsSelection::from_packed_context_lens(
+                logits,
+                self.context_lens,
+                query_lens,
+                &devices,
+            )?
+        } else {
+            LogitsSelection::from_context_lens(logits, self.context_lens, &devices)?
+        };
+        selection.select(logits)
     }
 }
 
@@ -567,6 +657,11 @@ pub(crate) enum LogitsSelection {
         len: usize,
     },
     Indices {
+        indices: DeviceTensorMap,
+        batch: usize,
+        len: usize,
+    },
+    PackedIndices {
         indices: DeviceTensorMap,
         batch: usize,
         len: usize,
@@ -646,6 +741,64 @@ impl LogitsSelection {
         })
     }
 
+    pub(crate) fn from_packed_context_lens(
+        source: &Tensor,
+        context_lens: &[(usize, usize)],
+        query_lens: &[usize],
+        devices: &[Device],
+    ) -> candle_core::Result<Self> {
+        let (physical_batch, physical_seq_len, _) = source.dims3()?;
+        if context_lens.len() != query_lens.len() {
+            candle_core::bail!(
+                "packed logits selection length mismatch: {} spans for {} queries",
+                context_lens.len(),
+                query_lens.len()
+            );
+        }
+        let total_tokens = query_lens.iter().sum::<usize>();
+        if physical_batch * physical_seq_len != total_tokens {
+            candle_core::bail!(
+                "packed logits selection token mismatch: source has {} rows, queries have {total_tokens}",
+                physical_batch * physical_seq_len
+            );
+        }
+        let Some((_, output_len)) = context_lens.first().copied() else {
+            candle_core::bail!("packed logits selection requires at least one span");
+        };
+        if context_lens.iter().any(|(_, len)| *len != output_len) {
+            candle_core::bail!("ragged packed logits selection spans are not supported");
+        }
+
+        let mut indices = Vec::with_capacity(context_lens.len() * output_len);
+        let mut base = 0usize;
+        for ((start, len), query_len) in context_lens.iter().copied().zip(query_lens) {
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| candle_core::Error::msg("packed logits selection span overflow"))?;
+            if end > *query_len {
+                candle_core::bail!(
+                    "packed logits selection span ({start}, {len}) exceeds query length {query_len}"
+                );
+            }
+            for position in start..end {
+                indices.push(u32::try_from(base + position).map_err(candle_core::Error::wrap)?);
+            }
+            base += query_len;
+        }
+
+        let batch = query_lens.len();
+        let cpu_indices = Tensor::from_vec(indices, (batch * output_len,), &Device::Cpu)?;
+        let mut device_indices = HashMap::new();
+        for device in devices {
+            device_indices.insert(device.location(), cpu_indices.to_device(device)?);
+        }
+        Ok(Self::PackedIndices {
+            indices: device_indices,
+            batch,
+            len: output_len,
+        })
+    }
+
     pub(crate) fn select(&self, logits: &Tensor) -> candle_core::Result<Tensor> {
         match self {
             Self::All => Ok(logits.clone()),
@@ -673,6 +826,20 @@ impl LogitsSelection {
                     .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
                 let flat = logits.reshape((logits_batch * seq_len, hidden))?;
                 flat.index_select(indices, 0)?
+                    .reshape((*batch, *len, hidden))
+            }
+            Self::PackedIndices {
+                indices,
+                batch,
+                len,
+            } => {
+                let (physical_batch, physical_seq_len, hidden) = logits.dims3()?;
+                let indices = indices
+                    .get(&logits.device().location())
+                    .ok_or_else(|| candle_core::Error::msg("missing logits selection indices"))?;
+                logits
+                    .reshape((physical_batch * physical_seq_len, hidden))?
+                    .index_select(indices, 0)?
                     .reshape((*batch, *len, hidden))
             }
         }
@@ -1018,6 +1185,19 @@ impl ForwardInputsResult {
             Self::BlockGeneration { .. } => Ok(self.clone()),
         }
     }
+
+    fn into_cpu_for_batch(
+        self,
+        batch_size: usize,
+        preserve_causal_generation: bool,
+    ) -> candle_core::Result<Self> {
+        if batch_size <= 1
+            || preserve_causal_generation && matches!(&self, Self::CausalGeneration { .. })
+        {
+            return Ok(self);
+        }
+        self.to_device(&Device::Cpu)
+    }
 }
 
 #[async_trait::async_trait]
@@ -1030,6 +1210,26 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        true
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        true
+    }
+
+    fn requires_uniform_media_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        false
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
         None
     }
@@ -1171,8 +1371,15 @@ pub trait Pipeline:
                         }
                     }
 
+                    let preserve_causal_generation = input_seqs.len() > 1
+                        && !return_raw_logits
+                        && self.device().is_cuda()
+                        && self.supports_batched_cuda_sampling()
+                        && sampling::can_sample_batch_cuda(input_seqs);
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                    let raw_logits = self
+                        .forward_inputs(inputs, return_raw_logits)?
+                        .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
@@ -1242,18 +1449,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
 
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
@@ -1399,35 +1598,6 @@ pub trait Pipeline:
             CacheBackendMetadata::PagedAttention { mut metadata } => {
                 let block_size = metadata.block_size;
                 let speculative_metadata = metadata.clone();
-                // For hybrid models, build state_indices tensor from sequences'
-                // recurrent_state_idx so recurrent layers are active during forward.
-                // Paged attention manages KV caches separately, but recurrent state
-                // pool access still needs the indices tensor to be set.
-                if self.cache().is_hybrid() {
-                    let mut hybrid_cache = self.cache().hybrid();
-                    let recurrent_device = hybrid_cache.caches.iter().find_map(|c| {
-                        if let HybridLayerCache::Recurrent(pool) = c {
-                            Some(pool.device().clone())
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(device) = recurrent_device {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let indices: Vec<u32> = input_seqs
-                            .iter()
-                            .filter_map(|seq| seq.recurrent_state_idx().map(|idx| idx as u32))
-                            .collect();
-                        if indices.len() == input_seqs.len() {
-                            if let Ok(si) =
-                                Tensor::from_vec(indices.clone(), (input_seqs.len(),), &device)
-                            {
-                                hybrid_cache.set_state_indices_with_host(Some(si), Some(indices));
-                            }
-                        }
-                    }
-                }
-
                 let chunk_size = if is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
@@ -1437,7 +1607,7 @@ pub trait Pipeline:
                 } else {
                     None
                 };
-                if chunk_size.is_some() {
+                if is_prompt {
                     self.get_processor()
                         .inputs_processor()
                         .prepare_for_paged_prompt_planning(
@@ -1449,14 +1619,26 @@ pub trait Pipeline:
                         )
                         .map_err(|e| candle_core::Error::msg(e.to_string()))?;
                     for seq in input_seqs.iter_mut() {
-                        seq.clip_prefix_cache_len_for_non_causal_mm_features(metadata.block_size);
+                        seq.clip_prefix_cache_len_for_mm_features(metadata.block_size);
                     }
                 }
                 let has_deferred_multimodal_prompt = input_seqs.iter().any(|seq| {
                     (seq.has_images() || seq.has_audios() || seq.has_videos())
                         && seq.mm_features().is_empty()
                 });
-                let chunk_plans = (!has_deferred_multimodal_prompt)
+                let has_suffix_only_prefill = input_seqs
+                    .iter()
+                    .any(|seq| seq.has_suffix_only_prefill_toks());
+                let keep_complete_packed_candidates = chunk_size.is_some_and(|chunk_size| {
+                    input_seqs.len() > 1
+                        && self.supports_packed_prefill()
+                        && input_seqs
+                            .iter()
+                            .all(|seq| seq.prefix_cache_len() == 0 && seq.len() <= chunk_size)
+                });
+                let chunk_plans = (!has_deferred_multimodal_prompt
+                    && !has_suffix_only_prefill
+                    && !keep_complete_packed_candidates)
                     .then(|| {
                         chunk_size.map(|chunk_size| {
                             input_seqs
@@ -1483,6 +1665,7 @@ pub trait Pipeline:
                             .iter()
                             .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
                             .collect::<Vec<_>>();
+                        let hybrid_recurrent = self.cache().is_hybrid();
                         let mut plan_indices = vec![0usize; chunk_plans.len()];
                         let mut inputs = Vec::new();
                         while plan_indices
@@ -1490,22 +1673,13 @@ pub trait Pipeline:
                             .zip(chunk_plans.iter())
                             .any(|(plan_idx, plan)| *plan_idx < plan.len())
                         {
-                            let attention_policy = plan_indices
-                                .iter()
-                                .zip(chunk_plans.iter())
-                                .find_map(|(plan_idx, plan)| plan.get(*plan_idx))
-                                .expect("at least one chunk plan is active")
-                                .attention_policy;
-                            let active_indices = plan_indices
-                                .iter()
-                                .zip(chunk_plans.iter())
-                                .enumerate()
-                                .filter_map(|(idx, (plan_idx, plan))| {
-                                    plan.get(*plan_idx)
-                                        .filter(|chunk| chunk.attention_policy == attention_policy)
-                                        .map(|_| idx)
-                                })
-                                .collect::<Vec<_>>();
+                            let (active_indices, attention_policy, is_final_prompt_chunk) =
+                                next_prompt_chunk_group(
+                                    &plan_indices,
+                                    &chunk_plans,
+                                    hybrid_recurrent,
+                                )
+                                .expect("at least one chunk plan is active");
 
                             let mut recurrent_boundaries = Vec::new();
                             for &seq_idx in &active_indices {
@@ -1520,9 +1694,7 @@ pub trait Pipeline:
 
                             let mut chunk_metadata = metadata.clone();
                             chunk_metadata.prompt_chunk_attention_policy = attention_policy;
-                            chunk_metadata.is_final_prompt_chunk = active_indices
-                                .iter()
-                                .all(|&idx| plan_indices[idx] + 1 == chunk_plans[idx].len());
+                            chunk_metadata.is_final_prompt_chunk = is_final_prompt_chunk;
                             let mut active_input_seqs = input_seqs
                                 .iter_mut()
                                 .enumerate()
@@ -1597,8 +1769,54 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(candle_core::Error::msg)?;
 
+                        let preserve_causal_generation = input_seqs.len() > 1
+                            && !return_raw_logits
+                            && self.device().is_cuda()
+                            && self.supports_batched_cuda_sampling()
+                            && sampling::can_sample_batch_cuda(input_seqs);
+                        if self.cache().is_hybrid() {
+                            let mut hybrid_cache = self.cache().hybrid();
+                            let device = hybrid_cache
+                                .caches
+                                .iter()
+                                .find_map(|cache| match cache {
+                                    HybridLayerCache::Recurrent(pool) => {
+                                        Some(pool.device().clone())
+                                    }
+                                    HybridLayerCache::Attention(_) => None,
+                                })
+                                .ok_or_else(|| {
+                                    candle_core::Error::msg(
+                                        "hybrid cache has no recurrent state pool",
+                                    )
+                                })?;
+                            let indices = seq_indices
+                                .iter()
+                                .map(|&seq_idx| {
+                                    let state_idx = input_seqs
+                                        .get(seq_idx)
+                                        .and_then(|seq| seq.recurrent_state_idx())
+                                        .ok_or_else(|| {
+                                            candle_core::Error::msg(format!(
+                                                "sequence {seq_idx} has no recurrent state slot"
+                                            ))
+                                        })?;
+                                    u32::try_from(state_idx).map_err(|_| {
+                                        candle_core::Error::msg(format!(
+                                            "recurrent state slot {state_idx} exceeds u32"
+                                        ))
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let state_indices =
+                                Tensor::from_vec(indices.clone(), (indices.len(),), &device)?;
+                            hybrid_cache
+                                .set_state_indices_with_host(Some(state_indices), Some(indices));
+                        }
                         let start = Instant::now();
-                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
+                        let raw_logits = self
+                            .forward_inputs(inputs, return_raw_logits)?
+                            .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
 
@@ -1666,18 +1884,10 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
-                let logits_on_cpu = logits.len() > 1;
                 let logits = logits
                     .into_iter()
-                    .map(|l| {
-                        let l = l.expect("missing forward result");
-                        if logits_on_cpu {
-                            l.to_device(&Device::Cpu)
-                        } else {
-                            Ok(l)
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
+                    .map(|logits| logits.expect("missing forward result"))
+                    .collect::<Vec<_>>();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
@@ -1847,10 +2057,140 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use crate::MessageContent;
+    use super::{resolve_lora_execution, ForwardCache, LogitsSelection, ModelForwardContext};
+    use crate::{
+        pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        MessageContent,
+    };
+    use candle_core::{Device, Tensor};
     use either::Either;
     use indexmap::IndexMap;
     use serde_json::Value;
+
+    #[test]
+    fn base_lora_routes_still_validate_dense_batch_cardinality() -> candle_core::Result<()> {
+        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &Device::Cpu)?;
+        let flash_meta = FlashParams::empty(true);
+
+        assert!(
+            resolve_lora_execution(None, &input_ids, None, &flash_meta, &[None, None])?.is_none()
+        );
+        let error =
+            resolve_lora_execution(None, &input_ids, None, &flash_meta, &[None]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("adapter lease count 1 does not match model batch size 2"));
+        Ok(())
+    }
+
+    #[test]
+    fn base_lora_routes_validate_packed_logical_shape() -> candle_core::Result<()> {
+        let input_ids = Tensor::zeros((1, 5), candle_core::DType::U32, &Device::Cpu)?;
+        let mut flash_meta = FlashParams::empty(true);
+        flash_meta.packed = true;
+        let mut paged_meta = PagedAttentionInputMetadata::dummy(&Device::Cpu)?;
+        paged_meta.query_lens = Some(vec![2, 3]);
+
+        assert!(resolve_lora_execution(
+            None,
+            &input_ids,
+            Some(&paged_meta),
+            &flash_meta,
+            &[None, None],
+        )?
+        .is_none());
+
+        let error =
+            resolve_lora_execution(None, &input_ids, Some(&paged_meta), &flash_meta, &[None])
+                .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("adapter lease count 1 does not match packed logical sequence count 2"));
+
+        paged_meta.query_lens = Some(vec![2, 2]);
+        let error = resolve_lora_execution(
+            None,
+            &input_ids,
+            Some(&paged_meta),
+            &flash_meta,
+            &[None, None],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(
+            "packed logical query lengths total 4 does not match physical sequence length 5"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn packed_logits_select_each_logical_sequence() {
+        let source = Tensor::from_vec(
+            (0u8..8).map(f32::from).collect::<Vec<_>>(),
+            (1, 8, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let selection = LogitsSelection::from_packed_context_lens(
+            &source,
+            &[(2, 1), (0, 1), (3, 1)],
+            &[3, 1, 4],
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let selected = selection.select(&source).unwrap();
+
+        assert_eq!(selected.dims(), &[3, 1, 1]);
+        assert_eq!(
+            selected.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![2.0, 3.0, 7.0]
+        );
+    }
+
+    #[test]
+    fn packed_logits_select_multi_token_spans() {
+        let source = Tensor::from_vec(
+            (0u8..5).map(f32::from).collect::<Vec<_>>(),
+            (1, 5, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let selection = LogitsSelection::from_packed_context_lens(
+            &source,
+            &[(1, 2), (0, 2)],
+            &[3, 2],
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let selected = selection.select(&source).unwrap();
+
+        assert_eq!(selected.dims(), &[2, 2, 1]);
+        assert_eq!(
+            selected.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![1.0, 2.0, 3.0, 4.0]
+        );
+    }
+
+    #[test]
+    fn packed_positions_require_explicit_metadata() {
+        let mut flash_params = FlashParams::empty(true);
+        flash_params.packed = true;
+        let seqlen_offsets = [0];
+        let context_lens = [(0, 1)];
+        let position_ids = [1];
+        let mut context = ModelForwardContext::with_cache(
+            ForwardCache::None,
+            &seqlen_offsets,
+            &context_lens,
+            &position_ids,
+            &flash_params,
+        );
+
+        let error = context.text_positions(&Device::Cpu, 1).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("packed prefill is missing RoPE positions"));
+    }
 
     macro_rules! hashmap {
         (@single $($x:tt)*) => (());

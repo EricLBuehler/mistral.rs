@@ -3,6 +3,8 @@ use std::{collections::HashMap, sync::Arc};
 use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
 use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
 
+#[cfg(target_family = "unix")]
+use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
         FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
@@ -573,6 +575,7 @@ impl CudaDecodeGraphMetadataBuffers {
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
+            full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
             prefill_key_value_heads: metadata.prefill_key_value_heads,
             prefill_head_dim: metadata.prefill_head_dim,
@@ -600,11 +603,12 @@ pub(crate) struct CudaDecodeGraphEntry {
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
     disabled: bool,
+    suspended: bool,
 }
 
 impl CudaDecodeGraphState {
     pub(crate) fn disabled(&self) -> bool {
-        self.disabled
+        self.disabled || self.suspended
     }
 
     pub(crate) fn disable(&mut self) {
@@ -614,6 +618,16 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
+    }
+
+    pub(crate) fn suspend(&mut self) {
+        self.suspended = true;
+        self.clear();
+    }
+
+    pub(crate) fn resume(&mut self) {
+        self.suspended = false;
+        self.clear();
     }
 
     pub(crate) fn replay(
@@ -746,6 +760,32 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn cuda_decode_graph_supported_for_model(
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+) -> bool {
+    let Some(metadata) = model_metadata else {
+        return false;
+    };
+    #[cfg(target_family = "unix")]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !DecodePlan::requires_host_context_lengths(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                metadata.k_head_dim_for_layer(layer_idx),
+            )
+        })
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        (0..metadata.num_layers()).all(|layer_idx| {
+            !matches!(
+                metadata.attention_backend_kind_for_layer(layer_idx),
+                AttentionBackendKind::FlashInfer
+            )
+        })
+    }
 }
 
 pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
@@ -1117,5 +1157,18 @@ mod tests {
         assert_eq!(graph_context_len(Some(513), None), Some(513));
         assert_eq!(graph_context_len(None, Some(2048)), Some(2048));
         assert_eq!(graph_context_len(None, None), None);
+    }
+
+    #[test]
+    fn graph_suspension_does_not_clear_permanent_disable() {
+        let mut state = CudaDecodeGraphState::default();
+        state.suspend();
+        assert!(state.disabled());
+        state.resume();
+        assert!(!state.disabled());
+        state.disable();
+        state.suspend();
+        state.resume();
+        assert!(state.disabled());
     }
 }

@@ -8,11 +8,45 @@ use tokio::sync::Mutex;
 use crate::{
     engine::IntervalLogger,
     paged_attention::{
-        block_hash::BlockHash, CacheConfig, KVCacheManager, PagedAttentionScheduler,
-        PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
+        block_hash::{BlockHash, MultimodalKind},
+        CacheConfig, KVCacheManager, PagedAttentionScheduler, PagedAttentionSchedulerConfig,
+        PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
 };
+
+pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
+pub(crate) const AUDIO_MODALITY: u8 = 1 << 1;
+pub(crate) const VIDEO_MODALITY: u8 = 1 << 2;
+
+pub(crate) fn modality_signature(sequence: &Sequence) -> u8 {
+    let mut signature = 0;
+    if sequence.has_images()
+        || sequence
+            .mm_features()
+            .iter()
+            .any(|feature| feature.kind == MultimodalKind::Image)
+    {
+        signature |= IMAGE_MODALITY;
+    }
+    if sequence.has_audios()
+        || sequence
+            .mm_features()
+            .iter()
+            .any(|feature| feature.kind == MultimodalKind::Audio)
+    {
+        signature |= AUDIO_MODALITY;
+    }
+    if sequence.has_videos()
+        || sequence
+            .mm_features()
+            .iter()
+            .any(|feature| feature.kind == MultimodalKind::Video)
+    {
+        signature |= VIDEO_MODALITY;
+    }
+    signature
+}
 
 #[derive(Clone)]
 pub enum SchedulerConfig {
@@ -59,6 +93,10 @@ pub trait PagedPrefixCacheValidator {
         cached_tokens: usize,
         block_size: usize,
     ) -> usize;
+
+    fn release_recurrent_state(&mut self, _slot_idx: usize) -> bool {
+        false
+    }
 }
 
 pub trait Scheduler: Send + Sync {
@@ -83,4 +121,12 @@ pub trait Scheduler: Send + Sync {
     /// Set whether prefix caching is enabled. Called by Engine after creation
     /// to synchronize with the global no_prefix_cache setting.
     fn set_prefix_caching_enabled(&mut self, enabled: bool);
+
+    fn set_requires_uniform_prompt_batch(&mut self, _required: bool) {}
+
+    fn set_requires_uniform_completion_batch(&mut self, _required: bool) {}
+
+    fn set_requires_uniform_media_batch(&mut self, _required: bool) {}
+
+    fn set_supports_packed_prefill(&mut self, _supported: bool) {}
 }

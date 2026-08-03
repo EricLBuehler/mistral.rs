@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{DType, Device, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::Module;
 use mistralrs_quant::{
     linear_no_bias, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
@@ -17,7 +17,7 @@ use crate::{
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        text_models_inputs_processor::{FlashKMeta, FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
         NormalModel,
     },
@@ -25,6 +25,278 @@ use crate::{
 };
 
 use super::config::TextConfig;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FixedChunkMaskRow {
+    query_start: usize,
+    query_len: usize,
+    key_start: usize,
+    key_len: usize,
+}
+
+fn causal_mask_values(
+    rows: &[FixedChunkMaskRow],
+    query_width: usize,
+    key_width: usize,
+    chunk_size: Option<usize>,
+) -> Result<Vec<f32>> {
+    if rows.is_empty()
+        || query_width == 0
+        || key_width == 0
+        || chunk_size.is_some_and(|size| size == 0)
+    {
+        candle_core::bail!("Llama4 attention has invalid mask dimensions");
+    }
+
+    let mut values = Vec::with_capacity(rows.len() * query_width * key_width);
+    for row in rows {
+        if row.query_len == 0
+            || row.query_len > query_width
+            || row.key_len == 0
+            || row.key_len > key_width
+        {
+            candle_core::bail!("Llama4 attention has invalid mask row lengths");
+        }
+        let query_end = row
+            .query_start
+            .checked_add(row.query_len)
+            .ok_or_else(|| candle_core::Error::msg("Llama4 query position overflow"))?;
+        let key_end = row
+            .key_start
+            .checked_add(row.key_len)
+            .ok_or_else(|| candle_core::Error::msg("Llama4 key position overflow"))?;
+        if row.query_start < row.key_start || query_end > key_end {
+            candle_core::bail!("Llama4 attention has inconsistent mask positions");
+        }
+
+        for query_idx in 0..query_width {
+            if query_idx >= row.query_len {
+                values.push(0.0);
+                values.extend(std::iter::repeat_n(f32::NEG_INFINITY, key_width - 1));
+                continue;
+            }
+
+            let query_position = row.query_start + query_idx;
+            let chunk_start = chunk_size.map_or(0, |size| query_position / size * size);
+            for key_idx in 0..key_width {
+                let visible = key_idx < row.key_len
+                    && row.key_start + key_idx >= chunk_start
+                    && row.key_start + key_idx <= query_position;
+                values.push(if visible { 0.0 } else { f32::NEG_INFINITY });
+            }
+        }
+    }
+    Ok(values)
+}
+
+#[cfg(test)]
+fn fixed_chunk_mask_values(
+    rows: &[FixedChunkMaskRow],
+    query_width: usize,
+    key_width: usize,
+    chunk_size: usize,
+) -> Result<Vec<f32>> {
+    causal_mask_values(rows, query_width, key_width, Some(chunk_size))
+}
+
+fn fixed_chunk_mask_layout(
+    batch_size: usize,
+    query_width: usize,
+    seqlen_offsets: &[usize],
+    metadata: Option<&PagedAttentionInputMetadata>,
+) -> Result<(Vec<FixedChunkMaskRow>, usize)> {
+    if batch_size == 0 || query_width == 0 {
+        candle_core::bail!("Llama4 fixed-chunk attention has an empty query");
+    }
+
+    let Some(metadata) = metadata else {
+        if seqlen_offsets.len() != batch_size {
+            candle_core::bail!(
+                "Llama4 fixed-chunk attention has {} offsets for batch size {batch_size}",
+                seqlen_offsets.len()
+            );
+        }
+        let rows = seqlen_offsets
+            .iter()
+            .map(|&query_start| {
+                let key_len = query_start
+                    .checked_add(query_width)
+                    .ok_or_else(|| candle_core::Error::msg("Llama4 key length overflow"))?;
+                Ok(FixedChunkMaskRow {
+                    query_start,
+                    query_len: query_width,
+                    key_start: 0,
+                    key_len,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let key_width = rows.iter().map(|row| row.key_len).max().unwrap_or(0);
+        return Ok((rows, key_width));
+    };
+
+    let selected_lens = metadata
+        .paged_context_lens_cpu
+        .as_deref()
+        .ok_or_else(|| candle_core::Error::msg("Llama4 attention is missing paged KV lengths"))?;
+    let full_lens = metadata
+        .full_paged_context_lens_cpu
+        .as_deref()
+        .unwrap_or(selected_lens);
+    if selected_lens.len() != full_lens.len() {
+        candle_core::bail!("Llama4 attention has inconsistent paged KV lengths");
+    }
+
+    let rows = if let Some(query_lens) = metadata.query_lens.as_deref() {
+        if query_lens.len() != batch_size
+            || selected_lens.len() != batch_size
+            || query_lens.iter().any(|&len| len == 0 || len > query_width)
+        {
+            candle_core::bail!("Llama4 attention has invalid prompt row lengths");
+        }
+        query_lens
+            .iter()
+            .zip(selected_lens)
+            .zip(full_lens)
+            .map(|((&query_len, &key_len), &full_len)| {
+                let query_start = full_len.checked_sub(query_len).ok_or_else(|| {
+                    candle_core::Error::msg("Llama4 query starts before its KV context")
+                })?;
+                let key_start = full_len.checked_sub(key_len).ok_or_else(|| {
+                    candle_core::Error::msg("Llama4 paged KV window exceeds its full context")
+                })?;
+                Ok(FixedChunkMaskRow {
+                    query_start,
+                    query_len,
+                    key_start,
+                    key_len,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        let query_rows = batch_size
+            .checked_mul(query_width)
+            .ok_or_else(|| candle_core::Error::msg("Llama4 query row count overflow"))?;
+        if selected_lens.len() != query_rows {
+            candle_core::bail!(
+                "Llama4 decode has {} KV rows for {query_rows} query rows",
+                selected_lens.len()
+            );
+        }
+        selected_lens
+            .iter()
+            .zip(full_lens)
+            .map(|(&key_len, &full_len)| {
+                let query_start = full_len.checked_sub(1).ok_or_else(|| {
+                    candle_core::Error::msg("Llama4 decode has an empty KV context")
+                })?;
+                let key_start = full_len.checked_sub(key_len).ok_or_else(|| {
+                    candle_core::Error::msg("Llama4 paged KV window exceeds its full context")
+                })?;
+                Ok(FixedChunkMaskRow {
+                    query_start,
+                    query_len: 1,
+                    key_start,
+                    key_len,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+    let key_width = rows.iter().map(|row| row.key_len).max().unwrap_or(0);
+    Ok((rows, key_width))
+}
+
+fn absolute_causal_attention_mask(
+    input_ids: &Tensor,
+    seqlen_offsets: &[usize],
+    metadata: Option<&PagedAttentionInputMetadata>,
+    chunk_size: Option<usize>,
+    dtype: DType,
+) -> Result<AttentionMask> {
+    let (batch_size, query_width) = input_ids.dims2()?;
+    let (rows, key_width) =
+        fixed_chunk_mask_layout(batch_size, query_width, seqlen_offsets, metadata)?;
+    let row_count = rows.len();
+    let mask_query_width = if metadata.is_some_and(|metadata| metadata.query_lens.is_none()) {
+        1
+    } else {
+        query_width
+    };
+    let values = causal_mask_values(&rows, mask_query_width, key_width, chunk_size)?;
+    let mask = Tensor::from_vec(
+        values,
+        (row_count, 1, mask_query_width, key_width),
+        input_ids.device(),
+    )?
+    .to_dtype(dtype)?;
+    Ok(AttentionMask::Custom(mask))
+}
+
+fn fixed_chunk_attention_mask(
+    input_ids: &Tensor,
+    seqlen_offsets: &[usize],
+    metadata: Option<&PagedAttentionInputMetadata>,
+    chunk_size: usize,
+    dtype: DType,
+) -> Result<AttentionMask> {
+    absolute_causal_attention_mask(input_ids, seqlen_offsets, metadata, Some(chunk_size), dtype)
+}
+
+fn chunked_flash_segment_lens(query_lens: &[usize], chunk_size: usize) -> Result<Vec<usize>> {
+    if chunk_size == 0 || query_lens.is_empty() || query_lens.contains(&0) {
+        candle_core::bail!("Llama4 packed chunked attention has invalid sequence lengths");
+    }
+    let mut segments = Vec::new();
+    for &query_len in query_lens {
+        let mut remaining = query_len;
+        while remaining > 0 {
+            let segment = remaining.min(chunk_size);
+            segments.push(segment);
+            remaining -= segment;
+        }
+    }
+    Ok(segments)
+}
+
+fn chunked_flash_params(
+    query_lens: &[usize],
+    chunk_size: usize,
+    devices: &[Device],
+) -> Result<FlashParams> {
+    let segment_lens = chunked_flash_segment_lens(query_lens, chunk_size)?;
+    let mut cumulative = Vec::with_capacity(segment_lens.len() + 1);
+    cumulative.push(0u32);
+    for &segment in &segment_lens {
+        let segment = u32::try_from(segment).map_err(candle_core::Error::wrap)?;
+        let next = cumulative
+            .last()
+            .copied()
+            .unwrap_or(0)
+            .checked_add(segment)
+            .ok_or_else(|| candle_core::Error::msg("Llama4 packed token count overflow"))?;
+        cumulative.push(next);
+    }
+    let mut cumulative_seqlens_q = HashMap::new();
+    let mut cumulative_seqlens_k = HashMap::new();
+    for device in devices {
+        let tensor = Tensor::new(cumulative.as_slice(), device)?;
+        cumulative_seqlens_q.insert(device.location(), tensor.clone());
+        cumulative_seqlens_k.insert(device.location(), tensor);
+    }
+    let max_segment = u32::try_from(segment_lens.iter().copied().max().unwrap_or(0))
+        .map_err(candle_core::Error::wrap)?;
+    Ok(FlashParams {
+        max_q: max_segment,
+        cumulative_seqlens_q,
+        logical_k: FlashKMeta {
+            max: max_segment,
+            cumulative_seqlens: cumulative_seqlens_k,
+        },
+        sliding_k: None,
+        causal: true,
+        packed: true,
+        varlen_segment_lens: Some(segment_lens),
+    })
+}
 
 struct CausalSelfAttention {
     q_proj: Arc<dyn QuantMethod>,
@@ -130,7 +402,7 @@ impl CausalSelfAttention {
                 )?,
                 softcap: None,
                 softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                sliding_window: None,
+                sliding_window: use_rope.then_some(cfg.attention_chunk_size),
                 sinks: None,
             },
             norm,
@@ -147,6 +419,7 @@ impl CausalSelfAttention {
         x: &Tensor,
         position_ids: &Tensor,
         attention_mask: &AttentionMask,
+        flash_params_override: Option<&FlashParams>,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
         layer_idx: usize,
@@ -186,12 +459,20 @@ impl CausalSelfAttention {
 
             q = q
                 .to_dtype(DType::F32)?
-                .broadcast_mul(&attn_scales.unsqueeze(D::Minus1)?)?
+                .broadcast_mul(&attn_scales.reshape((b_sz, 1, seq_len, 1))?)?
                 .to_dtype(q.dtype())?;
         }
 
         let metadata = ctx.paged_layer(layer_idx);
-        let flash_params = ctx.flash_params();
+        let flash_params = flash_params_override.unwrap_or_else(|| ctx.flash_params());
+        let packed_sdpa_params = flash_params_override.map(|_| SdpaParams {
+            n_kv_groups: self.sdpa_params.n_kv_groups,
+            softcap: self.sdpa_params.softcap,
+            softmax_scale: self.sdpa_params.softmax_scale,
+            sliding_window: None,
+            sinks: self.sdpa_params.sinks.clone(),
+        });
+        let sdpa_params = packed_sdpa_params.as_ref().unwrap_or(&self.sdpa_params);
         let mut y = match &self.paged_attn {
             Some(paged_attn) => match metadata {
                 Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
@@ -202,7 +483,7 @@ impl CausalSelfAttention {
                     Some(key_cache),
                     Some(value_cache),
                     input_metadata,
-                    &self.sdpa_params,
+                    sdpa_params,
                     Some(flash_params),
                 )?,
                 None => {
@@ -219,7 +500,7 @@ impl CausalSelfAttention {
                         None,
                         None,
                         &input_metadata,
-                        &self.sdpa_params,
+                        sdpa_params,
                         Some(flash_params),
                     )?
                 }
@@ -233,7 +514,7 @@ impl CausalSelfAttention {
                     &v.contiguous()?,
                     attention_mask,
                     Some(flash_params),
-                    &self.sdpa_params,
+                    sdpa_params,
                 )?
             }
         };
@@ -433,7 +714,8 @@ impl Block {
         x: &Tensor,
         position_ids: &Tensor,
         attention_mask: &AttentionMask,
-        chunked_mask: &Option<Tensor>,
+        chunked_mask: &AttentionMask,
+        chunked_flash_params: Option<&FlashParams>,
         kv_cache: &mut KvCache,
         ctx: &mut ModelForwardContext<'_>,
         layer_idx: usize,
@@ -441,17 +723,28 @@ impl Block {
         let residual = x;
         let x = self.rms_1.forward(x)?;
         let mask = if self.use_chunked_attention {
-            match chunked_mask {
-                Some(t) => AttentionMask::Custom(t.clone()),
-                None => AttentionMask::None,
+            if chunked_flash_params.is_some() {
+                AttentionMask::CausalFlash
+            } else {
+                chunked_mask.clone()
             }
         } else {
             attention_mask.clone()
         };
-        let x = (self
-            .attn
-            .forward(&x, position_ids, &mask, kv_cache, ctx, layer_idx)?
-            + residual)?;
+        let flash_params_override = if self.use_chunked_attention {
+            chunked_flash_params
+        } else {
+            None
+        };
+        let x = (self.attn.forward(
+            &x,
+            position_ids,
+            &mask,
+            flash_params_override,
+            kv_cache,
+            ctx,
+            layer_idx,
+        )? + residual)?;
         let residual = &x;
         let x = (self.ff.forward(&self.rms_2.forward(&x)?)? + residual)?;
         Ok(x)
@@ -601,10 +894,10 @@ impl TextModel {
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
                     .max(1),
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
-                sliding_window: None,
+                sliding_window: Some(cfg.attention_chunk_size),
                 k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
                 v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-                kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+                kv_cache_layout: crate::paged_attention::KvCacheLayout::StandardNoFlashInfer,
             },
             mapper,
             attention_chunk_size: cfg.attention_chunk_size,
@@ -636,36 +929,77 @@ impl TextModel {
             x.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let chunked_mask = CausalMasker.make_chunked_mask_matrix(
-            input_ids,
-            self.attention_chunk_size,
-            &mask_cache,
-            x.dtype(),
-            self.blocks[0].attn.num_attention_heads,
-        )?;
-        let mask = if ctx.is_first_prompt_chunk() {
-            mask
+        let mask = if mask.is_custom()
+            && !ctx.is_first_prompt_chunk()
+            && ctx
+                .paged_input_metadata()
+                .is_some_and(|metadata| metadata.query_lens.is_some())
+        {
+            absolute_causal_attention_mask(
+                input_ids,
+                ctx.seqlen_offsets(),
+                ctx.paged_input_metadata(),
+                None,
+                x.dtype(),
+            )?
         } else {
-            AttentionMask::None
+            mask
         };
-        let chunked_mask = if ctx.is_first_prompt_chunk() {
-            chunked_mask
+        let chunked_flash_params = if ctx.flash_params().packed {
+            if ctx.seqlen_offsets().iter().any(|&offset| offset != 0) {
+                candle_core::bail!("Llama4 packed chunked attention does not support cached keys");
+            }
+            if !ctx.is_first_prompt_chunk() {
+                candle_core::bail!(
+                    "Llama4 packed chunked attention requires the first prompt chunk"
+                );
+            }
+            let query_lens = ctx
+                .paged_input_metadata()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Llama4 packed chunked attention is missing logical query lengths",
+                    )
+                })?;
+            let expected_tokens = query_lens.iter().sum::<usize>();
+            if expected_tokens != input_ids.dim(1)? {
+                candle_core::bail!(
+                    "Llama4 packed chunked attention has {expected_tokens} logical tokens but {} physical tokens",
+                    input_ids.dim(1)?
+                );
+            }
+            Some(chunked_flash_params(
+                query_lens,
+                self.attention_chunk_size,
+                &self.mapper.get_unique_devices(),
+            )?)
         } else {
             None
         };
+        let chunked_mask = if chunked_flash_params.is_none() {
+            fixed_chunk_attention_mask(
+                input_ids,
+                ctx.seqlen_offsets(),
+                ctx.paged_input_metadata(),
+                self.attention_chunk_size,
+                x.dtype(),
+            )?
+        } else {
+            AttentionMask::None
+        };
         let mask = DeviceMappedMask::new(mask, &*self.mapper)?;
+        let chunked_mask = DeviceMappedMask::new(chunked_mask, &*self.mapper)?;
         for (block_idx, block) in self.blocks.iter().enumerate() {
             x = self.mapper.map(x, block_idx)?;
             let mask_for_layer = mask.get(x.device());
-            let chunked_mask_for_layer = chunked_mask
-                .as_ref()
-                .map(|m| m.to_device(x.device()))
-                .transpose()?;
+            let chunked_mask_for_layer = chunked_mask.get(x.device());
             x = block.forward(
                 &x,
                 &position_ids.to_device(x.device())?,
                 &mask_for_layer,
                 &chunked_mask_for_layer,
+                chunked_flash_params.as_ref(),
                 &mut cache[block_idx],
                 ctx,
                 block_idx,
@@ -737,3 +1071,198 @@ impl NormalModel for TextModel {
 }
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn visible_keys(
+        values: &[f32],
+        row: usize,
+        query: usize,
+        query_width: usize,
+        key_width: usize,
+    ) -> Vec<usize> {
+        let start = (row * query_width + query) * key_width;
+        values[start..start + key_width]
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, value)| (*value == 0.0).then_some(idx))
+            .collect()
+    }
+
+    #[test]
+    fn fixed_chunk_mask_resets_at_chunk_edges() {
+        let rows = [FixedChunkMaskRow {
+            query_start: 0,
+            query_len: 6,
+            key_start: 0,
+            key_len: 6,
+        }];
+        let values = fixed_chunk_mask_values(&rows, 6, 6, 4).unwrap();
+
+        assert_eq!(visible_keys(&values, 0, 3, 6, 6), vec![0, 1, 2, 3]);
+        assert_eq!(visible_keys(&values, 0, 4, 6, 6), vec![4]);
+        assert_eq!(visible_keys(&values, 0, 5, 6, 6), vec![4, 5]);
+    }
+
+    #[test]
+    fn fixed_chunk_mask_handles_later_prompt_chunks() {
+        let rows = [FixedChunkMaskRow {
+            query_start: 7,
+            query_len: 3,
+            key_start: 0,
+            key_len: 10,
+        }];
+        let values = fixed_chunk_mask_values(&rows, 3, 10, 4).unwrap();
+
+        assert_eq!(visible_keys(&values, 0, 0, 3, 10), vec![4, 5, 6, 7]);
+        assert_eq!(visible_keys(&values, 0, 1, 3, 10), vec![8]);
+        assert_eq!(visible_keys(&values, 0, 2, 3, 10), vec![8, 9]);
+    }
+
+    #[test]
+    fn full_causal_mask_keeps_the_later_prompt_prefix() {
+        let rows = [FixedChunkMaskRow {
+            query_start: 7,
+            query_len: 3,
+            key_start: 0,
+            key_len: 10,
+        }];
+        let values = causal_mask_values(&rows, 3, 10, None).unwrap();
+
+        assert_eq!(
+            visible_keys(&values, 0, 1, 3, 10),
+            (0..=8).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn fixed_chunk_mask_uses_absolute_positions_for_ragged_rows() {
+        let rows = [
+            FixedChunkMaskRow {
+                query_start: 3,
+                query_len: 1,
+                key_start: 0,
+                key_len: 4,
+            },
+            FixedChunkMaskRow {
+                query_start: 8,
+                query_len: 1,
+                key_start: 4,
+                key_len: 5,
+            },
+        ];
+        let values = fixed_chunk_mask_values(&rows, 1, 5, 4).unwrap();
+
+        assert_eq!(visible_keys(&values, 0, 0, 1, 5), vec![0, 1, 2, 3]);
+        assert_eq!(visible_keys(&values, 1, 0, 1, 5), vec![4]);
+    }
+
+    #[test]
+    fn fixed_chunk_layout_uses_paged_prompt_and_decode_rows() {
+        let mut prompt = PagedAttentionInputMetadata::dummy(&Device::Cpu).unwrap();
+        prompt.query_lens = Some(vec![3, 1]);
+        prompt.paged_context_lens_cpu = Some(vec![7, 3]);
+        prompt.full_paged_context_lens_cpu = Some(vec![10, 9]);
+        let (rows, key_width) = fixed_chunk_mask_layout(2, 3, &[7, 8], Some(&prompt)).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                FixedChunkMaskRow {
+                    query_start: 7,
+                    query_len: 3,
+                    key_start: 3,
+                    key_len: 7,
+                },
+                FixedChunkMaskRow {
+                    query_start: 8,
+                    query_len: 1,
+                    key_start: 6,
+                    key_len: 3,
+                },
+            ]
+        );
+        assert_eq!(key_width, 7);
+
+        let mut decode = PagedAttentionInputMetadata::dummy(&Device::Cpu).unwrap();
+        decode.paged_context_lens_cpu = Some(vec![4, 5, 3, 4]);
+        decode.full_paged_context_lens_cpu = Some(vec![4, 9, 12, 13]);
+        let (rows, key_width) = fixed_chunk_mask_layout(2, 2, &[2, 11], Some(&decode)).unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                FixedChunkMaskRow {
+                    query_start: 3,
+                    query_len: 1,
+                    key_start: 0,
+                    key_len: 4,
+                },
+                FixedChunkMaskRow {
+                    query_start: 8,
+                    query_len: 1,
+                    key_start: 4,
+                    key_len: 5,
+                },
+                FixedChunkMaskRow {
+                    query_start: 11,
+                    query_len: 1,
+                    key_start: 9,
+                    key_len: 3,
+                },
+                FixedChunkMaskRow {
+                    query_start: 12,
+                    query_len: 1,
+                    key_start: 9,
+                    key_len: 4,
+                },
+            ]
+        );
+        assert_eq!(key_width, 5);
+    }
+
+    #[test]
+    fn fixed_chunk_mask_rejects_invalid_metadata() {
+        assert!(fixed_chunk_mask_values(
+            &[FixedChunkMaskRow {
+                query_start: 4,
+                query_len: 1,
+                key_start: 5,
+                key_len: 1,
+            }],
+            1,
+            1,
+            4,
+        )
+        .is_err());
+
+        let mut metadata = PagedAttentionInputMetadata::dummy(&Device::Cpu).unwrap();
+        metadata.query_lens = Some(vec![3]);
+        metadata.paged_context_lens_cpu = Some(vec![2]);
+        metadata.full_paged_context_lens_cpu = Some(vec![2]);
+        assert!(fixed_chunk_mask_layout(1, 3, &[0], Some(&metadata)).is_err());
+    }
+
+    #[test]
+    fn packed_chunked_segments_restart_at_logical_row_boundaries() {
+        assert_eq!(
+            chunked_flash_segment_lens(&[3, 2], 2).unwrap(),
+            vec![2, 1, 2]
+        );
+        let params = chunked_flash_params(&[3, 2], 2, &[Device::Cpu]).unwrap();
+        assert_eq!(params.varlen_segment_lens, Some(vec![2, 1, 2]));
+        assert_eq!(params.max_q, 2);
+        assert_eq!(
+            params.cumulative_seqlens_q[&Device::Cpu.location()]
+                .to_vec1::<u32>()
+                .unwrap(),
+            vec![0, 2, 3, 5]
+        );
+    }
+
+    #[test]
+    fn packed_chunked_segments_reject_invalid_metadata() {
+        assert!(chunked_flash_segment_lens(&[2, 0], 2).is_err());
+        assert!(chunked_flash_segment_lens(&[2], 0).is_err());
+    }
+}

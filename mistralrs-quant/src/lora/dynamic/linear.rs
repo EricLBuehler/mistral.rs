@@ -123,6 +123,29 @@ impl QuantMethod for DynamicLoraLinear {
         }
     }
 
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        if self.site_is_active() {
+            Ok(false)
+        } else {
+            self.base.prepare_gguf_affine_raw(flat_batch, dtype, device)
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if self.site_is_active() {
+            Ok(None)
+        } else {
+            self.base.try_gguf_affine_forward_raw(a)
+        }
+    }
+
     fn afq_inner(&self) -> Option<crate::AfqInner> {
         if self.site_is_active() {
             None
@@ -294,6 +317,21 @@ mod tests {
             Some(self.qtensor.clone())
         }
 
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        fn prepare_gguf_affine_raw(
+            &self,
+            _flat_batch: usize,
+            _dtype: DType,
+            _device: &Device,
+        ) -> Result<bool> {
+            Ok(true)
+        }
+
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        fn try_gguf_affine_forward_raw(&self, input: &Tensor) -> Result<Option<Tensor>> {
+            Ok(Some(input.clone()))
+        }
+
         fn afq_inner(&self) -> Option<crate::AfqInner> {
             Some(self.afq.clone())
         }
@@ -453,6 +491,14 @@ mod tests {
         assert!(targeted_layer.afq_inner().is_some());
         assert!(targeted_layer.unquant_weight_bias().is_some());
         assert!(targeted_layer.get_qtensor().is_some());
+        #[cfg(all(feature = "cuda", has_marlin_kernels))]
+        {
+            let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
+            assert!(targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
+            assert!(targeted_layer
+                .try_gguf_affine_forward_raw(&input)?
+                .is_some());
+        }
 
         let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         execution.insert(
@@ -464,7 +510,7 @@ mod tests {
                 1.0,
             )?,
         )?;
-        with_lora_execution(Some(Arc::new(execution)), || {
+        with_lora_execution(Some(Arc::new(execution)), || -> Result<()> {
             assert!(targeted_layer.is_dynamic_lora_active());
             assert_eq!(targeted_layer.quantized_act_type(), None);
             assert!(targeted_layer.afq_inner().is_none());
@@ -475,7 +521,20 @@ mod tests {
             assert!(untargeted_layer.unquant_weight_bias().is_some());
             assert!(targeted_layer.get_qtensor().is_none());
             assert!(untargeted_layer.get_qtensor().is_some());
-        });
+            #[cfg(all(feature = "cuda", has_marlin_kernels))]
+            {
+                let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
+                assert!(!targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
+                assert!(targeted_layer
+                    .try_gguf_affine_forward_raw(&input)?
+                    .is_none());
+                assert!(untargeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
+                assert!(untargeted_layer
+                    .try_gguf_affine_forward_raw(&input)?
+                    .is_some());
+            }
+            Ok(())
+        })?;
         Ok(())
     }
 

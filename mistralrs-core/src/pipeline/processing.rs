@@ -82,6 +82,9 @@ pub trait Processor {
         Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
+    fn retain_prefix_cached_images(&self) -> bool {
+        false
+    }
     fn get_special_tokens(&self) -> &[&'static str];
     fn template_action(&self) -> MessagesAction;
 }

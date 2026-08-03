@@ -38,7 +38,12 @@ use crate::{
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
-    vision_models::clip::{ClipConfig, ClipVisionTransformer},
+    vision_models::{
+        clip::{ClipConfig, ClipVisionTransformer},
+        multimodal_layout::{
+            MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+        },
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -695,6 +700,7 @@ impl ImageEmbedding {
         pixel_values: &Tensor,
         image_sizes: Option<Vec<(usize, usize)>>,
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
         encoder_cache: &Mutex<EncoderCacheManager>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
@@ -706,187 +712,232 @@ impl ImageEmbedding {
         let target_dev = self.layers.0[0].device();
         let target_dtype = self.layers.0[0].dtype();
 
-        let mut select = false;
-        // If some, use hd transform case and it contains num_img_toks
-        let mut hd_transform = None;
-        let mut image_set_tensor = None;
+        let hd_transform;
+        let image_set_tensor;
         let n_hashes = image_hashes.len();
         if positions.dim(0)? > 0 {
-            select = true;
             // input_ids[positions[:, 0], positions[:, 1]]
             if self.use_hd_transform {
-                if let Some(image_sizes_ref) = image_sizes.as_ref() {
-                    assert_eq!(pixel_values.dims().len(), 5);
-                    let bs = pixel_values.dim(0)?;
+                let image_sizes_ref = image_sizes.as_ref().ok_or_else(|| {
+                    candle_core::Error::Msg("Phi3 HD input is missing image sizes".into())
+                })?;
+                if pixel_values.dims().len() != 5 {
+                    candle_core::bail!(
+                        "Phi3 HD input must have rank 5, got rank {}",
+                        pixel_values.dims().len()
+                    );
+                }
+                let bs = pixel_values.dim(0)?;
+                if bs == 0 {
+                    candle_core::bail!("Phi3 received an empty image batch");
+                }
+                if image_sizes_ref.len() != bs {
+                    candle_core::bail!(
+                        "Phi3 received {} image sizes for {bs} images",
+                        image_sizes_ref.len()
+                    );
+                }
+                if n_hashes != 0 && n_hashes != bs {
+                    candle_core::bail!("Phi3 received {n_hashes} image hashes for {bs} images");
+                }
 
-                    // Check cache for each image
-                    let mut per_image_cached: Vec<Option<Tensor>> = vec![None; bs];
-                    let mut miss_indices = Vec::new();
-                    if n_hashes > 0 && n_hashes == bs {
-                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
-                        for (i, &hash) in image_hashes.iter().enumerate() {
-                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                                per_image_cached[i] = Some(cached[0].clone());
-                            } else {
-                                miss_indices.push(i);
-                            }
-                        }
-                    } else {
-                        miss_indices = (0..bs).collect();
-                    }
-
-                    // Only run CLIP on miss images
-                    let mut img_features_per_image: Vec<Option<Tensor>> = vec![None; bs];
-                    if !miss_indices.is_empty() {
-                        // We need CLIP features for all miss images
-                        let miss_pv: Vec<Tensor> = miss_indices
-                            .iter()
-                            .map(|&i| pixel_values.get(i))
-                            .collect::<Result<Vec<_>>>()?;
-                        let miss_pv = Tensor::stack(&miss_pv, 0)?;
-                        let miss_features = self.get_image_features(&miss_pv.flatten(0, 1)?)?;
-                        let base_feat_dim = (miss_features.dims()[1] as f32).sqrt() as usize;
-                        assert_eq!(base_feat_dim, 24);
-                        let miss_bs = miss_indices.len();
-                        let miss_features = miss_features.reshape((
-                            miss_bs,
-                            (),
-                            base_feat_dim.pow(2),
-                            self.image_dim_out,
-                        ))?;
-                        for (batch_idx, &orig_idx) in miss_indices.iter().enumerate() {
-                            img_features_per_image[orig_idx] = Some(miss_features.get(batch_idx)?);
+                // Check cache for each image
+                let mut per_image_cached: Vec<Option<Tensor>> = vec![None; bs];
+                let mut miss_indices = Vec::new();
+                if n_hashes == bs {
+                    let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
+                    for (i, &hash) in image_hashes.iter().enumerate() {
+                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
+                            let cached = cached.first().ok_or_else(|| {
+                                candle_core::Error::Msg(
+                                    "cached Phi3 image has no encoder output".into(),
+                                )
+                            })?;
+                            per_image_cached[i] = Some(cached.clone());
+                        } else {
+                            miss_indices.push(i);
                         }
                     }
+                } else {
+                    miss_indices = (0..bs).collect();
+                }
 
-                    let C = self.image_dim_out;
-                    let H = 24usize; // base_feat_dim
+                // Only run CLIP on miss images
+                let mut img_features_per_image: Vec<Option<Tensor>> = vec![None; bs];
+                if !miss_indices.is_empty() {
+                    // We need CLIP features for all miss images
+                    let miss_pv: Vec<Tensor> = miss_indices
+                        .iter()
+                        .map(|&i| pixel_values.get(i))
+                        .collect::<Result<Vec<_>>>()?;
+                    let miss_pv = Tensor::stack(&miss_pv, 0)?;
+                    let miss_features = self.get_image_features(&miss_pv.flatten(0, 1)?)?;
+                    let patch_count = miss_features.dim(1)?;
+                    let base_feat_dim = (patch_count as f32).sqrt() as usize;
+                    if base_feat_dim != 24 || base_feat_dim * base_feat_dim != patch_count {
+                        candle_core::bail!(
+                            "Phi3 vision tower returned {patch_count} patches per crop"
+                        );
+                    }
+                    let miss_bs = miss_indices.len();
+                    let miss_features = miss_features.reshape((
+                        miss_bs,
+                        (),
+                        base_feat_dim.pow(2),
+                        self.image_dim_out,
+                    ))?;
+                    for (batch_idx, &orig_idx) in miss_indices.iter().enumerate() {
+                        img_features_per_image[orig_idx] = Some(miss_features.get(batch_idx)?);
+                    }
+                }
 
-                    let mut image_set_tensor_inner = Vec::new();
-                    let mut output_len = Vec::new();
-                    for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate().take(bs) {
-                        // Check if we have a cache hit for this image
-                        if let Some(ref cached_tensor) = per_image_cached[bs_] {
-                            let cnt = cached_tensor.dim(1)?;
-                            output_len.push(cnt);
-                            image_set_tensor_inner.push(cached_tensor.clone());
-                            continue;
-                        }
+                let C = self.image_dim_out;
+                let H = 24usize; // base_feat_dim
 
-                        let img_feats = img_features_per_image[bs_]
-                            .as_ref()
-                            .expect("miss image should have features");
+                let mut image_set_tensor_inner = Vec::new();
+                let mut output_len = Vec::new();
+                for (bs_, &(h, w)) in image_sizes_ref.iter().enumerate() {
+                    if h == 0 || w == 0 || h % 336 != 0 || w % 336 != 0 {
+                        candle_core::bail!("Phi3 image size {h}x{w} is not a valid HD grid");
+                    }
+                    let h = h / 336;
+                    let w = w / 336;
+                    let B_ = h * w;
+                    let temp_len = (B_ + 1) * 144 + 1 + (h + 1) * 12;
 
-                        let h = h / 336;
-                        let w = w / 336;
-                        let B_ = h * w;
-
-                        // 1 x (24x24) x 1024
-                        let global_img_feature = img_feats.i(..1)?;
-
-                        // 1 x 12 x 12 x 4096
-                        let glb_img = global_img_feature
-                            .reshape((1, H, H, C))?
-                            .reshape((1, H / 2, 2, H / 2, 2, C))?
-                            .contiguous()?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((1, H / 2, H / 2, 4 * C))?
-                            .contiguous()?;
-                        let temp_glbl_gn = self
-                            .sub_gn
-                            .as_ref()
-                            .expect("Need `sub_gn` if `use_hd_transform`")
-                            .repeat((1, H / 2, 1, 1))?;
-
-                        // 1 x 156 x 4096
-                        let glb_img =
-                            Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
-
-                        // (max_num_crops-1) x (12x12) x C
-                        let sub_img = img_feats.i(1..)?;
-
-                        // Get rid of padding sub_img
-                        let sub_img = sub_img.i(..B_)?;
-
-                        // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
-                        let sub_img = sub_img
-                            .reshape((B_, H, H, C))?
-                            .reshape((B_, H / 2, 2, H / 2, 2, C))?
-                            .contiguous()?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((B_, (), 4 * C))?
-                            .contiguous()?;
-                        let sub_img = sub_img
-                            .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
-                            .permute((0, 1, 3, 2, 4, 5))?
-                            .reshape((1, h * 12, w * 12, 4 * C))?;
-                        let temp_sub_gn = self
-                            .sub_gn
-                            .as_ref()
-                            .expect("Need `sub_gn` if `use_hd_transform`")
-                            .repeat((1, h * 12, 1, 1))?;
-
-                        let sub_img =
-                            Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
-
-                        // (1, num_img_tokens, 1024*4)
-
-                        let img = match self.hd_transform_order.as_str() {
-                            "glb_sub" => Tensor::cat(
-                                &[
-                                    glb_img,
-                                    self.glb_gn
-                                        .as_ref()
-                                        .expect("Need `glb_gn` if `use_hd_transform`")
-                                        .clone(),
-                                    sub_img,
-                                ],
-                                1,
-                            )?,
-                            "sub_glb" => Tensor::cat(
-                                &[
-                                    sub_img,
-                                    self.glb_gn
-                                        .as_ref()
-                                        .expect("Need `glb_gn` if `use_hd_transform`")
-                                        .clone(),
-                                    glb_img,
-                                ],
-                                1,
-                            )?,
-                            other => {
-                                candle_core::bail!("Invalid hd_transform_order=`{other}`");
-                            }
-                        };
-
-                        let temp_len = (h * w + 1) * 144 + 1 + (h + 1) * 12;
-                        assert_eq!(temp_len, img.dims()[1]);
-                        output_len.push(temp_len);
-
-                        let layerout = self
-                            .layers
-                            .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
-
-                        // Cache the projected features for this image
-                        if n_hashes > 0 && bs_ < n_hashes {
-                            let mut guard =
-                                encoder_cache.lock().expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[bs_],
-                                vec![layerout.clone()],
+                    // Check if we have a cache hit for this image
+                    if let Some(ref cached_tensor) = per_image_cached[bs_] {
+                        let (output_batch, cnt, _) = cached_tensor.dims3()?;
+                        if output_batch != 1 || cnt != temp_len {
+                            candle_core::bail!(
+                                "cached Phi3 image has shape {:?} but metadata requires one batch and {temp_len} rows",
+                                cached_tensor.dims()
                             );
                         }
-
-                        image_set_tensor_inner.push(layerout);
+                        output_len.push(cnt);
+                        image_set_tensor_inner.push(cached_tensor.clone());
+                        continue;
                     }
 
-                    hd_transform = Some(output_len);
-                    image_set_tensor = Some(Either::Left(image_set_tensor_inner));
+                    let img_feats = img_features_per_image[bs_].as_ref().ok_or_else(|| {
+                        candle_core::Error::Msg(format!("Phi3 image {bs_} has no vision features"))
+                    })?;
+
+                    // 1 x (24x24) x 1024
+                    let global_img_feature = img_feats.i(..1)?;
+
+                    // 1 x 12 x 12 x 4096
+                    let glb_img = global_img_feature
+                        .reshape((1, H, H, C))?
+                        .reshape((1, H / 2, 2, H / 2, 2, C))?
+                        .contiguous()?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((1, H / 2, H / 2, 4 * C))?
+                        .contiguous()?;
+                    let temp_glbl_gn = self
+                        .sub_gn
+                        .as_ref()
+                        .expect("Need `sub_gn` if `use_hd_transform`")
+                        .repeat((1, H / 2, 1, 1))?;
+
+                    // 1 x 156 x 4096
+                    let glb_img =
+                        Tensor::cat(&[glb_img, temp_glbl_gn], 2)?.reshape((1, (), 4 * C))?;
+
+                    // (max_num_crops-1) x (12x12) x C
+                    let sub_img = img_feats.i(1..)?;
+
+                    // Get rid of padding sub_img
+                    let sub_img = sub_img.i(..B_)?;
+
+                    // (num_crops, 12, 2, 12, 2, 1024) -> (num_crops, 12, 12, 2, 2, 1024) -> (num_crops, 12*12, 4*1024)
+                    let sub_img = sub_img
+                        .reshape((B_, H, H, C))?
+                        .reshape((B_, H / 2, 2, H / 2, 2, C))?
+                        .contiguous()?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((B_, (), 4 * C))?
+                        .contiguous()?;
+                    let sub_img = sub_img
+                        .reshape(BigShapeWithOneHole((1usize, h, w, 12usize, 12usize, ())))?
+                        .permute((0, 1, 3, 2, 4, 5))?
+                        .reshape((1, h * 12, w * 12, 4 * C))?;
+                    let temp_sub_gn = self
+                        .sub_gn
+                        .as_ref()
+                        .expect("Need `sub_gn` if `use_hd_transform`")
+                        .repeat((1, h * 12, 1, 1))?;
+
+                    let sub_img =
+                        Tensor::cat(&[sub_img, temp_sub_gn], 2)?.reshape((1, (), 4 * C))?;
+
+                    // (1, num_img_tokens, 1024*4)
+
+                    let img = match self.hd_transform_order.as_str() {
+                        "glb_sub" => Tensor::cat(
+                            &[
+                                glb_img,
+                                self.glb_gn
+                                    .as_ref()
+                                    .expect("Need `glb_gn` if `use_hd_transform`")
+                                    .clone(),
+                                sub_img,
+                            ],
+                            1,
+                        )?,
+                        "sub_glb" => Tensor::cat(
+                            &[
+                                sub_img,
+                                self.glb_gn
+                                    .as_ref()
+                                    .expect("Need `glb_gn` if `use_hd_transform`")
+                                    .clone(),
+                                glb_img,
+                            ],
+                            1,
+                        )?,
+                        other => {
+                            candle_core::bail!("Invalid hd_transform_order=`{other}`");
+                        }
+                    };
+
+                    if temp_len != img.dim(1)? {
+                        candle_core::bail!(
+                            "Phi3 HD transform produced {} rows, expected {temp_len}",
+                            img.dim(1)?
+                        );
+                    }
+                    output_len.push(temp_len);
+
+                    let layerout = self
+                        .layers
+                        .forward(&img.to_device(&target_dev)?.to_dtype(target_dtype)?)?;
+
+                    // Cache the projected features for this image
+                    if n_hashes == bs {
+                        let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
+                        guard.insert(
+                            CacheModality::Image,
+                            image_hashes[bs_],
+                            vec![layerout.clone()],
+                        );
+                    }
+
+                    image_set_tensor_inner.push(layerout);
                 }
+
+                hd_transform = Some(output_len);
+                image_set_tensor = Some(Either::Left(image_set_tensor_inner));
             } else if pixel_values.dims().len() == 4 {
+                hd_transform = None;
                 let n_imgs = pixel_values.dim(0)?;
-                if n_hashes > 0 && n_hashes == n_imgs {
+                if n_imgs == 0 {
+                    candle_core::bail!("Phi3 received an empty image batch");
+                }
+                if n_hashes != 0 && n_hashes != n_imgs {
+                    candle_core::bail!("Phi3 received {n_hashes} image hashes for {n_imgs} images");
+                }
+                if n_hashes == n_imgs {
                     // Per-image caching for non-HD path
                     let mut per_image_features: Vec<Option<Tensor>> = vec![None; n_imgs];
                     let mut miss_indices = Vec::new();
@@ -894,7 +945,20 @@ impl ImageEmbedding {
                         let mut guard = encoder_cache.lock().expect("encoder cache lock poisoned");
                         for (i, &hash) in image_hashes.iter().enumerate() {
                             if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                                per_image_features[i] = Some(cached[0].clone());
+                                let cached = cached.first().ok_or_else(|| {
+                                    candle_core::Error::Msg(
+                                        "cached Phi3 image has no encoder output".into(),
+                                    )
+                                })?;
+                                let (rows, _) = cached.dims2()?;
+                                if rows != self.num_img_tokens {
+                                    candle_core::bail!(
+                                        "cached Phi3 image has {} rows but metadata requires {}",
+                                        rows,
+                                        self.num_img_tokens
+                                    );
+                                }
+                                per_image_features[i] = Some(cached.clone());
                             } else {
                                 miss_indices.push(i);
                             }
@@ -923,8 +987,15 @@ impl ImageEmbedding {
                     }
                     let all_feats: Vec<Tensor> = per_image_features
                         .into_iter()
-                        .map(|f| f.expect("all images should be resolved"))
-                        .collect();
+                        .enumerate()
+                        .map(|(index, output)| {
+                            output.ok_or_else(|| {
+                                candle_core::Error::Msg(format!(
+                                    "Phi3 image {index} has no encoder output"
+                                ))
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     let image_set_tensor_inner = Tensor::cat(&all_feats, 0)?;
                     image_set_tensor = Some(Either::Right(image_set_tensor_inner));
                 } else {
@@ -937,6 +1008,7 @@ impl ImageEmbedding {
                     image_set_tensor = Some(Either::Right(image_set_tensor_inner));
                 }
             } else if pixel_values.dims().len() == 3 {
+                hd_transform = None;
                 let tt = pixel_values
                     .to_device(&target_dev)?
                     .to_dtype(target_dtype)?
@@ -944,52 +1016,149 @@ impl ImageEmbedding {
                 let image_set_tensor_inner = self.layers.forward(&tt)?;
                 image_set_tensor = Some(Either::Right(image_set_tensor_inner));
             } else {
-                unreachable!()
+                candle_core::bail!(
+                    "Phi3 image input must have rank 3, 4, or 5, got rank {}",
+                    pixel_values.dims().len()
+                );
             }
+        } else {
+            candle_core::bail!("Phi3 received image pixels without image placeholders");
         }
 
         let input_ids = input_ids.clamp(0.0, self.vocab_size as f64)?;
         let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
-        if select {
-            match (hd_transform, image_set_tensor) {
-                (Some(output_lens), Some(Either::Left(image_set_tensors))) => {
-                    let mut idx = 0;
-                    for (i, cnt) in output_lens.into_iter().enumerate() {
-                        let img_set_tensor = image_set_tensors[i]
-                            .to_device(&target_dev)?
-                            .to_dtype(target_dtype)?;
-                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
-                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
-                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
-                        hidden_states = hidden_states.slice_assign(
-                            &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..img_set_tensor.dims()[2]],
-                            &img_set_tensor,
-                        )?;
-                        idx += cnt;
-                    }
+        let expected_placeholder_rows = match (&hd_transform, &image_set_tensor) {
+            (Some(output_lens), Some(Either::Left(outputs))) => {
+                if output_lens.len() != outputs.len() {
+                    candle_core::bail!("Phi3 HD encoder output metadata is inconsistent");
                 }
-                (None, Some(Either::Right(image_set_tensor))) => {
-                    let mut idx = 0;
-                    // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
-                    // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
-                    for i in 0..pixel_values.dim(0)? {
-                        let cnt = self.num_img_tokens;
-                        let img_set_tensor = image_set_tensor
-                            .i(i * cnt..(i + 1) * cnt)?
-                            .to_device(&target_dev)?
-                            .to_dtype(target_dtype)?;
-                        let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
-                        let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
-                        // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
-                        hidden_states = hidden_states.slice_assign(
-                            &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..img_set_tensor.dims()[2]],
-                            &img_set_tensor,
-                        )?;
-                        idx += cnt;
+                let mut total = 0usize;
+                for (&output_len, output) in output_lens.iter().zip(outputs) {
+                    let (output_batch, output_rows, _) = output.dims3()?;
+                    if output_batch != 1 || output_rows != output_len {
+                        candle_core::bail!(
+                            "Phi3 HD encoder returned shape {:?}, expected one batch and {output_len} rows",
+                            output.dims()
+                        );
                     }
+                    total = total.checked_add(output_len).ok_or_else(|| {
+                        candle_core::Error::Msg("Phi3 image token count overflow".into())
+                    })?;
                 }
-                _ => unreachable!(),
+                total
             }
+            (None, Some(Either::Right(outputs))) => {
+                let (output_rows, _) = outputs.dims2()?;
+                let image_count = pixel_values.dim(0)?;
+                let expected = image_count
+                    .checked_mul(self.num_img_tokens)
+                    .ok_or_else(|| {
+                        candle_core::Error::Msg("Phi3 image token count overflow".into())
+                    })?;
+                if output_rows != expected {
+                    candle_core::bail!(
+                        "Phi3 encoder returned {} rows for {image_count} images",
+                        output_rows
+                    );
+                }
+                expected
+            }
+            _ => candle_core::bail!("Phi3 media has no encoder outputs"),
+        };
+        if positions.dim(0)? != expected_placeholder_rows {
+            candle_core::bail!(
+                "Phi3 received {} image placeholder tokens but encoder metadata requires {expected_placeholder_rows}",
+                positions.dim(0)?
+            );
+        }
+        if let Some(layout) = packed_layout {
+            let image_outputs = match (&hd_transform, &image_set_tensor) {
+                (Some(output_lens), Some(Either::Left(outputs))) => {
+                    if output_lens.len() != outputs.len() {
+                        candle_core::bail!("Phi3 HD encoder output metadata is inconsistent");
+                    }
+                    outputs.clone()
+                }
+                (None, Some(Either::Right(outputs))) => {
+                    let image_count = pixel_values.dim(0)?;
+                    if outputs.dim(0)? != image_count * self.num_img_tokens {
+                        candle_core::bail!(
+                            "Phi3 encoder returned {} rows for {image_count} images",
+                            outputs.dim(0)?
+                        );
+                    }
+                    (0..image_count)
+                        .map(|index| {
+                            outputs
+                                .i(index * self.num_img_tokens..(index + 1) * self.num_img_tokens)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                }
+                _ => candle_core::bail!("Phi3 packed media has no encoder outputs"),
+            };
+            if image_hashes.len() != image_outputs.len() {
+                candle_core::bail!(
+                    "packed Phi3 input has {} image hashes but {} encoder outputs",
+                    image_hashes.len(),
+                    image_outputs.len()
+                );
+            }
+            let encoder_outputs = image_hashes
+                .iter()
+                .copied()
+                .zip(image_outputs)
+                .map(|(hash, output)| {
+                    (
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                            hash,
+                        },
+                        vec![output],
+                    )
+                })
+                .collect::<MultimodalEncoderOutputs>();
+            return layout.splice_embeddings(&hidden_states, &encoder_outputs);
+        }
+        match (hd_transform, image_set_tensor) {
+            (Some(output_lens), Some(Either::Left(image_set_tensors))) => {
+                let mut idx = 0;
+                for (cnt, img_set_tensor) in output_lens.into_iter().zip(image_set_tensors) {
+                    let img_set_tensor = img_set_tensor
+                        .to_device(&target_dev)?
+                        .to_dtype(target_dtype)?;
+                    // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                    let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
+                    let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                    hidden_states = hidden_states.slice_assign(
+                        &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..img_set_tensor.dim(2)?],
+                        &img_set_tensor,
+                    )?;
+                    idx += cnt;
+                }
+            }
+            (None, Some(Either::Right(image_set_tensor))) => {
+                let mut idx = 0;
+                // Know len(img_embeds) == pixel_values.dim(0) == len(selected_g_values)
+                // https://huggingface.co/microsoft/Phi-3.5-vision-instruct/blob/dbcdaaacf52c8e40cf8de6d6ffa6ff6860e5f256/image_embedding_phi3_v.py#L259
+                for i in 0..pixel_values.dim(0)? {
+                    let cnt = self.num_img_tokens;
+                    let img_set_tensor = image_set_tensor
+                        .i(i * cnt..(i + 1) * cnt)?
+                        .to_device(&target_dev)?
+                        .to_dtype(target_dtype)?;
+                    let hidden_size = img_set_tensor.dim(1)?;
+                    let img_set_tensor = img_set_tensor.unsqueeze(0)?;
+                    let p_0 = positions.i((idx, 0))?.to_scalar::<u32>()? as usize;
+                    let p_1 = positions.i((idx, 1))?.to_scalar::<u32>()? as usize;
+                    // hidden_states[positions[idx, 0], positions[idx, 1] : positions[idx, 1] + cnt] = ...
+                    hidden_states = hidden_states.slice_assign(
+                        &[p_0..p_0 + 1, p_1..p_1 + cnt, 0..hidden_size],
+                        &img_set_tensor,
+                    )?;
+                    idx += cnt;
+                }
+            }
+            _ => candle_core::bail!("Phi3 media has no encoder outputs"),
         }
 
         Ok(hidden_states)
@@ -1154,6 +1323,7 @@ impl Model {
         ctx: &mut ModelForwardContext<'_>,
         image_sizes: Option<Vec<(usize, usize)>>,
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
         let mut xs = if let Some(ref pixel_values) = pixel_values {
             self.vision_embed_tokens.forward(
@@ -1161,6 +1331,7 @@ impl Model {
                 pixel_values,
                 image_sizes,
                 image_hashes,
+                packed_layout,
                 &self.encoder_cache,
             )?
         } else {
@@ -1222,6 +1393,7 @@ impl IsqModel for Model {
 pub(crate) struct Phi3VisionSpecificArgs {
     pub image_sizes: Option<Vec<(usize, usize)>>,
     pub image_hashes: Vec<u64>,
+    pub packed_layout: Option<PackedMultimodalLayout>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Model {}
@@ -1229,6 +1401,14 @@ impl crate::speculative::SpeculativeTargetMixin for Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Model {}
 
 impl MultimodalModel for Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -1239,10 +1419,18 @@ impl MultimodalModel for Model {
         let Phi3VisionSpecificArgs {
             image_sizes,
             image_hashes,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Phi3VisionSpecificArgs`");
-        self.forward(input_ids, pixel_values, ctx, image_sizes, &image_hashes)
+        self.forward(
+            input_ids,
+            pixel_values,
+            ctx,
+            image_sizes,
+            &image_hashes,
+            packed_layout.as_ref(),
+        )
     }
     fn cache(&self) -> &EitherCache {
         &self.cache

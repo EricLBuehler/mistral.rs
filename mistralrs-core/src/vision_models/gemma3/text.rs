@@ -7,7 +7,7 @@ use mistralrs_quant::{
 
 use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer, MoeMlp},
-    attention::{AttentionMask, SdpaParams},
+    attention::{flash_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
@@ -32,6 +32,28 @@ macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
         ($layer_idx + 1) % $cfg.sliding_window_pattern != 0
     };
+}
+
+fn attention_layers_support_packed_prefill(
+    layers: impl IntoIterator<Item = (usize, bool)>,
+) -> bool {
+    layers
+        .into_iter()
+        .all(|(head_dim, has_softcap)| flash_backend_supports(head_dim, has_softcap))
+}
+
+fn select_paged_mm_prefix_path(
+    requires_noncausal: bool,
+    is_paged: bool,
+    is_cuda: bool,
+    flash_attn: bool,
+    packed: bool,
+    has_range_metadata: bool,
+) -> Result<bool> {
+    if requires_noncausal && packed && !has_range_metadata {
+        candle_core::bail!("packed Gemma 3 multimodal prefill is missing noncausal range metadata");
+    }
+    Ok(requires_noncausal && is_paged && is_cuda && flash_attn && has_range_metadata)
 }
 
 struct Attention {
@@ -240,7 +262,7 @@ impl Attention {
                 )?,
                 None => {
                     let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(paged_mask.is_custom());
+                    assert!(!paged_mask.is_none());
                     paged_attn.forward(
                         &q,
                         &k,
@@ -566,6 +588,15 @@ impl TextModel {
         self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
+    pub fn supports_packed_prefill(&self) -> bool {
+        attention_layers_support_packed_prefill(self.layers.iter().map(|layer| {
+            (
+                layer.self_attn.head_dim,
+                layer.self_attn.sdpa_params.softcap.is_some(),
+            )
+        }))
+    }
+
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -577,24 +608,34 @@ impl TextModel {
         let mask_cache = ctx.mask_cache(cache);
         let flash_params = ctx.flash_params().clone();
 
-        // When images are present, we need bidirectional attention for image tokens.
-        // Flash attention doesn't support per-token mixed causal/bidirectional masking,
-        // so we construct real masks and bypass flash attention during image prefill
-        // by passing flash_params=None to layers.
-        // See: https://github.com/vllm-project/vllm/blob/5819ca8944af4f7dcbac3c6b73179f760e05910d/vllm/config/model.py#L1116-L1125
+        // Non-paged backends materialize the bidirectional image-token mask.
         let q_len = input_ids.dim(1)?;
         let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
             == MultimodalAttentionPolicy::NonCausal
             && q_len > 1;
         let has_bidirectional = has_images && self.image_token_index.is_some() && q_len > 1;
+        let requires_noncausal =
+            has_bidirectional || (is_non_causal_media_chunk && self.image_token_index.is_some());
+        let has_range_metadata = ctx
+            .paged_input_metadata()
+            .is_some_and(|metadata| metadata.has_noncausal_mm_context);
+        let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
+            requires_noncausal,
+            ctx.is_paged(),
+            xs.device().is_cuda(),
+            crate::using_flash_attn(),
+            ctx.flash_params().packed,
+            has_range_metadata,
+        )?;
 
         // Non-causal flash params used for the bidirectional-attention path so
         // that the paged-attention gather path does NOT force causal=true (which
         // would undo the bidirectional overrides in the materialized masks).
         let bidir_flash = FlashParams::empty(false);
 
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
-            || (is_non_causal_media_chunk && self.image_token_index.is_some())
+        let (attention_mask, sliding_attention_mask, layer_flash_params) = if (has_bidirectional
+            || (is_non_causal_media_chunk && self.image_token_index.is_some()))
+            && !use_paged_mm_prefix_path
         {
             // Build real masks (not flash-attn dummies) with bidirectional regions for image tokens
             let image_token_index = self.image_token_index.unwrap();
@@ -620,14 +661,19 @@ impl TextModel {
             // Apply bidirectional override for image tokens
             let attention_mask = match causal_mask {
                 AttentionMask::Custom(m) => AttentionMask::Custom(
-                    Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index)?,
+                    Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index, None)?,
                 ),
                 other => other,
             };
             let sliding_attention_mask = match sliding_mask {
-                AttentionMask::Custom(m) => AttentionMask::Custom(
-                    Self::apply_image_bidirectional_mask(&m, input_ids, image_token_index)?,
-                ),
+                AttentionMask::Custom(m) => {
+                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
+                        &m,
+                        input_ids,
+                        image_token_index,
+                        Some(self.sliding_window),
+                    )?)
+                }
                 other => other,
             };
 
@@ -729,6 +775,7 @@ impl TextModel {
         causal_mask: &Tensor,
         input_ids: &Tensor,
         image_token_index: usize,
+        sliding_window: Option<usize>,
     ) -> Result<Tensor> {
         // input_ids: (1, seq_len), causal_mask: (seq_len, total_len) where total_len = seq_len + past_kv_len
         let (_, seq_len) = input_ids.dims2()?;
@@ -772,7 +819,8 @@ impl TextModel {
                 continue; // Not an image token query
             }
             for ki in 0..seq_len {
-                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
+                let within_window = sliding_window.is_none_or(|window| qi.abs_diff(ki) < window);
+                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] && within_window {
                     // Both are image tokens in the same group: mark for bidirectional override
                     let col = ki + past_kv_len;
                     override_vals[qi * total_len + col] = 1.0;
@@ -972,5 +1020,62 @@ impl AnyMoeBaseModelMixin for TextModel {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{Device, Tensor};
+
+    use super::{attention_layers_support_packed_prefill, select_paged_mm_prefix_path, TextModel};
+
+    #[test]
+    fn packed_softcap_requires_flash_v2_support() {
+        assert_eq!(
+            attention_layers_support_packed_prefill([(128, true)]),
+            cfg!(feature = "flash-attn")
+        );
+        assert!(!attention_layers_support_packed_prefill([(512, true)]));
+    }
+
+    #[test]
+    fn paged_mm_prefix_requires_range_metadata() {
+        assert!(!select_paged_mm_prefix_path(true, true, true, true, false, false).unwrap());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
+        assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+    }
+
+    #[test]
+    fn image_attention_is_global_only_on_full_layers() {
+        let causal = Tensor::from_vec(
+            vec![
+                0f32,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.,
+                0.,
+                f32::NEG_INFINITY,
+                0.,
+                0.,
+                0.,
+            ],
+            (3, 3),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input_ids = Tensor::from_vec(vec![9u32, 9, 9], (1, 3), &Device::Cpu).unwrap();
+        let full = TextModel::apply_image_bidirectional_mask(&causal, &input_ids, 9, None)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+        let sliding = TextModel::apply_image_bidirectional_mask(&causal, &input_ids, 9, Some(2))
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        assert_eq!(full[0][2], 0.);
+        assert_eq!(sliding[0][1], 0.);
+        assert!(sliding[0][2].is_infinite() && sliding[0][2].is_sign_negative());
     }
 }

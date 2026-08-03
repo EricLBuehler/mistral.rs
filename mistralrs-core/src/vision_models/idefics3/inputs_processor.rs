@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::paged_attention::block_hash::MultimodalKind;
+use crate::paged_attention::block_hash::{MultimodalAttentionPolicy, MultimodalKind};
 use std::{any::Any, cmp, collections::HashMap, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
@@ -16,8 +16,14 @@ use crate::{
         },
         InputProcessorOutput, InputsProcessor, InputsProcessorType, MessagesAction, Processor,
     },
-    sequence::{build_mm_features_from_ranges, find_image_delimited_ranges, Sequence},
-    vision_models::ModelInputs,
+    sequence::{build_mm_features_from_ranges, Sequence},
+    vision_models::{
+        multimodal_layout::{
+            MultimodalEmbeddingMap, MultimodalEncoderKey, MultimodalItemLayout,
+            PackedMultimodalLayout, RequestMultimodalLayout,
+        },
+        ModelInputs,
+    },
 };
 
 use crate::vision_models::{
@@ -96,10 +102,315 @@ fn get_image_prompt_string(n_rows: usize, n_cols: usize, image_seq_len: usize) -
     }
 }
 
+fn expand_image_prompt(prompt: &str, image_prompt_strings: &[String]) -> anyhow::Result<String> {
+    let fragments = prompt.split(IMAGE_TOKEN).collect::<Vec<_>>();
+    if fragments.len() != image_prompt_strings.len() + 1 {
+        anyhow::bail!(
+            "Idefics3 prompt has {} image tags but {} image inputs",
+            fragments.len() - 1,
+            image_prompt_strings.len()
+        );
+    }
+    let mut expanded = fragments[0].to_string();
+    for (image_prompt, fragment) in image_prompt_strings.iter().zip(&fragments[1..]) {
+        expanded.push_str(image_prompt);
+        expanded.push_str(fragment);
+    }
+    Ok(expanded)
+}
+
+fn subimage_counts(rows: &[usize], cols: &[usize]) -> anyhow::Result<Vec<usize>> {
+    if rows.len() != cols.len() {
+        anyhow::bail!(
+            "Idefics3 preprocessing returned {} row counts but {} column counts",
+            rows.len(),
+            cols.len()
+        );
+    }
+    rows.iter()
+        .zip(cols)
+        .map(|(&rows, &cols)| {
+            if rows == 0 && cols == 0 {
+                Ok(1)
+            } else {
+                rows.checked_mul(cols)
+                    .and_then(|count| count.checked_add(1))
+                    .ok_or_else(|| anyhow::Error::msg("Idefics3 subimage count overflow"))
+            }
+        })
+        .collect()
+}
+
+fn max_image_longest_edge(config: &PreProcessorConfig) -> Result<usize> {
+    let longest_edge = match &config.max_image_size {
+        Some(size) => size.get("longest_edge").copied().ok_or_else(|| {
+            candle_core::Error::msg("Idefics3 max image size is missing `longest_edge`")
+        })?,
+        None => 364,
+    } as usize;
+    if longest_edge == 0 {
+        candle_core::bail!("Idefics3 max image size must be non-zero");
+    }
+    Ok(longest_edge)
+}
+
+fn image_token_ranges(tokens: &[u32], image_token_id: u32) -> Vec<std::ops::Range<usize>> {
+    crate::sequence::find_image_placeholder_ranges(tokens, image_token_id)
+        .into_iter()
+        .map(|(start, len)| start..start + len)
+        .collect()
+}
+
+fn grouped_image_ranges(
+    tokens: &[u32],
+    image_token_id: u32,
+    subimage_counts: &[usize],
+    image_seq_len: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let ranges = image_token_ranges(tokens, image_token_id);
+    if ranges.iter().any(|range| range.len() != image_seq_len) {
+        candle_core::bail!("Idefics3 image placeholder has an unexpected length");
+    }
+    let mut offset = 0usize;
+    let mut grouped = Vec::with_capacity(subimage_counts.len());
+    for &count in subimage_counts {
+        let end = offset
+            .checked_add(count)
+            .ok_or_else(|| candle_core::Error::msg("Idefics3 subimage count overflow"))?;
+        let item_ranges = ranges.get(offset..end).ok_or_else(|| {
+            candle_core::Error::msg(
+                "Idefics3 placeholders do not match the number of encoder images",
+            )
+        })?;
+        let range = item_ranges
+            .first()
+            .zip(item_ranges.last())
+            .map(|(first, last)| (first.start, last.end - first.start))
+            .ok_or_else(|| candle_core::Error::msg("Idefics3 image has no subimages"))?;
+        grouped.push(range);
+        offset = end;
+    }
+    if offset != ranges.len() {
+        candle_core::bail!("Idefics3 sequence has unmatched image placeholders");
+    }
+    Ok(grouped)
+}
+
+fn idefics3_packed_layout(
+    input_seqs: &[&mut Sequence],
+    query_lens: &[usize],
+    subimage_counts: &[Vec<usize>],
+    image_token_id: u32,
+    image_seq_len: usize,
+) -> Result<PackedMultimodalLayout> {
+    if input_seqs.len() != query_lens.len() || input_seqs.len() != subimage_counts.len() {
+        candle_core::bail!("Idefics3 packed multimodal metadata length mismatch");
+    }
+    let mut requests = Vec::with_capacity(input_seqs.len());
+    for ((seq, &query_len), counts) in input_seqs.iter().zip(query_lens).zip(subimage_counts) {
+        let tokens = seq.get_toks();
+        if query_len != tokens.len() {
+            candle_core::bail!(
+                "Idefics3 packed multimodal prefill requires the complete uncached prompt"
+            );
+        }
+        let hashes = seq.image_hashes().unwrap_or_default();
+        if hashes.len() != counts.len() {
+            candle_core::bail!(
+                "Idefics3 sequence has {} image hashes but {} subimage groups",
+                hashes.len(),
+                counts.len()
+            );
+        }
+        let ranges = image_token_ranges(tokens, image_token_id);
+        let grouped_ranges = grouped_image_ranges(tokens, image_token_id, counts, image_seq_len)?;
+        let mut range_offset = 0usize;
+        let mut items = Vec::with_capacity(hashes.len());
+        for (item_index, ((&hash, &count), &(start, len))) in
+            hashes.iter().zip(counts).zip(&grouped_ranges).enumerate()
+        {
+            let end = range_offset
+                .checked_add(count)
+                .ok_or_else(|| candle_core::Error::msg("Idefics3 subimage count overflow"))?;
+            let item_ranges = ranges.get(range_offset..end).ok_or_else(|| {
+                candle_core::Error::msg(
+                    "Idefics3 placeholders do not match the number of encoder images",
+                )
+            })?;
+            let maps = item_ranges
+                .iter()
+                .enumerate()
+                .map(|(source_output, range)| {
+                    MultimodalEmbeddingMap::contiguous(range.clone(), 0, source_output)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            items.push(MultimodalItemLayout::new(
+                MultimodalEncoderKey {
+                    kind: MultimodalKind::Image,
+                    hash,
+                },
+                item_index,
+                start..start + len,
+                MultimodalAttentionPolicy::Causal,
+                maps,
+            )?);
+            range_offset = end;
+        }
+        if range_offset != ranges.len() {
+            candle_core::bail!("Idefics3 sequence has unmatched image placeholders");
+        }
+        requests.push(RequestMultimodalLayout {
+            sequence_id: *seq.id(),
+            query: 0..query_len,
+            items,
+        });
+    }
+    PackedMultimodalLayout::new(&requests)
+}
+
+impl Idefics3ImageProcessor {
+    fn planned_image_grids(
+        &self,
+        images: &[DynamicImage],
+        config: &PreProcessorConfig,
+    ) -> anyhow::Result<(Vec<usize>, Vec<usize>)> {
+        let mut dimensions = if let Some(max_edge) = self.max_edge {
+            if max_edge == 0 {
+                anyhow::bail!("Idefics3 max image edge must be non-zero");
+            }
+            let resized = images
+                .iter()
+                .map(|image| {
+                    let (width, height) = image.dimensions();
+                    if width == 0 || height == 0 {
+                        anyhow::bail!("Idefics3 image dimensions must be non-zero");
+                    }
+                    let scale = max_edge as f32 / width.max(height) as f32;
+                    let width = (width as f32 * scale) as usize;
+                    let height = (height as f32 * scale) as usize;
+                    if width == 0 || height == 0 {
+                        anyhow::bail!("Idefics3 max-edge resize produced a zero dimension");
+                    }
+                    Ok((height, width))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let max_height = resized.iter().map(|&(height, _)| height).max().unwrap_or(0);
+            let max_width = resized.iter().map(|&(_, width)| width).max().unwrap_or(0);
+            vec![(max_height, max_width); resized.len()]
+        } else {
+            images
+                .iter()
+                .map(|image| {
+                    let (width, height) = image.dimensions();
+                    (height as usize, width as usize)
+                })
+                .collect()
+        };
+
+        if config.do_resize.is_some_and(|enabled| enabled) {
+            let size = config
+                .size
+                .as_ref()
+                .ok_or_else(|| anyhow::Error::msg("Idefics3 resize config is missing its size"))?;
+            for dimensions in &mut dimensions {
+                *dimensions = resize_dimensions(*dimensions, size)?;
+            }
+        }
+
+        if !config.do_image_splitting.unwrap_or(true) {
+            return Ok((vec![0; dimensions.len()], vec![0; dimensions.len()]));
+        }
+
+        let max_image_size = max_image_longest_edge(config)?;
+        let grids = dimensions
+            .into_iter()
+            .map(|dimensions| {
+                let (height, width) = resize_for_vision_encoder(dimensions, max_image_size);
+                if width > max_image_size || height > max_image_size {
+                    (
+                        height.div_ceil(max_image_size),
+                        width.div_ceil(max_image_size),
+                    )
+                } else {
+                    (0, 0)
+                }
+            })
+            .collect::<Vec<_>>();
+        Ok(grids.into_iter().unzip())
+    }
+}
+
 impl InputsProcessor for Idefics3ImageProcessor {
     fn get_type(&self) -> InputsProcessorType {
         InputsProcessorType::Vision
     }
+
+    fn prepare_for_paged_prompt_planning(
+        &self,
+        tokenizer: Option<Arc<Tokenizer>>,
+        input_seqs: &mut [&mut Sequence],
+        _device: &Device,
+        other_config: Option<Arc<dyn Any>>,
+        mut paged_attn_metadata: Option<&mut PagedAttentionMeta>,
+    ) -> anyhow::Result<()> {
+        let tokenizer = tokenizer.ok_or_else(|| {
+            anyhow::Error::msg("Idefics3ImageProcessor requires a specified tokenizer.")
+        })?;
+        let config = other_config.expect("Need a PreProcessorConfig config.");
+        let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
+        let image_token_id = tokenizer
+            .token_to_id(IMAGE_TOKEN)
+            .ok_or_else(|| anyhow::Error::msg("Idefics3 tokenizer is missing the image token"))?;
+        for seq in input_seqs {
+            if !seq.has_images() || seq.multimodal.has_changed_prompt {
+                continue;
+            }
+            let (rows, cols) =
+                self.planned_image_grids(seq.images().unwrap_or_default(), config)?;
+            let subimage_counts = subimage_counts(&rows, &cols)?;
+            let detok = tokenizer
+                .decode(seq.get_toks(), false)
+                .map_err(|error| anyhow::Error::msg(error.to_string()))?;
+            let image_prompt_strings = rows
+                .into_iter()
+                .zip(cols)
+                .map(|(rows, cols)| get_image_prompt_string(rows, cols, self.image_seq_len))
+                .collect::<Vec<_>>();
+            let sample = expand_image_prompt(&detok, &image_prompt_strings)?;
+            seq.set_initial_prompt(sample.clone());
+            let ids = tokenizer
+                .encode_fast(sample, false)
+                .map_err(|error| anyhow::Error::msg(error.to_string()))?
+                .get_ids()
+                .to_vec();
+            if seq.mm_features().is_empty() {
+                if let Some(hashes) = seq.image_hashes().map(<[u64]>::to_vec) {
+                    let ranges = grouped_image_ranges(
+                        &ids,
+                        image_token_id,
+                        &subimage_counts,
+                        self.image_seq_len,
+                    )?;
+                    if hashes.len() != ranges.len() {
+                        anyhow::bail!(
+                            "Idefics3 has {} image hashes but {} image placeholders",
+                            hashes.len(),
+                            ranges.len()
+                        );
+                    }
+                    seq.set_mm_features(build_mm_features_from_ranges(
+                        &ranges,
+                        &hashes,
+                        MultimodalKind::Image,
+                    ));
+                }
+            }
+            seq.set_toks_and_reallocate(ids, paged_attn_metadata.as_deref_mut());
+            seq.multimodal.has_changed_prompt = true;
+        }
+        Ok(())
+    }
+
     fn process_inputs(
         &self,
         tokenizer: Option<Arc<Tokenizer>>,
@@ -132,12 +443,17 @@ impl InputsProcessor for Idefics3ImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = input_seqs.iter().all(|seq| seq.has_images());
+        let has_images = input_seqs.iter().any(|seq| seq.has_images());
+        let mut subimage_counts_by_sequence = vec![Vec::new(); input_seqs.len()];
+        let mut subimage_counts_accum = Vec::new();
 
         let (pixel_values, pixel_attention_mask) = if has_images {
             let mut pixel_values_accum = Vec::new();
             let mut pixel_attention_mask_accum = Vec::new();
-            for seq in input_seqs.iter_mut() {
+            for (seq_idx, seq) in input_seqs.iter_mut().enumerate() {
+                if !seq.has_images() {
+                    continue;
+                }
                 let PreprocessedImages {
                     pixel_values,
                     pixel_attention_mask,
@@ -165,49 +481,58 @@ impl InputsProcessor for Idefics3ImageProcessor {
                     )
                     .expect("Preprocessing failed");
                 let pixel_attention_mask = pixel_attention_mask.unwrap();
+                let rows = rows.as_ref().ok_or_else(|| {
+                    anyhow::Error::msg("Idefics3 preprocessing omitted row counts")
+                })?;
+                let cols = cols.as_ref().ok_or_else(|| {
+                    anyhow::Error::msg("Idefics3 preprocessing omitted column counts")
+                })?;
+                let subimage_counts = subimage_counts(rows, cols)?;
+                if subimage_counts.iter().sum::<usize>() != pixel_values.dim(0)? {
+                    anyhow::bail!("Idefics3 preprocessing returned inconsistent subimage counts");
+                }
+                subimage_counts_by_sequence[seq_idx] = subimage_counts.clone();
 
                 if !seq.multimodal.has_changed_prompt {
                     let detok = tokenizer
                         .decode(seq.get_toks(), false)
-                        .expect("Detokenization failed!");
+                        .map_err(|error| anyhow::Error::msg(error.to_string()))?;
 
                     let mut image_prompt_strings = Vec::new();
-                    for (n_rows, n_cols) in rows.unwrap().into_iter().zip(cols.unwrap()) {
+                    for (&n_rows, &n_cols) in rows.iter().zip(cols) {
                         let image_prompt_string =
                             get_image_prompt_string(n_rows, n_cols, self.image_seq_len);
                         image_prompt_strings.push(image_prompt_string);
                     }
 
-                    let split_sample = detok.split(IMAGE_TOKEN).collect::<Vec<_>>();
-                    let mut sample = split_sample
-                        .first()
-                        .expect("The image token <image> should be present in the text.")
-                        .to_string();
-                    for (i, image_prompt_string) in image_prompt_strings.into_iter().enumerate() {
-                        sample.push_str(&format!(
-                            "{image_prompt_string}{}",
-                            split_sample
-                                .get(i + 1)
-                                .expect("Incorrect chat template. Use the one provided in `chat_templates` with the `--chat-template`/`chat_template` settings.")
-                        ));
-                    }
+                    let sample = expand_image_prompt(&detok, &image_prompt_strings)?;
 
                     seq.set_initial_prompt(sample.clone());
                     let toks = tokenizer
                         .encode_fast(sample, false)
-                        .expect("Detokenization failed!");
+                        .map_err(|error| anyhow::Error::msg(error.to_string()))?;
 
                     let ids = toks.get_ids().to_vec();
 
                     // Build mm_features for position-aware prefix cache hashing
                     if seq.mm_features().is_empty() {
-                        if let (Some(hashes), Some(fake_id)) = (
+                        if let (Some(hashes), Some(image_token_id)) = (
                             seq.image_hashes().map(|h| h.to_vec()),
-                            tokenizer.token_to_id(FAKE_IMAGE_TOKEN),
+                            tokenizer.token_to_id(IMAGE_TOKEN),
                         ) {
-                            // Each image is wrapped in FAKE_IMAGE_TOKEN pairs.
-                            // Find all FAKE_IMAGE_TOKEN...FAKE_IMAGE_TOKEN ranges.
-                            let ranges = find_image_delimited_ranges(&ids, fake_id, fake_id);
+                            let ranges = grouped_image_ranges(
+                                &ids,
+                                image_token_id,
+                                &subimage_counts,
+                                self.image_seq_len,
+                            )?;
+                            if hashes.len() != ranges.len() {
+                                anyhow::bail!(
+                                    "Idefics3 has {} image hashes but {} image placeholders",
+                                    hashes.len(),
+                                    ranges.len()
+                                );
+                            }
                             seq.set_mm_features(build_mm_features_from_ranges(
                                 &ranges,
                                 &hashes,
@@ -222,27 +547,21 @@ impl InputsProcessor for Idefics3ImageProcessor {
 
                 // Per-sequence prefix cache trimming of pixel_values and pixel_attention_mask
                 let cached = seq.count_prefix_cached_mm_items();
-                let n_sub = pixel_values.dim(0).unwrap_or(0);
-                if cached < n_sub {
-                    if cached > 0 {
-                        pixel_values_accum.push(
-                            pixel_values
-                                .narrow(0, cached, n_sub - cached)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                        );
-                        pixel_attention_mask_accum.push(
-                            pixel_attention_mask
-                                .narrow(0, cached, n_sub - cached)
-                                .unwrap()
-                                .unsqueeze(0)
-                                .unwrap(),
-                        );
+                if cached < subimage_counts.len() {
+                    let subimage_offset = subimage_counts[..cached].iter().sum::<usize>();
+                    let n_sub = pixel_values.dim(0)? - subimage_offset;
+                    if subimage_offset > 0 {
+                        pixel_values_accum.push(pixel_values.narrow(0, subimage_offset, n_sub)?);
+                        pixel_attention_mask_accum.push(pixel_attention_mask.narrow(
+                            0,
+                            subimage_offset,
+                            n_sub,
+                        )?);
                     } else {
-                        pixel_values_accum.push(pixel_values.unsqueeze(0).unwrap());
-                        pixel_attention_mask_accum.push(pixel_attention_mask.unsqueeze(0).unwrap());
+                        pixel_values_accum.push(pixel_values);
+                        pixel_attention_mask_accum.push(pixel_attention_mask);
                     }
+                    subimage_counts_accum.extend_from_slice(&subimage_counts[cached..]);
                 }
             }
 
@@ -328,6 +647,34 @@ impl InputsProcessor for Idefics3ImageProcessor {
         } else {
             vec![]
         };
+        let packed_layout = if is_prompt && flash_meta.packed {
+            let query_lens = paged_attn_meta
+                .as_ref()
+                .and_then(|metadata| metadata.query_lens.as_deref())
+                .ok_or_else(|| {
+                    anyhow::Error::msg("packed Idefics3 prefill requires logical query lengths")
+                })?;
+            let image_token_id = tokenizer.token_to_id(IMAGE_TOKEN).ok_or_else(|| {
+                anyhow::Error::msg("Idefics3 tokenizer is missing the image token")
+            })?;
+            let layout = idefics3_packed_layout(
+                input_seqs,
+                query_lens,
+                &subimage_counts_by_sequence,
+                image_token_id,
+                self.image_seq_len,
+            )?;
+            if layout.token_count() != input.dim(1)? {
+                anyhow::bail!(
+                    "Idefics3 packed layout has {} tokens but input has {}",
+                    layout.token_count(),
+                    input.dim(1)?
+                );
+            }
+            Some(layout)
+        } else {
+            None
+        };
 
         let inputs: Box<dyn Any> = Box::new(ModelInputs {
             input_ids: input,
@@ -338,6 +685,8 @@ impl InputsProcessor for Idefics3ImageProcessor {
             model_specific_args: Box::new(super::Idefics3SpecificArgs {
                 pixel_attention_mask,
                 image_hashes,
+                subimage_counts: subimage_counts_accum,
+                packed_layout,
             }),
             paged_attn_meta,
             flash_meta,
@@ -451,21 +800,29 @@ fn resize(
     size: &HashMap<String, u32>,
     resampling: FilterType,
 ) -> Result<DynamicImage> {
-    let (h, w) = if size.contains_key("longest_edge") {
-        get_resize_output_image_size(
-            (image.dimensions().1 as usize, image.dimensions().0 as usize),
-            size["longest_edge"] as usize,
-        )
-    } else if size.contains_key("height") && size.contains_key("width") {
-        (size["height"] as usize, size["width"] as usize)
-    } else {
-        candle_core::bail!(
-            "Size must be a map of `shortest_edge` and `longest_edge` or `height` and `width`."
-        );
-    };
+    let (h, w) = resize_dimensions(
+        (image.dimensions().1 as usize, image.dimensions().0 as usize),
+        size,
+    )?;
 
     Ok(image.resize_exact(w as u32, h as u32, resampling))
     // Ok(image.resize_exact(w as u32, h as u32,  FilterType::Nearest))
+}
+
+fn resize_dimensions(
+    dimensions: (usize, usize),
+    size: &HashMap<String, u32>,
+) -> Result<(usize, usize)> {
+    if let Some(&longest_edge) = size.get("longest_edge") {
+        Ok(get_resize_output_image_size(
+            dimensions,
+            longest_edge as usize,
+        ))
+    } else if let (Some(&height), Some(&width)) = (size.get("height"), size.get("width")) {
+        Ok((height as usize, width as usize))
+    } else {
+        candle_core::bail!("Size must contain `longest_edge` or both `height` and `width`.");
+    }
 }
 
 /// Returns: frames, num_splits_h, num_splits_w
@@ -558,10 +915,7 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
         let mut image_rows = Vec::new();
         let mut image_cols = Vec::new();
         let mut new_images = Vec::new();
-        let max_image_size = config
-            .max_image_size
-            .clone()
-            .unwrap_or_else(|| HashMap::from([("longest_edge".to_string(), 364)]));
+        let max_image_size = max_image_longest_edge(config)?;
         if config.do_image_splitting.unwrap_or(true) {
             // We first resize both height and width of each image to the nearest max_image_size multiple, disregarding the aspect ratio
             // for size=(10, max_image_size) -> rescaled_size=(max_image_size, max_image_size)
@@ -569,14 +923,13 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             for image in images.iter_mut() {
                 let (new_h, new_w) = resize_for_vision_encoder(
                     (image.dimensions().1 as usize, image.dimensions().0 as usize),
-                    max_image_size["longest_edge"] as usize,
+                    max_image_size,
                 );
 
                 *image =
                     image.resize_exact(new_w as u32, new_h as u32, config.resampling.to_filter()?);
 
-                let (split_image_array, rows, cols) =
-                    split_image(image, max_image_size["longest_edge"] as usize)?;
+                let (split_image_array, rows, cols) = split_image(image, max_image_size)?;
                 new_images.extend(split_image_array);
                 image_rows.push(rows);
                 image_cols.push(cols);
@@ -587,8 +940,8 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
                 new_images.push(resize(
                     image,
                     &HashMap::from([
-                        ("height".to_string(), max_image_size["longest_edge"]),
-                        ("width".to_string(), max_image_size["longest_edge"]),
+                        ("height".to_string(), max_image_size as u32),
+                        ("width".to_string(), max_image_size as u32),
                     ]),
                     FilterType::Lanczos3,
                 )?);
@@ -663,5 +1016,81 @@ impl ImagePreProcessor for Idefics3ImageProcessor {
             image_sizes_all: None,
             num_crops: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn groups_split_image_placeholders() {
+        let tokens = [8, 4, 4, 7, 4, 4, 6, 4, 4, 9];
+        let ranges = grouped_image_ranges(&tokens, 4, &[2, 1], 2).unwrap();
+        assert_eq!(ranges, vec![(1, 5), (7, 2)]);
+    }
+
+    #[test]
+    fn rejects_incomplete_subimage_groups() {
+        let error = grouped_image_ranges(&[4, 4, 7, 4, 4], 4, &[1], 2).unwrap_err();
+        assert!(error.to_string().contains("unmatched image placeholders"));
+    }
+
+    #[test]
+    fn image_prompt_expansion_requires_exact_media_count() {
+        let replacements = vec!["A".to_string(), "B".to_string()];
+        assert_eq!(
+            expand_image_prompt("left<image>middle<image>right", &replacements).unwrap(),
+            "leftAmiddleBright"
+        );
+        assert!(expand_image_prompt("left<image>right", &replacements).is_err());
+        assert!(
+            expand_image_prompt("left<image>middle<image>right<image>extra", &replacements)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn dimension_plan_matches_image_preprocessing_groups() {
+        let processor = Idefics3ImageProcessor {
+            max_edge: None,
+            image_seq_len: 2,
+        };
+        let config = PreProcessorConfig {
+            do_convert_rgb: Some(true),
+            do_image_splitting: Some(true),
+            do_normalize: Some(false),
+            do_pad: Some(true),
+            do_rescale: Some(false),
+            do_resize: Some(false),
+            max_image_size: Some(HashMap::from([("longest_edge".to_string(), 28)])),
+            ..Default::default()
+        };
+        let images = vec![
+            DynamicImage::new_rgb8(56, 28),
+            DynamicImage::new_rgb8(12, 12),
+        ];
+
+        let planned = processor.planned_image_grids(&images, &config).unwrap();
+        let processed = processor
+            .preprocess(
+                images,
+                vec![],
+                &config,
+                &Device::Cpu,
+                (usize::MAX, usize::MAX),
+            )
+            .unwrap();
+        let rows = processed.rows.unwrap();
+        let cols = processed.cols.unwrap();
+
+        assert_eq!(planned, (rows.clone(), cols.clone()));
+        assert_eq!(subimage_counts(&rows, &cols).unwrap(), vec![3, 1]);
+        assert_eq!(processed.pixel_values.dim(0).unwrap(), 4);
+    }
+
+    #[test]
+    fn rejects_mismatched_subimage_grid_metadata() {
+        assert!(subimage_counts(&[1, 2], &[1]).is_err());
     }
 }

@@ -19,10 +19,13 @@ use crate::{
     matformer::MatformerSliceConfig,
     paged_attention::{
         AttentionImplementation, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention,
     },
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -37,21 +40,76 @@ macro_rules! is_sliding {
 
 const EPS: f64 = 1e-8;
 
-fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Option<usize> {
-    if cfg.num_kv_shared_layers == 0 {
+fn sliding_decode_kv_window(
+    use_sliding_window: bool,
+    query_len: usize,
+    sliding_window: Option<usize>,
+    kv_len: usize,
+) -> Option<(usize, usize)> {
+    let window = sliding_window?;
+    if !use_sliding_window || query_len != 1 || kv_len <= window {
         return None;
     }
+    Some((kv_len - window, window))
+}
 
-    let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
-    if first_kv_shared_layer_idx == 0 || layer_idx < first_kv_shared_layer_idx {
-        return None;
+fn is_paged_decode_forward(
+    is_paged: bool,
+    query_len: usize,
+    is_first_prompt_chunk: bool,
+    has_prompt_cache_metadata: bool,
+) -> bool {
+    is_paged && query_len > 0 && !is_first_prompt_chunk && !has_prompt_cache_metadata
+}
+
+fn kv_shared_layer_index_for_layout(
+    layer_types: &[String],
+    num_kv_shared_layers: usize,
+    layer_idx: usize,
+) -> Result<Option<usize>> {
+    let first_kv_shared_layer_idx = layer_types
+        .len()
+        .checked_sub(num_kv_shared_layers)
+        .ok_or_else(|| candle_core::Error::msg("Gemma 3n has more shared KV layers than layers"))?;
+    let attention_type = layer_types.get(layer_idx).ok_or_else(|| {
+        candle_core::Error::msg(format!("Gemma 3n layer index {layer_idx} is out of bounds"))
+    })?;
+    if num_kv_shared_layers == 0 || layer_idx < first_kv_shared_layer_idx {
+        return Ok(None);
+    }
+    if first_kv_shared_layer_idx == 0 {
+        candle_core::bail!("Gemma 3n shared KV layers have no donor layers");
     }
 
-    if is_sliding!(layer_idx, cfg) {
-        Some(first_kv_shared_layer_idx - 2)
-    } else {
-        Some(first_kv_shared_layer_idx - 1)
+    layer_types[..first_kv_shared_layer_idx]
+        .iter()
+        .rposition(|candidate| candidate == attention_type)
+        .map(Some)
+        .ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "Gemma 3n layer {layer_idx} shares KV without a prior `{attention_type}` donor"
+            ))
+        })
+}
+
+fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Result<Option<usize>> {
+    if cfg.layer_types.len() != cfg.num_hidden_layers {
+        candle_core::bail!(
+            "Gemma 3n has {} layer types for {} layers",
+            cfg.layer_types.len(),
+            cfg.num_hidden_layers
+        );
     }
+    kv_shared_layer_index_for_layout(&cfg.layer_types, cfg.num_kv_shared_layers, layer_idx)
+}
+
+struct AttentionForwardContext<'a> {
+    attention_mask: &'a AttentionMask,
+    sliding_attention_mask: &'a AttentionMask,
+    rope_positions: &'a Tensor,
+    kv_caches: &'a mut [KvCache],
+    metadata: Option<((Tensor, Tensor), &'a PagedAttentionInputMetadata)>,
+    flash_params: Option<&'a FlashParams>,
 }
 
 #[derive(Clone)]
@@ -231,6 +289,7 @@ struct Attention {
     rotary_emb_global: Arc<Gemma3nRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     use_sliding_window: bool,
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -248,6 +307,7 @@ impl Attention {
         layer_idx: usize,
         mapper: &dyn DeviceMapper,
         vb: ShardedVarBuilder,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -319,7 +379,7 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
 
-        let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx);
+        let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx)?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -331,6 +391,7 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             use_sliding_window: sliding_window.is_some(),
+            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
@@ -368,16 +429,7 @@ impl Attention {
         .transpose(1, 2)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn forward(
-        &self,
-        xs: &Tensor,
-        attention_mask: &AttentionMask,
-        sliding_attention_mask: &AttentionMask,
-        kv_caches: &mut [KvCache],
-        ctx: &mut ModelForwardContext<'_>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, ctx: &mut AttentionForwardContext<'_>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let is_shared = self.kv_shared_layer_index.is_some();
@@ -399,25 +451,11 @@ impl Attention {
         };
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
-        let rope_positions = ctx
-            .text_positions(q.device(), q.dim(2)?)?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
-            .clone();
-        q = self.apply_rope_positions(&q, &rope_positions)?;
+        q = self.apply_rope_positions(&q, ctx.rope_positions)?;
         q = q.transpose(1, 2)?;
 
-        let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
-        {
-            let shared_cache = &kv_caches[kv_shared_layer_index];
-            // Cast device because kv cache on prev layer might be different device
-            // https://github.com/EricLBuehler/mistral.rs/pull/1650#issuecomment-3393222444
-            (
-                (
-                    shared_cache.k()?.unwrap().to_device(q.device())?,
-                    shared_cache.v()?.unwrap().to_device(q.device())?,
-                ),
-                true,
-            )
+        let (k, v) = if is_shared {
+            (None, None)
         } else {
             let (mut k, mut v) = if let Some((_, k, v)) = qkv {
                 (k, v)
@@ -427,68 +465,121 @@ impl Attention {
 
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
-            k = self.apply_rope_positions(&k, &rope_positions)?;
+            k = self.apply_rope_positions(&k, ctx.rope_positions)?;
             k = k.transpose(1, 2)?;
 
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
 
-            (kv_caches[self.layer_idx].append(&k, &v)?, false)
+            (Some(k), Some(v))
         };
 
         let mask = if self.use_sliding_window {
-            sliding_attention_mask
+            ctx.sliding_attention_mask
         } else {
-            attention_mask
+            ctx.attention_mask
         };
 
-        // Adjust mask dimensions if using shared KV cache
-        let mask = if is_shared_kv {
-            if let AttentionMask::Custom(mask) = mask {
-                let kv_seq_len = k.dims()[2];
-                let mask_dims = mask.dims();
-
-                // Only narrow when the target dimension is strictly longer; otherwise reuse as-is.
-                let narrowed = match mask.rank() {
-                    2 => {
-                        // 2D masks: (q_len, kv_len)
-                        if mask_dims[1] > kv_seq_len {
-                            mask.narrow(1, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => match &ctx.metadata {
+                Some(((key_cache, value_cache), input_metadata)) if is_shared => paged_attn
+                    .forward_donor_cache(
+                        &q,
+                        key_cache,
+                        value_cache,
+                        mask,
+                        input_metadata,
+                        &self.sdpa_params,
+                        ctx.flash_params,
+                    )?,
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    k.as_ref().unwrap(),
+                    v.as_ref().unwrap(),
+                    mask,
+                    Some(key_cache.clone()),
+                    Some(value_cache.clone()),
+                    input_metadata,
+                    &self.sdpa_params,
+                    ctx.flash_params,
+                )?,
+                None if is_shared => {
+                    candle_core::bail!("Gemma 3n shared KV attention is missing paged metadata")
+                }
+                None => {
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    if matches!(mask, AttentionMask::None) {
+                        candle_core::bail!("Gemma 3n paged prompt is missing an attention mask");
                     }
-                    3 => {
-                        // 3D masks: (batch, q_len, kv_len)
-                        if mask_dims[2] > kv_seq_len {
-                            mask.narrow(2, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
-                    }
-                    4 => {
-                        // 4D masks: (batch, heads, q_len, kv_len)
-                        if mask_dims[3] > kv_seq_len {
-                            mask.narrow(3, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
-                    }
-                    _ => mask.clone(),
+                    paged_attn.forward(
+                        &q,
+                        k.as_ref().unwrap(),
+                        v.as_ref().unwrap(),
+                        mask,
+                        None,
+                        None,
+                        &input_metadata,
+                        &self.sdpa_params,
+                        ctx.flash_params,
+                    )?
+                }
+            },
+            None => {
+                let (mut k, mut v) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
+                {
+                    let shared_cache = &ctx.kv_caches[kv_shared_layer_index];
+                    let k = shared_cache.appended_k()?.ok_or_else(|| {
+                        candle_core::Error::msg("Gemma 3n shared KV donor has no key cache")
+                    })?;
+                    let v = shared_cache.appended_v()?.ok_or_else(|| {
+                        candle_core::Error::msg("Gemma 3n shared KV donor has no value cache")
+                    })?;
+                    (k.to_device(q.device())?, v.to_device(q.device())?)
+                } else {
+                    ctx.kv_caches[self.layer_idx]
+                        .append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
-                AttentionMask::Custom(narrowed)
-            } else {
-                AttentionMask::None
+
+                if let Some((start, len)) = sliding_decode_kv_window(
+                    self.use_sliding_window,
+                    q_len,
+                    self.sdpa_params.sliding_window,
+                    k.dim(2)?,
+                ) {
+                    k = k.narrow(2, start, len)?;
+                    v = v.narrow(2, start, len)?;
+                }
+
+                let mask = if let AttentionMask::Custom(mask) = mask {
+                    let kv_len = k.dim(2)?;
+                    let mask_dims = mask.dims();
+                    let narrowed = match mask.rank() {
+                        2 if mask_dims[1] > kv_len => {
+                            mask.narrow(1, mask_dims[1] - kv_len, kv_len)?
+                        }
+                        3 if mask_dims[2] > kv_len => {
+                            mask.narrow(2, mask_dims[2] - kv_len, kv_len)?
+                        }
+                        4 if mask_dims[3] > kv_len => {
+                            mask.narrow(3, mask_dims[3] - kv_len, kv_len)?
+                        }
+                        _ => mask.clone(),
+                    };
+                    AttentionMask::Custom(narrowed)
+                } else {
+                    mask.clone()
+                };
+
+                Sdpa.run_attention(&q, &k, &v, &mask, ctx.flash_params, &self.sdpa_params)?
             }
-        } else {
-            mask.clone()
         };
 
-        let mut attn_output =
-            Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;
-
-        attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
+        attn_output = if matches!(mask, AttentionMask::None) {
+            attn_output.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        };
         self.o_proj.forward(&attn_output)
     }
 }
@@ -676,6 +767,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -685,6 +777,7 @@ impl DecoderLayer {
             layer_idx,
             mapper,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
             comm,
         )?;
         let mlp = Mlp::new(
@@ -755,16 +848,25 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn has_active_dynamic_lora(&self) -> bool {
+        [
+            &self.self_attn.q_proj,
+            &self.self_attn.k_proj,
+            &self.self_attn.v_proj,
+            &self.self_attn.o_proj,
+            &self.mlp.gate,
+            &self.mlp.up,
+            &self.mlp.down,
+        ]
+        .into_iter()
+        .any(|layer| layer.is_dynamic_lora_active())
+    }
+
     fn forward(
         &self,
         xs: &Tensor,
         per_layer_input: &Tensor,
-        attention_mask: &AttentionMask,
-        sliding_attention_mask: &AttentionMask,
-        kv_caches: &mut [KvCache],
-        ctx: &mut ModelForwardContext<'_>,
-        flash_params: &FlashParams,
+        ctx: &mut AttentionForwardContext<'_>,
     ) -> Result<Tensor> {
         let predictions = self.altup.predict(xs)?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
@@ -774,14 +876,7 @@ impl DecoderLayer {
 
         let attn = self
             .self_attn
-            .forward(
-                &active_prediction_normed,
-                attention_mask,
-                sliding_attention_mask,
-                kv_caches,
-                ctx,
-                flash_params,
-            )?
+            .forward(&active_prediction_normed, ctx)?
             .apply(&self.post_attention_layernorm)?;
 
         // Perform addition and scaling in float32 for precision
@@ -970,6 +1065,64 @@ pub struct TextModel {
     final_logit_softcapping: Option<f64>,
 }
 
+#[derive(Clone)]
+struct PrefillQuerySelection {
+    source_context_lens: Vec<(usize, usize)>,
+    seqlen_offsets: Vec<usize>,
+    num_cached_tokens: Vec<usize>,
+    query_lens: Vec<usize>,
+}
+
+impl PrefillQuerySelection {
+    fn from_logits_context(
+        query_len: usize,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+    ) -> Option<Self> {
+        if context_lens.is_empty() || context_lens.len() != seqlen_offsets.len() {
+            return None;
+        }
+
+        let mut tail_offsets = Vec::with_capacity(context_lens.len());
+        let mut num_cached_tokens = Vec::with_capacity(context_lens.len());
+        let mut query_lens = Vec::with_capacity(context_lens.len());
+        for ((start, len), offset) in context_lens.iter().zip(seqlen_offsets) {
+            if *len != 1 || start.checked_add(*len)? != query_len {
+                return None;
+            }
+            tail_offsets.push(offset + start);
+            num_cached_tokens.push(offset + start);
+            query_lens.push(*len);
+        }
+
+        Some(Self {
+            source_context_lens: context_lens.to_vec(),
+            seqlen_offsets: tail_offsets,
+            num_cached_tokens,
+            query_lens,
+        })
+    }
+
+    fn reduce(&self, tensor: &Tensor) -> Result<Tensor> {
+        extract_logits(tensor, self.source_context_lens.clone())
+    }
+
+    fn reduce_altup(&self, tensor: &Tensor) -> Result<Tensor> {
+        let streams = tensor.dim(0)?;
+        let mut reduced = Vec::with_capacity(streams);
+        for stream in 0..streams {
+            reduced.push(self.reduce(&tensor.i(stream)?)?);
+        }
+        Tensor::stack(&reduced, 0)
+    }
+}
+
+struct KvSharingFastPrefillPlan {
+    first_shared_layer: usize,
+    query_selection: PrefillQuerySelection,
+    paged_metadata: Option<PagedAttentionInputMetadata>,
+}
+
 impl TextModel {
     pub fn new(
         cfg: &Gemma3nTextConfig,
@@ -984,9 +1137,6 @@ impl TextModel {
                 quant_cfg.name(),
                 quant_cfg.get_bits_name(&vb)
             );
-        }
-        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
         }
         let mapper = normal_loading_metadata.mapper;
 
@@ -1123,6 +1273,12 @@ impl TextModel {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(cfg.head_dim, device, None)?)
+                }
+            };
             let comm = mapper.get_comm_for(layer_idx)?;
             DecoderLayer::new(
                 rotary_emb_global,
@@ -1132,6 +1288,7 @@ impl TextModel {
                 &*mapper,
                 layer_idx_effective,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
                 &comm,
             )
         })
@@ -1203,22 +1360,22 @@ impl TextModel {
         let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
-                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx) {
+                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     kv_cache_layer_owners.push(owner);
-                    NormalCacheType::Shared { owner }
+                    Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding!(layer_idx, cfg) {
                     kv_cache_layer_owners.push(layer_idx);
-                    NormalCacheType::SlidingWindow {
+                    Ok(NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
-                    }
+                    })
                 } else {
                     kv_cache_layer_owners.push(layer_idx);
-                    NormalCacheType::Normal {
+                    Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
-                    }
+                    })
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let cfg_metadata = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -1340,6 +1497,65 @@ impl TextModel {
         (result_f32 * self.per_layer_input_scale)?.to_dtype(per_layer_projection.dtype())
     }
 
+    fn kv_sharing_fast_prefill_plan(
+        &self,
+        input_ids: &Tensor,
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Option<KvSharingFastPrefillPlan>> {
+        if ctx.requires_full_prefill_queries() {
+            return Ok(None);
+        }
+        let (batch, query_len) = input_ids.dims2()?;
+        if query_len <= 1 || ctx.context_lens().len() != batch {
+            return Ok(None);
+        }
+        let Some(first_shared_layer) = self
+            .layers
+            .iter()
+            .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+        else {
+            return Ok(None);
+        };
+        if !self.layers[first_shared_layer..]
+            .iter()
+            .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+            || self.layers[first_shared_layer..]
+                .iter()
+                .any(DecoderLayer::has_active_dynamic_lora)
+        {
+            return Ok(None);
+        }
+        let Some(query_selection) = PrefillQuerySelection::from_logits_context(
+            query_len,
+            ctx.context_lens(),
+            ctx.seqlen_offsets(),
+        ) else {
+            return Ok(None);
+        };
+
+        let paged_metadata = if let Some(metadata) = ctx.paged_input_metadata() {
+            if metadata.block_tables.is_none() {
+                return Ok(None);
+            }
+            Some(
+                metadata
+                    .for_reduced_prefill_queries(
+                        &self.mapper.get_unique_devices(),
+                        &query_selection.num_cached_tokens,
+                        &query_selection.query_lens,
+                    )
+                    .map_err(|error| candle_core::Error::Msg(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(KvSharingFastPrefillPlan {
+            first_shared_layer,
+            query_selection,
+            paged_metadata,
+        }))
+    }
+
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -1355,13 +1571,13 @@ impl TextModel {
 
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
-        let attention_mask = CausalMasker.make_causal_mask(
+        let mut attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &mask_cache,
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let sliding_attention_mask = CausalMasker.make_causal_mask(
+        let mut sliding_attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &mask_cache,
             xs.dtype(),
@@ -1370,6 +1586,17 @@ impl TextModel {
                 ..Default::default()
             },
         )?;
+        let is_paged_decode = is_paged_decode_forward(
+            ctx.is_paged(),
+            input_ids.dim(1)?,
+            ctx.is_first_prompt_chunk(),
+            ctx.paged_input_metadata()
+                .is_some_and(|metadata| metadata.num_cached_tokens.is_some()),
+        );
+        if is_paged_decode {
+            attention_mask = AttentionMask::None;
+            sliding_attention_mask = AttentionMask::None;
+        }
 
         // Already using float32 for magnitude calculations
         let target_magnitude = xs
@@ -1400,17 +1627,80 @@ impl TextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(input_ids, ctx)?;
+        let mut reduced_to_logits = false;
         for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(plan) = fast_prefill_tail
+                .as_ref()
+                .filter(|plan| i == plan.first_shared_layer)
+            {
+                xs = plan.query_selection.reduce_altup(&xs)?;
+                reduced_to_logits = true;
+            }
+
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
+            let per_layer_input = if reduced_to_logits {
+                fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan")
+                    .query_selection
+                    .reduce(&per_layer_input)?
+            } else {
+                per_layer_input
+            };
             xs = self.mapper.map(xs, i)?;
+            let rope_positions = if reduced_to_logits {
+                let plan = fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan");
+                if let Some(metadata) = plan.paged_metadata.as_ref() {
+                    crate::pipeline::metadata_rope_positions(metadata, xs.device())
+                        .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                        .clone()
+                } else {
+                    ctx.text_positions_from_offsets(
+                        &plan.query_selection.seqlen_offsets,
+                        xs.dim(2)?,
+                        xs.device(),
+                    )?
+                }
+            } else {
+                ctx.text_positions(xs.device(), xs.dim(2)?)?
+                    .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                    .clone()
+            };
+            let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
+                (AttentionMask::None, AttentionMask::None)
+            } else {
+                (
+                    attention_mask.get(xs.device()),
+                    sliding_attention_mask.get(xs.device()),
+                )
+            };
+            let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
+            let metadata = ctx.paged_layer(cache_idx).map(|(kv_cache, metadata)| {
+                let metadata = if reduced_to_logits {
+                    fast_prefill_tail
+                        .as_ref()
+                        .and_then(|plan| plan.paged_metadata.as_ref())
+                        .unwrap_or(metadata)
+                } else {
+                    metadata
+                };
+                (kv_cache, metadata)
+            });
+            let mut layer_ctx = AttentionForwardContext {
+                attention_mask: &layer_attention_mask,
+                sliding_attention_mask: &layer_sliding_attention_mask,
+                rope_positions: &rope_positions,
+                kv_caches: &mut *cache,
+                metadata,
+                flash_params: (!reduced_to_logits).then_some(&flash_params),
+            };
             xs = layer.forward(
                 &xs,
                 &per_layer_input.to_device(xs.device())?,
-                &attention_mask.get(xs.device()),
-                &sliding_attention_mask.get(xs.device()),
-                &mut *cache,
-                ctx,
-                &flash_params,
+                &mut layer_ctx,
             )?;
         }
         xs = xs.to_device(&self.device)?;
@@ -1445,7 +1735,11 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
-        let mut xs = ctx.logits(&xs)?;
+        let mut xs = if reduced_to_logits {
+            xs
+        } else {
+            ctx.logits(&xs)?
+        };
         xs = self.lm_head.forward(&xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
@@ -1571,3 +1865,127 @@ impl MultimodalModel for TextModel {
 }
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use candle_core::{DType, Device, Tensor};
+
+    use super::{
+        is_paged_decode_forward, kv_shared_layer_index_for_layout, sliding_decode_kv_window,
+        KvCacheTopology, PagedAttentionInputMetadata, PrefillQuerySelection,
+    };
+
+    fn layer_types(types: &[&str]) -> Vec<String> {
+        types.iter().map(|ty| (*ty).to_string()).collect()
+    }
+
+    #[test]
+    fn shared_kv_layers_use_the_latest_matching_donor() {
+        let types = layer_types(&[
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+        ]);
+        let owners = (0..types.len())
+            .map(|layer| {
+                kv_shared_layer_index_for_layout(&types, 2, layer)
+                    .unwrap()
+                    .unwrap_or(layer)
+            })
+            .collect::<Vec<_>>();
+        let topology = KvCacheTopology::from_layer_owners(owners);
+
+        assert_eq!(topology.owner_for_layer(4), 2);
+        assert_eq!(topology.owner_for_layer(5), 3);
+        assert!(topology.uses_own_kv_cache_for_layer(2));
+        assert!(!topology.uses_own_kv_cache_for_layer(4));
+    }
+
+    #[test]
+    fn malformed_shared_kv_layouts_fail_closed() {
+        let types = layer_types(&["sliding_attention", "full_attention"]);
+        assert!(kv_shared_layer_index_for_layout(&types, 3, 0).is_err());
+        assert!(kv_shared_layer_index_for_layout(&types, 2, 0).is_err());
+        assert!(kv_shared_layer_index_for_layout(&types, 0, 2).is_err());
+
+        let missing_donor =
+            layer_types(&["sliding_attention", "sliding_attention", "full_attention"]);
+        assert!(kv_shared_layer_index_for_layout(&missing_donor, 1, 2).is_err());
+    }
+
+    #[test]
+    fn sliding_donor_decode_uses_the_trailing_window() {
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(4), 11), Some((7, 4)));
+        assert_eq!(sliding_decode_kv_window(true, 2, Some(4), 11), None);
+        assert_eq!(sliding_decode_kv_window(false, 1, Some(4), 11), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(4), 4), None);
+    }
+
+    #[test]
+    fn paged_decode_does_not_depend_on_physical_query_width() {
+        assert!(is_paged_decode_forward(true, 1, false, false));
+        assert!(is_paged_decode_forward(true, 8, false, false));
+        assert!(!is_paged_decode_forward(true, 8, true, false));
+        assert!(!is_paged_decode_forward(true, 8, false, true));
+        assert!(!is_paged_decode_forward(false, 8, false, false));
+    }
+
+    #[test]
+    fn reduced_shared_prefill_keeps_query_rows_and_positions_aligned() {
+        let selection =
+            PrefillQuerySelection::from_logits_context(4, &[(3, 1), (3, 1)], &[5, 10]).unwrap();
+        let source = Tensor::from_vec(
+            (0u32..8).map(|value| value as f32).collect::<Vec<_>>(),
+            (2, 4, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        assert_eq!(
+            selection
+                .reduce(&source)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            vec![3.0, 7.0]
+        );
+        let shifted = (source.clone() + 10.0).unwrap();
+        let altup = Tensor::stack(&[source, shifted], 0).unwrap();
+        assert_eq!(
+            selection.reduce_altup(&altup).unwrap().dims(),
+            &[2, 2, 1, 1]
+        );
+
+        let mut metadata = PagedAttentionInputMetadata::dummy(&Device::Cpu).unwrap();
+        metadata.block_size = Some(16);
+        metadata.block_tables = Some(HashMap::from([(
+            Device::Cpu.location(),
+            Tensor::zeros((2, 1), DType::U32, &Device::Cpu).unwrap(),
+        )]));
+        let reduced = metadata
+            .for_reduced_prefill_queries(
+                &[Device::Cpu],
+                &selection.num_cached_tokens,
+                &selection.query_lens,
+            )
+            .unwrap();
+        assert_eq!(reduced.num_cached_tokens, Some(vec![8, 13]));
+        assert_eq!(reduced.query_lens, Some(vec![1, 1]));
+        assert_eq!(
+            reduced
+                .rope_positions
+                .unwrap()
+                .get(&Device::Cpu.location())
+                .unwrap()
+                .to_vec1::<u32>()
+                .unwrap(),
+            vec![8, 13]
+        );
+    }
+}

@@ -21,6 +21,9 @@ use crate::{
         SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
 };
 
 pub(crate) mod audio;
@@ -49,9 +52,11 @@ pub struct Gemma4SpecificArgs {
     pub audio_hashes: Vec<u64>,
     pub audio_cached_tokens: Vec<usize>,
     pub video_pixel_values: Option<Tensor>,
+    pub video_position_ids: Option<Tensor>,
     pub video_hashes: Vec<u64>,
     pub video_cached_tokens: Vec<usize>,
     pub video_sizes: Vec<(u32, u32)>,
+    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
     pub(crate) block_denoising_progress:
         Option<Vec<crate::block_diffusion::BlockDenoisingProgressEmitter>>,
 }
@@ -346,11 +351,14 @@ impl Gemma4Model {
         audio_hashes: &[u64],
         audio_cached_tokens: &[usize],
         video_pixel_values: Option<&Tensor>,
+        video_position_ids: Option<&Tensor>,
         video_hashes: &[u64],
         video_cached_tokens: &[usize],
         video_sizes: &[(u32, u32)],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
+        let mut encoder_outputs = MultimodalEncoderOutputs::new();
 
         if let Some(ref pixel_values) = pixel_values {
             let vision = self.vision.as_ref().ok_or_else(|| {
@@ -377,122 +385,160 @@ impl Gemma4Model {
                     Ok(pv)
                 }
             };
-            let image_embeds = if !image_hashes.is_empty() && image_hashes.len() == n_images {
-                let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (image_embeds, per_image_embeds) =
+                if !image_hashes.is_empty() && image_hashes.len() == n_images {
+                    let mut per_image: Vec<Option<Tensor>> = vec![None; n_images];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in image_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Image, hash) {
+                                per_image[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_pv = if is_unified_vision {
-                            pixel_values.get(idx)?.unsqueeze(0)?
-                        } else {
-                            crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?
-                        };
-                        let single_position_ids = if is_unified_vision {
-                            Some(
-                                image_position_ids
-                                    .ok_or_else(|| {
-                                        candle_core::Error::Msg(
-                                            "missing Gemma4 unified image position ids."
-                                                .to_string(),
-                                        )
-                                    })?
-                                    .get(idx)?
-                                    .unsqueeze(0)?,
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_pv = if is_unified_vision {
+                                pixel_values.get(idx)?.unsqueeze(0)?
+                            } else {
+                                crop_image(pixel_values.get(idx)?.unsqueeze(0)?, idx)?
+                            };
+                            let single_position_ids = if is_unified_vision {
+                                Some(
+                                    image_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified image position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(idx)?
+                                        .unsqueeze(0)?,
+                                )
+                            } else {
+                                None
+                            };
+                            let single_position_ids_slice =
+                                single_position_ids.as_ref().map(std::slice::from_ref);
+                            let feats = vision
+                                .forward(
+                                    &[single_pv],
+                                    single_position_ids_slice,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Image,
+                                    image_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_image[idx] = Some(feats);
+                        }
+                    }
+                    let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                image_cached_tokens.get(idx).copied().unwrap_or(0),
                             )
-                        } else {
-                            None
-                        };
-                        let single_position_ids_slice =
-                            single_position_ids.as_ref().map(std::slice::from_ref);
-                        let feats = vision
-                            .forward(
-                                &[single_pv],
-                                single_position_ids_slice,
-                                self.vision_dtype,
-                                input_embeds.dtype(),
-                            )?
-                            .squeeze(0)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[idx],
-                                vec![feats.clone()],
-                            );
-                        }
-                        per_image[idx] = Some(feats);
-                    }
-                }
-                let parts: Vec<Tensor> = per_image.into_iter().map(|t| t.unwrap()).collect();
-                Self::trim_cached_prefix_tokens(
-                    Tensor::cat(&parts, 0)?,
-                    image_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            } else {
-                let per_image_tensors: Vec<Tensor> = (0..n_images)
-                    .map(|i| {
-                        pixel_values
-                            .get(i)
-                            .and_then(|t| t.unsqueeze(0))
-                            .and_then(|t| {
-                                if is_unified_vision {
-                                    Ok(t)
-                                } else {
-                                    crop_image(t, i)
-                                }
-                            })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let per_image_position_ids = if is_unified_vision {
-                    Some(
-                        (0..n_images)
-                            .map(|i| {
-                                image_position_ids
-                                    .ok_or_else(|| {
-                                        candle_core::Error::Msg(
-                                            "missing Gemma4 unified image position ids."
-                                                .to_string(),
-                                        )
-                                    })?
-                                    .get(i)
-                                    .and_then(|t| t.unsqueeze(0))
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
                 } else {
-                    None
+                    let per_image_tensors: Vec<Tensor> = (0..n_images)
+                        .map(|i| {
+                            pixel_values
+                                .get(i)
+                                .and_then(|t| t.unsqueeze(0))
+                                .and_then(|t| {
+                                    if is_unified_vision {
+                                        Ok(t)
+                                    } else {
+                                        crop_image(t, i)
+                                    }
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let per_image_position_ids = if is_unified_vision {
+                        Some(
+                            (0..n_images)
+                                .map(|i| {
+                                    image_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified image position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(i)
+                                        .and_then(|t| t.unsqueeze(0))
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    let parts = per_image_tensors
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, pixels)| {
+                            let position_ids = per_image_position_ids
+                                .as_ref()
+                                .map(|positions| std::slice::from_ref(&positions[idx]));
+                            let output = vision
+                                .forward(
+                                    &[pixels],
+                                    position_ids,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            Self::trim_cached_prefix_tokens(
+                                output,
+                                image_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&parts, 0)?, None)
                 };
-                let embeds = vision
-                    .forward(
-                        &per_image_tensors,
-                        per_image_position_ids.as_deref(),
-                        self.vision_dtype,
-                        input_embeds.dtype(),
-                    )?
-                    .squeeze(0)?;
-                Self::trim_cached_prefix_tokens(
-                    embeds,
-                    image_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if image_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed image prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_image_embeds = per_image_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed image prefill requires per-image encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in image_hashes.iter().zip(per_image_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = image_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -515,60 +561,107 @@ impl Gemma4Model {
             let indices = audio_mask_expanded.flatten_all()?.nonzero()?.squeeze(1)?;
 
             let n_audio = audio_mel.dim(0)?;
-            let audio_embeds = if !audio_hashes.is_empty() && audio_hashes.len() == n_audio {
-                let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in audio_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Audio, hash) {
-                            per_audio[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (audio_embeds, per_audio_embeds) =
+                if !audio_hashes.is_empty() && audio_hashes.len() == n_audio {
+                    let mut per_audio: Vec<Option<Tensor>> = vec![None; n_audio];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in audio_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Audio, hash) {
+                                per_audio[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
-                        let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
-                        let feats = audio_path.forward_one(
-                            &single_mel,
-                            &single_mask,
-                            input_embeds.dtype(),
-                        )?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Audio,
-                                audio_hashes[idx],
-                                vec![feats.clone()],
-                            );
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_mel = audio_mel.get(idx)?.unsqueeze(0)?;
+                            let single_mask = audio_mel_mask.get(idx)?.unsqueeze(0)?;
+                            let feats = audio_path.forward_one(
+                                &single_mel,
+                                &single_mask,
+                                input_embeds.dtype(),
+                            )?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Audio,
+                                    audio_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_audio[idx] = Some(feats);
                         }
-                        per_audio[idx] = Some(feats);
                     }
-                }
-                let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
-                Self::trim_cached_prefix_tokens(
-                    Tensor::cat(&parts, 0)?,
-                    audio_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            } else {
-                let embeds =
-                    audio_path.forward_batch(audio_mel, audio_mel_mask, input_embeds.dtype())?;
-                Self::trim_cached_prefix_tokens(
-                    embeds,
-                    audio_cached_tokens.first().copied().unwrap_or(0),
-                )?
-            };
+                    let parts: Vec<Tensor> = per_audio.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                audio_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
+                } else {
+                    if audio_cached_tokens.iter().all(|&tokens| tokens == 0) {
+                        (
+                            audio_path.forward_batch(
+                                audio_mel,
+                                audio_mel_mask,
+                                input_embeds.dtype(),
+                            )?,
+                            None,
+                        )
+                    } else {
+                        let parts = (0..n_audio)
+                            .map(|idx| {
+                                let output = audio_path.forward_one(
+                                    &audio_mel.get(idx)?.unsqueeze(0)?,
+                                    &audio_mel_mask.get(idx)?.unsqueeze(0)?,
+                                    input_embeds.dtype(),
+                                )?;
+                                Self::trim_cached_prefix_tokens(
+                                    output,
+                                    audio_cached_tokens.get(idx).copied().unwrap_or(0),
+                                )
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        (Tensor::cat(&parts, 0)?, None)
+                    }
+                };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if audio_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed audio prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_audio_embeds = per_audio_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed audio prefill requires per-audio encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in audio_hashes.iter().zip(per_audio_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Audio,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = audio_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -585,6 +678,7 @@ impl Gemma4Model {
                     "Gemma4 model was loaded without a vision encoder.".to_string(),
                 )
             })?;
+            let is_unified_vision = matches!(vision, Gemma4VisionPath::Unified(_));
             let video_mask = input_ids
                 .to_dtype(DType::F32)?
                 .eq(self.cfg.video_token_id as f64)?;
@@ -604,70 +698,160 @@ impl Gemma4Model {
                 }
             };
 
-            let video_embeds = if !video_hashes.is_empty() && video_hashes.len() == n_frames {
-                let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in video_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Video, hash) {
-                            per_frame[i] = Some(cached[0].clone());
-                        } else {
-                            miss_indices.push(i);
+            let (video_embeds, per_frame_embeds) =
+                if !video_hashes.is_empty() && video_hashes.len() == n_frames {
+                    let mut per_frame: Vec<Option<Tensor>> = vec![None; n_frames];
+                    let mut miss_indices = Vec::new();
+                    {
+                        let mut guard = self
+                            .encoder_cache
+                            .lock()
+                            .expect("encoder cache lock poisoned");
+                        for (i, &hash) in video_hashes.iter().enumerate() {
+                            if let Some(cached) = guard.get(CacheModality::Video, hash) {
+                                per_frame[i] = Some(cached[0].clone());
+                            } else {
+                                miss_indices.push(i);
+                            }
                         }
                     }
-                }
-                if !miss_indices.is_empty() {
-                    for &idx in &miss_indices {
-                        let single_pv = crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?;
-                        let feats = vision
-                            .forward(&[single_pv], None, self.vision_dtype, input_embeds.dtype())?
-                            .squeeze(0)?;
-                        {
-                            let mut guard = self
-                                .encoder_cache
-                                .lock()
-                                .expect("encoder cache lock poisoned");
-                            guard.insert(
-                                CacheModality::Video,
-                                video_hashes[idx],
-                                vec![feats.clone()],
-                            );
+                    if !miss_indices.is_empty() {
+                        for &idx in &miss_indices {
+                            let single_pv = if is_unified_vision {
+                                vid_pixel_values.get(idx)?.unsqueeze(0)?
+                            } else {
+                                crop_frame(vid_pixel_values.get(idx)?.unsqueeze(0)?, idx)?
+                            };
+                            let single_position_ids = if is_unified_vision {
+                                Some(
+                                    video_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified video position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(idx)?
+                                        .unsqueeze(0)?,
+                                )
+                            } else {
+                                None
+                            };
+                            let single_position_ids_slice =
+                                single_position_ids.as_ref().map(std::slice::from_ref);
+                            let feats = vision
+                                .forward(
+                                    &[single_pv],
+                                    single_position_ids_slice,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            {
+                                let mut guard = self
+                                    .encoder_cache
+                                    .lock()
+                                    .expect("encoder cache lock poisoned");
+                                guard.insert(
+                                    CacheModality::Video,
+                                    video_hashes[idx],
+                                    vec![feats.clone()],
+                                );
+                            }
+                            per_frame[idx] = Some(feats);
                         }
-                        per_frame[idx] = Some(feats);
                     }
-                }
-                let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
-                // Sum all per-frame cached counts. Unlike images, where fully-cached
-                // ones are skipped), ALL video frames are sent when not fully cached,
-                // so we must trim the total cached prefix from the concatenated features.
-                let total_cached: usize = video_cached_tokens.iter().copied().sum();
-                Self::trim_cached_prefix_tokens(Tensor::cat(&parts, 0)?, total_cached)?
-            } else {
-                let per_frame_tensors: Vec<Tensor> = (0..n_frames)
-                    .map(|i| {
-                        vid_pixel_values
-                            .get(i)
-                            .and_then(|t| t.unsqueeze(0))
-                            .and_then(|t| crop_frame(t, i))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let embeds = vision
-                    .forward(
-                        &per_frame_tensors,
-                        None,
-                        self.vision_dtype,
-                        input_embeds.dtype(),
-                    )?
-                    .squeeze(0)?;
-                let total_cached: usize = video_cached_tokens.iter().copied().sum();
-                Self::trim_cached_prefix_tokens(embeds, total_cached)?
-            };
+                    let parts: Vec<Tensor> = per_frame.into_iter().map(|t| t.unwrap()).collect();
+                    let trimmed_parts = parts
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, output)| {
+                            Self::trim_cached_prefix_tokens(
+                                output.clone(),
+                                video_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&trimmed_parts, 0)?, Some(parts))
+                } else {
+                    let per_frame_tensors: Vec<Tensor> = (0..n_frames)
+                        .map(|i| {
+                            vid_pixel_values
+                                .get(i)
+                                .and_then(|t| t.unsqueeze(0))
+                                .and_then(|t| {
+                                    if is_unified_vision {
+                                        Ok(t)
+                                    } else {
+                                        crop_frame(t, i)
+                                    }
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let per_frame_position_ids = if is_unified_vision {
+                        Some(
+                            (0..n_frames)
+                                .map(|i| {
+                                    video_position_ids
+                                        .ok_or_else(|| {
+                                            candle_core::Error::Msg(
+                                                "missing Gemma4 unified video position ids."
+                                                    .to_string(),
+                                            )
+                                        })?
+                                        .get(i)
+                                        .and_then(|t| t.unsqueeze(0))
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    let parts = per_frame_tensors
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, pixels)| {
+                            let position_ids = per_frame_position_ids
+                                .as_ref()
+                                .map(|positions| std::slice::from_ref(&positions[idx]));
+                            let output = vision
+                                .forward(
+                                    &[pixels],
+                                    position_ids,
+                                    self.vision_dtype,
+                                    input_embeds.dtype(),
+                                )?
+                                .squeeze(0)?;
+                            Self::trim_cached_prefix_tokens(
+                                output,
+                                video_cached_tokens.get(idx).copied().unwrap_or(0),
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    (Tensor::cat(&parts, 0)?, None)
+                };
 
-            if indices.dim(0)? > 0 {
+            if packed_layout.is_some() {
+                if video_cached_tokens.iter().any(|&tokens| tokens != 0) {
+                    candle_core::bail!(
+                        "Gemma 4 packed video prefill does not support cached encoder tokens"
+                    );
+                }
+                let per_frame_embeds = per_frame_embeds.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "Gemma 4 packed video prefill requires per-frame encoder outputs",
+                    )
+                })?;
+                for (&hash, output) in video_hashes.iter().zip(per_frame_embeds) {
+                    encoder_outputs.insert(
+                        MultimodalEncoderKey {
+                            kind: crate::paged_attention::block_hash::MultimodalKind::Video,
+                            hash,
+                        },
+                        vec![output],
+                    );
+                }
+            } else if indices.dim(0)? > 0 {
                 let mut x_flat = input_embeds.flatten_all()?;
                 let src_flat = video_embeds.flatten_all()?;
                 let current_vals = x_flat.gather(&indices, 0)?;
@@ -675,6 +859,10 @@ impl Gemma4Model {
                 x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
                 input_embeds = x_flat.reshape(input_embeds.shape())?;
             }
+        }
+
+        if let Some(layout) = packed_layout {
+            input_embeds = layout.splice_embeddings(&input_embeds, &encoder_outputs)?;
         }
 
         let ple_vocab_limit = self
@@ -716,9 +904,11 @@ impl Gemma4Model {
         audio_hashes: &[u64],
         audio_cached_tokens: &[usize],
         video_pixel_values: Option<&Tensor>,
+        video_position_ids: Option<&Tensor>,
         video_hashes: &[u64],
         video_cached_tokens: &[usize],
         video_sizes: &[(u32, u32)],
+        packed_layout: Option<&PackedMultimodalLayout>,
     ) -> Result<Tensor> {
         self.forward_inner(
             input_ids,
@@ -733,9 +923,11 @@ impl Gemma4Model {
             audio_hashes,
             audio_cached_tokens,
             video_pixel_values,
+            video_position_ids,
             video_hashes,
             video_cached_tokens,
             video_sizes,
+            packed_layout,
         )
     }
 }
@@ -777,6 +969,14 @@ impl IsqModel for Gemma4Model {
 impl crate::block_diffusion::BlockDiffusionMixin for Gemma4Model {}
 
 impl MultimodalModel for Gemma4Model {
+    fn supports_packed_prefill(&self) -> bool {
+        self.language_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -801,9 +1001,11 @@ impl MultimodalModel for Gemma4Model {
             &args.audio_hashes,
             &args.audio_cached_tokens,
             args.video_pixel_values.as_ref(),
+            args.video_position_ids.as_ref(),
             &args.video_hashes,
             &args.video_cached_tokens,
             &args.video_sizes,
+            args.packed_layout.as_ref(),
         )
     }
 

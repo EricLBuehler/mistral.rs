@@ -346,6 +346,12 @@ impl MultimodalModel for MLlamaModel {
     fn max_seq_len(&self) -> usize {
         self.language_model.max_position_embeddings
     }
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+    fn supports_mixed_media_batches(&self) -> bool {
+        false
+    }
     fn forward(
         &self,
         input_ids: &Tensor,

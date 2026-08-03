@@ -1061,6 +1061,7 @@ fn make_mtp_decode_metadata(
             crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         has_noncausal_mm_context: false,
         mm_prefix_ranges: None,
+        full_mm_prefix_ranges: None,
         prefill_attention_heads: 1,
         prefill_key_value_heads: 1,
         prefill_head_dim: 1,

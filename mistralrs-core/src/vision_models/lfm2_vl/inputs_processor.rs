@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::{any::Any, sync::Arc};
+use std::{any::Any, ops::Range, sync::Arc};
 
 use candle_core::{Device, Result, Tensor};
 use image::{imageops, DynamicImage, RgbImage};
@@ -30,6 +30,20 @@ pub(crate) const IMAGE_TOKEN: &str = "<image>";
 const IMAGE_START: &str = "<|image_start|>";
 const IMAGE_END: &str = "<|image_end|>";
 const IMAGE_THUMBNAIL: &str = "<|img_thumbnail|>";
+
+fn prompt_image_sequence_indices(
+    is_prompt: bool,
+    has_images: impl IntoIterator<Item = bool>,
+) -> Vec<usize> {
+    if !is_prompt {
+        return Vec::new();
+    }
+    has_images
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, has_images)| has_images.then_some(index))
+        .collect()
+}
 
 #[derive(Clone)]
 pub struct Lfm2VlImageProcessor {
@@ -412,6 +426,14 @@ impl Lfm2VlImageProcessor {
         cols: &[usize],
         image_sizes: &[(u32, u32)],
     ) -> anyhow::Result<String> {
+        if rows.len() != cols.len() || rows.len() != image_sizes.len() {
+            anyhow::bail!(
+                "LFM2-VL image metadata has {} rows, {} columns, and {} image sizes",
+                rows.len(),
+                cols.len(),
+                image_sizes.len()
+            );
+        }
         let placeholder_count = prompt.matches(IMAGE_TOKEN).count();
         if placeholder_count != rows.len() {
             anyhow::bail!(
@@ -505,25 +527,29 @@ impl Lfm2VlImageProcessor {
         Ok(processed)
     }
 
-    fn trim_cached_crops(
+    fn select_image_crops(
         &self,
         processed: &PreprocessedForSeq,
-        cached_images: usize,
+        image_range: Range<usize>,
     ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-        let crop_offset = processed
-            .num_crops
-            .iter()
-            .take(cached_images)
-            .sum::<usize>();
-        let total_crops = processed.pixel_values.dim(0)?;
-        if crop_offset >= total_crops {
+        if image_range.start > image_range.end || image_range.end > processed.num_crops.len() {
+            candle_core::bail!(
+                "LFM2-VL image range {:?} exceeds {} preprocessed images",
+                image_range,
+                processed.num_crops.len()
+            );
+        }
+        let crop_start = processed.num_crops[..image_range.start].iter().sum();
+        let crop_len = processed.num_crops[image_range].iter().sum();
+        if crop_len == 0 {
             return Ok(None);
         }
-        let len = total_crops - crop_offset;
         Ok(Some((
-            processed.pixel_values.narrow(0, crop_offset, len)?,
-            processed.pixel_attention_mask.narrow(0, crop_offset, len)?,
-            processed.spatial_shapes.narrow(0, crop_offset, len)?,
+            processed.pixel_values.narrow(0, crop_start, crop_len)?,
+            processed
+                .pixel_attention_mask
+                .narrow(0, crop_start, crop_len)?,
+            processed.spatial_shapes.narrow(0, crop_start, crop_len)?,
         )))
     }
 
@@ -549,18 +575,29 @@ impl Lfm2VlImageProcessor {
             .map_err(|err| anyhow::anyhow!(err.to_string()))?;
         let ids = toks.get_ids().to_vec();
         if seq.mm_features().is_empty() {
-            if let (Some(hashes), Some(start_id), Some(end_id)) = (
-                seq.image_hashes().map(|h| h.to_vec()),
-                tokenizer.token_to_id(IMAGE_START),
-                tokenizer.token_to_id(IMAGE_END),
-            ) {
-                let ranges = find_image_delimited_ranges(&ids, start_id, end_id);
-                seq.set_mm_features(build_mm_features_from_ranges(
-                    &ranges,
-                    &hashes,
-                    MultimodalKind::Image,
-                ));
+            let hashes = seq
+                .image_hashes()
+                .ok_or_else(|| anyhow::Error::msg("LFM2-VL images are missing content hashes"))?
+                .to_vec();
+            let start_id = tokenizer.token_to_id(IMAGE_START).ok_or_else(|| {
+                anyhow::Error::msg("LFM2-VL tokenizer is missing the image start token")
+            })?;
+            let end_id = tokenizer.token_to_id(IMAGE_END).ok_or_else(|| {
+                anyhow::Error::msg("LFM2-VL tokenizer is missing the image end token")
+            })?;
+            let ranges = find_image_delimited_ranges(&ids, start_id, end_id);
+            if ranges.len() != hashes.len() {
+                anyhow::bail!(
+                    "LFM2-VL expanded prompt has {} image ranges but {} images",
+                    ranges.len(),
+                    hashes.len()
+                );
             }
+            seq.set_mm_features(build_mm_features_from_ranges(
+                &ranges,
+                &hashes,
+                MultimodalKind::Image,
+            ));
         }
         seq.set_toks_and_reallocate(ids, paged_attn_metadata);
         seq.multimodal.has_changed_prompt = true;
@@ -584,13 +621,13 @@ impl InputsProcessor for Lfm2VlImageProcessor {
         let Some(tokenizer) = tokenizer else {
             anyhow::bail!("LFM2-VL image processor requires a tokenizer");
         };
-        if !input_seqs.iter().all(|seq| seq.has_images()) {
+        if !input_seqs.iter().any(|seq| seq.has_images()) {
             return Ok(());
         }
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
         for seq in input_seqs {
-            if seq.multimodal.has_changed_prompt {
+            if !seq.has_images() || seq.multimodal.has_changed_prompt {
                 continue;
             }
             let processed = self.cached_or_preprocess(seq, config, device)?;
@@ -631,13 +668,15 @@ impl InputsProcessor for Lfm2VlImageProcessor {
         let config = other_config.expect("Need a PreProcessorConfig config.");
         let config: &PreProcessorConfig = config.downcast_ref().expect("Downcast failed.");
 
-        let has_images = is_prompt && input_seqs.iter().all(|seq| seq.has_images());
+        let image_sequence_indices =
+            prompt_image_sequence_indices(is_prompt, input_seqs.iter().map(|seq| seq.has_images()));
         let mut pixel_values_accum = Vec::new();
         let mut pixel_attention_mask_accum = Vec::new();
         let mut spatial_shapes_accum = Vec::new();
 
-        if has_images {
-            for seq in input_seqs.iter_mut() {
+        if !image_sequence_indices.is_empty() {
+            for seq_index in image_sequence_indices {
+                let seq = &mut input_seqs[seq_index];
                 let processed = self.cached_or_preprocess(seq, config, device)?;
                 self.maybe_expand_prompt(
                     &tokenizer,
@@ -645,9 +684,19 @@ impl InputsProcessor for Lfm2VlImageProcessor {
                     &processed,
                     paged_attn_metadata.as_mut(),
                 )?;
-                let cached = seq.count_prefix_cached_mm_items();
+                let image_count = processed.num_crops.len();
+                let image_range = if seq.is_chunked_prefill_view() {
+                    seq.active_local_multimodal_item_range(MultimodalKind::Image, image_count)
+                        .ok_or_else(|| {
+                            candle_core::Error::msg(
+                                "LFM2-VL image chunk is missing its active image range",
+                            )
+                        })?
+                } else {
+                    seq.count_prefix_cached_mm_items_by_kind(MultimodalKind::Image)..image_count
+                };
                 if let Some((pixel_values, pixel_attention_mask, spatial_shapes)) =
-                    self.trim_cached_crops(&processed, cached)?
+                    self.select_image_crops(&processed, image_range)?
                 {
                     pixel_values_accum.push(pixel_values);
                     pixel_attention_mask_accum.push(pixel_attention_mask);
@@ -800,5 +849,66 @@ impl ImagePreProcessor for Lfm2VlImageProcessor {
             image_sizes_all: Some(image_sizes),
             num_crops: Some(num_crops),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn processor() -> Lfm2VlImageProcessor {
+        Lfm2VlImageProcessor {
+            settings: Lfm2VlProcessorSettings {
+                downsample_factor: 2,
+                do_image_splitting: true,
+                min_tiles: 1,
+                max_tiles: 4,
+                use_thumbnail: true,
+                min_image_tokens: 4,
+                max_image_tokens: 64,
+                encoder_patch_size: 14,
+                tile_size: 28,
+                max_pixels_tolerance: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn mixed_prompt_selects_only_image_sequences() {
+        assert_eq!(
+            prompt_image_sequence_indices(true, [true, false, true]),
+            vec![0, 2]
+        );
+        assert!(prompt_image_sequence_indices(false, [true, false]).is_empty());
+    }
+
+    #[test]
+    fn prompt_expansion_rejects_mismatched_image_metadata() {
+        let error = processor()
+            .expand_prompt(IMAGE_TOKEN, &[1], &[], &[(28, 28)])
+            .unwrap_err();
+        assert!(error.to_string().contains("image metadata"));
+    }
+
+    #[test]
+    fn chunk_crop_selection_uses_exact_image_interval() {
+        let processed = PreprocessedForSeq {
+            pixel_values: Tensor::new(&[10u32, 11, 20, 30, 31, 32], &Device::Cpu).unwrap(),
+            pixel_attention_mask: Tensor::new(&[1u32, 1, 2, 3, 3, 3], &Device::Cpu).unwrap(),
+            spatial_shapes: Tensor::new(&[100u32, 101, 200, 300, 301, 302], &Device::Cpu).unwrap(),
+            rows: Vec::new(),
+            cols: Vec::new(),
+            image_sizes: Vec::new(),
+            num_crops: vec![2, 1, 3],
+        };
+
+        let (pixels, mask, shapes) = processor()
+            .select_image_crops(&processed, 1..2)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pixels.to_vec1::<u32>().unwrap(), vec![20]);
+        assert_eq!(mask.to_vec1::<u32>().unwrap(), vec![2]);
+        assert_eq!(shapes.to_vec1::<u32>().unwrap(), vec![200]);
     }
 }

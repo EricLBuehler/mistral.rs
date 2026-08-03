@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use crate::layers_masker::CausalMaskConfig;
+use crate::layers_masker::{BidirectionalMasker, CausalMaskConfig};
 use std::{
     collections::HashMap,
     sync::{
@@ -18,7 +18,7 @@ use mistralrs_quant::{
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::{AttentionMask, SdpaParams},
+    attention::{flash_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
         embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
@@ -38,7 +38,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-use super::config::Gemma4TextConfig;
+use super::config::{Gemma4BidirectionalAttention, Gemma4TextConfig};
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -67,6 +67,20 @@ fn kv_shared_layer_index(cfg: &Gemma4TextConfig, layer_idx: usize) -> Result<Opt
                 "Gemma4 layer {layer_idx} is configured to share KV without a prior `{attention_type}` donor layer."
             ))
         })
+}
+
+fn select_paged_mm_prefix_path(
+    requires_noncausal: bool,
+    is_paged: bool,
+    is_cuda: bool,
+    flash_attn: bool,
+    packed: bool,
+    has_range_metadata: bool,
+) -> Result<bool> {
+    if requires_noncausal && packed && !has_range_metadata {
+        candle_core::bail!("packed Gemma 4 multimodal prefill is missing noncausal range metadata");
+    }
+    Ok(requires_noncausal && is_paged && is_cuda && flash_attn && has_range_metadata)
 }
 
 /// Proportional RoPE for Gemma4 full-attention layers.
@@ -855,6 +869,15 @@ fn sliding_decode_kv_window(
     Some((kv_len - window, window))
 }
 
+fn is_paged_decode_forward(
+    is_paged: bool,
+    q_len: usize,
+    is_first_prompt_chunk: bool,
+    has_prompt_cache_metadata: bool,
+) -> bool {
+    is_paged && q_len > 0 && !is_first_prompt_chunk && !has_prompt_cache_metadata
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 //  Decoder layer
 // ────────────────────────────────────────────────────────────────────────────
@@ -1441,7 +1464,7 @@ pub struct TextModel {
     store_spec_hidden: AtomicBool,
     image_token_id: Option<usize>,
     video_token_id: Option<usize>,
-    use_bidirectional_vision_attention: bool,
+    bidirectional_attention: Gemma4BidirectionalAttention,
     cfg: ModelConfigMetadata,
     model_config: Arc<dyn ModelConfigLike + Send + Sync>,
 }
@@ -1811,10 +1834,7 @@ impl TextModel {
             store_spec_hidden: AtomicBool::new(false),
             image_token_id,
             video_token_id,
-            use_bidirectional_vision_attention: matches!(
-                cfg.use_bidirectional_attention.as_deref(),
-                Some("vision")
-            ),
+            bidirectional_attention: cfg.bidirectional_attention(),
             cfg: cfg_metadata,
             model_config,
             mapper,
@@ -1828,6 +1848,15 @@ impl TextModel {
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
+    }
+
+    pub fn supports_packed_prefill(&self) -> bool {
+        self.layers.iter().all(|layer| {
+            flash_backend_supports(
+                layer.self_attn.head_dim,
+                layer.self_attn.sdpa_params.softcap.is_some(),
+            )
+        })
     }
 
     pub fn last_spec_hidden(&self) -> Option<Tensor> {
@@ -2030,14 +2059,30 @@ impl TextModel {
         let is_non_causal_media_chunk = ctx.prompt_chunk_attention_policy()
             == MultimodalAttentionPolicy::NonCausal
             && q_len > 1;
-        let has_bidirectional = self.use_bidirectional_vision_attention
-            && (has_images || is_non_causal_media_chunk || has_vision_tokens)
-            && q_len > 1
-            && self.image_token_id.is_some();
-        let use_paged_mm_prefix_path = has_bidirectional
-            && ctx.is_paged()
-            && xs.device().is_cuda()
-            && crate::using_flash_attn();
+        let active_bidirectional_attention = match self.bidirectional_attention {
+            Gemma4BidirectionalAttention::All if q_len > 1 => Gemma4BidirectionalAttention::All,
+            Gemma4BidirectionalAttention::Vision
+                if (has_images || is_non_causal_media_chunk || has_vision_tokens)
+                    && q_len > 1
+                    && self.image_token_id.is_some() =>
+            {
+                Gemma4BidirectionalAttention::Vision
+            }
+            _ => Gemma4BidirectionalAttention::Causal,
+        };
+        let has_bidirectional =
+            active_bidirectional_attention != Gemma4BidirectionalAttention::Causal;
+        let has_range_metadata = ctx
+            .paged_input_metadata()
+            .is_some_and(|metadata| metadata.has_noncausal_mm_context);
+        let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
+            active_bidirectional_attention == Gemma4BidirectionalAttention::Vision,
+            ctx.is_paged(),
+            xs.device().is_cuda(),
+            crate::using_flash_attn(),
+            ctx.flash_params().packed,
+            has_range_metadata,
+        )?;
         let mask_cache = ctx.mask_cache(cache);
 
         let bidir_flash = FlashParams::empty(false);
@@ -2045,104 +2090,134 @@ impl TextModel {
             .layers
             .iter()
             .any(|layer| layer.self_attn.force_eager_prefill());
-        let is_paged_decode = ctx.is_paged() && q_len == 1 && !ctx.is_first_prompt_chunk();
-        let is_paged_prefill_chunk = ctx.is_paged() && q_len > 1 && !ctx.is_first_prompt_chunk();
+        let is_first_prompt_chunk = ctx.is_first_prompt_chunk();
+        let has_prompt_cache_metadata = ctx
+            .paged_input_metadata()
+            .is_some_and(|metadata| metadata.num_cached_tokens.is_some());
+        let is_paged_decode = is_paged_decode_forward(
+            ctx.is_paged(),
+            q_len,
+            is_first_prompt_chunk,
+            has_prompt_cache_metadata,
+        );
+        let is_paged_prefill_chunk =
+            ctx.is_paged() && q_len > 1 && !is_first_prompt_chunk && !is_paged_decode;
 
-        let (attention_mask, sliding_attention_mask, layer_flash_params) = if has_bidirectional
-            && !use_paged_mm_prefix_path
-        {
-            let attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                &mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    force_custom: true,
-                    ..Default::default()
-                },
-            )?;
-            let attention_mask = match attention_mask {
-                AttentionMask::Custom(m) => {
-                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
-                        &m,
+        let (attention_mask, sliding_attention_mask, layer_flash_params) =
+            if active_bidirectional_attention == Gemma4BidirectionalAttention::All {
+                (
+                    AttentionMask::Custom(BidirectionalMasker.make_mask(input_ids, xs.dtype())?),
+                    AttentionMask::Custom(BidirectionalMasker.make_sliding_mask(
                         input_ids,
-                        self.image_token_id.expect("missing image token id"),
-                        self.video_token_id,
-                    )?)
-                }
-                other => other,
-            };
+                        xs.dtype(),
+                        self.sliding_window,
+                    )?),
+                    Some(&bidir_flash),
+                )
+            } else if active_bidirectional_attention == Gemma4BidirectionalAttention::Vision
+                && !use_paged_mm_prefix_path
+            {
+                let attention_mask = CausalMasker.make_causal_mask(
+                    input_ids,
+                    &mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        force_custom: true,
+                        ..Default::default()
+                    },
+                )?;
+                let attention_mask = if layer_scalar_overrides.is_some() {
+                    match attention_mask {
+                        AttentionMask::Custom(m) => {
+                            AttentionMask::Custom(Self::apply_image_bidirectional_mask(
+                                &m,
+                                input_ids,
+                                self.image_token_id.expect("missing image token id"),
+                                self.video_token_id,
+                                None,
+                            )?)
+                        }
+                        other => other,
+                    }
+                } else {
+                    attention_mask
+                };
 
-            let sliding_attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                &mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    sliding_window: Some(self.sliding_window),
-                    force_custom: true,
-                },
-            )?;
-            let sliding_attention_mask = match sliding_attention_mask {
-                AttentionMask::Custom(m) => {
-                    AttentionMask::Custom(Self::apply_image_bidirectional_mask(
-                        &m,
-                        input_ids,
-                        self.image_token_id.expect("missing image token id"),
-                        self.video_token_id,
-                    )?)
-                }
-                other => other,
-            };
-
-            (attention_mask, sliding_attention_mask, Some(&bidir_flash))
-        } else if is_paged_decode {
-            (
-                AttentionMask::None,
-                AttentionMask::None,
-                Some(&flash_params),
-            )
-        } else {
-            // Keep full-attention layers on flash-attn when their head dim is
-            // supported. PagedAttention still needs a non-None prompt mask
-            // (CausalFlash is enough) to route prompt chunks through SDPA
-            // before writing to the paged cache.
-            let attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                &mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    force_custom: force_eager_full_attention,
-                    ..Default::default()
-                },
-            )?;
-            let is_first = ctx.is_first_prompt_chunk();
-            let attention_mask = if is_first || is_paged_prefill_chunk {
-                match attention_mask {
-                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
+                let sliding_attention_mask = CausalMasker.make_causal_mask(
+                    input_ids,
+                    &mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        sliding_window: Some(self.sliding_window),
+                        force_custom: true,
+                    },
+                )?;
+                let sliding_attention_mask = match sliding_attention_mask {
+                    AttentionMask::Custom(m) => {
+                        AttentionMask::Custom(Self::apply_image_bidirectional_mask(
+                            &m,
+                            input_ids,
+                            self.image_token_id.expect("missing image token id"),
+                            self.video_token_id,
+                            Some(self.sliding_window),
+                        )?)
+                    }
                     other => other,
-                }
-            } else {
-                AttentionMask::None
-            };
-            let sliding_attention_mask = CausalMasker.make_causal_mask(
-                input_ids,
-                &mask_cache,
-                xs.dtype(),
-                &CausalMaskConfig {
-                    sliding_window: Some(self.sliding_window),
-                    force_custom: false,
-                },
-            )?;
-            let sliding_attention_mask = if is_first || is_paged_prefill_chunk {
-                match sliding_attention_mask {
-                    AttentionMask::Custom(m) => AttentionMask::Custom(m.to_device(&Device::Cpu)?),
-                    other => other,
-                }
-            } else {
-                AttentionMask::None
-            };
+                };
 
-            (attention_mask, sliding_attention_mask, Some(&flash_params))
-        };
+                (attention_mask, sliding_attention_mask, Some(&bidir_flash))
+            } else if is_paged_decode {
+                (
+                    AttentionMask::None,
+                    AttentionMask::None,
+                    Some(&flash_params),
+                )
+            } else {
+                // Keep full-attention layers on flash-attn when their head dim is
+                // supported. PagedAttention still needs a non-None prompt mask
+                // (CausalFlash is enough) to route prompt chunks through SDPA
+                // before writing to the paged cache.
+                let attention_mask = CausalMasker.make_causal_mask(
+                    input_ids,
+                    &mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        force_custom: force_eager_full_attention,
+                        ..Default::default()
+                    },
+                )?;
+                let attention_mask = if is_first_prompt_chunk || is_paged_prefill_chunk {
+                    match attention_mask {
+                        AttentionMask::Custom(m) => {
+                            AttentionMask::Custom(m.to_device(&Device::Cpu)?)
+                        }
+                        other => other,
+                    }
+                } else {
+                    AttentionMask::None
+                };
+                let sliding_attention_mask = CausalMasker.make_causal_mask(
+                    input_ids,
+                    &mask_cache,
+                    xs.dtype(),
+                    &CausalMaskConfig {
+                        sliding_window: Some(self.sliding_window),
+                        force_custom: false,
+                    },
+                )?;
+                let sliding_attention_mask = if is_first_prompt_chunk || is_paged_prefill_chunk {
+                    match sliding_attention_mask {
+                        AttentionMask::Custom(m) => {
+                            AttentionMask::Custom(m.to_device(&Device::Cpu)?)
+                        }
+                        other => other,
+                    }
+                } else {
+                    AttentionMask::None
+                };
+
+                (attention_mask, sliding_attention_mask, Some(&flash_params))
+            };
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
@@ -2266,7 +2341,11 @@ impl TextModel {
         } else {
             xs.to_device(&self.device)?.apply(&self.norm)?
         };
-        let xs = extract_logits(&xs, context_lens)?;
+        let xs = if reduced_to_logits {
+            extract_logits(&xs, context_lens)?
+        } else {
+            ctx.logits(&xs)?
+        };
         if self.store_spec_hidden.load(Ordering::Relaxed) {
             if let Ok(mut hidden) = self.last_spec_hidden.lock() {
                 *hidden = Some(xs.clone());
@@ -2285,6 +2364,7 @@ impl TextModel {
         input_ids: &Tensor,
         image_token_id: usize,
         video_token_id: Option<usize>,
+        sliding_window: Option<usize>,
     ) -> Result<Tensor> {
         let (_, seq_len) = input_ids.dims2()?;
         let total_len = causal_mask.dim(1)?;
@@ -2320,7 +2400,8 @@ impl TextModel {
                 continue;
             }
             for ki in 0..seq_len {
-                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] {
+                let within_window = sliding_window.is_none_or(|window| qi.abs_diff(ki) < window);
+                if group_ids[ki] >= 0 && group_ids[qi] == group_ids[ki] && within_window {
                     let col = ki + past_kv_len;
                     override_vals[qi * total_len + col] = 1.0;
                 }
@@ -2540,7 +2621,20 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use super::sliding_decode_kv_window;
+    use candle_core::{Device, Tensor};
+
+    use super::{
+        is_paged_decode_forward, select_paged_mm_prefix_path, sliding_decode_kv_window, TextModel,
+    };
+
+    #[test]
+    fn paged_decode_phase_does_not_depend_on_query_width() {
+        assert!(is_paged_decode_forward(true, 1, false, false));
+        assert!(is_paged_decode_forward(true, 7, false, false));
+        assert!(!is_paged_decode_forward(true, 7, true, false));
+        assert!(!is_paged_decode_forward(true, 7, false, true));
+        assert!(!is_paged_decode_forward(false, 7, false, false));
+    }
 
     #[test]
     fn sliding_decode_kv_window_clamps_only_single_token_sliding_decode() {
@@ -2553,5 +2647,50 @@ mod tests {
         assert_eq!(sliding_decode_kv_window(true, 7, Some(512), 7354), None);
         assert_eq!(sliding_decode_kv_window(false, 1, Some(512), 7354), None);
         assert_eq!(sliding_decode_kv_window(true, 1, None, 7354), None);
+    }
+
+    #[test]
+    fn paged_mm_prefix_requires_range_metadata() {
+        assert!(!select_paged_mm_prefix_path(true, true, true, true, false, false).unwrap());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
+        assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
+        assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+    }
+
+    #[test]
+    fn gemma4_and_diffusion_vision_masks_use_their_layer_scopes() {
+        let causal = Tensor::from_vec(
+            vec![
+                0f32,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.,
+                0.,
+                f32::NEG_INFINITY,
+                0.,
+                0.,
+                0.,
+            ],
+            (3, 3),
+            &Device::Cpu,
+        )
+        .unwrap();
+        let input_ids = Tensor::from_vec(vec![9u32, 9, 9], (1, 3), &Device::Cpu).unwrap();
+        let sliding =
+            TextModel::apply_image_bidirectional_mask(&causal, &input_ids, 9, None, Some(2))
+                .unwrap()
+                .to_vec2::<f32>()
+                .unwrap();
+        let diffusion_full =
+            TextModel::apply_image_bidirectional_mask(&causal, &input_ids, 9, None, None)
+                .unwrap()
+                .to_vec2::<f32>()
+                .unwrap();
+        let full = causal.to_vec2::<f32>().unwrap();
+
+        assert!(full[0][1].is_infinite() && full[0][1].is_sign_negative());
+        assert_eq!(sliding[0][1], 0.);
+        assert!(sliding[0][2].is_infinite() && sliding[0][2].is_sign_negative());
+        assert_eq!(diffusion_full[0][2], 0.);
     }
 }

@@ -24,14 +24,25 @@ use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 
 #[cfg(feature = "cuda")]
 type SeqRecurrentStateSnapshots = Vec<(usize, Vec<RecurrentStateSnapshot>)>;
+#[cfg(feature = "cuda")]
+struct CudaDecodeGraphForwardInput<'a> {
+    input_ids: &'a Tensor,
+    seqlen_offsets: &'a [usize],
+    context_lens: &'a [(usize, usize)],
+    position_ids: &'a [usize],
+    paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &'a PagedAttentionInputMetadata)>,
+    flash_meta: &'a FlashParams,
+    model_specific_args: &'a dyn Any,
+}
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graphs_enabled, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphState,
+    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
+    prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphState,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -63,7 +74,7 @@ use crate::{
     Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor, Var};
+use candle_core::{DType, Device, Tensor, Var};
 use either::Either;
 use hf_hub::Cache;
 use hf_hub::{Repo, RepoType};
@@ -862,6 +873,11 @@ impl Loader for MultimodalLoader {
             })?;
         }
 
+        if paged_attn_config.is_some() {
+            for module in tracker.get().clone() {
+                module.ct.resolve()?;
+            }
+        }
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
@@ -887,6 +903,9 @@ impl Loader for MultimodalLoader {
         } else {
             (None, None)
         };
+
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
         let num_hidden_layers = match model.cache() {
@@ -980,6 +999,7 @@ impl IsqPipelineMixin for MultimodalPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
+        self.cleanup_cuda_graphs();
         super::isq_flow::requantize_and_swap(
             &self.tracked_modules,
             dtype,
@@ -989,7 +1009,13 @@ impl IsqPipelineMixin for MultimodalPipeline {
     }
 
     fn begin_calibration(&mut self) -> Result<()> {
-        super::isq_flow::begin_calibration(&self.tracked_modules).map(|_| ())
+        super::isq_flow::begin_calibration(&self.tracked_modules)?;
+        #[cfg(feature = "cuda")]
+        self.cuda_decode_graph
+            .lock()
+            .expect("CUDA graph mutex poisoned")
+            .suspend();
+        Ok(())
     }
 
     fn calibration_status(&self) -> Result<super::isq_flow::CalibrationStatus> {
@@ -1000,11 +1026,21 @@ impl IsqPipelineMixin for MultimodalPipeline {
         &mut self,
         save_cimatrix: Option<std::path::PathBuf>,
     ) -> Result<super::isq_flow::CalibrationStatus> {
-        super::isq_flow::apply_calibration(
+        self.cleanup_cuda_graphs();
+        let result = super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
             save_cimatrix.as_deref(),
-        )
+        );
+        #[cfg(feature = "cuda")]
+        if result.is_ok() || !super::isq_flow::calibration_status(&self.tracked_modules).collecting
+        {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .resume();
+        }
+        result
     }
 }
 
@@ -1048,10 +1084,9 @@ impl CacheManagerMixin for MultimodalPipeline {
                 load_preallocated_cache,
             ),
         }
-        // Always clear model-specific state (e.g. Voxtral audio_embeds_cache)
-        // for new prompts. set_none_cache is "Only called for prompt seqs",
-        // so this is always appropriate. Default impl is a no-op.
-        self.model.reset_model_specific_state();
+        let sequence_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+        self.model
+            .reset_model_specific_state_for_sequences(&sequence_ids);
 
         if reset_non_granular {
             self.reset_non_granular_state()
@@ -1139,40 +1174,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
     }
 }
 
-fn lora_batch_shape<T>(
-    input_ids: &Tensor,
-    adapter_leases: &[Option<T>],
-) -> candle_core::Result<Option<(usize, usize)>> {
-    let (batch, sequence_length) = input_ids.dims2()?;
-    if adapter_leases.len() != batch {
-        candle_core::bail!(
-            "adapter lease count {} does not match model batch size {batch}",
-            adapter_leases.len()
-        );
-    }
-    if adapter_leases.iter().all(Option::is_none) {
-        return Ok(None);
-    }
-    Ok(Some((batch, sequence_length)))
-}
-
 impl MultimodalPipeline {
-    fn lora_execution(
-        &self,
-        input_ids: &Tensor,
-        adapter_leases: &[Option<crate::AdapterLease>],
-    ) -> candle_core::Result<Option<Arc<mistralrs_quant::LoraExecution>>> {
-        let Some((_, sequence_length)) = lora_batch_shape(input_ids, adapter_leases)? else {
-            return Ok(None);
-        };
-        let runtime = self.dynamic_lora.as_ref().ok_or_else(|| {
-            candle_core::Error::msg(
-                "request selected an adapter on a pipeline without dynamic LoRA",
-            )
-        })?;
-        runtime.execution(adapter_leases, sequence_length).map(Some)
-    }
-
     fn recurrent_batch_kind(
         &self,
         input_ids: &Tensor,
@@ -1220,11 +1222,11 @@ impl MultimodalPipeline {
             .map(ToOwned::to_owned)
     }
 
-    fn hybrid_state_indices_tensor(&self) -> Option<Tensor> {
+    fn hybrid_state_index_tensors(&self) -> Vec<Tensor> {
         if !self.model.cache().is_hybrid() {
-            return None;
+            return Vec::new();
         }
-        self.model.cache().hybrid().state_indices().cloned()
+        self.model.cache().hybrid().state_index_tensors()
     }
 
     fn snapshot_hybrid_recurrent_state(
@@ -1261,14 +1263,25 @@ impl MultimodalPipeline {
 
     fn try_cuda_decode_graph_forward(
         &self,
-        input_ids: &Tensor,
-        seqlen_offsets: &[usize],
-        context_lens: &[(usize, usize)],
-        position_ids: &[usize],
-        paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
-        flash_meta: &FlashParams,
+        input: CudaDecodeGraphForwardInput<'_>,
     ) -> candle_core::Result<Option<Tensor>> {
-        if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
+        let CudaDecodeGraphForwardInput {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            paged_attn_meta,
+            flash_meta,
+            model_specific_args,
+        } = input;
+        if !cuda_decode_graphs_enabled()
+            || !self
+                .model
+                .supports_cuda_decode_graphs_for_args(model_specific_args)
+        {
+            return Ok(None);
+        }
+        if !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref()) {
             return Ok(None);
         }
         if self.model.has_speculative_proposer() {
@@ -1334,7 +1347,7 @@ impl MultimodalPipeline {
         self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
         input_ids.device().synchronize()?;
 
-        let retained_tensors = self.hybrid_state_indices_tensor().into_iter().collect();
+        let retained_tensors = self.hybrid_state_index_tensors();
         let capture_result = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
                 key,
@@ -1392,6 +1405,37 @@ impl MultimodalPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for MultimodalPipeline {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        !self.supports_packed_prefill()
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        self.model.requires_uniform_completion_batch()
+    }
+
+    fn requires_uniform_media_batch(&self) -> bool {
+        !self.model.supports_mixed_media_batches()
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        self.model.supports_packed_prefill()
+            && self.metadata.cache_engine.is_some()
+            && !self.model.has_speculative_proposer()
+            && self.model.device().is_cuda()
+            && self.mapper.get_unique_devices().iter().all(Device::is_cuda)
+            && crate::using_flash_attn()
+            && crate::attention::flash_backend_supports_sdpa(
+                self.model.config().k_head_dim,
+                false,
+                self.metadata.sliding_window.is_some(),
+            )
+            && matches!(self.metadata.activation_dtype, DType::F16 | DType::BF16)
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        !self.model.has_speculative_proposer()
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
         self.dynamic_lora.clone()
     }
@@ -1413,7 +1457,13 @@ impl Pipeline for MultimodalPipeline {
             recurrent_batch_kind,
             adapter_leases,
         } = *inputs.downcast::<ModelInputs>().expect("Downcast failed.");
-        let lora_execution = self.lora_execution(&input_ids, &adapter_leases)?;
+        let lora_execution = super::resolve_lora_execution(
+            self.dynamic_lora.as_deref(),
+            &input_ids,
+            paged_attn_meta.as_ref(),
+            &flash_meta,
+            &adapter_leases,
+        )?;
         let metadata = self.get_metadata();
         let paged_attn_meta = match (&metadata.cache_engine, &paged_attn_meta) {
             (Some(engine), Some(meta)) => Some((engine.get_kv_cache().clone(), meta)),
@@ -1434,14 +1484,15 @@ impl Pipeline for MultimodalPipeline {
         )?;
         #[cfg(feature = "cuda")]
         if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
-            match self.try_cuda_decode_graph_forward(
-                &input_ids,
-                &seqlen_offsets,
-                &context_lens,
-                &position_ids,
-                paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), *b)),
-                &flash_meta,
-            ) {
+            match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
+                input_ids: &input_ids,
+                seqlen_offsets: &seqlen_offsets,
+                context_lens: &context_lens,
+                position_ids: &position_ids,
+                paged_attn_meta: paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), *b)),
+                flash_meta: &flash_meta,
+                model_specific_args: &*model_specific_args,
+            }) {
                 Ok(Some(logits)) => return Ok(ForwardInputsResult::CausalGeneration { logits }),
                 Ok(None) => {}
                 Err(err) => self.disable_cuda_decode_graph(&err),
@@ -1710,32 +1761,5 @@ impl AnyMoePipelineMixin for MultimodalPipeline {
     }
     fn amoe_supported(&self) -> bool {
         self.model.amoe_supported()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::lora_batch_shape;
-    use candle_core::{Device, Tensor};
-
-    #[test]
-    fn lora_batch_shape_accepts_base_and_mixed_batches() -> candle_core::Result<()> {
-        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &Device::Cpu)?;
-        assert_eq!(lora_batch_shape(&input_ids, &[None::<()>, None])?, None);
-        assert_eq!(
-            lora_batch_shape(&input_ids, &[Some(()), None])?,
-            Some((2, 3))
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn lora_batch_shape_rejects_missing_base_lease() -> candle_core::Result<()> {
-        let input_ids = Tensor::zeros((2, 3), candle_core::DType::U32, &Device::Cpu)?;
-        let error = lora_batch_shape(&input_ids, &[None::<()>]).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("adapter lease count 1 does not match model batch size 2"));
-        Ok(())
     }
 }

@@ -78,6 +78,7 @@ pub mod text_models_inputs_processor {
         },
         get_mut_arcmutex,
         paged_attention::{
+            block_aligned_sliding_window_start,
             block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
             AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
@@ -136,6 +137,8 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub full_mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub(crate) enable_packed_prefill: bool,
         /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
         /// canvas generation until the prompt is fully encoded.
         pub is_final_prompt_chunk: bool,
@@ -143,14 +146,29 @@ pub mod text_models_inputs_processor {
 
     impl PagedAttentionMeta {
         pub(crate) fn set_noncausal_mm_context(&mut self, input_seqs: &[&mut Sequence]) {
+            self.set_noncausal_mm_context_views(input_seqs, true);
+        }
+
+        pub(crate) fn set_noncausal_mm_context_views(
+            &mut self,
+            input_seqs: &[&mut Sequence],
+            include_full_attention: bool,
+        ) {
             self.mm_prefix_ranges_by_seq_id.clear();
+            self.full_mm_prefix_ranges_by_seq_id.clear();
             for seq in input_seqs {
-                let ranges = noncausal_mm_ranges(seq.mm_features(), self.sliding_window);
-                if !ranges.is_empty() {
-                    self.mm_prefix_ranges_by_seq_id.insert(*seq.id(), ranges);
+                let full_ranges = noncausal_mm_ranges(seq.mm_features(), None);
+                if !full_ranges.is_empty() {
+                    if include_full_attention {
+                        self.full_mm_prefix_ranges_by_seq_id
+                            .insert(*seq.id(), full_ranges.clone());
+                    }
+                    self.mm_prefix_ranges_by_seq_id
+                        .insert(*seq.id(), full_ranges);
                 }
             }
-            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty();
+            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty()
+                || !self.full_mm_prefix_ranges_by_seq_id.is_empty();
         }
     }
 
@@ -178,6 +196,7 @@ pub mod text_models_inputs_processor {
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
@@ -218,6 +237,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -453,6 +473,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
+                full_mm_prefix_ranges: self.full_mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
                 prefill_key_value_heads: self.prefill_key_value_heads,
                 prefill_head_dim: self.prefill_head_dim,
@@ -468,13 +489,11 @@ pub mod text_models_inputs_processor {
 
     /// Flash attention sequence length metadata.
     ///
-    /// `cumulative_seqlens_q/k` use **padded** lengths (each sequence is padded to
-    /// `max_len` in the batch). This matches the padded Q tensor in the normal
-    /// prefill and decode paths.
+    /// `cumulative_seqlens_q/k` describe the physical Q/K layout. They use padded
+    /// lengths for normal batches and logical lengths when `packed` is true.
     ///
     /// `logical_k` describes full logical K lengths. `sliding_k`, when present,
-    /// describes retained K lengths after a rotating/sliding KV cache has already
-    /// truncated K/V to the configured window.
+    /// describes the physical K lengths returned by a rotating/sliding KV cache.
     ///
     /// For the **prefix cache path**, K/V are gathered from the paged cache into a
     /// packed (non-padded) layout via `gather_kv_cache`. The packed K/V lengths are
@@ -503,6 +522,12 @@ pub mod text_models_inputs_processor {
         pub logical_k: FlashKMeta,
         pub sliding_k: Option<FlashKMeta>,
         pub causal: bool,
+        pub(crate) packed: bool,
+        #[cfg_attr(
+            not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")),
+            allow(dead_code)
+        )]
+        pub(crate) varlen_segment_lens: Option<Vec<usize>>,
     }
 
     impl FlashParams {
@@ -513,6 +538,8 @@ pub mod text_models_inputs_processor {
                 logical_k: FlashKMeta::empty(),
                 sliding_k: None,
                 causal,
+                packed: false,
+                varlen_segment_lens: None,
             }
         }
 
@@ -572,6 +599,57 @@ pub mod text_models_inputs_processor {
         Ok((max, cumulative_seqlens_map))
     }
 
+    fn packed_rope_positions(seqlen_offsets: &[usize], query_lens: &[usize]) -> Result<Vec<u32>> {
+        if seqlen_offsets.len() != query_lens.len() {
+            anyhow::bail!(
+                "packed RoPE position length mismatch: {} offsets for {} queries",
+                seqlen_offsets.len(),
+                query_lens.len()
+            );
+        }
+        let mut positions = Vec::with_capacity(query_lens.iter().sum());
+        for (&offset, &query_len) in seqlen_offsets.iter().zip(query_lens) {
+            for position in offset..offset + query_len {
+                positions.push(u32::try_from(position)?);
+            }
+        }
+        Ok(positions)
+    }
+
+    fn sliding_k_lengths(
+        seqlens_q: &[u32],
+        seqlens_k: &[u32],
+        sliding_window: usize,
+    ) -> Result<Vec<u32>> {
+        if seqlens_q.len() != seqlens_k.len() {
+            anyhow::bail!(
+                "sliding FlashAttention metadata length mismatch: q={} k={}",
+                seqlens_q.len(),
+                seqlens_k.len()
+            );
+        }
+        let window = u32::try_from(sliding_window)?;
+        seqlens_q
+            .iter()
+            .zip(seqlens_k)
+            .map(|(&query_len, &logical_k_len)| {
+                let past_len = logical_k_len.checked_sub(query_len).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "sliding FlashAttention query length {query_len} exceeds K length {logical_k_len}"
+                    )
+                })?;
+                if query_len > 1 {
+                    past_len
+                        .min(window)
+                        .checked_add(query_len)
+                        .ok_or_else(|| anyhow::anyhow!("sliding FlashAttention K length overflow"))
+                } else {
+                    Ok(logical_k_len.min(window))
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn make_flash_params(
         device: &Device,
         mapper: Option<&dyn DeviceMapper>,
@@ -579,6 +657,7 @@ pub mod text_models_inputs_processor {
         seqlens_k: &[u32],
         sliding_window: Option<usize>,
         causal: bool,
+        packed: bool,
     ) -> Result<FlashParams> {
         let devices = flash_param_devices(device, mapper);
         let (max_q, cumulative_seqlens_q) = cumulative_seqlens_map(seqlens_q, &devices)?;
@@ -590,11 +669,7 @@ pub mod text_models_inputs_processor {
         };
         let sliding_k = sliding_window
             .map(|window| -> Result<FlashKMeta> {
-                let window = window as u32;
-                let sliding_seqlens_k = seqlens_k
-                    .iter()
-                    .map(|len| (*len).min(window))
-                    .collect::<Vec<_>>();
+                let sliding_seqlens_k = sliding_k_lengths(seqlens_q, seqlens_k, window)?;
                 let (sliding_max_k, sliding_cumulative_seqlens_k) =
                     cumulative_seqlens_map(&sliding_seqlens_k, &devices)?;
                 Ok(FlashKMeta {
@@ -610,6 +685,8 @@ pub mod text_models_inputs_processor {
             logical_k,
             sliding_k,
             causal,
+            packed,
+            varlen_segment_lens: None,
         })
     }
 
@@ -632,6 +709,7 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
         prefix_cache_lens: Option<&[usize]>,
         sliding_window: Option<usize>,
+        allow_packed_prefill: bool,
     ) -> Result<InputMetadata> {
         // Determine effective tokens per sequence after prefix cache trimming
         let effective_lens: Vec<usize> = toks
@@ -644,7 +722,39 @@ pub mod text_models_inputs_processor {
             .collect();
         let max_len = *effective_lens.iter().max().expect("No sequences");
         let padding_tok = T::zero();
-        // Pad each sequence by the padding token to the max len.
+        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
+        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
+            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+        });
+        let all_model_devices_cuda = mapper.is_none_or(|mapper| {
+            mapper
+                .get_unique_devices()
+                .iter()
+                .all(|device| device.is_cuda())
+        });
+        let packed_prefill = allow_packed_prefill
+            && effective_lens.len() > 1
+            && effective_lens.iter().any(|len| *len != max_len)
+            && device.is_cuda()
+            && all_model_devices_cuda
+            && crate::using_flash_attn()
+            && !return_raw_logits
+            && last_n_context_len.is_none()
+            && chunk_offset_toks == 0
+            && !has_any_cache_hit
+            && paged_attn_metadata.as_ref().is_some_and(|metadata| {
+                metadata.enable_packed_prefill
+                    && metadata.is_final_prompt_chunk
+                    && metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+            });
+        if packed_prefill {
+            tracing::debug!(
+                sequences = effective_lens.len(),
+                tokens = effective_lens.iter().sum::<usize>(),
+                padded_tokens = effective_lens.len() * max_len,
+                "Using packed prompt prefill"
+            );
+        }
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
@@ -659,10 +769,6 @@ pub mod text_models_inputs_processor {
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         let mut num_cached_tokens_vec: Vec<usize> = Vec::new();
         let mut query_lens_vec: Vec<usize> = Vec::new();
-        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
-        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
-            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
-        });
         for (seq_idx, (seq_id, ctxt)) in seq_ids.iter().zip(&toks).enumerate() {
             let cached = prefix_cache_lens.map_or(0, |lens| lens[seq_idx]);
             let full_prompt_len = ctxt.len();
@@ -675,34 +781,33 @@ pub mod text_models_inputs_processor {
             seqlen_offsets.push(offset.1 + chunk_offset_toks + cached);
 
             position_ids.push(new_len + chunk_offset_toks + cached);
-            let mut padded = new_toks.to_vec();
-            padded.extend(std::iter::repeat_n(
-                padding_tok,
-                max_len.saturating_sub(padded.len()),
-            ));
+            let mut input_toks = new_toks.to_vec();
+            if !packed_prefill {
+                input_toks.extend(std::iter::repeat_n(
+                    padding_tok,
+                    max_len.saturating_sub(input_toks.len()),
+                ));
+            }
             // If we are returning raw logits, we want to not trim the logits at all.
             if return_raw_logits {
                 if last_n_context_len.is_some() {
                     anyhow::bail!("`return_raw_logits` is incompatible with `last_n_context_len`");
                 }
 
-                context_lens.push((0, padded.len()));
+                context_lens.push((0, input_toks.len()));
             } else {
                 context_lens.push((
-                    padded
-                        .len()
-                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
+                    new_len.saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
 
             if flash_attn {
-                // Padded lengths, see FlashParams doc comment for prefix cache nuance.
-                seqlens_q.push(padded.len() as u32);
-                seqlens_k.push((padded.len() + chunk_offset_toks + cached) as u32);
+                seqlens_q.push(input_toks.len() as u32);
+                seqlens_k.push((input_toks.len() + chunk_offset_toks + cached) as u32);
             }
 
-            seqs_tensors.push(Tensor::new(padded, device)?.unsqueeze(0)?);
+            seqs_tensors.push(Tensor::new(input_toks, device)?.unsqueeze(0)?);
 
             if has_any_cache_hit {
                 num_cached_tokens_vec.push(cached);
@@ -756,21 +861,32 @@ pub mod text_models_inputs_processor {
                 full_paged_attn_context_lens.push(full_context_len);
 
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let window_start = full_context_len.saturating_sub(sliding_window);
-                    let block_aligned_start = (window_start / paged_attn_metadata.block_size)
-                        * paged_attn_metadata.block_size;
-                    if block_aligned_start <= slot_start {
-                        let paged_context_len = full_context_len - block_aligned_start;
-                        let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
-                        let needed_blocks =
-                            paged_context_len.div_ceil(paged_attn_metadata.block_size);
-                        let slide_end = (slide_idx + needed_blocks).min(table.len());
-                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                        paged_attn_context_lens.push((0..paged_context_len).collect());
-                    } else {
-                        block_tables.push(table.clone());
-                        paged_attn_context_lens.push(ctxt_len);
+                    let mut block_aligned_start = block_aligned_sliding_window_start(
+                        full_context_len,
+                        new_len,
+                        sliding_window,
+                        paged_attn_metadata.block_size,
+                    );
+                    if let Some(mm_start) = paged_attn_metadata
+                        .mm_prefix_ranges_by_seq_id
+                        .get(seq_id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|&&(start, end)| start < slot_end && slot_start < end)
+                        .map(|&(start, _)| start)
+                        .min()
+                    {
+                        block_aligned_start = block_aligned_start.min(
+                            mm_start / paged_attn_metadata.block_size
+                                * paged_attn_metadata.block_size,
+                        );
                     }
+                    let paged_context_len = full_context_len - block_aligned_start;
+                    let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
+                    let needed_blocks = paged_context_len.div_ceil(paged_attn_metadata.block_size);
+                    let slide_end = (slide_idx + needed_blocks).min(table.len());
+                    block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                    paged_attn_context_lens.push((0..paged_context_len).collect());
                 } else {
                     block_tables.push(table.clone());
                     paged_attn_context_lens.push(ctxt_len);
@@ -786,23 +902,31 @@ pub mod text_models_inputs_processor {
                 &seqlens_k,
                 sliding_window,
                 prompt_chunk_causal,
+                packed_prefill,
             )?
         } else {
             FlashParams::empty(prompt_chunk_causal)
         };
 
-        let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+        let input_concat_dim = if packed_prefill { 1 } else { 0 };
+        let input = Tensor::cat(&seqs_tensors, input_concat_dim).unwrap();
 
         let paged_attn_meta = if let Some(paged_attn_metadata) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see comment above about CUDA contexts)
-            let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
             let prefill_query_lens = slot_mappings.iter().map(Vec::len).collect::<Vec<_>>();
-            let slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                max_slot_mapping_len,
-                _PAD_SLOT_ID,
-                &Device::Cpu,
-            )?;
+            let slot_mappings = if packed_prefill {
+                let slots = slot_mappings.into_iter().flatten().collect::<Vec<_>>();
+                let slot_count = slots.len();
+                Tensor::from_vec(slots, (slot_count,), &Device::Cpu)?
+            } else {
+                let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap();
+                _make_tensor_with_pad(
+                    slot_mappings,
+                    max_slot_mapping_len,
+                    _PAD_SLOT_ID,
+                    &Device::Cpu,
+                )?
+            };
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
             let block_size = paged_attn_metadata.block_size;
@@ -867,13 +991,26 @@ pub mod text_models_inputs_processor {
                 &Device::Cpu,
             )?
             .reshape(((),))?;
+            let packed_rope_positions = if packed_prefill {
+                let positions = packed_rope_positions(&seqlen_offsets, &prefill_query_lens)?;
+                let position_count = positions.len();
+                Some(Tensor::from_vec(
+                    positions,
+                    (position_count,),
+                    &Device::Cpu,
+                )?)
+            } else {
+                None
+            };
 
             // For device mapping, make a copy of each tensor for each device
             let devices = mapper.unwrap().get_unique_devices();
             let mut slot_mappings_map = HashMap::new();
+            let mut rope_positions_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
             let mut mm_prefix_ranges_map = HashMap::new();
+            let mut full_mm_prefix_ranges_map = HashMap::new();
             let mut full_block_tables_map = HashMap::new();
             let mut full_context_lens_map = HashMap::new();
             let mut paged_kv_indptr_map = HashMap::new();
@@ -960,10 +1097,26 @@ pub mod text_models_inputs_processor {
                 &paged_context_lens_for_fi,
                 &prefill_query_lens,
             )?;
+            let full_kv_window_starts = vec![0; seq_ids.len()];
+            let full_mm_prefix_ranges_tensor = if sliding_window.is_some() {
+                crate::paged_attention::mm_prefix::make_ranges_tensor(
+                    seq_ids,
+                    &paged_attn_metadata.full_mm_prefix_ranges_by_seq_id,
+                    &full_kv_window_starts,
+                    &full_paged_attn_context_lens,
+                    &prefill_query_lens,
+                )?
+            } else {
+                None
+            };
 
             for device in devices {
                 slot_mappings_map
                     .insert(device.location(), slot_mappings.clone().to_device(&device)?);
+                if let Some(positions) = &packed_rope_positions {
+                    rope_positions_map
+                        .insert(device.location(), positions.clone().to_device(&device)?);
+                }
                 block_tables_map
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
@@ -972,6 +1125,12 @@ pub mod text_models_inputs_processor {
                     mm_prefix_ranges_map.insert(
                         device.location(),
                         mm_prefix_ranges_tensor.clone().to_device(&device)?,
+                    );
+                }
+                if let Some(full_mm_prefix_ranges_tensor) = &full_mm_prefix_ranges_tensor {
+                    full_mm_prefix_ranges_map.insert(
+                        device.location(),
+                        full_mm_prefix_ranges_tensor.clone().to_device(&device)?,
                     );
                 }
                 paged_kv_indptr_map.insert(
@@ -1120,21 +1279,28 @@ pub mod text_models_inputs_processor {
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 is_final_prompt_chunk: paged_attn_metadata.is_final_prompt_chunk,
                 prompt_chunk_attention_policy,
-                // Per-forward flag: only true when a noncausal range actually reaches this
-                // chunk's query rows. The sticky per-conversation flag lives on
-                // PagedAttentionMeta; using it here would disable the fast prefill paths for
-                // every chunk after an image has scrolled out of the sliding window.
-                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some(),
+                // Keep the slow path local to chunks whose query rows overlap a noncausal range.
+                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
+                    || full_mm_prefix_ranges_tensor.is_some(),
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
                     Some(mm_prefix_ranges_map)
                 },
+                full_mm_prefix_ranges: if full_mm_prefix_ranges_map.is_empty() {
+                    None
+                } else {
+                    Some(full_mm_prefix_ranges_map)
+                },
                 prefill_attention_heads: paged_attn_metadata.prefill_attention_heads,
                 prefill_key_value_heads: paged_attn_metadata.prefill_key_value_heads,
                 prefill_head_dim: paged_attn_metadata.prefill_head_dim,
                 flashinfer,
-                rope_positions: None,
+                rope_positions: if rope_positions_map.is_empty() {
+                    None
+                } else {
+                    Some(rope_positions_map)
+                },
                 num_cached_tokens: if has_any_cache_hit {
                     Some(num_cached_tokens_vec.clone())
                 } else {
@@ -1308,7 +1474,15 @@ pub mod text_models_inputs_processor {
         }
 
         let flash_meta = if flash_attn {
-            make_flash_params(device, mapper, &seqlens_q, &seqlens_k, sliding_window, true)?
+            make_flash_params(
+                device,
+                mapper,
+                &seqlens_q,
+                &seqlens_k,
+                sliding_window,
+                true,
+                false,
+            )?
         } else {
             FlashParams::empty(true)
         };
@@ -1626,6 +1800,7 @@ pub mod text_models_inputs_processor {
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -1677,6 +1852,7 @@ pub mod text_models_inputs_processor {
             mapper,
             Some(&prefix_cache_lens),
             sliding_window,
+            false,
         )
     }
 
@@ -1711,6 +1887,7 @@ pub mod text_models_inputs_processor {
                 None
             },
             sliding_window,
+            true,
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,
@@ -2070,6 +2247,118 @@ pub mod text_models_inputs_processor {
 
         fn get_type(&self) -> InputsProcessorType {
             InputsProcessorType::Text
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn ragged_prompt_selects_each_last_real_token() {
+            let short = [1u32, 2];
+            let long = [3u32, 4, 5, 6];
+            let input = make_prompt_chunk(
+                0,
+                vec![short.as_slice(), long.as_slice()],
+                &[0, 1],
+                &Device::Cpu,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(input.input.dims(), &[2, 4]);
+            assert_eq!(input.context_lens, vec![(1, 1), (3, 1)]);
+        }
+
+        #[test]
+        fn packed_rope_positions_preserve_logical_offsets() {
+            let positions = packed_rope_positions(&[0, 16, 32], &[3, 1, 4]).unwrap();
+
+            assert_eq!(positions, vec![0, 1, 2, 16, 32, 33, 34, 35]);
+        }
+
+        #[test]
+        fn packed_rope_positions_reject_mismatched_metadata() {
+            let error = packed_rope_positions(&[0, 16], &[3]).unwrap_err();
+
+            assert!(error.to_string().contains("2 offsets for 1 queries"));
+        }
+
+        #[test]
+        fn packed_flash_params_preserve_ragged_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 4],
+                &[0, 3, 1, 4],
+                None,
+                true,
+                true,
+            )
+            .unwrap();
+            let cumulative = params.cumulative_seqlens_q[&Device::Cpu.location()]
+                .to_vec1::<u32>()
+                .unwrap();
+
+            assert_eq!(params.max_q, 4);
+            assert_eq!(cumulative, vec![0, 3, 4, 8]);
+        }
+
+        #[test]
+        fn sliding_single_token_uses_the_retained_window() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 1], &[0, 101], 4).unwrap(),
+                vec![0, 4]
+            );
+        }
+
+        #[test]
+        fn sliding_query_longer_than_the_window_keeps_the_full_query() {
+            assert_eq!(sliding_k_lengths(&[0, 8], &[0, 8], 4).unwrap(), vec![0, 8]);
+        }
+
+        #[test]
+        fn sliding_cached_multi_token_append_keeps_retained_and_new_tokens() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 3], &[0, 103], 4).unwrap(),
+                vec![0, 7]
+            );
+        }
+
+        #[test]
+        fn fresh_packed_sliding_metadata_preserves_logical_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 6],
+                &[0, 3, 1, 6],
+                Some(4),
+                true,
+                true,
+            )
+            .unwrap();
+            let sliding = params.sliding_k.unwrap();
+
+            assert_eq!(sliding.max, 6);
+            assert_eq!(
+                sliding.cumulative_seqlens[&Device::Cpu.location()]
+                    .to_vec1::<u32>()
+                    .unwrap(),
+                vec![0, 3, 4, 10]
+            );
+        }
+
+        #[test]
+        fn sliding_metadata_rejects_inconsistent_lengths() {
+            assert!(sliding_k_lengths(&[0, 2], &[0], 4).is_err());
+            assert!(sliding_k_lengths(&[0, 3], &[0, 2], 4).is_err());
         }
     }
 }

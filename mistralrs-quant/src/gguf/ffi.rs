@@ -1391,6 +1391,45 @@ extern "C" {
         activation: i32,
         stream: *mut c_void,
     );
+    pub fn launch_mmq_quantize_glu_q8_1_D4(
+        gate: *const c_void,
+        up: *const c_void,
+        ids: *const i32,
+        vy: *mut c_void,
+        type_x: i32,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_quantize_glu_q8_1_DS4(
+        gate: *const c_void,
+        up: *const c_void,
+        ids: *const i32,
+        vy: *mut c_void,
+        type_x: i32,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_quantize_glu_q8_1_D2S6(
+        gate: *const c_void,
+        up: *const c_void,
+        ids: *const i32,
+        vy: *mut c_void,
+        type_x: i32,
+        ne00: i64,
+        s01: i64,
+        ne0: i64,
+        ne1: i64,
+        activation: i32,
+        stream: *mut c_void,
+    );
 
     // MMQ matmul launchers (one per quant type)
     pub fn launch_mmq_gguf_q4_0(

@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+#[cfg(all(feature = "cuda", has_marlin_kernels))]
+use candle_core::DType;
 use candle_core::{Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
@@ -345,6 +347,30 @@ impl QuantMethod for RowParallelLayer {
             self.weight.get_qtensor()
         } else {
             None
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        if self.all_reduce.is_noop() {
+            self.weight
+                .prepare_gguf_affine_raw(flat_batch, dtype, device)
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if self.all_reduce.is_noop() {
+            self.weight.try_gguf_affine_forward_raw(a)
+        } else {
+            Ok(None)
         }
     }
 
@@ -724,6 +750,22 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.get_qtensor()
     }
 
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        self.weight
+            .prepare_gguf_affine_raw(flat_batch, dtype, device)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        self.weight.try_gguf_affine_forward_raw(a)
+    }
+
     fn afq_inner(&self) -> Option<crate::AfqInner> {
         self.weight.afq_inner()
     }
@@ -1059,6 +1101,21 @@ impl QuantMethod for ReplicatedLayer {
 
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         self.0.get_qtensor()
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn prepare_gguf_affine_raw(
+        &self,
+        flat_batch: usize,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<bool> {
+        self.0.prepare_gguf_affine_raw(flat_batch, dtype, device)
+    }
+
+    #[cfg(all(feature = "cuda", has_marlin_kernels))]
+    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        self.0.try_gguf_affine_forward_raw(a)
     }
 
     fn afq_inner(&self) -> Option<crate::AfqInner> {
