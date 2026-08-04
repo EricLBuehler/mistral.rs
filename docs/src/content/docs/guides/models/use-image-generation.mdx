@@ -15,7 +15,7 @@ mistralrs serve -m black-forest-labs/FLUX.1-schnell
 
 `FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance: accept on the model page, then authenticate with `mistralrs login`.
 
-The CLI and server always load the fully-resident `Flux` path. To trade speed for a much smaller GPU footprint, use the `FluxOffloaded` loader, which is only selectable from the SDKs (see [Python SDK](#python-sdk)):
+The CLI and server always load the fully-resident `Flux` path. To trade speed for a much smaller GPU footprint, use the `FluxOffloaded` loader, which is only selectable from the Python and Rust SDKs shown below:
 
 | Loader | GPU footprint | Availability | Notes |
 |---|---|---|---|

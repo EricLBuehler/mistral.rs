@@ -246,6 +246,7 @@ pub mod handler_core;
 mod handlers;
 pub mod image_generation;
 mod input_files;
+pub mod lora_adapters;
 pub mod mcp_server;
 mod media_source;
 pub use media_source::configure_ui_upload_dir;

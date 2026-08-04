@@ -3991,7 +3991,7 @@ struct mmq_args {
                            ncols_dst,                                         \
                            stride_row_x,                                      \
                            ncols_dst,                                         \
-                           nrows_x,                                           \
+                           stride_col_dst,                                    \
                            num_experts,                                       \
                            num_experts,                                       \
                            stride_channel_x,                                  \

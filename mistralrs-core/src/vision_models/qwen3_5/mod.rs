@@ -22,13 +22,19 @@ use crate::{
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
-    vision_models::qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
+    vision_models::{
+        multimodal_layout::PackedMultimodalLayout,
+        qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
+    },
 };
 
 pub(crate) mod config;
+pub(crate) mod packed_gdn;
+pub(crate) mod packed_visual;
 mod text;
 
 pub(crate) use config::Config;
+use packed_visual::{PackedVisualEncoder, PackedVisualInput};
 // Re-export the processor from qwen3_vl since the input processing is identical
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen3_5Processor;
 
@@ -100,6 +106,9 @@ impl Qwen3_5Model {
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         image_hashes: &[u64],
+        video_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
+        prompt_position_ids: Option<&Tensor>,
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let seqlen_offsets = ctx.seqlen_offsets();
@@ -119,7 +128,37 @@ impl Qwen3_5Model {
             AttentionMask::None
         };
 
-        let mut input_embeds = self.text.embed_tokens(input_ids)?;
+        let input_embeds = self.text.embed_tokens(input_ids)?;
+        if let Some(layout) = packed_layout {
+            let position_ids = prompt_position_ids.ok_or_else(|| {
+                candle_core::Error::msg("packed Qwen3.5 prefill is missing prompt position IDs")
+            })?;
+            let visual = PackedVisualEncoder::new(
+                &self.vision,
+                &self.encoder_cache,
+                self.spatial_merge_size,
+            )
+            .prepare(PackedVisualInput {
+                input_embeds,
+                pixel_values: pixel_values.as_ref(),
+                pixel_values_videos: pixel_values_videos.as_ref(),
+                image_grid_thw: image_grid_thw.as_ref(),
+                video_grid_thw: video_grid_thw.as_ref(),
+                image_hashes,
+                video_hashes,
+                layout,
+            })?;
+            return self.text.forward_embeds(
+                visual.input_embeds,
+                &attention_mask,
+                position_ids,
+                seqlen_offsets,
+                ctx,
+                visual.visual_pos_mask.as_ref(),
+                visual.deepstack_visual_embeds.as_deref(),
+            );
+        }
+        let mut input_embeds = input_embeds;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;
         let device = input_embeds.device().clone();
 
@@ -461,6 +500,14 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5Model {}
 
 impl MultimodalModel for Qwen3_5Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -470,6 +517,7 @@ impl MultimodalModel for Qwen3_5Model {
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {
             input_ids_full,
+            pixel_values_videos,
             image_grid_thw,
             video_grid_thw,
             rope_img_grid_thw,
@@ -478,17 +526,18 @@ impl MultimodalModel for Qwen3_5Model {
             continuous_img_pad,
             continuous_vid_pad,
             image_hashes,
+            video_hashes,
+            packed_layout,
+            prompt_position_ids,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen3VLVisionSpecificArgs`");
-        let (pixel_values, pixel_values_video) = match (&image_grid_thw, &video_grid_thw) {
-            (Some(_), None) => (pixel_values, None),
-            (None, Some(_)) => (None, pixel_values),
-            (None, None) => (None, None),
-            (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
-            }
-        };
+        let pixel_values_video = pixel_values_videos.or_else(|| {
+            (image_grid_thw.is_none() && video_grid_thw.is_some())
+                .then(|| pixel_values.clone())
+                .flatten()
+        });
+        let pixel_values = (image_grid_thw.is_some()).then_some(pixel_values).flatten();
         let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
         let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
@@ -504,6 +553,9 @@ impl MultimodalModel for Qwen3_5Model {
             continuous_img_pad,
             continuous_vid_pad,
             &image_hashes,
+            &video_hashes,
+            packed_layout.as_ref(),
+            prompt_position_ids.as_ref(),
             ctx,
         )
     }
@@ -520,21 +572,33 @@ impl MultimodalModel for Qwen3_5Model {
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
+        model_specific_args
+            .downcast_ref::<Qwen3VLVisionSpecificArgs>()
+            .is_some_and(|args| {
+                args.rope_img_grid_thw.is_none() && args.rope_vid_grid_thw.is_none()
+            })
+    }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
-        assert_eq!(input_ids.dims()[0], 1);
+        let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");
         Box::new(Qwen3VLVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
+            pixel_values_videos: None,
             image_grid_thw: None,
             video_grid_thw: None,
             rope_img_grid_thw: None,
             rope_vid_grid_thw: None,
-            seqlens: vec![input_ids.dims()[1]],
+            seqlens: vec![seq_len; batch_size],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
             image_hashes: vec![],
+            video_hashes: vec![],
+            packed_layout: None,
+            prompt_position_ids: None,
         })
     }
     fn encoder_cache_counters(

@@ -73,7 +73,7 @@ jobs:
           nvcc --version || true
 
       - name: Clippy
-        run: cargo clippy --features ${{ matrix.features }}
+        run: cargo clippy ${{ matrix.test_args }} --features ${{ matrix.features }} --tests --examples -- -D warnings
 
       - name: Test
         run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }}

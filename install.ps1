@@ -209,7 +209,7 @@ function Test-CuTileSupported {
     if (($CudaComputeCap -eq 90) -and ($CudaVersionCode -ge 1303)) {
         return $true
     }
-    if (($CudaComputeCap -ge 100) -and ($CudaVersionCode -ge 1301)) {
+    if (($CudaComputeCap -ge 100) -and ($CudaVersionCode -ge 1302)) {
         return $true
     }
     return $false

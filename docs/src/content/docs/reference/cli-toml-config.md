@@ -141,6 +141,28 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 | `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
+Dynamic LoRA uses structured adapter entries and explicit per-request selection. For `command = "run"`, the top-level `adapter` key selects the initial alias; omit it to run the base model.
+
+```toml
+command = "run"
+adapter = "code"
+
+[[models]]
+model_id = "Qwen/Qwen3-4B"
+
+[models.adapter]
+enable_lora = true
+lora = [
+  { alias = "code", source = "org/code-lora", revision = "refs/pr/7" },
+  { alias = "math", source = "./math-adapter" },
+]
+lora_max_adapters = 16
+lora_max_rank = 256
+lora_max_bytes = 8589934592
+```
+
+`revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit loaded adapters.
+
 ## Multi-model example
 
 ```toml
@@ -184,7 +206,7 @@ Flag interactions that hold on the command line and as TOML keys:
 
 - `quant` (CLI `--quant`, TOML key `quant`) is the front door: it tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` rejects `quant = "auto"` (`--quant auto`) because `tune` is the recommender.
 - `--calibration-file` conflicts with `--imatrix`.
-- `--xlora` conflicts with `--lora`. `--xlora-order` and `--tgt-non-granular-index` require `--xlora`; `--xlora` alone is accepted.
+- Dynamic LoRA (`enable_lora` or `lora`), legacy raw GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. `tgt_non_granular_index` requires `xlora`.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
 - `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.

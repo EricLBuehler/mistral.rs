@@ -16,7 +16,7 @@ use crate::moe::cuda::{moe_align, moe_align_em};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 use super::warmup::CutileKernel;
-use super::{context, get_default_config, MoeTileConfig};
+use super::{catch_cutile_panic, context, get_default_config, MoeTileConfig};
 
 #[cutile::module]
 pub mod fused_moe {
@@ -304,10 +304,13 @@ pub fn cutile_grouped_gemm(
     cfg: MoeTileConfig,
     dev: &CudaDevice,
 ) -> Result<Tensor> {
-    assert_eq!(a.dtype(), DType::BF16, "cutile gemm is bf16-only");
-    assert_eq!(b.dtype(), DType::BF16, "cutile gemm is bf16-only");
+    if a.dtype() != DType::BF16 || b.dtype() != DType::BF16 {
+        candle_core::bail!("cutile gemm is bf16-only");
+    }
     let (_e, n_size, k_size) = b.dims3()?;
-    assert_eq!(a.dim(1)?, k_size, "A K and B K mismatch");
+    if a.dim(1)? != k_size {
+        candle_core::bail!("A K and B K mismatch");
+    }
 
     let mut out = unsafe { dev.alloc::<bf16>(num_valid_tokens * n_size)? };
     let stream = dev.cuda_stream();
@@ -374,8 +377,11 @@ pub fn cutile_grouped_gemm(
     .generics(generics)
     .grid((grid_x, 1, 1));
 
-    unsafe { launcher.execute(&ctx) }
-        .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe launch: {e:?}")))?;
+    catch_cutile_panic("fused MoE kernel execute", || unsafe {
+        launcher
+            .execute(&ctx)
+            .map_err(|e| candle_core::Error::Msg(format!("cutile fused_moe launch: {e:?}")))
+    })?;
     drop((out_guard, tw_guard));
 
     let storage = candle_core::CudaStorage::wrap_cuda_slice(out, dev.clone());
