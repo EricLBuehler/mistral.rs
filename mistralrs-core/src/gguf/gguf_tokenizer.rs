@@ -99,11 +99,12 @@ pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
 
     let mut token_types = Vec::<i32>::new();
     if metadata.metadata.contains_key("tokenizer.ggml.token_type") {
-        let vtypes: &Vec<Value> = md_get("tokenizer.ggml.token_type")
-            .unwrap()
-            .to_vec()
-            .unwrap();
-        let v: Vec<i32> = vtypes.iter().map(|v| v.to_i32().unwrap()).collect();
+        // `token_type` is untrusted GGUF metadata; propagate errors instead of panicking.
+        let vtypes: &Vec<Value> = md_get("tokenizer.ggml.token_type")?.to_vec()?;
+        let v: Vec<i32> = vtypes
+            .iter()
+            .map(|v| v.to_i32())
+            .collect::<candle_core::Result<Vec<_>>>()?;
         token_types.extend(v);
     }
 
@@ -229,13 +230,15 @@ fn bpe_tokenizer(p: &PropsGGUF) -> Result<(Tokenizer, TokenizerKind)> {
         .ok_or(anyhow::Error::msg("BPE tokenizer must include merges"))?
         .iter()
         .map(|merge| {
-            let split: (&str, &str) = merge
-                .splitn(2, ' ')
-                .collect_tuple()
-                .expect("Failed to convert split into 2-tuple");
-            (split.0.to_string(), split.1.to_string())
+            // Merges come from untrusted GGUF metadata; a non-pair entry should error, not panic.
+            let split: (&str, &str) = merge.splitn(2, ' ').collect_tuple().ok_or_else(|| {
+                anyhow::Error::msg(format!(
+                    "GGUF BPE merge `{merge}` is malformed: expected two space-separated tokens"
+                ))
+            })?;
+            Ok((split.0.to_string(), split.1.to_string()))
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut vocab = AHashMap::new();
     for (i, token) in p.tokens.iter().enumerate() {
@@ -577,5 +580,37 @@ mod tests {
         assert_eq!(hf_decoded, gguf_decoded);
 
         Ok(())
+    }
+
+    fn bpe_props(merges: Vec<String>) -> super::PropsGGUF {
+        super::PropsGGUF {
+            model: "gpt2".to_string(),
+            tokens: vec!["a".to_string(), "b".to_string(), "ab".to_string()],
+            added_tokens: None,
+            scores: None,
+            merges: Some(merges),
+            unk: None,
+            bos: None,
+            eos: 0,
+        }
+    }
+
+    #[test]
+    fn bpe_malformed_merge_errors_without_panic() {
+        let props = bpe_props(vec!["ab".to_string()]);
+        let err = super::bpe_tokenizer(&props)
+            .expect_err("a merge without a space separator should be rejected");
+        assert!(
+            err.to_string().contains("malformed"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn bpe_well_formed_merge_builds() {
+        let props = bpe_props(vec!["a b".to_string()]);
+        if let Err(e) = super::bpe_tokenizer(&props) {
+            panic!("well-formed merge should build, got error: {e}");
+        }
     }
 }
