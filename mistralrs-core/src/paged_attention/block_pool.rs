@@ -12,7 +12,10 @@
 
 use std::collections::HashMap;
 
+use std::sync::Arc;
+
 use super::block_hash::{BlockHash, BlockHashWithGroupId};
+use super::kv_cache_connector::{KvCacheConnector, NoopKvCacheConnector};
 
 /// Sentinel value for "no link" in the doubly-linked free list.
 const NO_LINK: usize = usize::MAX;
@@ -279,15 +282,32 @@ pub struct BlockPool {
     null_block_id: usize,
     /// The block size (number of tokens per block) for hash computation.
     hash_block_size: usize,
+    /// Optional external KV connector (no-op by default).
+    connector: Arc<dyn KvCacheConnector>,
 }
 
 impl BlockPool {
-    /// Create a new block pool.
+    /// Create a new block pool with the default no-op connector.
     ///
     /// `num_gpu_blocks`: Number of physical GPU blocks.
     /// `enable_caching`: Whether to enable prefix caching.
     /// `hash_block_size`: Block size used for hash computation.
     pub fn new(num_gpu_blocks: usize, enable_caching: bool, hash_block_size: usize) -> Self {
+        Self::with_connector(
+            num_gpu_blocks,
+            enable_caching,
+            hash_block_size,
+            Arc::new(NoopKvCacheConnector),
+        )
+    }
+
+    /// Create a new block pool with a custom KV cache connector.
+    pub fn with_connector(
+        num_gpu_blocks: usize,
+        enable_caching: bool,
+        hash_block_size: usize,
+        connector: Arc<dyn KvCacheConnector>,
+    ) -> Self {
         assert!(num_gpu_blocks > 0, "Must have at least 1 GPU block");
 
         // Allocate blocks: [0..num_gpu_blocks) are real blocks,
@@ -310,6 +330,7 @@ impl BlockPool {
             num_gpu_blocks,
             null_block_id: 0, // Will be set below
             hash_block_size,
+            connector,
         };
 
         // Pop the first block as the null block (placeholder, never freed)
@@ -496,6 +517,9 @@ impl BlockPool {
     /// Evict a cached block's hash from the cache map and reset its hash.
     fn maybe_evict_cached_block(&mut self, block_id: usize) {
         let block_hashes = std::mem::take(&mut self.blocks[block_id].block_hashes);
+        if !block_hashes.is_empty() {
+            self.connector.observe_evict(&block_hashes, block_id);
+        }
         for hash in &block_hashes {
             self.cached_block_hash_to_block.pop(hash, block_id);
         }

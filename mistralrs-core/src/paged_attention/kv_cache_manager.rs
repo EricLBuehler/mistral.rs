@@ -10,9 +10,11 @@
 //! - `cache_blocks`: Cache newly-full blocks after computation.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::block_hash::BlockHash;
 use super::block_pool::BlockPool;
+use super::kv_cache_connector::{KvCacheConnector, NoopKvCacheConnector};
 
 /// Result of `get_computed_blocks`: cached block IDs and how many tokens they cover.
 #[derive(Debug)]
@@ -50,10 +52,12 @@ pub struct KVCacheManager {
     kv_cache_group_ids: Vec<u32>,
     /// Per-request block tracking.
     req_to_blocks: HashMap<usize, RequestBlocks>,
+    /// Optional external KV connector (no-op by default).
+    connector: Arc<dyn KvCacheConnector>,
 }
 
 impl KVCacheManager {
-    /// Create a new KV cache manager.
+    /// Create a new KV cache manager with the default no-op connector.
     ///
     /// - `num_gpu_blocks`: Total number of physical GPU blocks.
     /// - `block_size`: Tokens per block.
@@ -65,12 +69,35 @@ impl KVCacheManager {
         enable_caching: bool,
         kv_cache_group_ids: Vec<u32>,
     ) -> Self {
+        Self::with_connector(
+            num_gpu_blocks,
+            block_size,
+            enable_caching,
+            kv_cache_group_ids,
+            Arc::new(NoopKvCacheConnector),
+        )
+    }
+
+    /// Create a new KV cache manager with a custom KV cache connector.
+    pub fn with_connector(
+        num_gpu_blocks: usize,
+        block_size: usize,
+        enable_caching: bool,
+        kv_cache_group_ids: Vec<u32>,
+        connector: Arc<dyn KvCacheConnector>,
+    ) -> Self {
         Self {
-            block_pool: BlockPool::new(num_gpu_blocks, enable_caching, block_size),
+            block_pool: BlockPool::with_connector(
+                num_gpu_blocks,
+                enable_caching,
+                block_size,
+                Arc::clone(&connector),
+            ),
             block_size,
             enable_caching,
             kv_cache_group_ids,
             req_to_blocks: HashMap::new(),
+            connector,
         }
     }
 
@@ -139,28 +166,45 @@ impl KVCacheManager {
 
         let mut cached_block_ids = Vec::new();
 
-        for (i, &block_hash) in block_hashes.iter().enumerate() {
-            if i >= max_num_blocks {
-                break;
+        if let Some(ids) =
+            self.connector
+                .lookup_blocks(block_hashes, &self.kv_cache_group_ids, max_num_blocks)
+        {
+            if !ids.is_empty() {
+                let take = ids.len().min(max_num_blocks);
+                cached_block_ids.extend_from_slice(&ids[..take]);
             }
+        }
 
-            if let Some(ids) = self
-                .block_pool
-                .get_cached_block(block_hash, &self.kv_cache_group_ids)
-            {
-                let Some(first) = ids.first().copied() else {
-                    break;
-                };
-                if ids.iter().any(|&id| id != first) {
+        if cached_block_ids.is_empty() {
+            for (i, &block_hash) in block_hashes.iter().enumerate() {
+                if i >= max_num_blocks {
                     break;
                 }
-                cached_block_ids.push(first);
-            } else {
-                break;
+
+                if let Some(ids) = self
+                    .block_pool
+                    .get_cached_block(block_hash, &self.kv_cache_group_ids)
+                {
+                    let Some(first) = ids.first().copied() else {
+                        break;
+                    };
+                    if ids.iter().any(|&id| id != first) {
+                        break;
+                    }
+                    cached_block_ids.push(first);
+                } else {
+                    break;
+                }
             }
         }
 
         let num_computed_tokens = cached_block_ids.len() * self.block_size;
+        if !cached_block_ids.is_empty() {
+            let hit_hashes = &block_hashes[..cached_block_ids.len().min(block_hashes.len())];
+            self.connector
+                .observe_hit(hit_hashes, &cached_block_ids, num_computed_tokens);
+        }
 
         ComputedBlocks {
             block_ids: cached_block_ids,
@@ -318,9 +362,8 @@ impl KVCacheManager {
             return;
         }
 
-        let req = match self.req_to_blocks.get_mut(&request_id) {
-            Some(r) => r,
-            None => return,
+        let Some(req) = self.req_to_blocks.get(&request_id) else {
+            return;
         };
 
         // Clamp to allocated blocks: callers may pass token counts that run ahead of
@@ -330,18 +373,29 @@ impl KVCacheManager {
             return;
         }
 
+        let previously_cached = req.num_cached_blocks;
+        let block_ids = req.block_ids.clone();
+
         // Cache each full block for each group ID
         for &group_id in &self.kv_cache_group_ids {
             self.block_pool.cache_full_blocks(
-                &req.block_ids,
+                &block_ids,
                 block_hashes,
-                req.num_cached_blocks,
+                previously_cached,
                 num_full_blocks,
                 group_id,
             );
         }
 
-        req.num_cached_blocks = num_full_blocks;
+        self.req_to_blocks
+            .get_mut(&request_id)
+            .expect("request must still exist")
+            .num_cached_blocks = num_full_blocks;
+
+        let new_ids = &block_ids[previously_cached..num_full_blocks];
+        let new_hashes = &block_hashes[previously_cached..num_full_blocks.min(block_hashes.len())];
+        self.connector
+            .observe_store(new_hashes, new_ids, num_full_blocks);
     }
 
     /// Get the block IDs allocated for a request.
@@ -671,5 +725,117 @@ mod tests {
         // Cache should be empty now
         let computed = mgr.get_computed_blocks(&hashes, 8);
         assert_eq!(computed.num_computed_tokens, 0);
+    }
+
+    struct RecordingConnector {
+        lookups: std::sync::atomic::AtomicUsize,
+        hits: std::sync::atomic::AtomicUsize,
+        stores: std::sync::atomic::AtomicUsize,
+        evicts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl RecordingConnector {
+        fn new() -> Self {
+            Self {
+                lookups: std::sync::atomic::AtomicUsize::new(0),
+                hits: std::sync::atomic::AtomicUsize::new(0),
+                stores: std::sync::atomic::AtomicUsize::new(0),
+                evicts: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn count(&self, field: &std::sync::atomic::AtomicUsize) -> usize {
+            field.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl KvCacheConnector for RecordingConnector {
+        fn lookup_blocks(
+            &self,
+            _block_hashes: &[BlockHash],
+            _group_ids: &[u32],
+            _max_blocks: usize,
+        ) -> Option<Vec<usize>> {
+            self.lookups
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        }
+
+        fn observe_hit(
+            &self,
+            _block_hashes: &[BlockHash],
+            _block_ids: &[usize],
+            _num_computed_tokens: usize,
+        ) {
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn observe_store(
+            &self,
+            _block_hashes: &[BlockHash],
+            _block_ids: &[usize],
+            _num_full_blocks: usize,
+        ) {
+            self.stores
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn observe_evict(
+            &self,
+            _block_hashes: &[crate::paged_attention::BlockHashWithGroupId],
+            _block_id: usize,
+        ) {
+            self.evicts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn test_connector_observes_store_hit_and_keeps_local_behavior() {
+        let connector = Arc::new(RecordingConnector::new());
+        let mut mgr = KVCacheManager::with_connector(
+            16,
+            4,
+            true,
+            vec![0],
+            Arc::clone(&connector) as Arc<dyn KvCacheConnector>,
+        );
+
+        let tokens: Vec<u32> = (1..=8).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        mgr.allocate_slots(1, 8, &[]).unwrap();
+        mgr.cache_blocks(1, &hashes, 8);
+        assert_eq!(connector.count(&connector.stores), 1);
+
+        mgr.free(1);
+
+        let computed = mgr.get_computed_blocks(&hashes, 12);
+        assert_eq!(computed.num_computed_tokens, 8);
+        assert_eq!(computed.block_ids.len(), 2);
+        assert_eq!(connector.count(&connector.lookups), 1);
+        assert_eq!(connector.count(&connector.hits), 1);
+    }
+
+    #[test]
+    fn test_connector_observes_evict_on_reallocation() {
+        use crate::paged_attention::block_hash::hash_block_tokens;
+        use crate::paged_attention::block_pool::BlockPool;
+
+        let connector = Arc::new(RecordingConnector::new());
+        let mut pool = BlockPool::with_connector(
+            4,
+            true,
+            4,
+            Arc::clone(&connector) as Arc<dyn KvCacheConnector>,
+        );
+
+        let block_ids = pool.get_new_blocks(3).unwrap();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+        pool.cache_full_blocks(&block_ids, &[h0, h0, h0], 0, 1, 0);
+        pool.free_blocks(&block_ids);
+
+        let _new_ids = pool.get_new_blocks(3).unwrap();
+        assert!(connector.count(&connector.evicts) >= 1);
     }
 }

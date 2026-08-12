@@ -10,6 +10,8 @@ mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
 pub mod encoder_cache;
+/// Optional external KV cache connector seam.
+pub mod kv_cache_connector;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
@@ -20,9 +22,11 @@ mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
 pub use attention_backend::AttentionBackendKind;
+pub use block_hash::{BlockHash, BlockHashWithGroupId};
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
 pub use config::{KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata};
+pub use kv_cache_connector::{KvCacheConnector, NoopKvCacheConnector};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
