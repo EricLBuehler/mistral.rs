@@ -21,7 +21,7 @@ use crate::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -574,7 +574,18 @@ impl Model {
 
 impl IsqModel for Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        Vec::new()
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+        uvb.to_safetensors()
     }
 }
 
@@ -755,5 +766,87 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+
+    #[test]
+    fn residual_tensors_cover_llava_mistral_non_linear_state() -> Result<()> {
+        let cfg = Config {
+            vocab_size: 8,
+            hidden_size: 4,
+            intermediate_size: 8,
+            num_hidden_layers: 1,
+            num_attention_heads: 1,
+            num_key_value_heads: 1,
+            hidden_act: Activation::Silu,
+            max_position_embeddings: 16,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            rope_parameters: None,
+            sliding_window: None,
+            head_dim: None,
+            quantization_config: None,
+            tie_word_embeddings: false,
+        };
+        let shapes = [
+            ("model.embed_tokens.weight", vec![8, 4]),
+            ("model.norm.weight", vec![4]),
+            ("model.layers.0.input_layernorm.weight", vec![4]),
+            ("model.layers.0.post_attention_layernorm.weight", vec![4]),
+            ("model.layers.0.self_attn.q_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.k_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.v_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.o_proj.weight", vec![4, 4]),
+            ("model.layers.0.mlp.gate_proj.weight", vec![8, 4]),
+            ("model.layers.0.mlp.up_proj.weight", vec![8, 4]),
+            ("model.layers.0.mlp.down_proj.weight", vec![4, 8]),
+            ("lm_head.weight", vec![8, 4]),
+        ];
+        let tensors = shapes
+            .into_iter()
+            .map(|(name, shape)| {
+                Ok((
+                    name.to_string(),
+                    Tensor::zeros(shape, DType::F32, &Device::Cpu)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+        let metadata = NormalLoadingMetadata {
+            mapper: Box::new(crate::device_map::DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(indicatif::MultiProgress::new()),
+            matformer_slicing_config: None,
+            rope_pairing: None,
+        };
+        let model = Model::new(&cfg, vb, false, metadata, AttentionImplementation::Eager)?;
+        let names = model
+            .residual_tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            names,
+            [
+                "model.embed_tokens.weight",
+                "model.norm.weight",
+                "model.layers.0.input_layernorm.weight",
+                "model.layers.0.post_attention_layernorm.weight",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+        );
+        Ok(())
     }
 }

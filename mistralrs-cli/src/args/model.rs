@@ -630,8 +630,9 @@ pub struct QuantizationOptions {
     /// to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds
     /// q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8).
     /// Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff)
-    /// automatically finds q4k-1.uqff, etc. Use semicolons to separate different
-    /// quantizations.
+    /// automatically finds q4k-1.uqff, etc. Use semicolons to list shard files
+    /// manually when auto-discovery is unavailable. Listed files must be disjoint
+    /// parts of one artifact.
     #[arg(long)]
     pub from_uqff: Option<String>,
 

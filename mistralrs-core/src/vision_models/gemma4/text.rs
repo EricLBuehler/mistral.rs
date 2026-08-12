@@ -21,8 +21,8 @@ use crate::{
     attention::{flash_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
-        RotaryEmbedding, Sdpa,
+        contains_tensor_or_weight_source, embedding, embedding_with_legacy_tied_uqff, Activation,
+        CausalMasker, Mlp, RmsNorm, RotaryEmbedding, Sdpa,
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
@@ -39,6 +39,14 @@ use crate::{
 };
 
 use super::config::{Gemma4BidirectionalAttention, Gemma4TextConfig};
+
+fn gemma4_moe_weight_prefix(vb: &ShardedVarBuilder) -> &'static str {
+    if contains_tensor_or_weight_source(&vb.pp("moe"), "gate_up_proj") {
+        "moe"
+    } else {
+        "experts"
+    }
+}
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -994,11 +1002,7 @@ impl DecoderLayer {
                 .unwrap_or(cfg.intermediate_size);
 
             // Support both old ("moe") and new ("experts") weight paths
-            let moe_prefix = if vb.pp("moe").contains_tensor("gate_up_proj") {
-                "moe"
-            } else {
-                "experts"
-            };
+            let moe_prefix = gemma4_moe_weight_prefix(&vb);
             let moe_vb = mapper.set_device(layer_idx, vb.pp(moe_prefix), false);
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
@@ -2632,13 +2636,96 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use super::{
-        is_paged_decode_forward, select_paged_mm_prefix_path, sliding_decode_kv_window,
-        Gemma4Router, TextModel,
+        gemma4_moe_weight_prefix, is_paged_decode_forward, select_paged_mm_prefix_path,
+        sliding_decode_kv_window, Gemma4Router, TextModel,
     };
     use candle_core::{DType, Device, Tensor};
+    use mistralrs_quant::{
+        QuantMethod, QuantizedWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder,
+    };
+
+    struct MoePrefixWeightSource(HashSet<String>);
+
+    impl QuantizedWeightSource for MoePrefixWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            self.0.contains(name)
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            unreachable!()
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            unreachable!()
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    fn gemma4_layer_vb(
+        residual_moe: bool,
+        source_moe: bool,
+    ) -> candle_core::Result<ShardedVarBuilder> {
+        let prefix = "model.layers.0";
+        let tensors = if residual_moe {
+            HashMap::from([(
+                format!("{prefix}.moe.gate_up_proj"),
+                Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?,
+            )])
+        } else {
+            HashMap::new()
+        };
+        let source = if source_moe {
+            HashSet::from([format!("{prefix}.moe.gate_up_proj")])
+        } else {
+            HashSet::new()
+        };
+        Ok(ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu)
+            .with_weight_source(Arc::new(MoePrefixWeightSource(source)))
+            .pp(prefix))
+    }
+
+    #[test]
+    fn gemma4_moe_prefix_reads_residual_and_weight_source_tensors() -> candle_core::Result<()> {
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(true, false)?),
+            "moe"
+        );
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(false, true)?),
+            "moe"
+        );
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(false, false)?),
+            "experts"
+        );
+        Ok(())
+    }
 
     #[test]
     fn paged_decode_phase_does_not_depend_on_query_width() {

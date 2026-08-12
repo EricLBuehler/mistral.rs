@@ -103,24 +103,24 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 | `quantized_model_id` | `str` | required |
 | `quantized_filename` | `str \| list[str]` | required |
 | `tok_model_id` | `str \| None` | `None` |
-| `tokenizer_json` | `str \| None` | `None` |
-| `mmproj_filename` | `str \| list[str] \| None` | `None` |
 | `topology` | `str \| None` | `None` |
-| `organization` | `IsqOrganization \| None` | `None` |
-| `write_uqff` | `str \| None` | `None` |
-| `imatrix` | `str \| None` | `None` |
-| `calibration_file` | `str \| None` | `None` |
-| `max_edge` | `int \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
-| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
-| `adapters` | `list[LoraAdapter] \| None` | `None` |
-| `max_adapters` | `int` | `16` |
-| `max_rank` | `int` | `256` |
-| `max_bytes` | `int` | `8589934592` |
-| `hf_cache_path` | `str \| None` | `None` |
-| `matformer_config_path` | `str \| None` | `None` |
-| `matformer_slice_name` | `str \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None (keyword-only)` |
+| `mmproj_filename` | `str \| list[str] \| None` | `None (keyword-only)` |
+| `organization` | `IsqOrganization \| None` | `None (keyword-only)` |
+| `write_uqff` | `str \| None` | `None (keyword-only)` |
+| `imatrix` | `str \| None` | `None (keyword-only)` |
+| `calibration_file` | `str \| None` | `None (keyword-only)` |
+| `max_edge` | `int \| None` | `None (keyword-only)` |
+| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None (keyword-only)` |
+| `adapters` | `list[LoraAdapter] \| None` | `None (keyword-only)` |
+| `max_adapters` | `int` | `16 (keyword-only)` |
+| `max_rank` | `int` | `256 (keyword-only)` |
+| `max_bytes` | `int` | `8589934592 (keyword-only)` |
+| `hf_cache_path` | `str \| None` | `None (keyword-only)` |
+| `matformer_config_path` | `str \| None` | `None (keyword-only)` |
+| `matformer_slice_name` | `str \| None` | `None (keyword-only)` |
 
 ### `Which.XLoraGGUF`
 

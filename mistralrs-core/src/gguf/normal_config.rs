@@ -1,7 +1,7 @@
 use super::normal_registry::{schema_for, CanonicalGgufArchitecture, GgufDescriptor};
 #[cfg(test)]
 use super::normal_registry::{NativeModelAdapter, NORMAL_MODEL_ADAPTERS};
-use crate::NormalLoaderType;
+use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, NormalLoaderType};
 use candle_core::quantized::gguf_file::Value as GgufValue;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use std::{collections::HashMap, error::Error, fmt, num::TryFromIntError};
@@ -12,7 +12,6 @@ const GPT_OSS_ALPHA: f64 = 1.702;
 const GPT_OSS_SWIGLU_LIMIT: f64 = 7.0;
 const GPT_OSS_SWA_PERIOD: usize = 2;
 const SMOLLM3_NO_ROPE_INTERVAL: usize = 4;
-const GDN_V_HEAD_LAYOUT_FIELD: &str = "_mistralrs_gdn_v_head_layout";
 
 type BuilderFn = fn(&MetadataView<'_>) -> SynthesisResult<JsonValue>;
 type SynthesisResult<T> = Result<T, NormalConfigSynthesisError>;
@@ -178,7 +177,25 @@ pub(crate) fn synthesize_normal_config_value(
                 "No standalone GGUF config builder is registered for `{loader}`"
             ))
         })?;
-    (builder.build)(&view)
+    let value = (builder.build)(&view)?;
+    with_reload_identity(loader, value)
+}
+
+fn with_reload_identity(
+    loader: &NormalLoaderType,
+    mut value: JsonValue,
+) -> SynthesisResult<JsonValue> {
+    let object = value.as_object_mut().ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Synthesized `{loader}` config must be a JSON object"
+        ))
+    })?;
+    object.insert(
+        "architectures".to_string(),
+        json!([loader.causal_lm_name()]),
+    );
+    object.insert("model_type".to_string(), json!(loader.model_type_name()));
+    Ok(value)
 }
 
 pub(crate) fn normal_loader_hint_from_external_config(
@@ -217,8 +234,13 @@ pub(crate) fn normalize_external_normal_config(
             architecture,
             CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
         ) {
-            text_config.insert(GDN_V_HEAD_LAYOUT_FIELD.to_string(), json!("tiled"));
+            text_config.insert(GDN_V_HEAD_LAYOUT_CONFIG_KEY.to_string(), json!("tiled"));
         }
+        text_config.insert(
+            "architectures".to_string(),
+            json!([loader.causal_lm_name()]),
+        );
+        text_config.insert("model_type".to_string(), json!(loader.model_type_name()));
         return serde_json::to_string(&text_config)
             .map_err(|error| anyhow::anyhow!("Failed to serialize native text config: {error}"));
     };
@@ -273,8 +295,13 @@ pub(crate) fn normalize_external_normal_config(
         architecture,
         CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
     ) {
-        text_config.insert(GDN_V_HEAD_LAYOUT_FIELD.to_string(), json!("tiled"));
+        text_config.insert(GDN_V_HEAD_LAYOUT_CONFIG_KEY.to_string(), json!("tiled"));
     }
+    text_config.insert(
+        "architectures".to_string(),
+        json!([loader.causal_lm_name()]),
+    );
+    text_config.insert("model_type".to_string(), json!(loader.model_type_name()));
 
     serde_json::to_string(&text_config).map_err(|error| {
         anyhow::anyhow!(
@@ -282,6 +309,27 @@ pub(crate) fn normalize_external_normal_config(
             shape.label()
         )
     })
+}
+
+pub(crate) fn validate_normal_config_tensor_inventory(
+    config: &str,
+    tensor_names: &[String],
+) -> anyhow::Result<()> {
+    let value: JsonValue = serde_json::from_str(config)
+        .map_err(|error| anyhow::anyhow!("Native model config is not valid JSON: {error}"))?;
+    let Some(configured_tied) = value
+        .get("tie_word_embeddings")
+        .and_then(JsonValue::as_bool)
+    else {
+        return Ok(());
+    };
+    let expected_tied = !tensor_names.iter().any(|name| name == "output.weight");
+    let output_state = if expected_tied { "absent" } else { "present" };
+    anyhow::ensure!(
+        configured_tied == expected_tied,
+        "Model config has `tie_word_embeddings={configured_tied}`, but GGUF `output.weight` is {output_state}; expected `tie_word_embeddings={expected_tied}`"
+    );
+    Ok(())
 }
 
 fn loader_hint_from_config_object(
@@ -1733,7 +1781,7 @@ fn build_qwen3_next(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
         json!(metadata.required_usize("full_attention_interval")?),
     );
     if metadata.architecture == CanonicalGgufArchitecture::Qwen35Moe {
-        config.insert(GDN_V_HEAD_LAYOUT_FIELD.into(), json!("tiled"));
+        config.insert(GDN_V_HEAD_LAYOUT_CONFIG_KEY.into(), json!("tiled"));
     }
     Ok(JsonValue::Object(config))
 }
@@ -1844,7 +1892,7 @@ fn build_qwen35(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     config.insert("linear_value_head_dim".into(), json!(value_head_dim));
     config.insert("linear_num_key_heads".into(), json!(key_head_count));
     config.insert("linear_num_value_heads".into(), json!(value_head_count));
-    config.insert(GDN_V_HEAD_LAYOUT_FIELD.into(), json!("tiled"));
+    config.insert(GDN_V_HEAD_LAYOUT_CONFIG_KEY.into(), json!("tiled"));
     Ok(JsonValue::Object(config))
 }
 
@@ -2822,6 +2870,16 @@ mod tests {
             let (_, metadata, tensors) = default_fixture(&loader);
             let config = synthesize_normal_config_value(&loader, &metadata, &tensors)
                 .unwrap_or_else(|error| panic!("failed to synthesize `{loader}` fixture: {error}"));
+            assert_eq!(
+                config["architectures"],
+                json!([loader.causal_lm_name()]),
+                "synthesized `{loader}` config is not auto-loadable"
+            );
+            assert_eq!(config["model_type"], loader.model_type_name());
+            assert_eq!(
+                normal_loader_hint_from_external_config(&config.to_string()).unwrap(),
+                Some(loader.clone())
+            );
             assert_native_config_deserializes(&loader, config);
         }
     }
@@ -2843,7 +2901,7 @@ mod tests {
         assert_eq!(config["intermediate_size"], 512);
         assert_eq!(config["head_dim"], 256);
         assert_eq!(config["partial_rotary_factor"], 0.25);
-        assert_eq!(config[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        assert_eq!(config[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
         let native: models::qwen3_next::Config = serde_json::from_value(config.clone()).unwrap();
         assert_eq!(
             crate::gdn::GdnConfig::v_head_layout(&native),
@@ -2890,7 +2948,7 @@ mod tests {
             config["rope_parameters"]["mrope_section"],
             json!([11, 11, 10])
         );
-        assert_eq!(config[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        assert_eq!(config[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
         let native: crate::vision_models::qwen3_5::TextConfig =
             serde_json::from_value(config.clone()).unwrap();
         assert_eq!(
@@ -3089,42 +3147,11 @@ mod tests {
         assert!(error.to_string().contains("shortconv.l_cache"));
     }
 
-    fn causal_lm_architecture(loader: &NormalLoaderType) -> &'static str {
-        match loader {
-            NormalLoaderType::Mistral => "MistralForCausalLM",
-            NormalLoaderType::Gemma => "GemmaForCausalLM",
-            NormalLoaderType::Mixtral => "MixtralForCausalLM",
-            NormalLoaderType::Llama => "LlamaForCausalLM",
-            NormalLoaderType::Phi2 => "PhiForCausalLM",
-            NormalLoaderType::Phi3 => "Phi3ForCausalLM",
-            NormalLoaderType::Qwen2 => "Qwen2ForCausalLM",
-            NormalLoaderType::Gemma2 => "Gemma2ForCausalLM",
-            NormalLoaderType::Starcoder2 => "Starcoder2ForCausalLM",
-            NormalLoaderType::Phi3_5MoE => "PhiMoEForCausalLM",
-            NormalLoaderType::DeepSeekV2 => "DeepseekV2ForCausalLM",
-            NormalLoaderType::DeepSeekV3 => "DeepseekV3ForCausalLM",
-            NormalLoaderType::Qwen3 => "Qwen3ForCausalLM",
-            NormalLoaderType::GLM4 => "Glm4ForCausalLM",
-            NormalLoaderType::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
-            NormalLoaderType::GLM4Moe => "Glm4MoeForCausalLM",
-            NormalLoaderType::Qwen3Moe => "Qwen3MoeForCausalLM",
-            NormalLoaderType::SmolLm3 => "SmolLM3ForCausalLM",
-            NormalLoaderType::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
-            NormalLoaderType::GptOss => "GptOssForCausalLM",
-            NormalLoaderType::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
-            NormalLoaderType::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
-            NormalLoaderType::Qwen3Next => "Qwen3NextForCausalLM",
-            NormalLoaderType::Qwen3_5 => "Qwen3_5ForCausalLM",
-            NormalLoaderType::Lfm2 => "Lfm2ForCausalLM",
-            NormalLoaderType::Lfm2Moe => "Lfm2MoeForCausalLM",
-        }
-    }
-
     #[test]
     fn external_flat_configs_are_preserved_for_every_loader() {
         let mut architectures = HashSet::new();
         for (index, loader) in NormalLoaderType::iter().enumerate() {
-            let model_architecture = causal_lm_architecture(&loader);
+            let model_architecture = loader.causal_lm_name();
             assert!(architectures.insert(model_architecture));
             let raw_value = json!({
                 "architectures": [model_architecture],
@@ -3142,11 +3169,12 @@ mod tests {
             .unwrap();
             let mut expected = raw_value;
             expected["quantization_config"] = JsonValue::Null;
+            expected["model_type"] = json!(loader.model_type_name());
             if matches!(
                 gguf_architecture,
                 CanonicalGgufArchitecture::Qwen35 | CanonicalGgufArchitecture::Qwen35Moe
             ) {
-                expected[GDN_V_HEAD_LAYOUT_FIELD] = json!("tiled");
+                expected[GDN_V_HEAD_LAYOUT_CONFIG_KEY] = json!("tiled");
             }
             assert_eq!(
                 normalized, expected,
@@ -3333,7 +3361,7 @@ mod tests {
         assert_eq!(value["rope_theta"], 10000000.0);
         assert_eq!(value["partial_rotary_factor"], 0.25);
         assert_eq!(value["intermediate_size"], 512);
-        assert_eq!(value[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        assert_eq!(value[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
         assert_native_config_deserializes(&NormalLoaderType::Qwen3Next, value);
     }
 
@@ -3386,8 +3414,28 @@ mod tests {
         let value: JsonValue = serde_json::from_str(&normalized).unwrap();
         assert!(value.get("vision_config").is_none());
         assert_eq!(value["tie_word_embeddings"], false);
-        assert_eq!(value[GDN_V_HEAD_LAYOUT_FIELD], "tiled");
+        assert_eq!(value[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
         assert_native_config_deserializes(&NormalLoaderType::Qwen3_5, value);
+    }
+
+    #[test]
+    fn external_config_tying_matches_the_gguf_output_tensor() {
+        let tied = r#"{"tie_word_embeddings":true}"#;
+        let untied = r#"{"tie_word_embeddings":false}"#;
+        let no_output = vec!["token_embd.weight".to_string()];
+        let with_output = vec!["token_embd.weight".to_string(), "output.weight".to_string()];
+
+        validate_normal_config_tensor_inventory(tied, &no_output).unwrap();
+        validate_normal_config_tensor_inventory(untied, &with_output).unwrap();
+        assert!(validate_normal_config_tensor_inventory(tied, &with_output)
+            .unwrap_err()
+            .to_string()
+            .contains("tie_word_embeddings"));
+        assert!(validate_normal_config_tensor_inventory(untied, &no_output)
+            .unwrap_err()
+            .to_string()
+            .contains("tie_word_embeddings"));
+        validate_normal_config_tensor_inventory("{}", &with_output).unwrap();
     }
 
     #[test]

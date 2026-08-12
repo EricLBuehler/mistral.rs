@@ -16,7 +16,7 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
+    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -56,6 +56,9 @@ impl GdnConfig for TextConfig {
     }
     fn quantization_config(&self) -> &Option<QuantizedConfig> {
         &self.quantization_config
+    }
+    fn v_head_layout(&self) -> GdnVHeadLayout {
+        self.gdn_v_head_layout
     }
 }
 
@@ -942,6 +945,46 @@ impl IsqModel for Qwen3_5MoeTextModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn text_config_json() -> serde_json::Value {
+        serde_json::json!({
+            "head_dim": 8,
+            "vocab_size": 32,
+            "hidden_size": 16,
+            "num_hidden_layers": 4,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_act": "silu",
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 0.00001,
+            "rope_parameters": {
+                "rope_theta": 10000000.0,
+                "mrope_section": [1, 1, 2],
+                "partial_rotary_factor": 0.5
+            },
+            "moe_intermediate_size": 8,
+            "shared_expert_intermediate_size": 16,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+            "full_attention_interval": 4,
+            "linear_conv_kernel_dim": 4,
+            "linear_key_head_dim": 4,
+            "linear_value_head_dim": 4,
+            "linear_num_key_heads": 2,
+            "linear_num_value_heads": 4
+        })
+    }
+
+    #[test]
+    fn gdn_head_layout_defaults_to_grouped_and_accepts_tiled_override() {
+        let default: TextConfig = serde_json::from_value(text_config_json()).unwrap();
+        assert_eq!(default.v_head_layout(), GdnVHeadLayout::Grouped);
+
+        let mut tiled = text_config_json();
+        tiled["_mistralrs_gdn_v_head_layout"] = serde_json::json!("tiled");
+        let tiled: TextConfig = serde_json::from_value(tiled).unwrap();
+        assert_eq!(tiled.v_head_layout(), GdnVHeadLayout::Tiled);
+    }
 
     #[test]
     fn dynamic_lora_rejects_alternate_text_checkpoint_namespace() -> Result<()> {

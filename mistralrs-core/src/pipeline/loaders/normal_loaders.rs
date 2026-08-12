@@ -217,6 +217,68 @@ pub enum NormalLoaderType {
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
 impl NormalLoaderType {
+    pub(crate) fn causal_lm_name(&self) -> &'static str {
+        match self {
+            Self::Mistral => "MistralForCausalLM",
+            Self::Gemma => "GemmaForCausalLM",
+            Self::Mixtral => "MixtralForCausalLM",
+            Self::Llama => "LlamaForCausalLM",
+            Self::Phi2 => "PhiForCausalLM",
+            Self::Phi3 => "Phi3ForCausalLM",
+            Self::Qwen2 => "Qwen2ForCausalLM",
+            Self::Gemma2 => "Gemma2ForCausalLM",
+            Self::Starcoder2 => "Starcoder2ForCausalLM",
+            Self::Phi3_5MoE => "PhiMoEForCausalLM",
+            Self::DeepSeekV2 => "DeepseekV2ForCausalLM",
+            Self::DeepSeekV3 => "DeepseekV3ForCausalLM",
+            Self::Qwen3 => "Qwen3ForCausalLM",
+            Self::GLM4 => "Glm4ForCausalLM",
+            Self::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
+            Self::GLM4Moe => "Glm4MoeForCausalLM",
+            Self::Qwen3Moe => "Qwen3MoeForCausalLM",
+            Self::SmolLm3 => "SmolLM3ForCausalLM",
+            Self::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
+            Self::GptOss => "GptOssForCausalLM",
+            Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
+            Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
+            Self::Qwen3Next => "Qwen3NextForCausalLM",
+            Self::Qwen3_5 => "Qwen3_5ForCausalLM",
+            Self::Lfm2 => "Lfm2ForCausalLM",
+            Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+        }
+    }
+
+    pub(crate) fn model_type_name(&self) -> &'static str {
+        match self {
+            Self::Mistral => "mistral",
+            Self::Gemma => "gemma",
+            Self::Mixtral => "mixtral",
+            Self::Llama => "llama",
+            Self::Phi2 => "phi",
+            Self::Phi3 => "phi3",
+            Self::Qwen2 => "qwen2",
+            Self::Gemma2 => "gemma2",
+            Self::Starcoder2 => "starcoder2",
+            Self::Phi3_5MoE => "phimoe",
+            Self::DeepSeekV2 => "deepseek_v2",
+            Self::DeepSeekV3 => "deepseek_v3",
+            Self::Qwen3 => "qwen3",
+            Self::GLM4 => "glm4",
+            Self::GLM4MoeLite => "glm4_moe_lite",
+            Self::GLM4Moe => "glm4_moe",
+            Self::Qwen3Moe => "qwen3_moe",
+            Self::SmolLm3 => "smollm3",
+            Self::GraniteMoeHybrid => "granitemoehybrid",
+            Self::GptOss => "gpt_oss",
+            Self::HunYuanDenseV1 => "hunyuan_v1_dense",
+            Self::HunYuanMoEV1 => "hunyuan_v1_moe",
+            Self::Qwen3Next => "qwen3_next",
+            Self::Qwen3_5 => "qwen3_5_text",
+            Self::Lfm2 => "lfm2",
+            Self::Lfm2Moe => "lfm2_moe",
+        }
+    }
+
     pub fn from_causal_lm_name(name: &str) -> Result<Self> {
         match name {
             "MistralForCausalLM" => Ok(Self::Mistral),
@@ -1211,6 +1273,19 @@ impl IsqModelLoader for MixtralLoader {
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w3\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.block_sparse_moe\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+        ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
 }
 
 impl DeviceMappedModelLoader for MixtralLoader {
@@ -1628,8 +1703,7 @@ impl IsqModelLoader for Phi3Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.qkv_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
@@ -2259,7 +2333,7 @@ impl IsqModelLoader for Starcoder2Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.fc1\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.c_fc\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.c_proj\.(weight|bias)$")?,
         ])
     }
@@ -2479,7 +2553,6 @@ impl IsqModelLoader for Phi3_5MoELoader {
 
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
             // MLP
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.block_sparse_moe\.experts\.(\d+)\.w2\.(weight|bias)$")?,
@@ -2688,7 +2761,7 @@ impl IsqModelLoader for DeepSeekV2Loader {
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.(kv_b|k_b|v_b)_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
@@ -2751,55 +2824,13 @@ impl IsqModelLoader for DeepSeekV2Loader {
         self.isq_layer_regexes(config)
     }
 
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
-        ];
-        let cfg: crate::models::deepseek2::DeepSeekV2Config = serde_json::from_str(config)?;
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
-                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
-            }) {
-                for i in 0..n_routed_experts {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts.is_some() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
+        ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
@@ -3036,7 +3067,7 @@ impl IsqModelLoader for DeepSeekV3Loader {
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.(kv_b|k_b|v_b)_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
         ];
@@ -3099,55 +3130,13 @@ impl IsqModelLoader for DeepSeekV3Loader {
         self.isq_layer_regexes(config)
     }
 
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
-        ];
-        let cfg: crate::models::deepseek3::DeepSeekV3Config = serde_json::from_str(config)?;
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if let Some(n_routed_experts) = cfg.n_routed_experts.filter(|_| {
-                layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0
-            }) {
-                for i in 0..n_routed_experts {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts.is_some() {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(r"layers.{layer_idx}.mlp\.up_proj\.(weight|bias)$"))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
+        ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
@@ -3813,8 +3802,13 @@ impl IsqModelLoader for HunYuanMoEV1Loader {
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
     }
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes(config)
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
@@ -4030,8 +4024,7 @@ impl IsqModelLoader for GLM4Loader {
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // MLP
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.gate_up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
         ])
     }
@@ -4223,7 +4216,7 @@ impl IsqModelLoader for GLM4MoeLiteLoader {
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention (MLA)
             Regex::new(r"layers\.(\d+)\.self_attn\.kv_a_proj_with_mqa\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.kv_b_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.(kv_b|k_b|v_b)_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
             // Q LoRA projections
             Regex::new(r"layers\.(\d+)\.self_attn\.q_a_proj\.(weight|bias)$")?,
@@ -4281,57 +4274,13 @@ impl IsqModelLoader for GLM4MoeLiteLoader {
         self.isq_layer_regexes(config)
     }
 
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
-        ];
-        let cfg: crate::models::glm4_moe_lite::Glm4MoeLiteConfig = serde_json::from_str(config)?;
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if layer_idx >= cfg.first_k_dense_replace && layer_idx % cfg.moe_layer_freq == 0 {
-                // MoE layer
-                for i in 0..cfg.n_routed_experts {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts > 0 {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                // Dense MLP layer
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.up_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
+        ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
@@ -4624,57 +4573,13 @@ impl IsqModelLoader for GLM4MoeLoader {
         self.isq_layer_regexes(config)
     }
 
-    fn isq_layer_regexes_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        let mut data = vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
-        ];
-        let cfg: crate::models::glm4_moe::Glm4MoeConfig = serde_json::from_str(config)?;
-        for layer_idx in 0..cfg.num_hidden_layers {
-            if layer_idx >= cfg.first_k_dense_replace {
-                // MoE layer
-                for i in 0..cfg.n_routed_experts {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.experts\.{i}\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-                if cfg.n_shared_experts > 0 {
-                    data.extend(vec![
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.gate_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.up_proj\.(weight|bias)$"
-                        ))?,
-                        Regex::new(&format!(
-                            r"layers\.{layer_idx}\.mlp\.shared_experts\.down_proj\.(weight|bias)$"
-                        ))?,
-                    ]);
-                }
-            } else {
-                // Dense MLP layer
-                data.extend(vec![
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.gate_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.up_proj\.(weight|bias)$"
-                    ))?,
-                    Regex::new(&format!(
-                        r"layers\.{layer_idx}\.mlp\.down_proj\.(weight|bias)$"
-                    ))?,
-                ]);
-            };
-        }
-        Ok(data)
+        ])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
@@ -4932,6 +4837,14 @@ impl IsqModelLoader for Qwen3MoELoader {
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes_moqe(config)
+    }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ])
     }
 }
 
@@ -5351,6 +5264,7 @@ impl IsqModelLoader for GraniteMoeHybridLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.mamba\.(in_proj|out_proj)\.(weight|bias)$")?,
             // MLP (GraniteMLP uses shared_mlp.input_linear and shared_mlp.output_linear)
             Regex::new(r"layers\.(\d+)\.shared_mlp\.input_linear\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.shared_mlp\.output_linear\.(weight|bias)$")?,
@@ -5585,7 +5499,9 @@ impl IsqModelLoader for GptOssLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(gate_up_proj|gate_proj|up_proj|down_proj)\.weight$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -5593,7 +5509,7 @@ impl IsqModelLoader for GptOssLoader {
     }
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![Regex::new(
-            r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            r"layers\.(\d+)\.mlp\.experts\.(gate_up_proj|gate_proj|up_proj|down_proj)\.weight$",
         )?])
     }
     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
@@ -5813,8 +5729,9 @@ impl IsqModelLoader for Qwen3NextLoader {
             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.linear_attn\.in_proj_qkvz\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.linear_attn\.in_proj_ba\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.linear_attn\.(in_proj_qkvz|in_proj_qkv|in_proj_z|in_proj_ba|in_proj_b|in_proj_a)\.(weight|bias)$",
+            )?,
             Regex::new(r"layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$")?,
             Regex::new(
                 r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
@@ -5827,6 +5744,17 @@ impl IsqModelLoader for Qwen3NextLoader {
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         self.isq_layer_regexes(config)
+    }
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$")?,
+        ])
+    }
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
     }
 }
 
@@ -5926,9 +5854,9 @@ impl DeviceMappedModelLoader for Qwen3NextLoader {
                     let value_dim = cfg.linear_value_dim();
                     let conv_dim = cfg.linear_conv_dim();
                     // in_proj_qkvz: (2 * key_dim + 2 * value_dim, hidden)
-                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2);
+                    let in_proj_qkvz = hidden * (key_dim * 2 + value_dim * 2) / weight_pack_factor;
                     // in_proj_ba: (2 * num_v_heads, hidden)
-                    let in_proj_ba = hidden * (cfg.linear_num_value_heads * 2);
+                    let in_proj_ba = hidden * (cfg.linear_num_value_heads * 2) / weight_pack_factor;
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * cfg.linear_conv_kernel_dim;
                     let dt_bias = cfg.linear_num_value_heads;
@@ -6273,7 +6201,6 @@ impl IsqModelLoader for Lfm2Loader {
 
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w1\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w2\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.(\d+)\.w3\.(weight|bias)$")?,
@@ -6474,6 +6401,8 @@ mod tests {
     }
 
     const FUSED_EXPERT_PROJECTIONS: &[&str] = &["gate_proj", "up_proj", "down_proj"];
+    const GPT_OSS_EXPERT_PROJECTIONS: &[&str] =
+        &["gate_up_proj", "gate_proj", "up_proj", "down_proj"];
     const GRANITE_EXPERT_PROJECTIONS: &[&str] = &["input_linear", "output_linear"];
 
     fn assert_expert_isq_predicates(
@@ -6498,6 +6427,59 @@ mod tests {
                 assert!(
                     predicates.iter().any(|predicate| predicate.is_match(&key)),
                     "{loader_name} {kind} predicates did not match {key}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_default_isq_paths(
+        loader_name: &str,
+        loader: &dyn IsqModelLoader,
+        config: &str,
+        expected: &[&str],
+        rejected: &[&str],
+    ) -> Result<()> {
+        for (kind, predicates) in [
+            ("isq", loader.isq_layer_regexes(config)?),
+            ("immediate", loader.immediate_isq_predicates(config)?),
+        ] {
+            for path in expected {
+                assert!(
+                    predicates.iter().any(|predicate| predicate.is_match(path)),
+                    "{loader_name} {kind} predicates did not match {path}"
+                );
+            }
+            for path in rejected {
+                assert!(
+                    predicates.iter().all(|predicate| !predicate.is_match(path)),
+                    "{loader_name} {kind} predicates matched {path}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn assert_moqe_isq_paths(
+        loader_name: &str,
+        loader: &dyn IsqModelLoader,
+        expected: &[&str],
+        rejected: &[&str],
+    ) -> Result<()> {
+        for (kind, predicates) in [
+            ("moqe", loader.isq_layer_regexes_moqe("")?),
+            ("immediate moqe", loader.immediate_isq_predicates_moqe("")?),
+        ] {
+            for path in expected {
+                assert!(
+                    predicates.iter().any(|predicate| predicate.is_match(path)),
+                    "{loader_name} {kind} predicates did not match {path}"
+                );
+            }
+            for path in rejected {
+                assert!(
+                    predicates.iter().all(|predicate| !predicate.is_match(path)),
+                    "{loader_name} {kind} predicates matched {path}"
                 );
             }
         }
@@ -6569,6 +6551,288 @@ mod tests {
         config: &'a str,
         prefix: &'static str,
         projections: &'static [&'static str],
+    }
+
+    struct NativeIsqNamespaceCase<'a> {
+        name: &'static str,
+        loader: Box<dyn IsqModelLoader>,
+        config: &'a str,
+        paths: &'static [&'static str],
+    }
+
+    #[test]
+    fn native_gguf_adapter_isq_namespace_matrix() -> Result<()> {
+        let deepseek_config = deepseek_moe_config();
+        let glm4_moe_config = glm4_moe_config();
+        let cases = vec![
+            NativeIsqNamespaceCase {
+                name: "Mistral",
+                loader: Box::new(MistralLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Gemma",
+                loader: Box::new(GemmaLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Mixtral",
+                loader: Box::new(MixtralLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.block_sparse_moe.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Llama",
+                loader: Box::new(LlamaLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Phi2",
+                loader: Box::new(Phi2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.fc1.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Phi3",
+                loader: Box::new(Phi3Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.qkv_proj.weight",
+                    "model.layers.0.mlp.gate_up_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Qwen2",
+                loader: Box::new(Qwen2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Gemma2",
+                loader: Box::new(Gemma2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Starcoder2",
+                loader: Box::new(Starcoder2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.c_fc.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Phi3.5 MoE",
+                loader: Box::new(Phi3_5MoELoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.block_sparse_moe.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "DeepSeek V2",
+                loader: Box::new(DeepSeekV2Loader),
+                config: &deepseek_config,
+                paths: &[
+                    "model.layers.0.self_attn.k_b_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "DeepSeek V3",
+                loader: Box::new(DeepSeekV3Loader),
+                config: &deepseek_config,
+                paths: &[
+                    "model.layers.0.self_attn.v_b_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Qwen3",
+                loader: Box::new(Qwen3Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "GLM4",
+                loader: Box::new(GLM4Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_up_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "GLM4 MoE Lite",
+                loader: Box::new(GLM4MoeLiteLoader),
+                config: &glm4_moe_config,
+                paths: &[
+                    "model.layers.0.self_attn.k_b_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "GLM4 MoE",
+                loader: Box::new(GLM4MoeLoader),
+                config: &glm4_moe_config,
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                    "model.layers.0.mlp.shared_experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Qwen3 MoE",
+                loader: Box::new(Qwen3MoELoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "SmolLM3",
+                loader: Box::new(SmolLm3Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Granite",
+                loader: Box::new(GraniteMoeHybridLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mamba.in_proj.weight",
+                    "model.layers.0.shared_mlp.input_linear.weight",
+                    "model.layers.0.block_sparse_moe.input_linear.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "GPT-OSS",
+                loader: Box::new(GptOssLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.experts.gate_up_proj.weight",
+                    "model.layers.0.mlp.experts.down_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "HunYuan dense",
+                loader: Box::new(HunYuanDenseV1Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "HunYuan MoE",
+                loader: Box::new(HunYuanMoEV1Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                    "model.layers.0.mlp.shared_mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Qwen3Next",
+                loader: Box::new(Qwen3NextLoader),
+                config: "",
+                paths: &[
+                    "model.layers.0.linear_attn.in_proj_qkv.weight",
+                    "model.layers.0.linear_attn.in_proj_z.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                    "model.layers.0.mlp.shared_expert.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "Qwen3.5",
+                loader: Box::new(Qwen3_5TextLoader),
+                config: "",
+                paths: &[
+                    "model.language_model.layers.0.self_attn.q_proj.weight",
+                    "model.language_model.layers.0.linear_attn.in_proj_b.weight",
+                    "model.language_model.layers.0.mlp.gate_proj.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "LFM2",
+                loader: Box::new(Lfm2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.conv.in_proj.weight",
+                    "model.layers.0.feed_forward.w1.weight",
+                ],
+            },
+            NativeIsqNamespaceCase {
+                name: "LFM2 MoE",
+                loader: Box::new(Lfm2Loader),
+                config: "",
+                paths: &[
+                    "model.layers.0.conv.out_proj.weight",
+                    "model.layers.0.feed_forward.experts.gate_proj.weight",
+                ],
+            },
+        ];
+
+        for case in cases {
+            let promoted = case.loader.promoted_isq_predicates(case.config)?;
+            let embedding = if case.name == "Qwen3.5" {
+                "model.language_model.embed_tokens.weight"
+            } else {
+                "model.embed_tokens.weight"
+            };
+            for path in [embedding, "lm_head.weight"] {
+                assert!(
+                    promoted.iter().any(|predicate| predicate.is_match(path)),
+                    "{} promoted predicates did not match {path}",
+                    case.name
+                );
+            }
+            assert_default_isq_paths(
+                case.name,
+                case.loader.as_ref(),
+                case.config,
+                case.paths,
+                &[],
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -6658,7 +6922,7 @@ mod tests {
                 loader: Box::new(GptOssLoader),
                 config: "",
                 prefix: "model.layers.0.mlp.experts",
-                projections: FUSED_EXPERT_PROJECTIONS,
+                projections: GPT_OSS_EXPERT_PROJECTIONS,
             },
         ];
 
@@ -6671,6 +6935,213 @@ mod tests {
                 case.projections,
             )?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_gguf_isq_predicates_match_model_linear_sites() -> Result<()> {
+        assert_default_isq_paths(
+            "Starcoder2Loader",
+            &Starcoder2Loader,
+            "",
+            &["model.layers.0.mlp.c_fc.weight"],
+            &[
+                "model.layers.0.mlp.fc1.weight",
+                "model.layers.0.mlp.c_fc_extra.weight",
+            ],
+        )?;
+        for (name, loader) in [
+            ("Phi3Loader", &Phi3Loader as &dyn IsqModelLoader),
+            ("GLM4Loader", &GLM4Loader as &dyn IsqModelLoader),
+        ] {
+            assert_default_isq_paths(
+                name,
+                loader,
+                "",
+                &["model.layers.0.mlp.gate_up_proj.weight"],
+                &[
+                    "model.layers.0.mlp.gate_proj.weight",
+                    "model.layers.0.mlp.up_proj.weight",
+                    "model.layers.0.mlp.gate_up_projector.weight",
+                ],
+            )?;
+        }
+
+        let deepseek_config = deepseek_moe_config();
+        let glm4_config = glm4_moe_config();
+        for (name, loader, config) in [
+            (
+                "DeepSeekV2Loader",
+                &DeepSeekV2Loader as &dyn IsqModelLoader,
+                deepseek_config.as_str(),
+            ),
+            (
+                "DeepSeekV3Loader",
+                &DeepSeekV3Loader as &dyn IsqModelLoader,
+                deepseek_config.as_str(),
+            ),
+            (
+                "GLM4MoeLiteLoader",
+                &GLM4MoeLiteLoader as &dyn IsqModelLoader,
+                glm4_config.as_str(),
+            ),
+        ] {
+            assert_default_isq_paths(
+                name,
+                loader,
+                config,
+                &[
+                    "model.layers.0.self_attn.kv_b_proj.weight",
+                    "model.layers.0.self_attn.k_b_proj.weight",
+                    "model.layers.0.self_attn.v_b_proj.weight",
+                ],
+                &[
+                    "model.layers.0.self_attn.key_b_proj.weight",
+                    "model.layers.0.self_attn.k_b_projector.weight",
+                ],
+            )?;
+        }
+
+        assert_default_isq_paths(
+            "GraniteMoeHybridLoader",
+            &GraniteMoeHybridLoader,
+            "",
+            &[
+                "model.layers.0.mamba.in_proj.weight",
+                "model.layers.0.mamba.out_proj.weight",
+            ],
+            &[
+                "model.layers.0.mamba.conv1d.weight",
+                "model.layers.0.mamba.input_proj.weight",
+            ],
+        )?;
+
+        assert_default_isq_paths(
+            "Qwen3NextLoader",
+            &Qwen3NextLoader,
+            "",
+            &[
+                "model.layers.0.linear_attn.in_proj_qkvz.weight",
+                "model.layers.0.linear_attn.in_proj_qkv.weight",
+                "model.layers.0.linear_attn.in_proj_z.weight",
+                "model.layers.0.linear_attn.in_proj_ba.weight",
+                "model.layers.0.linear_attn.in_proj_b.weight",
+                "model.layers.0.linear_attn.in_proj_a.weight",
+            ],
+            &[
+                "model.layers.0.linear_attn.in_proj_qkvzz.weight",
+                "model.layers.0.linear_attn.in_proj_beta.weight",
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn native_gguf_moqe_predicates_exclude_the_shared_trunk() -> Result<()> {
+        assert_moqe_isq_paths(
+            "MixtralLoader",
+            &MixtralLoader,
+            &[
+                "model.layers.0.block_sparse_moe.experts.0.w1.weight",
+                "model.layers.0.block_sparse_moe.experts.gate_proj.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.block_sparse_moe.gate.weight",
+            ],
+        )?;
+
+        assert_moqe_isq_paths(
+            "Phi3_5MoELoader",
+            &Phi3_5MoELoader,
+            &[
+                "model.layers.0.block_sparse_moe.experts.0.w1.weight",
+                "model.layers.0.block_sparse_moe.experts.gate_proj.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.block_sparse_moe.gate.weight",
+            ],
+        )?;
+
+        for (name, loader) in [
+            ("DeepSeekV2Loader", &DeepSeekV2Loader as &dyn IsqModelLoader),
+            ("DeepSeekV3Loader", &DeepSeekV3Loader as &dyn IsqModelLoader),
+            (
+                "HunYuanMoEV1Loader",
+                &HunYuanMoEV1Loader as &dyn IsqModelLoader,
+            ),
+            (
+                "GLM4MoeLiteLoader",
+                &GLM4MoeLiteLoader as &dyn IsqModelLoader,
+            ),
+            ("GLM4MoeLoader", &GLM4MoeLoader as &dyn IsqModelLoader),
+            ("Qwen3MoELoader", &Qwen3MoELoader as &dyn IsqModelLoader),
+            ("Qwen3NextLoader", &Qwen3NextLoader as &dyn IsqModelLoader),
+        ] {
+            assert_moqe_isq_paths(
+                name,
+                loader,
+                &[
+                    "model.layers.0.mlp.experts.0.gate_proj.weight",
+                    "model.layers.0.mlp.experts.gate_proj.weight",
+                ],
+                &[
+                    "lm_head.weight",
+                    "model.layers.0.self_attn.q_proj.weight",
+                    "model.layers.0.mlp.gate.weight",
+                    "model.layers.0.mlp.gate_proj.weight",
+                    "model.layers.0.mlp.shared_mlp.gate_proj.weight",
+                    "model.layers.0.mlp.shared_expert.gate_proj.weight",
+                    "model.layers.0.mlp.shared_experts.gate_proj.weight",
+                ],
+            )?;
+        }
+
+        assert_moqe_isq_paths(
+            "GraniteMoeHybridLoader",
+            &GraniteMoeHybridLoader,
+            &[
+                "model.layers.0.block_sparse_moe.input_linear.weight",
+                "model.layers.0.block_sparse_moe.output_linear.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.shared_mlp.input_linear.weight",
+                "model.layers.0.block_sparse_moe.router.weight",
+            ],
+        )?;
+        assert_moqe_isq_paths(
+            "GptOssLoader",
+            &GptOssLoader,
+            &[
+                "model.layers.0.mlp.experts.gate_up_proj.weight",
+                "model.layers.0.mlp.experts.down_proj.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.mlp.router.weight",
+            ],
+        )?;
+        assert_moqe_isq_paths(
+            "Lfm2Loader",
+            &Lfm2Loader,
+            &[
+                "model.layers.0.feed_forward.experts.0.w1.weight",
+                "model.layers.0.feed_forward.experts.gate_proj.weight",
+            ],
+            &[
+                "lm_head.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+                "model.layers.0.feed_forward.gate.weight",
+            ],
+        )?;
+
         Ok(())
     }
 

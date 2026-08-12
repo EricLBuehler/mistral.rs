@@ -123,7 +123,7 @@ fn resolve_gguf_source(
 
     let should_inspect = requested.is_some() || (explicit_gguf && exact_file.is_some());
     let files = should_inspect
-        .then(|| selected_model_files(&model_id, token_source))
+        .then(|| selected_model_files(&model_id, exact_file.as_deref(), token_source))
         .transpose()?
         .flatten();
     let confident_gguf = files
@@ -168,8 +168,7 @@ fn resolve_gguf_source(
         })?;
 
         if model.format.mmproj.is_none()
-            && (confident_gguf || explicit_multimodal)
-            && !model.format.direct_file_only
+            && (confident_gguf || explicit_multimodal || model.format.direct_file_only)
         {
             if let Some(files) = files.as_ref() {
                 if let Some(projector) =
@@ -193,9 +192,16 @@ fn resolve_gguf_source(
     Ok(())
 }
 
-fn selected_model_files(model_id: &str, token_source: &TokenSource) -> Result<Option<Vec<String>>> {
+fn selected_model_files(
+    model_id: &str,
+    exact_file: Option<&str>,
+    token_source: &TokenSource,
+) -> Result<Option<Vec<String>>> {
     let path = Path::new(model_id);
     if path.exists() {
+        if let Some(exact_file) = exact_file {
+            return crate::commands::quant::list_local_gguf_companions(path, exact_file).map(Some);
+        }
         return crate::commands::quant::list_local_files_recursive(path).map(Some);
     }
     Ok(mistralrs_core::probe_hf_repo_files(
@@ -874,6 +880,37 @@ mod tests {
         assert_eq!(tok_model_id.as_deref(), Some("org/base"));
         assert_eq!(quantized_filename, "model-Q4_K_M.gguf");
         assert_eq!(mmproj_filename.as_deref(), Some("custom-mmproj.gguf"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_local_gguf_discovers_only_a_sibling_projector() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        let unrelated = root.join("unrelated");
+        fs::create_dir_all(&unrelated).unwrap();
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, []).unwrap();
+        fs::write(root.join("mmproj-BF16.gguf"), []).unwrap();
+        fs::write(root.join("model.safetensors"), []).unwrap();
+        fs::write(unrelated.join("mmproj-BF16.gguf"), []).unwrap();
+        let output = root.join("output.uqff");
+        let mut model_type = parse(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--isq",
+            "q4k",
+            "-o",
+            &output.to_string_lossy(),
+        ]);
+
+        let resolved = resolve_gguf_source(&mut model_type, &TokenSource::None);
+
+        resolved.unwrap();
+        let source = get_model_source(&model_type).expect("GGUF model source");
+        assert_eq!(source.format.quantized_file.as_deref(), Some("model.gguf"));
+        assert_eq!(source.format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
+        assert!(source.format.direct_file_only);
 
         fs::remove_dir_all(root).unwrap();
     }

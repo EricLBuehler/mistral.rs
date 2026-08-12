@@ -65,7 +65,10 @@ mod tests {
     };
 
     #[cfg(not(feature = "metal"))]
-    use crate::{fp8::FP8Linear, QuantMethod, QuantMethodConfig};
+    use crate::{fp8::FP8Linear, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard};
+
+    #[cfg(not(feature = "metal"))]
+    use std::sync::{atomic::AtomicUsize, Arc};
 
     #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
@@ -120,6 +123,58 @@ mod tests {
             actual.flatten_all()?.to_vec1::<f32>()?,
             expected.flatten_all()?.to_vec1::<f32>()?
         );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(not(feature = "metal"))]
+    fn apply_isq_preserves_fp8_and_requantizes_other_targets() -> Result<()> {
+        let weight = Tensor::ones((2, 32), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::ones(2, DType::F32, &Device::Cpu)?;
+        let source = Arc::new(FP8Linear::new(QuantMethodConfig::FP8 {
+            lin: candle_nn::Linear::new(weight, Some(bias)),
+            dtype: DType::F8E4M3,
+        })?) as Arc<dyn QuantMethod>;
+        let guard = QuantizeOntoGuard::new();
+        let n_quantized = AtomicUsize::new(0);
+
+        let preserved = source.clone().apply_isq(
+            Some(IsqType::F8E4M3),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            guard.clone(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &preserved));
+        assert_eq!(preserved.uqff_type(), Some(IsqType::F8E4M3));
+        assert!(preserved.has_bias());
+
+        let moved =
+            source
+                .clone()
+                .apply_isq(None, Device::Cpu, &n_quantized, None, guard.clone())?;
+        assert!(Arc::ptr_eq(&source, &moved));
+
+        let requantized = source.clone().apply_isq(
+            Some(IsqType::Q4_0),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            guard.clone(),
+        )?;
+        assert_eq!(requantized.uqff_type(), Some(IsqType::Q4_0));
+        assert!(requantized.has_bias());
+
+        let error = source
+            .apply_isq(
+                Some(IsqType::F8E4M3),
+                Device::Cpu,
+                &n_quantized,
+                Some(vec![1.0; 32]),
+                guard,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("does not support imatrix"));
         Ok(())
     }
 

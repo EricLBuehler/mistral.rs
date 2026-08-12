@@ -8,9 +8,9 @@ use super::{
     GgufMatMul,
 };
 use crate::{
-    bias_shard, shard_range, slice_blocked_data, BiasShard, QuantMethod, QuantMethodConfig,
-    QuantizedWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder, TensorShapes,
-    UnquantLinear,
+    bias_shard, block_pack_factor, shard_range, slice_blocked_data, BiasShard, QuantMethod,
+    QuantMethodConfig, QuantizedWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder,
+    TensorShapes, UnquantLinear,
 };
 
 const DIRECT_GGUF_DTYPES: &str =
@@ -512,9 +512,9 @@ impl GgufWeightSource {
         match bias_shard(range, weight_rank) {
             BiasShard::Skip => Ok(None),
             BiasShard::Full => self.materialize_tensor(&name, device).map(Some),
-            BiasShard::Narrow(start, len) => self
+            BiasShard::Narrow { dim, start, len } => self
                 .materialize_tensor(&name, &Device::Cpu)?
-                .narrow(0, start, len)?
+                .narrow(dim, start, len)?
                 .contiguous()?
                 .to_device(device)
                 .map(Some),
@@ -710,22 +710,54 @@ impl GgufWeightSource {
         )?))
     }
 
-    fn direct_pack_factor(&self, source_name: &str, dtype: DType) -> Result<usize> {
-        let info = self.archive.tensor_info(source_name)?;
-        if matches!(info.dtype().raw(), 0 | 1 | 30) {
-            return Ok(1);
-        }
-        let Some(block_size) = info.dtype().block_size() else {
-            return Ok(1);
+    fn binding_storage(
+        &self,
+        native_name: &str,
+        binding: &GgufTensorBinding,
+        dtype: DType,
+    ) -> Result<(usize, usize)> {
+        let shape = self
+            .shapes
+            .get(native_name)
+            .ok_or_else(|| Error::msg(format!("GGUF binding `{native_name}` has no shape")))?;
+        let logical_elements = checked_elem_count(shape)?;
+        let resident_bytes = match binding.direct_tensor() {
+            Some(source_name) => {
+                let info = self.archive.tensor_info(source_name)?;
+                if matches!(info.dtype().raw(), 0 | 1 | 30) {
+                    logical_elements
+                        .checked_mul(dtype.size_in_bytes())
+                        .ok_or_else(|| Error::msg("GGUF dense resident byte estimate overflow"))?
+                } else {
+                    info.byte_len().ok_or_else(|| {
+                        Error::msg(format!("GGUF tensor `{source_name}` has no byte range"))
+                    })?
+                }
+            }
+            None => match self.structural_quant_dtype(binding)? {
+                Some(ggml_dtype) => packed_byte_len(shape, ggml_dtype)?,
+                None => logical_elements
+                    .checked_mul(
+                        self.output_dtypes
+                            .get(native_name)
+                            .expect("every GGUF binding has an output dtype")
+                            .size_in_bytes(),
+                    )
+                    .ok_or_else(|| Error::msg("GGUF resident byte estimate overflow"))?,
+            },
         };
-        let Some(type_size) = info.dtype().type_size() else {
-            return Ok(1);
-        };
-        let dense_bytes = dtype
-            .size_in_bytes()
-            .checked_mul(block_size)
-            .ok_or_else(|| Error::msg("GGUF pack factor overflow"))?;
-        Ok((dense_bytes / type_size).max(1))
+        Ok((logical_elements, resident_bytes))
+    }
+
+    fn binding_pack_factor(
+        &self,
+        native_name: &str,
+        binding: &GgufTensorBinding,
+        dtype: DType,
+    ) -> Result<usize> {
+        let (logical_elements, resident_bytes) =
+            self.binding_storage(native_name, binding, dtype)?;
+        Ok(block_pack_factor(logical_elements, dtype, resident_bytes))
     }
 }
 
@@ -795,7 +827,7 @@ impl QuantizedWeightSource for GgufWeightSource {
     }
 
     fn pack_factor(&self, dtype: DType) -> Result<usize> {
-        let mut layers = HashMap::<usize, (usize, usize)>::new();
+        let mut layers = HashMap::<usize, Vec<(usize, usize)>>::new();
         for (native_name, binding) in &self.bindings {
             if !native_name.ends_with(".weight")
                 || self
@@ -808,45 +840,43 @@ impl QuantizedWeightSource for GgufWeightSource {
             let Some(layer) = binding.text_layer_index() else {
                 continue;
             };
-            let shape = &self.shapes[native_name];
-            let logical_bytes = checked_elem_count(shape)?
-                .checked_mul(dtype.size_in_bytes())
-                .ok_or_else(|| Error::msg("GGUF dense byte estimate overflow"))?;
-            let binding_bytes = match binding.direct_tensor() {
-                Some(source_name) => {
-                    let info = self.archive.tensor_info(source_name)?;
-                    if matches!(info.dtype().raw(), 0 | 1 | 30) {
-                        logical_bytes
-                    } else {
-                        info.byte_len().unwrap_or(logical_bytes)
-                    }
-                }
-                None => match self.structural_quant_dtype(binding)? {
-                    Some(dtype) => packed_byte_len(shape, dtype)?,
-                    None => checked_elem_count(shape)?
-                        .checked_mul(
-                            self.output_dtypes
-                                .get(native_name)
-                                .expect("every GGUF binding has an output dtype")
-                                .size_in_bytes(),
-                        )
-                        .ok_or_else(|| Error::msg("GGUF resident byte estimate overflow"))?,
-                },
-            };
-            let (dense_bytes, resident_bytes) = layers.entry(layer).or_default();
-            *dense_bytes = dense_bytes
-                .checked_add(logical_bytes)
-                .ok_or_else(|| Error::msg("GGUF dense byte estimate overflow"))?;
-            *resident_bytes = resident_bytes
-                .checked_add(binding_bytes)
-                .ok_or_else(|| Error::msg("GGUF resident byte estimate overflow"))?;
+            layers.entry(layer).or_default().push(self.binding_storage(
+                native_name,
+                binding,
+                dtype,
+            )?);
         }
-        Ok(layers
-            .into_values()
-            .filter(|(_, resident_bytes)| *resident_bytes != 0)
-            .map(|(dense_bytes, resident_bytes)| (dense_bytes / resident_bytes).max(1))
-            .min()
-            .unwrap_or(1))
+        let dtype_bytes = dtype.size_in_bytes();
+        let mut global_factor: Option<usize> = None;
+        for bindings in layers.into_values() {
+            let logical_elements = bindings.iter().try_fold(0usize, |total, (logical, _)| {
+                total
+                    .checked_add(*logical)
+                    .ok_or_else(|| Error::msg("GGUF logical element estimate overflow"))
+            })?;
+            let resident_bytes = bindings.iter().try_fold(0usize, |total, (_, resident)| {
+                total
+                    .checked_add(*resident)
+                    .ok_or_else(|| Error::msg("GGUF resident byte estimate overflow"))
+            })?;
+            let mut factor = block_pack_factor(logical_elements, dtype, resident_bytes);
+            while factor > 1 {
+                let estimated_bytes = bindings.iter().try_fold(0usize, |total, (logical, _)| {
+                    let bytes = (logical / factor)
+                        .checked_mul(dtype_bytes)
+                        .ok_or_else(|| Error::msg("GGUF packed byte estimate overflow"))?;
+                    total
+                        .checked_add(bytes)
+                        .ok_or_else(|| Error::msg("GGUF packed byte estimate overflow"))
+                })?;
+                if estimated_bytes >= resident_bytes {
+                    break;
+                }
+                factor -= 1;
+            }
+            global_factor = Some(global_factor.map_or(factor, |global| global.min(factor)));
+        }
+        Ok(global_factor.unwrap_or(1))
     }
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
@@ -854,19 +884,8 @@ impl QuantizedWeightSource for GgufWeightSource {
         let Some(binding) = self.bindings.get(&weight_name) else {
             return Ok(None);
         };
-        match binding.direct_tensor() {
-            Some(source_name) => self.direct_pack_factor(source_name, dtype).map(Some),
-            None => match self.structural_quant_dtype(binding)? {
-                Some(ggml_dtype) => {
-                    let dense_bytes = dtype
-                        .size_in_bytes()
-                        .checked_mul(ggml_dtype.block_size())
-                        .ok_or_else(|| Error::msg("GGUF pack factor overflow"))?;
-                    Ok(Some((dense_bytes / ggml_dtype.type_size()).max(1)))
-                }
-                None => Ok(Some(1)),
-            },
-        }
+        self.binding_pack_factor(&weight_name, binding, dtype)
+            .map(Some)
     }
 }
 
@@ -1508,11 +1527,13 @@ mod tests {
     fn test_source() -> Result<(NamedTempFile, Arc<GgufWeightSource>, Tensor, Tensor)> {
         let weight = patterned(OUT_DIM, IN_DIM, 0)?;
         let other = patterned(OUT_DIM, IN_DIM, 11)?;
+        let single_block = patterned(1, GgmlDType::Q4_0.block_size(), 7)?;
         let bias = Tensor::from_vec(vec![0.25f32, 0.5, 0.75, 1.0], OUT_DIM, &Device::Cpu)?;
         let norm = Tensor::from_vec(vec![1f32, 2.0, 3.0, 4.0], OUT_DIM, &Device::Cpu)?;
 
         let q_weight = QTensor::quantize(&weight, GgmlDType::Q4_0)?;
         let q_other = QTensor::quantize(&other, GgmlDType::Q4_0)?;
+        let q_single_block = QTensor::quantize(&single_block, GgmlDType::Q4_0)?;
         let q_bias = QTensor::quantize(&bias, GgmlDType::F32)?;
         let q_norm = QTensor::quantize(&norm, GgmlDType::F32)?;
         let expected_weight = q_weight.dequantize(&Device::Cpu)?;
@@ -1526,6 +1547,7 @@ mod tests {
             &[
                 ("blk.0.weight", &q_weight),
                 ("blk.1.weight", &q_other),
+                ("blk.0.single.weight", &q_single_block),
                 ("blk.float.weight", &float_weight),
                 ("blk.0.bias", &q_bias),
                 ("norm.weight", &q_norm),
@@ -1543,6 +1565,10 @@ mod tests {
             .with_binding(
                 "model.float.weight",
                 GgufTensorBinding::tensor("blk.float.weight"),
+            )
+            .with_binding(
+                "model.single.weight",
+                GgufTensorBinding::tensor("blk.0.single.weight"),
             )
             .with_binding(
                 "model.slice.weight",
@@ -1591,6 +1617,10 @@ mod tests {
             .with_binding(
                 "model.layers.0.linear.weight",
                 GgufTensorBinding::tensor("blk.0.weight"),
+            )
+            .with_binding(
+                "model.layers.0.single.weight",
+                GgufTensorBinding::tensor("blk.0.single.weight"),
             )
             .with_binding(
                 "model.layers.1.linear.weight",
@@ -1734,6 +1764,10 @@ mod tests {
             source.pack_factor_for("model.linear.weight", DType::F32)?,
             Some(7)
         );
+        assert_eq!(
+            source.pack_factor_for("model.single.weight", DType::F32)?,
+            Some(6)
+        );
 
         let with_weight_suffix = source
             .load_linear("model.linear.weight", &Device::Cpu, Shard::default())?
@@ -1746,7 +1780,7 @@ mod tests {
         assert!(float.get_qtensor().is_none());
         assert_close(&float.dequantize_w()?, &expected)?;
         assert_eq!(source.pack_factor_for("model.float", DType::F32)?, Some(1));
-        assert_eq!(source.pack_factor(DType::F32)?, 7);
+        assert_eq!(source.pack_factor(DType::F32)?, 6);
 
         let uniform_bindings = GgufBindingMap::new().with_binding(
             "model.layers.0.linear.weight",
@@ -1812,16 +1846,35 @@ mod tests {
         let indices = Tensor::from_vec(vec![0u32, 2, 1, 0], (2, 2), &Device::Cpu)?;
         let zeros = Tensor::zeros((2, 1, IN_DIM), DType::F32, &Device::Cpu)?;
         let actual = layer.gather_forward(&zeros, &indices)?;
-        let expected_bias = expected_bias
+        let selected_bias = expected_bias
             .index_select(&indices.flatten_all()?, 0)?
             .reshape((2, 2, EXPERT_ROWS * 2))?;
-        assert_close(&actual, &expected_bias)?;
+        assert_close(&actual, &selected_bias)?;
 
         let gate = source
             .load_linear("model.experts.gate", &Device::Cpu, Shard::default())?
             .unwrap();
         assert!(gate.get_qtensor().is_some());
-        assert_close(&gate.dequantize_w()?, &expected.narrow(1, 0, EXPERT_ROWS)?)
+        assert_close(&gate.dequantize_w()?, &expected.narrow(1, 0, EXPERT_ROWS)?)?;
+
+        let output_shard = source
+            .load_linear(
+                "model.experts.gate_up",
+                &Device::Cpu,
+                Shard::Simple {
+                    dim: 1,
+                    rank: 1,
+                    world_size: 2,
+                },
+            )?
+            .unwrap();
+        let actual = output_shard.gather_forward(&zeros, &indices)?;
+        let expected_bias = expected_bias
+            .narrow(1, EXPERT_ROWS, EXPERT_ROWS)?
+            .contiguous()?
+            .index_select(&indices.flatten_all()?, 0)?
+            .reshape((2, 2, EXPERT_ROWS))?;
+        assert_close(&actual, &expected_bias)
     }
 
     #[test]

@@ -4,8 +4,8 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::Module;
 use mistralrs_quant::{
-    apply_immediate_isq, ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer,
-    RowParallelLayer, ShardedVarBuilder,
+    apply_immediate_isq, should_apply_immediate_isq, ColumnParallelLayer, QuantMethod,
+    QuantizedConfig, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -364,9 +364,12 @@ impl GraniteParallelExperts {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         if let Some(source) = vb.weight_source() {
-            if let Some(weight) =
-                source.load_linear(&vb.prefix(), vb.device(), mistralrs_quant::Shard::default())?
-            {
+            let load_device = mistralrs_quant::weight_source_load_device(&vb);
+            if let Some(weight) = source.load_linear(
+                &vb.prefix(),
+                &load_device,
+                mistralrs_quant::Shard::default(),
+            )? {
                 let weight = apply_immediate_isq(weight, vb)?;
                 return Ok(Self {
                     weights: GraniteParallelExpertWeights::Quantized(weight),
@@ -375,6 +378,18 @@ impl GraniteParallelExperts {
             }
         }
         let all_weights = vb.get((num_experts, output_size, input_size), "weight")?;
+        if should_apply_immediate_isq(&vb) {
+            let layer = Arc::new(mistralrs_quant::UnquantLinear::new(
+                mistralrs_quant::QuantMethodConfig::Unquantized(candle_nn::Linear::new(
+                    all_weights,
+                    None,
+                )),
+            )?);
+            return Ok(Self {
+                weights: GraniteParallelExpertWeights::Quantized(apply_immediate_isq(layer, vb)?),
+                output_size,
+            });
+        }
         let weights = (0..num_experts)
             .map(|i| all_weights.i(i))
             .collect::<Result<Vec<_>>>()?;
@@ -389,6 +404,19 @@ impl GraniteParallelExperts {
             GraniteParallelExpertWeights::Dense(_) => None,
             GraniteParallelExpertWeights::Quantized(weight) => Some(weight),
         }
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        match &self.weights {
+            GraniteParallelExpertWeights::Dense(weights) => {
+                let weight = Tensor::stack(weights, 0)
+                    .expect("Granite expert weight reconstruction should succeed");
+                uvb.add_tensor("weight", weight);
+            }
+            GraniteParallelExpertWeights::Quantized(weight) => uvb.add(weight),
+        }
+        uvb.to_safetensors()
     }
 
     fn forward(&self, x: &Tensor, expert_size: &[usize]) -> Result<Tensor> {
@@ -534,6 +562,16 @@ impl GraniteMoE {
         Tensor::from_vec(flat_output, (num_tokens, self.input_size), device)?
             .to_dtype(dtype)?
             .reshape((batch_size, seq_len, self.input_size))
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("input_linear")
+            .extend(self.input_linear.residual_tensors());
+        uvb.pp("output_linear")
+            .extend(self.output_linear.residual_tensors());
+        uvb.pp("router").pp("layer").add(&self.router.layer);
+        uvb.to_safetensors()
     }
 }
 
@@ -872,6 +910,23 @@ impl MambaLayer {
             self.num_heads,
         )?;
         Ok((gate, hidden_states_b_c, dt))
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("in_proj").add(&self.in_proj);
+        let uvb_conv = uvb.pp("conv1d");
+        uvb_conv.add_tensor("weight", self.conv1d_weight.clone());
+        if let Some(bias) = &self.conv1d_bias {
+            uvb_conv.add_tensor("bias", bias.clone());
+        }
+        uvb.add_tensor("dt_bias", self.dt_bias.clone());
+        uvb.add_tensor("A_log", self.a_log.clone());
+        uvb.add_tensor("D", self.d.clone());
+        uvb.pp("norm")
+            .add_tensor("weight", self.norm.weight.clone());
+        uvb.pp("out_proj").add(&self.out_proj);
+        uvb.to_safetensors()
     }
 
     fn forward(
@@ -2294,10 +2349,17 @@ impl GraniteMoeHybrid {
                 DecoderLayer::Attention(block) => {
                     uvb_l.pp("input_layernorm").add(&block.rms_1);
                     uvb_l.pp("post_attention_layernorm").add(&block.rms_2);
+                    if let Some(moe) = &block.block_sparse_moe {
+                        uvb_l.pp("block_sparse_moe").extend(moe.residual_tensors());
+                    }
                 }
                 DecoderLayer::Mamba(block) => {
                     uvb_l.pp("input_layernorm").add(&block.rms_1);
                     uvb_l.pp("post_attention_layernorm").add(&block.rms_2);
+                    uvb_l.pp("mamba").extend(block.mamba.residual_tensors());
+                    if let Some(moe) = &block.block_sparse_moe {
+                        uvb_l.pp("block_sparse_moe").extend(moe.residual_tensors());
+                    }
                 }
             }
         }
@@ -2515,6 +2577,7 @@ impl AnyMoeBaseModelMixin for GraniteMoeHybrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::IsqModelLoader;
 
     const HIDDEN_SIZE: usize = 4;
     const INTERMEDIATE_SIZE: usize = 4;
@@ -2608,6 +2671,78 @@ mod tests {
                 device,
             )?,
         })
+    }
+
+    #[test]
+    fn mamba_residual_contains_every_checkpoint_tensor() -> Result<()> {
+        let names = mamba_layer(&Device::Cpu)?
+            .residual_tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<std::collections::HashSet<_>>();
+
+        for name in [
+            "in_proj.weight",
+            "in_proj.bias",
+            "conv1d.weight",
+            "conv1d.bias",
+            "dt_bias",
+            "A_log",
+            "D",
+            "norm.weight",
+            "out_proj.weight",
+            "out_proj.bias",
+        ] {
+            assert!(names.contains(name), "missing Mamba residual tensor {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn safetensors_granite_experts_participate_in_immediate_isq() -> anyhow::Result<()> {
+        const PREFIX: &str = "model.layers.0.block_sparse_moe.input_linear";
+        let loader = crate::pipeline::GraniteMoeHybridLoader;
+        for predicates in [
+            loader.immediate_isq_predicates("")?,
+            loader.immediate_isq_predicates_moqe("")?,
+        ] {
+            let weight = Tensor::ones((2, 4, 3), DType::F32, &Device::Cpu)?;
+            let vb = mistralrs_quant::ShardedSafeTensors::wrap(
+                HashMap::from([(format!("{PREFIX}.weight"), weight)]),
+                DType::F32,
+                Device::Cpu,
+            );
+            let tracker = vb.tracker().clone();
+            mistralrs_quant::set_immediate_isq(
+                Some(mistralrs_quant::IsqType::Q8_0),
+                predicates,
+                mistralrs_quant::IsqCaptureMode::CaptureMatches,
+            );
+            let experts = GraniteParallelExperts::new(2, 3, 4, vb.pp(PREFIX));
+            mistralrs_quant::clear_immediate_isq();
+
+            assert!(experts?.quantized().is_some());
+            assert_eq!(tracker.get().len(), 1);
+            assert_eq!(tracker.get()[0].key, PREFIX);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn dense_granite_expert_residual_reconstructs_stacked_weight() -> Result<()> {
+        let experts = GraniteParallelExperts {
+            weights: GraniteParallelExpertWeights::Dense(vec![
+                Tensor::zeros((4, 3), DType::F32, &Device::Cpu)?,
+                Tensor::ones((4, 3), DType::F32, &Device::Cpu)?,
+            ]),
+            output_size: 4,
+        };
+        let residual = experts.residual_tensors();
+
+        assert_eq!(residual.len(), 1);
+        assert_eq!(residual[0].0, "weight");
+        assert_eq!(residual[0].1.dims(), &[2, 4, 3]);
+        Ok(())
     }
 
     fn assert_close(lhs: &Tensor, rhs: &Tensor) -> Result<()> {

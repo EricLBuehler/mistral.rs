@@ -3315,6 +3315,69 @@ mod lora_adapter_error_tests {
     }
 
     #[test]
+    fn gguf_python_constructor_preserves_legacy_positional_prefix() {
+        Python::with_gil(|py| {
+            let constructor = py.get_type::<Which>().getattr("GGUF").unwrap();
+            let signature = py
+                .import("inspect")
+                .unwrap()
+                .call_method1("signature", (&constructor,))
+                .unwrap();
+            let parameters = signature.getattr("parameters").unwrap();
+            let names = py
+                .import("builtins")
+                .unwrap()
+                .call_method1("list", (parameters,))
+                .unwrap()
+                .extract::<Vec<String>>()
+                .unwrap();
+            assert_eq!(
+                &names[..6],
+                &[
+                    "quantized_model_id",
+                    "quantized_filename",
+                    "tok_model_id",
+                    "topology",
+                    "dtype",
+                    "auto_map_params",
+                ]
+            );
+
+            let value = constructor
+                .call1(("repo", "model.gguf", "tokenizer", "topology"))
+                .unwrap();
+            assert_eq!(
+                value
+                    .getattr("tok_model_id")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "tokenizer"
+            );
+            assert_eq!(
+                value
+                    .getattr("topology")
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "topology"
+            );
+            assert!(value.getattr("tokenizer_json").unwrap().is_none());
+            assert!(constructor
+                .call1((
+                    "repo",
+                    "model.gguf",
+                    None::<String>,
+                    None::<String>,
+                    mistralrs_core::ModelDType::Auto,
+                    None::<which::TextAutoMapParams>,
+                    "unexpected-positional-option",
+                ))
+                .is_err());
+        });
+    }
+
+    #[test]
     fn gguf_dynamic_lora_accepts_multimodal_device_mapping() {
         let mut which = gguf_which(Some(Vec::new()), mistralrs_core::DEFAULT_LORA_MAX_RANK);
         let Which::GGUF {

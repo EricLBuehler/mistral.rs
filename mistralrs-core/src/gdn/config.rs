@@ -1,6 +1,8 @@
 use mistralrs_quant::QuantizedConfig;
 use serde::{Deserialize, Serialize};
 
+pub const GDN_V_HEAD_LAYOUT_CONFIG_KEY: &str = "_mistralrs_gdn_v_head_layout";
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GdnVHeadLayout {

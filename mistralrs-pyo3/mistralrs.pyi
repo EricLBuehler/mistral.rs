@@ -555,24 +555,24 @@ class Which(Enum):
         quantized_model_id: str
         quantized_filename: str | list[str]
         tok_model_id: str | None = None
-        tokenizer_json: str | None = None
-        mmproj_filename: str | list[str] | None = None
         topology: str | None = None
-        organization: IsqOrganization | None = None
-        write_uqff: str | None = None
-        imatrix: str | None = None
-        calibration_file: str | None = None
-        max_edge: int | None = None
         dtype: ModelDType = ModelDType.Auto
         auto_map_params: TextAutoMapParams | None = None
-        multimodal_auto_map_params: MultimodalAutoMapParams | None = None
-        adapters: list[LoraAdapter] | None = None
-        max_adapters: int = 16
-        max_rank: int = 256
-        max_bytes: int = 8589934592
-        hf_cache_path: str | None = None
-        matformer_config_path: str | None = None
-        matformer_slice_name: str | None = None
+        tokenizer_json: str | None = field(default=None, kw_only=True)
+        mmproj_filename: str | list[str] | None = field(default=None, kw_only=True)
+        organization: IsqOrganization | None = field(default=None, kw_only=True)
+        write_uqff: str | None = field(default=None, kw_only=True)
+        imatrix: str | None = field(default=None, kw_only=True)
+        calibration_file: str | None = field(default=None, kw_only=True)
+        max_edge: int | None = field(default=None, kw_only=True)
+        multimodal_auto_map_params: MultimodalAutoMapParams | None = field(default=None, kw_only=True)
+        adapters: list[LoraAdapter] | None = field(default=None, kw_only=True)
+        max_adapters: int = field(default=16, kw_only=True)
+        max_rank: int = field(default=256, kw_only=True)
+        max_bytes: int = field(default=8589934592, kw_only=True)
+        hf_cache_path: str | None = field(default=None, kw_only=True)
+        matformer_config_path: str | None = field(default=None, kw_only=True)
+        matformer_slice_name: str | None = field(default=None, kw_only=True)
 
     @dataclass
     class XLoraGGUF:

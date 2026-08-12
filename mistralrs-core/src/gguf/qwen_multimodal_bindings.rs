@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use candle_core::quantized::gguf_file::Value;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 
-use crate::pipeline::MultimodalLoaderType;
+use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, pipeline::MultimodalLoaderType};
 
 const GENERAL_ARCHITECTURE: &str = "general.architecture";
 const PROJECTOR_TYPE: &str = "clip.projector_type";
@@ -151,6 +151,34 @@ pub(crate) fn build_qwen_multimodal_bindings(archive: &GgufArchive) -> Result<Gg
     )
 }
 
+pub(crate) fn normalize_qwen_multimodal_config(
+    loader_type: &MultimodalLoaderType,
+    config: &str,
+) -> Result<String> {
+    if !matches!(
+        loader_type,
+        MultimodalLoaderType::Qwen3_5 | MultimodalLoaderType::Qwen3_5Moe
+    ) {
+        return Ok(config.to_string());
+    }
+    let mut config: serde_json::Value =
+        serde_json::from_str(config).context("Qwen3.5 multimodal config is not valid JSON")?;
+    let config = config
+        .as_object_mut()
+        .context("Qwen3.5 multimodal config requires a JSON object")?;
+    config.insert("quantization_config".to_string(), serde_json::Value::Null);
+    let text_config = config
+        .get_mut("text_config")
+        .and_then(serde_json::Value::as_object_mut)
+        .context("Qwen3.5 multimodal config requires an object-valued `text_config`")?;
+    text_config.insert("quantization_config".to_string(), serde_json::Value::Null);
+    text_config.insert(
+        GDN_V_HEAD_LAYOUT_CONFIG_KEY.to_string(),
+        serde_json::Value::String("tiled".to_string()),
+    );
+    serde_json::to_string(&config).context("Failed to serialize Qwen3.5 multimodal config")
+}
+
 pub(crate) fn build_qwen35_text_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
     let architecture = metadata_string(archive, GENERAL_ARCHITECTURE)?
         .context("GGUF metadata is missing `general.architecture`")?;
@@ -163,7 +191,6 @@ pub(crate) fn build_qwen35_text_bindings(archive: &GgufArchive) -> Result<GgufBi
         &inventory,
         QwenMultimodalFamily::Qwen35,
         Some(read_gdn_metadata(archive)?),
-        true,
         &mut bindings,
     )?;
     Ok(bindings)
@@ -307,7 +334,7 @@ fn build_qwen_multimodal_bindings_from_inventory(
     gdn: Option<GdnMetadata>,
 ) -> Result<GgufBindingMap> {
     let mut bindings = GgufBindingMap::new();
-    bind_text(inventory, family, gdn, false, &mut bindings)?;
+    bind_text(inventory, family, gdn, &mut bindings)?;
     if family.uses_qwen3_vision() {
         bind_qwen3_vision(inventory, deepstack_layers, &mut bindings)?;
     } else {
@@ -320,7 +347,6 @@ fn bind_text(
     inventory: &TensorInventory,
     family: QwenMultimodalFamily,
     gdn: Option<GdnMetadata>,
-    preserve_tiled_gdn: bool,
     bindings: &mut GgufBindingMap,
 ) -> Result<()> {
     let model = if family.uses_language_model_prefix() {
@@ -389,11 +415,7 @@ fn bind_text(
         bind_experts(inventory, &native, &source, bindings);
         bind_shared_expert(inventory, &native, &source, bindings)?;
         if let Some(gdn) = gdn {
-            if preserve_tiled_gdn {
-                bind_gdn_tiled(inventory, &native, &source, gdn, bindings)?;
-            } else {
-                bind_gdn(inventory, &native, &source, gdn, bindings)?;
-            }
+            bind_gdn(inventory, &native, &source, gdn, bindings)?;
         }
     }
     Ok(())
@@ -452,7 +474,7 @@ fn bind_shared_expert(
     Ok(())
 }
 
-fn bind_gdn_tiled(
+fn bind_gdn(
     inventory: &TensorInventory,
     native: &str,
     source: &str,
@@ -528,169 +550,6 @@ fn bind_gdn_tiled(
         format!("{source}.ssm_norm.weight"),
     );
     Ok(())
-}
-
-fn bind_gdn(
-    inventory: &TensorInventory,
-    native: &str,
-    source: &str,
-    metadata: GdnMetadata,
-    bindings: &mut GgufBindingMap,
-) -> Result<()> {
-    let native = format!("{native}.linear_attn");
-    let qkv = format!("{source}.attn_qkv.weight");
-    if inventory.contains(&qkv) {
-        let shape = inventory.shape(&qkv)?;
-        let &[rows, hidden] = shape else {
-            bail!("Qwen3.5 GDN tensor `{qkv}` must be rank 2");
-        };
-        let key_dim = metadata.key_dim()?;
-        let value_dim = metadata.value_dim()?;
-        let qk_dim = key_dim
-            .checked_mul(2)
-            .context("Qwen3.5 GDN QK dimension overflow")?;
-        if rows != qk_dim + value_dim {
-            bail!("Qwen3.5 GDN tensor `{qkv}` has incompatible shape {shape:?}");
-        }
-        let qk = GgufTensorBinding::tensor(&qkv).slice(0, 0, qk_dim);
-        let value_shape = vec![value_dim, hidden];
-        let value = inverse_v_head_order(
-            GgufTensorBinding::tensor(&qkv).slice(0, qk_dim, value_dim),
-            &value_shape,
-            0,
-            metadata,
-            metadata.value_head_dim,
-        )?;
-        bindings.insert(
-            format!("{native}.in_proj_qkv.weight"),
-            GgufTensorBinding::concat(vec![qk, value], 0),
-        );
-    }
-
-    for (target, role, head_dim) in [
-        (
-            "in_proj_z.weight",
-            "attn_gate.weight",
-            metadata.value_head_dim,
-        ),
-        ("in_proj_b.weight", "ssm_beta.weight", 1),
-        ("in_proj_a.weight", "ssm_alpha.weight", 1),
-    ] {
-        let source_name = format!("{source}.{role}");
-        if inventory.contains(&source_name) {
-            let shape = inventory.shape(&source_name)?;
-            bindings.insert(
-                format!("{native}.{target}"),
-                inverse_v_head_order(
-                    GgufTensorBinding::tensor(&source_name),
-                    shape,
-                    0,
-                    metadata,
-                    head_dim,
-                )?,
-            );
-        }
-    }
-
-    let dt = format!("{source}.ssm_dt.bias");
-    if inventory.contains(&dt) {
-        let shape = inventory.shape(&dt)?;
-        bindings.insert(
-            format!("{native}.dt_bias"),
-            inverse_v_head_order(GgufTensorBinding::tensor(&dt), shape, 0, metadata, 1)?,
-        );
-    }
-
-    let a = format!("{source}.ssm_a");
-    if inventory.contains(&a) {
-        let shape = inventory.shape(&a)?;
-        bindings.insert(
-            format!("{native}.A_log"),
-            inverse_v_head_order(GgufTensorBinding::tensor(&a), shape, 0, metadata, 1)?
-                .affine(-1.0, 0.0)
-                .log(),
-        );
-    }
-
-    let conv = format!("{source}.ssm_conv1d.weight");
-    if inventory.contains(&conv) {
-        let shape = inventory.shape(&conv)?;
-        let &[channels, kernel] = shape else {
-            bail!("Qwen3.5 GDN convolution `{conv}` must be rank 2");
-        };
-        let key_dim = metadata.key_dim()?;
-        let value_dim = metadata.value_dim()?;
-        let qk_dim = key_dim
-            .checked_mul(2)
-            .context("Qwen3.5 GDN QK dimension overflow")?;
-        if channels != qk_dim + value_dim {
-            bail!("Qwen3.5 GDN convolution `{conv}` has incompatible shape {shape:?}");
-        }
-        let qk = GgufTensorBinding::tensor(&conv).slice(0, 0, qk_dim);
-        let value = inverse_v_head_order(
-            GgufTensorBinding::tensor(&conv).slice(0, qk_dim, value_dim),
-            &[value_dim, kernel],
-            0,
-            metadata,
-            metadata.value_head_dim,
-        )?;
-        bindings.insert(
-            format!("{native}.conv1d.weight"),
-            GgufTensorBinding::concat(vec![qk, value], 0).reshape(vec![channels, 1, kernel]),
-        );
-    }
-
-    bind(
-        inventory,
-        bindings,
-        format!("{native}.norm.weight"),
-        format!("{source}.ssm_norm.weight"),
-    );
-
-    let out = format!("{source}.ssm_out.weight");
-    if inventory.contains(&out) {
-        let shape = inventory.shape(&out)?;
-        bindings.insert(
-            format!("{native}.out_proj.weight"),
-            inverse_v_head_order(
-                GgufTensorBinding::tensor(&out),
-                shape,
-                1,
-                metadata,
-                metadata.value_head_dim,
-            )?,
-        );
-    }
-    Ok(())
-}
-
-fn inverse_v_head_order(
-    binding: GgufTensorBinding,
-    shape: &[usize],
-    dim: usize,
-    metadata: GdnMetadata,
-    head_dim: usize,
-) -> Result<GgufTensorBinding> {
-    if metadata.key_heads == metadata.value_heads {
-        return Ok(binding);
-    }
-    let value_per_key = metadata.value_per_key()?;
-    let expected = metadata
-        .value_heads
-        .checked_mul(head_dim)
-        .context("Qwen3.5 GDN value dimension overflow")?;
-    if shape.get(dim).copied() != Some(expected) {
-        bail!(
-            "Qwen3.5 GDN reordered dimension {dim} has length {:?}, expected {expected}",
-            shape.get(dim)
-        );
-    }
-    let mut expanded = shape.to_vec();
-    expanded.splice(dim..=dim, [value_per_key, metadata.key_heads, head_dim]);
-    Ok(binding
-        .reshape(expanded)
-        .transpose(dim, dim + 1)
-        .reshape(shape.to_vec()))
 }
 
 fn bind_qwen2_vision(
@@ -961,7 +820,26 @@ fn bind(
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write, sync::Arc};
+
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        DType, Device, Tensor,
+    };
+    use mistralrs_quant::{
+        ColumnParallelLayer, Comm, GgufWeightSource, Id, QuantizedConfig, QuantizedWeightSource,
+        Shard,
+    };
+    use tempfile::NamedTempFile;
+
     use super::*;
+
+    const TINY_HIDDEN_SIZE: usize = 256;
+    const TINY_KEY_HEADS: u32 = 1;
+    const TINY_VALUE_HEADS: u32 = 2;
+    const TINY_KEY_HEAD_DIM: u32 = 1;
+    const TINY_VALUE_DIM: u32 = 256;
+    const TINY_QKV_ROWS: usize = (2 * TINY_KEY_HEADS * TINY_KEY_HEAD_DIM + TINY_VALUE_DIM) as usize;
 
     fn inventory(tensors: &[(&str, &[usize])]) -> TensorInventory {
         TensorInventory::new(
@@ -973,6 +851,67 @@ mod tests {
 
     fn names(bindings: &GgufBindingMap) -> BTreeSet<String> {
         bindings.iter().map(|(name, _)| name.to_string()).collect()
+    }
+
+    fn tiny_qwen35_multimodal_archive(
+        architecture: &str,
+    ) -> Result<(NamedTempFile, Arc<GgufArchive>)> {
+        let qkv = q4k_ones(TINY_QKV_ROWS, TINY_HIDDEN_SIZE)?;
+        let gate = q4k_ones(TINY_VALUE_DIM as usize, TINY_HIDDEN_SIZE)?;
+        let beta = q4k_ones(TINY_VALUE_HEADS as usize, TINY_HIDDEN_SIZE)?;
+        let alpha = q4k_ones(TINY_VALUE_HEADS as usize, TINY_HIDDEN_SIZE)?;
+        let output = q4k_ones(TINY_HIDDEN_SIZE, TINY_VALUE_DIM as usize)?;
+        let metadata = [
+            (
+                GENERAL_ARCHITECTURE.to_string(),
+                Value::String(architecture.to_string()),
+            ),
+            (
+                PROJECTOR_TYPE.to_string(),
+                Value::String(QWEN3VL_PROJECTOR.to_string()),
+            ),
+            (
+                format!("{architecture}.ssm.group_count"),
+                Value::U32(TINY_KEY_HEADS),
+            ),
+            (
+                format!("{architecture}.ssm.time_step_rank"),
+                Value::U32(TINY_VALUE_HEADS),
+            ),
+            (
+                format!("{architecture}.ssm.state_size"),
+                Value::U32(TINY_KEY_HEAD_DIM),
+            ),
+            (
+                format!("{architecture}.ssm.inner_size"),
+                Value::U32(TINY_VALUE_DIM),
+            ),
+        ];
+        let metadata = metadata
+            .iter()
+            .map(|(key, value)| (key.as_str(), value))
+            .collect::<Vec<_>>();
+
+        let mut file = NamedTempFile::new()?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &metadata,
+            &[
+                ("blk.0.attn_qkv.weight", &qkv),
+                ("blk.0.attn_gate.weight", &gate),
+                ("blk.0.ssm_beta.weight", &beta),
+                ("blk.0.ssm_alpha.weight", &alpha),
+                ("blk.0.ssm_out.weight", &output),
+            ],
+        )?;
+        file.as_file_mut().flush()?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        Ok((file, archive))
+    }
+
+    fn q4k_ones(rows: usize, cols: usize) -> Result<QTensor> {
+        let weight = Tensor::ones((rows, cols), DType::F32, &Device::Cpu)?;
+        QTensor::quantize(&weight, GgmlDType::Q4K).map_err(Into::into)
     }
 
     #[test]
@@ -1227,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn qwen35_inverts_converter_transforms() -> Result<()> {
+    fn qwen35_moe_preserves_tiled_gdn_and_inverts_remaining_transforms() -> Result<()> {
         let metadata = GdnMetadata {
             key_heads: 2,
             value_heads: 4,
@@ -1292,6 +1231,21 @@ mod tests {
             Some(GgufTensorBinding::Tensor(source))
                 if source == "blk.0.ffn_gate_exps.weight"
         ));
+        for (target, source) in [
+            ("in_proj_qkv.weight", "blk.0.attn_qkv.weight"),
+            ("in_proj_z.weight", "blk.0.attn_gate.weight"),
+            ("in_proj_b.weight", "blk.0.ssm_beta.weight"),
+            ("in_proj_a.weight", "blk.0.ssm_alpha.weight"),
+            ("dt_bias", "blk.0.ssm_dt.bias"),
+            ("out_proj.weight", "blk.0.ssm_out.weight"),
+        ] {
+            assert!(matches!(
+                bindings.get(&format!(
+                    "model.language_model.layers.0.linear_attn.{target}"
+                )),
+                Some(GgufTensorBinding::Tensor(actual)) if actual == source
+            ));
+        }
         Ok(())
     }
 
@@ -1316,13 +1270,11 @@ mod tests {
             ("blk.0.ssm_norm.weight", &[2]),
             ("blk.0.ssm_out.weight", &[8, 8]),
         ]);
-        let mut bindings = GgufBindingMap::new();
-        bind_text(
+        let bindings = build_qwen_multimodal_bindings_from_inventory(
             &inventory,
             QwenMultimodalFamily::Qwen35,
+            None,
             Some(metadata),
-            true,
-            &mut bindings,
         )?;
         for (target, source) in [
             ("in_proj_qkv.weight", "blk.0.attn_qkv.weight"),
@@ -1347,6 +1299,123 @@ mod tests {
             bindings.get("model.language_model.layers.0.linear_attn.conv1d.weight"),
             Some(GgufTensorBinding::Reshape { dims, .. }) if dims == &[16, 1, 3]
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn qwen35_multimodal_q4k_gdn_stays_packed() -> Result<()> {
+        for architecture in ["qwen35", "qwen35moe"] {
+            let (_file, archive) = tiny_qwen35_multimodal_archive(architecture)?;
+            let bindings = build_qwen_multimodal_bindings(&archive)?;
+            let source = GgufWeightSource::new(archive, &bindings, DType::F32)?;
+            for (projection, expected_shape) in [
+                ("in_proj_qkv", [TINY_QKV_ROWS, TINY_HIDDEN_SIZE]),
+                ("in_proj_z", [TINY_VALUE_DIM as usize, TINY_HIDDEN_SIZE]),
+                ("in_proj_b", [TINY_VALUE_HEADS as usize, TINY_HIDDEN_SIZE]),
+                ("in_proj_a", [TINY_VALUE_HEADS as usize, TINY_HIDDEN_SIZE]),
+                ("out_proj", [TINY_HIDDEN_SIZE, TINY_VALUE_DIM as usize]),
+            ] {
+                let layer = source
+                    .load_linear(
+                        &format!("model.language_model.layers.0.linear_attn.{projection}"),
+                        &Device::Cpu,
+                        Shard::default(),
+                    )?
+                    .unwrap();
+
+                assert_eq!(layer.name(), "gguf", "{architecture} {projection}");
+                let qweight = layer
+                    .get_qtensor()
+                    .unwrap_or_else(|| panic!("{architecture} {projection} did not stay packed"));
+                assert_eq!(
+                    qweight.dtype(),
+                    GgmlDType::Q4K,
+                    "{architecture} {projection}"
+                );
+                assert_eq!(
+                    qweight.shape().dims(),
+                    expected_shape,
+                    "{architecture} {projection}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn qwen35_multimodal_config_selects_tiled_gdn() -> Result<()> {
+        for loader_type in [
+            MultimodalLoaderType::Qwen3_5,
+            MultimodalLoaderType::Qwen3_5Moe,
+        ] {
+            let config = normalize_qwen_multimodal_config(
+                &loader_type,
+                r#"{"text_config":{"_mistralrs_gdn_v_head_layout":"grouped"}}"#,
+            )?;
+            let config: serde_json::Value = serde_json::from_str(&config)?;
+            assert_eq!(config["text_config"][GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn qwen35_multimodal_config_uses_gguf_weights_over_hf_quantization_metadata() -> Result<()> {
+        let quantization_config = r#"{"quant_method":"awq","bits":4,"group_size":128}"#;
+        for (architecture, loader_type) in [
+            ("qwen35", MultimodalLoaderType::Qwen3_5),
+            ("qwen35moe", MultimodalLoaderType::Qwen3_5Moe),
+        ] {
+            let config = normalize_qwen_multimodal_config(
+                &loader_type,
+                &format!(
+                    r#"{{"quantization_config":{quantization_config},"text_config":{{"quantization_config":{quantization_config}}}}}"#
+                ),
+            )?;
+            let config: serde_json::Value = serde_json::from_str(&config)?;
+            let top_level: Option<QuantizedConfig> =
+                serde_json::from_value(config["quantization_config"].clone())?;
+            let text: Option<QuantizedConfig> =
+                serde_json::from_value(config["text_config"]["quantization_config"].clone())?;
+            assert!(top_level.is_none(), "{architecture}");
+            assert!(text.is_none(), "{architecture}");
+
+            let (_file, archive) = tiny_qwen35_multimodal_archive(architecture)?;
+            let bindings = build_qwen_multimodal_bindings(&archive)?;
+            let source = Arc::new(GgufWeightSource::new(archive, &bindings, DType::F32)?);
+            let vb = source
+                .sharded_var_builder(Device::Cpu)
+                .pp("model")
+                .pp("language_model")
+                .pp("layers")
+                .pp(0)
+                .pp("linear_attn")
+                .pp("in_proj_qkv");
+            let comm = Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1)?);
+            let layer = ColumnParallelLayer::new(
+                TINY_HIDDEN_SIZE,
+                TINY_QKV_ROWS,
+                &top_level.or(text),
+                false,
+                &comm,
+                vb,
+            )?;
+            assert_eq!(layer.name(), "gguf", "{architecture}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn qwen_multimodal_config_normalization_is_scoped() -> Result<()> {
+        let config = r#"{"text_config":{}}"#;
+        assert_eq!(
+            normalize_qwen_multimodal_config(&MultimodalLoaderType::Qwen3VL, config)?,
+            config
+        );
+        assert!(normalize_qwen_multimodal_config(
+            &MultimodalLoaderType::Qwen3_5,
+            r#"{"text_config":null}"#,
+        )
+        .is_err());
         Ok(())
     }
 

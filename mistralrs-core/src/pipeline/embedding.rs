@@ -232,6 +232,11 @@ impl Loader for EmbeddingLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let config = if self.config.from_uqff.is_some() {
+            super::isq::sanitize_quantized_weight_source_config(&config)?
+        } else {
+            config
+        };
 
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for embedding models, disabling it.");
@@ -312,9 +317,10 @@ impl Loader for EmbeddingLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } else if let Some(isq) = in_situ_quant {
-                    let weight_pack_factor = isq.pack_factor(dtype);
                     let quantization =
                         AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
+                    let weight_pack_factor =
+                        quantization.conservative_pack_factor(dtype, isq.pack_factor(dtype));
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -343,6 +349,12 @@ impl Loader for EmbeddingLoader {
                         .topology
                         .as_ref()
                         .map(|topology| AutoDeviceMapQuantization::isq(None, Some(topology)));
+                    let weight_pack_factor =
+                        quantization
+                            .as_ref()
+                            .map_or(weight_pack_factor, |quantization| {
+                                quantization.conservative_pack_factor(dtype, weight_pack_factor)
+                            });
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -562,6 +574,8 @@ impl Loader for EmbeddingLoader {
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 
+        plan.validate_tracked_selection(&tracker.get())?;
+
         let imatrix_map = if plan.wants_imatrix {
             let drive = super::isq_flow::EmbeddingCalibrationDrive(&*model);
             Some(super::isq_flow::resolve_imatrix_map(
@@ -602,6 +616,7 @@ impl Loader for EmbeddingLoader {
             let full_ser = UqffFullSer {
                 tokenizer: &tokenizer,
                 template_filename: paths.get_template_filename(),
+                effective_chat_template: None,
                 generation_config: paths.get_gen_conf_filename(),
                 config: config.clone(),
                 processor_filename: &None,
@@ -615,10 +630,17 @@ impl Loader for EmbeddingLoader {
                 base_model: write_uqff.base_model.clone(),
                 repo_id: write_uqff.repo_id.clone(),
                 layers,
+                quantize_predicates: plan.uqff_quantize_predicates.clone(),
                 residual: model.residual_tensors(),
                 full_ser,
                 imatrix: imatrix_map.unwrap_or_default(),
             })?;
+        }
+
+        if plan.immediate_isq_installed {
+            for module in tracker.get().clone() {
+                module.ct.resolve()?;
+            }
         }
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;

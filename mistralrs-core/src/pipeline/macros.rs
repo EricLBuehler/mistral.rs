@@ -332,40 +332,49 @@ macro_rules! get_uqff_paths {
 
         let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
         let input_count = input_files.len();
-
-        // Resolve numeric/ISQ-name shorthands (e.g., "8" -> "q8_0-0.uqff")
-        let resolved_files: Vec<String> = input_files
+        let uqff_report = if available_files
             .iter()
-            .map(|file_str| {
-                if let Some(resolved) =
-                    $crate::pipeline::isq::resolve_uqff_shorthand(file_str, &available_files)
-                {
-                    tracing::debug!("Resolved UQFF shorthand `{}` to `{}`", file_str, resolved,);
-                    resolved
-                } else if file_str.parse::<u32>().is_ok() {
-                    let available_uqff: Vec<_> = available_files
-                        .iter()
-                        .filter(|f| f.ends_with(".uqff"))
-                        .collect();
-                    tracing::warn!(
-                        "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
-                        file_str,
-                        available_uqff,
-                    );
-                    file_str.clone()
-                } else {
-                    file_str.clone()
-                }
-            })
-            .collect();
+            .any(|file| file == mistralrs_quant::UQFF_REPORT_JSON)
+        {
+            let report_path = $crate::api_get_file!(
+                api,
+                mistralrs_quant::UQFF_REPORT_JSON,
+                Path::new(&$this.model_id),
+                &revision
+            );
+            Some(
+                $crate::pipeline::isq::read_uqff_report_file(&report_path)
+                    .map_err(candle_core::Error::msg)?,
+            )
+        } else {
+            None
+        };
 
         let mut expanded_files: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for file_str in &resolved_files {
-            let expanded = $crate::pipeline::isq::expand_uqff_shards(file_str, &available_files);
-            for f in expanded {
-                if seen.insert(f.clone()) {
-                    expanded_files.push(f);
+        for input in &input_files {
+            let resolved = $crate::pipeline::isq::resolve_uqff_input_files(
+                input,
+                &available_files,
+                uqff_report.as_ref(),
+            )
+            .map_err(candle_core::Error::msg)?;
+            if resolved.len() != 1 || resolved.first() != Some(input) {
+                tracing::debug!("Resolved UQFF input `{}` to {:?}", input, resolved);
+            } else if input.parse::<u32>().is_ok() {
+                let available_uqff: Vec<_> = available_files
+                    .iter()
+                    .filter(|file| file.ends_with(".uqff"))
+                    .collect();
+                tracing::warn!(
+                    "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
+                    input,
+                    available_uqff,
+                );
+            }
+            for file in resolved {
+                if seen.insert(file.clone()) {
+                    expanded_files.push(file);
                 }
             }
         }

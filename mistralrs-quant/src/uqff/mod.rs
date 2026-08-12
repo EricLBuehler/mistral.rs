@@ -166,8 +166,12 @@ pub enum BiasShard {
     Full,
     /// Do not embed: the input dim is sharded, so the caller adds the bias post-reduce.
     Skip,
-    /// The output dim is sharded; embed the matching bias slice.
-    Narrow(usize, usize),
+    /// A non-input weight dim is sharded; embed the matching bias slice.
+    Narrow {
+        dim: usize,
+        start: usize,
+        len: usize,
+    },
 }
 
 pub fn bias_shard(range: Option<(usize, usize, usize)>, weight_rank: usize) -> BiasShard {
@@ -181,10 +185,7 @@ pub fn bias_shard(range: Option<(usize, usize, usize)>, weight_rank: usize) -> B
     match range {
         None => BiasShard::Full,
         Some((dim, _, _)) if dim == weight_rank - 1 => BiasShard::Skip,
-        Some((dim, start, len)) if dim == weight_rank - 2 && weight_rank == 2 => {
-            BiasShard::Narrow(start, len)
-        }
-        // 3D expert layers never carry biases; anything else is a format we do not produce.
+        Some((dim, start, len)) if dim < weight_rank - 1 => BiasShard::Narrow { dim, start, len },
         Some(_) => BiasShard::Skip,
     }
 }
@@ -668,8 +669,28 @@ mod tests {
         assert!(matches!(bias_shard(Some((1, 0, 4)), 2), BiasShard::Skip));
         assert!(matches!(
             bias_shard(Some((0, 4, 4)), 2),
-            BiasShard::Narrow(4, 4)
+            BiasShard::Narrow {
+                dim: 0,
+                start: 4,
+                len: 4
+            }
         ));
         assert!(matches!(bias_shard(Some((2, 0, 4)), 3), BiasShard::Skip));
+        assert!(matches!(
+            bias_shard(Some((1, 4, 4)), 3),
+            BiasShard::Narrow {
+                dim: 1,
+                start: 4,
+                len: 4
+            }
+        ));
+        assert!(matches!(
+            bias_shard(Some((0, 1, 2)), 3),
+            BiasShard::Narrow {
+                dim: 0,
+                start: 1,
+                len: 2
+            }
+        ));
     }
 }

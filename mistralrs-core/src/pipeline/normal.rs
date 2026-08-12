@@ -268,6 +268,7 @@ pub(crate) struct PreparedNormalSource {
     pub config: String,
     pub weights: mistralrs_quant::ShardedVarBuilder,
     pub tokenizer: Tokenizer,
+    pub generation_config: Option<GenerationConfig>,
     pub chat_template: Option<String>,
     pub bos_token: Option<String>,
     pub eos_token: Option<String>,
@@ -539,6 +540,11 @@ impl Loader for NormalLoader {
             Some(source) => source.config.clone(),
             None => std::fs::read_to_string(paths.get_config_filename())?,
         };
+        let config = if self.config.from_uqff.is_some() {
+            super::isq::sanitize_quantized_weight_source_config(&config)?
+        } else {
+            config
+        };
 
         if !self.inner.supports_paged_attention(&config)? {
             paged_attn_config = None;
@@ -585,10 +591,11 @@ impl Loader for NormalLoader {
             .prepared_source
             .as_ref()
             .and_then(|source| source.weights.weight_source().cloned());
+        let has_prepared_weight_source = prepared_weight_source.is_some();
         let weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>> = uqff_reader
             .clone()
             .map(|reader| reader as Arc<dyn mistralrs_quant::QuantizedWeightSource>)
-            .or(prepared_weight_source);
+            .or(prepared_weight_source.clone());
 
         // If auto, convert to Map if not using nccl
         let mut max_kv_tokens: Option<usize> = None;
@@ -606,79 +613,145 @@ impl Loader for NormalLoader {
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                if let Some(source) = weight_source.as_ref() {
-                    let weight_pack_factor = source.pack_factor(dtype)?;
-                    let quantization = AutoDeviceMapQuantization::weight_source(source.as_ref());
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        None,
-                    )?;
-                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        Some(&quantization),
-                        None,
-                    )?;
-                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                    (
-                        layer_sizes_in_bytes,
-                        non_mapped_size_in_bytes,
-                        layer_sizes_sum + non_mapped_size_in_bytes,
-                    )
-                } else if let Some(isq) = in_situ_quant {
-                    let weight_pack_factor = isq.pack_factor(dtype);
-                    let quantization =
-                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        None,
-                    )?;
-                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        Some(&quantization),
-                        None,
-                    )?;
-                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                    (
-                        layer_sizes_in_bytes,
-                        non_mapped_size_in_bytes,
-                        layer_sizes_sum + non_mapped_size_in_bytes,
-                    )
-                } else {
-                    // Be sure to get the weight pack factor here; we might be loading a prequantized model.
-                    let weight_pack_factor =
-                        QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                    let quantization = self
-                        .config
-                        .topology
-                        .as_ref()
-                        .map(|topology| AutoDeviceMapQuantization::isq(None, Some(topology)));
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        None,
-                    )?;
-                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        quantization.as_ref(),
-                        None,
-                    )?;
-                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                    (
-                        layer_sizes_in_bytes,
-                        non_mapped_size_in_bytes,
-                        layer_sizes_sum + non_mapped_size_in_bytes,
-                    )
+                match super::isq_flow::resolve_auto_device_map_sizing(
+                    uqff_reader.is_some(),
+                    has_prepared_weight_source,
+                    in_situ_quant,
+                ) {
+                    sizing @ (super::isq_flow::AutoDeviceMapSizing::Uqff
+                    | super::isq_flow::AutoDeviceMapSizing::PreparedWeightSource) => {
+                        let source = weight_source
+                            .as_ref()
+                            .expect("selected weight-source sizing requires a weight source");
+                        let quantization =
+                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                AutoDeviceMapQuantization::weight_source(source.as_ref())
+                            } else {
+                                AutoDeviceMapQuantization::weight_source_with_topology(
+                                    source.as_ref(),
+                                    self.config.topology.as_ref(),
+                                )
+                            };
+                        let weight_pack_factor = quantization
+                            .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
+                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            None,
+                        )?;
+                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            Some(&quantization),
+                            None,
+                        )?;
+                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                        (
+                            layer_sizes_in_bytes,
+                            non_mapped_size_in_bytes,
+                            layer_sizes_sum + non_mapped_size_in_bytes,
+                        )
+                    }
+                    super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
+                        let moqe =
+                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly);
+                        let source_pack_factor = if let Some(source) = &prepared_weight_source {
+                            source.pack_factor(dtype)?
+                        } else {
+                            QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?
+                        };
+                        let target_pack_factor = isq.pack_factor(dtype);
+                        let (weight_pack_factor, non_mapped_pack_factor, quantization) = if moqe {
+                            let quantization = prepared_weight_source.as_ref().map_or_else(
+                                || {
+                                    AutoDeviceMapQuantization::isq(
+                                        None,
+                                        self.config.topology.as_ref(),
+                                    )
+                                },
+                                |source| {
+                                    AutoDeviceMapQuantization::weight_source_with_topology(
+                                        source.as_ref(),
+                                        self.config.topology.as_ref(),
+                                    )
+                                },
+                            );
+                            (
+                                quantization.conservative_moqe_pack_factor(
+                                    dtype,
+                                    source_pack_factor,
+                                    isq,
+                                ),
+                                source_pack_factor,
+                                quantization,
+                            )
+                        } else {
+                            let quantization = AutoDeviceMapQuantization::isq(
+                                Some(isq),
+                                self.config.topology.as_ref(),
+                            );
+                            (
+                                quantization.conservative_pack_factor(dtype, target_pack_factor),
+                                target_pack_factor,
+                                quantization,
+                            )
+                        };
+                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            None,
+                        )?;
+                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                            &config,
+                            dtype,
+                            non_mapped_pack_factor,
+                            Some(&quantization),
+                            None,
+                        )?;
+                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                        (
+                            layer_sizes_in_bytes,
+                            non_mapped_size_in_bytes,
+                            layer_sizes_sum + non_mapped_size_in_bytes,
+                        )
+                    }
+                    super::isq_flow::AutoDeviceMapSizing::Checkpoint => {
+                        // Be sure to get the weight pack factor here; we might be loading a prequantized model.
+                        let weight_pack_factor =
+                            QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
+                        let quantization =
+                            self.config.topology.as_ref().map(|topology| {
+                                AutoDeviceMapQuantization::isq(None, Some(topology))
+                            });
+                        let weight_pack_factor =
+                            quantization
+                                .as_ref()
+                                .map_or(weight_pack_factor, |quantization| {
+                                    quantization.conservative_pack_factor(dtype, weight_pack_factor)
+                                });
+                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            None,
+                        )?;
+                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            quantization.as_ref(),
+                            None,
+                        )?;
+                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                        (
+                            layer_sizes_in_bytes,
+                            non_mapped_size_in_bytes,
+                            layer_sizes_sum + non_mapped_size_in_bytes,
+                        )
+                    }
                 };
 
             let new = auto_device_map::get_device_layers(
@@ -1081,15 +1154,18 @@ impl Loader for NormalLoader {
             Some(source) => source.tokenizer.clone(),
             None => get_tokenizer(paths.get_tokenizer_filename(), None)?,
         };
-        let gen_conf: Option<GenerationConfig> = paths.get_gen_conf_filename().and_then(|f| {
-            match serde_json::from_str::<GenerationConfig>(&fs::read_to_string(f).unwrap()) {
-                Ok(conf) => Some(conf),
-                Err(e) => {
-                    warn!("Failed to parse generation_config.json: {}", e);
-                    None
+        let gen_conf: Option<GenerationConfig> = match self.prepared_source.as_ref() {
+            Some(source) => source.generation_config.clone(),
+            None => paths.get_gen_conf_filename().and_then(|f| {
+                match serde_json::from_str::<GenerationConfig>(&fs::read_to_string(f).unwrap()) {
+                    Ok(conf) => Some(conf),
+                    Err(e) => {
+                        warn!("Failed to parse generation_config.json: {}", e);
+                        None
+                    }
                 }
-            }
-        });
+            }),
+        };
 
         let chat_template_explicit = paths
             .get_chat_template_explicit()
@@ -1124,6 +1200,8 @@ impl Loader for NormalLoader {
                     .map(|token| BeginEndUnkPadTok(Either::Left(token)));
             }
         }
+
+        plan.validate_tracked_selection(&tracker.get())?;
 
         let imatrix_map = if plan.wants_imatrix {
             let drive = super::isq_flow::NormalCalibrationDrive(&*model);
@@ -1173,7 +1251,11 @@ impl Loader for NormalLoader {
             let full_ser = UqffFullSer {
                 tokenizer: &tokenizer,
                 template_filename: paths.get_template_filename(),
-                generation_config: paths.get_gen_conf_filename(),
+                effective_chat_template: Some(&chat_template),
+                generation_config: match self.prepared_source.as_ref() {
+                    Some(source) if source.generation_config.is_none() => None,
+                    _ => paths.get_gen_conf_filename(),
+                },
                 config: config.clone(),
                 processor_filename: &None,
                 preprocessor_filename: &None,
@@ -1186,6 +1268,7 @@ impl Loader for NormalLoader {
                 base_model: write_uqff.base_model.clone(),
                 repo_id: write_uqff.repo_id.clone(),
                 layers,
+                quantize_predicates: plan.uqff_quantize_predicates.clone(),
                 residual,
                 full_ser,
                 imatrix: imatrix_map.unwrap_or_default(),
@@ -1206,7 +1289,7 @@ impl Loader for NormalLoader {
             paged_attn_config
         };
 
-        if paged_attn_config.is_some() {
+        if plan.immediate_isq_installed {
             for module in tracker.get().clone() {
                 module.ct.resolve()?;
             }

@@ -50,20 +50,27 @@ impl Gemma3Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         match cfg {
-            Gemma3Config::Text(text_cfg) => Ok(Self {
-                language_model: TextModel::new(
-                    text_cfg,
-                    vb,
-                    is_gptx,
-                    normal_loading_metadata,
-                    attention_mechanism,
-                    None,
-                )?,
-                multi_modal_projector: None,
-                vision_tower: None,
-                cfg: cfg.clone(),
-                encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
-            }),
+            Gemma3Config::Text(text_cfg) => {
+                let vb = if text_cfg.use_language_model_prefix {
+                    vb.pp("language_model")
+                } else {
+                    vb
+                };
+                Ok(Self {
+                    language_model: TextModel::new(
+                        text_cfg,
+                        vb,
+                        is_gptx,
+                        normal_loading_metadata,
+                        attention_mechanism,
+                        None,
+                    )?,
+                    multi_modal_projector: None,
+                    vision_tower: None,
+                    cfg: cfg.clone(),
+                    encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+                })
+            }
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
@@ -189,6 +196,12 @@ impl Gemma3Model {
 impl IsqModel for Gemma3Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         match &self.cfg {
+            Gemma3Config::Text(config) if config.use_language_model_prefix => {
+                let uvb = UnVarBuilder::new();
+                uvb.pp("language_model")
+                    .extend(self.language_model.residual_tensors());
+                uvb.to_safetensors()
+            }
             Gemma3Config::Text(_) => self.language_model.residual_tensors(),
             Gemma3Config::WithVision { .. } => {
                 let vision_tower = self.vision_tower.as_ref().unwrap();

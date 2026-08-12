@@ -42,8 +42,9 @@ quantized model:
 Q8_0 is the common high-precision Q target because quantized embedding kernels support it across
 CPU, CUDA, and Metal. This policy applies to token embeddings, quantized per-layer token embeddings,
 `lm_head`, and the top-level `output` head. Gemma 4 applies it to the PLE token-embedding table while
-keeping PLE projections at the model default and norms dense. Gemma 3n PLE remains dense because its
-MatFormer slicing path reshapes the embedding table directly.
+keeping PLE projections at the model default and norms dense. Gemma 3n applies it to the PLE
+token-embedding table in the default full configuration; explicit MatFormer slices keep that table
+dense.
 
 Each supported model loader declares the exact language embedding and output-head paths that receive
 this policy. A similarly named tensor in a vision, audio, or auxiliary subtree is not promoted merely
@@ -94,12 +95,12 @@ Supported for GGUF compatibility:
 
 ### FP8
 
-E4M3 FP8. Native acceleration on NVIDIA Ada/Hopper (compute 8.9+); runs emulated elsewhere.
+E4M3 FP8 has native acceleration on NVIDIA Ada/Hopper (compute 8.9+). F8Q8 is CPU-only.
 
 | Type | Bits | Layout |
 |---|---|---|
 | `fp8` | 8 | E4M3 (4-bit exponent, 3-bit mantissa) |
-| `f8q8` | 8 | FP8 weights, INT8 activations |
+| `f8q8` | 8 | CPU-only F8Q8 weights |
 
 ### MXFP4
 

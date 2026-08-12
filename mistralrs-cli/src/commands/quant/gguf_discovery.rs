@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::Path,
     sync::LazyLock,
 };
@@ -303,6 +304,45 @@ pub(crate) fn list_local_files_recursive(root: &Path) -> Result<Vec<String>> {
     }
     files.sort();
     Ok(files)
+}
+
+pub(crate) fn list_local_gguf_companions(root: &Path, exact_file: &str) -> Result<Vec<String>> {
+    let mut directories = BTreeSet::from([root.to_path_buf()]);
+    for filename in exact_file.split(GGUF_MULTI_FILE_DELIMITER).map(str::trim) {
+        let path = Path::new(filename);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        };
+        if let Some(parent) = resolved.parent() {
+            directories.insert(parent.to_path_buf());
+        }
+    }
+
+    let mut files = BTreeSet::new();
+    for directory in directories {
+        if !directory.is_dir() {
+            continue;
+        }
+        for entry in fs::read_dir(&directory).with_context(|| {
+            format!("Cannot list local GGUF directory `{}`", directory.display())
+        })? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if !file_type.is_file() && !file_type.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            files.insert(
+                path.strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+    Ok(files.into_iter().collect())
 }
 
 fn build_groups(files: &[String], kind: ArtifactKind) -> BTreeMap<String, GgufGroup> {

@@ -318,7 +318,7 @@ pub fn get_device_layers(
 
     let mut mappings = Vec::new();
     info!("Using automatic device mapping parameters: {params}.");
-    if let Some(subs) = loader.non_mapped_sub_models() {
+    if let Some(subs) = loader.non_mapped_sub_models_for_config(config)? {
         let (_, last) = avail.last().unwrap();
         info!(
             "The following sub-models will not be device mapped and will be loaded on {}: {}",

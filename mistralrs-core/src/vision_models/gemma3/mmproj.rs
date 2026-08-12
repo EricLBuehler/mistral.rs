@@ -9,6 +9,10 @@ use crate::{
 
 use super::config::Gemma3Config;
 
+fn add_input_projection_residual(uvb: &UnVarBuilder, weight: &Tensor) {
+    uvb.add_tensor("mm_input_projection_weight", weight.clone());
+}
+
 pub struct Gemma3MultiModalProjector {
     mm_input_projection_weight: Tensor,
     mm_soft_emb_norm: GemmaRmsNorm,
@@ -77,11 +81,26 @@ impl Gemma3MultiModalProjector {
 
         uvb.pp("mm_soft_emb_norm").add(&self.mm_soft_emb_norm);
 
-        let mut tensors = uvb.to_safetensors();
-        tensors.push((
-            "mm_input_projection_weight.weight".to_string(),
-            self.mm_input_projection_weight.clone(),
-        ));
-        tensors
+        add_input_projection_residual(&uvb, &self.mm_input_projection_weight);
+
+        uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::{DType, Device};
+
+    #[test]
+    fn input_projection_residual_uses_constructor_key() -> Result<()> {
+        let uvb = UnVarBuilder::new();
+        let weight = Tensor::zeros((2, 3), DType::F32, &Device::Cpu)?;
+        add_input_projection_residual(&uvb, &weight);
+
+        let residual = uvb.to_safetensors();
+        assert_eq!(residual.len(), 1);
+        assert_eq!(residual[0].0, "mm_input_projection_weight");
+        Ok(())
     }
 }

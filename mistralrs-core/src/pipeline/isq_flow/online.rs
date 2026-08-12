@@ -277,7 +277,10 @@ pub(crate) fn requantize_from_source(
             && !needs_distributed_wrapper(module)
         {
             dense.push(module.clone());
-        } else if source.has_expert_stack(&module.key) && module.shard.is_some() {
+        } else if source.has_expert_stack(&module.key)
+            && module.shard.is_some()
+            && !needs_distributed_wrapper(module)
+        {
             experts.push(module.clone());
         } else {
             fallback.push(module.clone());
@@ -306,6 +309,11 @@ pub(crate) fn requantize_from_source(
         let mmap = source.mmap.clone();
         let guard = guard.clone().with_module_key(module.key.clone());
         let (ty, imatrix) = module_imatrix(&module, pool_ty, imatrix_map);
+        let source_shape = source
+            .shapes
+            .get(&format!("{}.weight", module.key))
+            .expect("dense source probe requires a weight")
+            .clone();
         let source_has_bias = source.shapes.contains_key(&format!("{}.bias", module.key));
         let resident = module.ct.resolve()?;
         let (_, device) = resident.dtype_and_device();
@@ -326,23 +334,38 @@ pub(crate) fn requantize_from_source(
                 let w = mmap.load(&format!("{}.weight", module.key), &Device::Cpu, None)?;
                 // force_contiguous: offset views share storage, and QTensor::quantize reads raw storage
                 let w = shard.apply_to(&w)?.force_contiguous()?;
-                let b = if resident_has_bias && source_has_bias {
+                let range = mistralrs_quant::shard_range(shard, &source_shape)?;
+                let b = if source_has_bias && (resident_has_bias || source_shape.len() == 3) {
                     let b = mmap.load(&format!("{}.bias", module.key), &Device::Cpu, None)?;
-                    // Out-dim shards slice the bias the same way; in-dim shards leave it whole.
-                    let sharded_dim0 = matches!(
-                        shard,
-                        mistralrs_quant::Shard::Simple { dim: 0, .. }
-                            | mistralrs_quant::Shard::Offset { dim: 0, .. }
-                    );
-                    Some(if sharded_dim0 {
-                        shard.apply_to(&b)?.force_contiguous()?
-                    } else {
-                        b
-                    })
+                    match mistralrs_quant::bias_shard(range, source_shape.len()) {
+                        mistralrs_quant::BiasShard::Skip if source_shape.len() == 3 => {
+                            anyhow::bail!(
+                                "Biased stacked expert `{}` cannot be input-sharded; load replicated experts.",
+                                module.key
+                            );
+                        }
+                        mistralrs_quant::BiasShard::Skip => None,
+                        mistralrs_quant::BiasShard::Full => Some(b),
+                        mistralrs_quant::BiasShard::Narrow { dim, start, len } => {
+                            Some(b.narrow(dim, start, len)?.force_contiguous()?)
+                        }
+                    }
                 } else {
                     None
                 };
-                let replacement = quantize_source_tensor(w, b, ty, device, imatrix, guard)?;
+                let replacement = if w.rank() == 3 {
+                    mistralrs_quant::quantize_expert_stack_with_bias(
+                        w,
+                        b,
+                        ty,
+                        imatrix,
+                        &device,
+                        &AtomicUsize::new(0),
+                        guard,
+                    )?
+                } else {
+                    quantize_source_tensor(w, b, ty, device, imatrix, guard)?
+                };
                 module
                     .ct
                     .replace(resident.preserve_dynamic_lora(replacement));
@@ -356,19 +379,45 @@ pub(crate) fn requantize_from_source(
     let mut errors: Vec<String> = Vec::new();
     for module in &experts {
         let job = || -> Result<()> {
-            let stack =
-                crate::moe::rebuild_expert_stack(&source.mmap, &source.shapes, &module.key)?
+            let projection =
+                crate::moe::rebuild_expert_projection(&source.mmap, &source.shapes, &module.key)?
                     .context("Expert stack probe succeeded but rebuild failed.")?;
             let resident = module.ct.resolve()?;
             let (_, device) = resident.dtype_and_device();
             let (ty, imatrix) = module_imatrix(module, pool_ty, imatrix_map);
-            module.ct.replace(mistralrs_quant::quantize_expert_stack(
-                stack,
+            let shard = module.shard.expect("expert source reload requires a shard");
+            let range = mistralrs_quant::shard_range(shard, projection.weight.dims())?;
+            let weight_rank = projection.weight.rank();
+            let weight = shard.apply_to(&projection.weight)?.force_contiguous()?;
+            let bias = match (
+                projection.bias,
+                mistralrs_quant::bias_shard(range, weight_rank),
+            ) {
+                (Some(_), mistralrs_quant::BiasShard::Skip) => {
+                    anyhow::bail!(
+                        "Biased stacked expert `{}` cannot be input-sharded; load replicated experts.",
+                        module.key
+                    );
+                }
+                (None, mistralrs_quant::BiasShard::Skip) => None,
+                (bias, mistralrs_quant::BiasShard::Full) => bias,
+                (Some(bias), mistralrs_quant::BiasShard::Narrow { dim, start, len }) => {
+                    Some(bias.narrow(dim, start, len)?.contiguous()?)
+                }
+                (None, mistralrs_quant::BiasShard::Narrow { .. }) => None,
+            };
+            let replacement = mistralrs_quant::quantize_expert_stack_with_bias(
+                weight,
+                bias,
                 ty,
                 imatrix,
                 &device,
+                &AtomicUsize::new(0),
                 guard.clone().with_module_key(module.key.clone()),
-            )?);
+            )?;
+            module
+                .ct
+                .replace(resident.preserve_dynamic_lora(replacement));
             Ok(())
         };
         if let Err(e) = job() {
@@ -683,6 +732,234 @@ mod tests {
             dot / (na * nb)
         };
         assert!(cos > 0.99, "cos {cos}");
+        Ok(())
+    }
+
+    #[test]
+    fn from_source_preserves_expert_bias() -> Result<()> {
+        use mistralrs_quant::{QuantMethod, TrackedModule};
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let mut tensors = Vec::new();
+        let mut biases = Vec::new();
+        for expert in 0..E {
+            tensors.push((
+                format!("m.experts.{expert}.w1.weight"),
+                Tensor::zeros((INTER, 32), DType::F32, &Device::Cpu)?,
+            ));
+            let bias = Tensor::from_vec(
+                (0..INTER)
+                    .map(|output| {
+                        f32::from(u16::try_from(expert * INTER + output).expect("test value"))
+                    })
+                    .collect::<Vec<_>>(),
+                INTER,
+                &Device::Cpu,
+            )?;
+            tensors.push((format!("m.experts.{expert}.w1.bias"), bias.clone()));
+            biases.push(bias);
+        }
+        write_st(&file, tensors);
+
+        let zeros = candle_core::quantized::QTensor::quantize(
+            &Tensor::zeros((E, INTER, 32), DType::F32, &Device::Cpu)?,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        let resident = Arc::new(mistralrs_quant::GgufMatMul::new(
+            mistralrs_quant::QuantMethodConfig::Gguf {
+                q_weight: Arc::new(zeros),
+                b: Some(Tensor::zeros((E, INTER), DType::F32, &Device::Cpu)?),
+            },
+        )?) as Arc<dyn QuantMethod>;
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))?;
+        let ct = Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
+        let module = TrackedModule {
+            key: "m.experts.gate_proj".to_string(),
+            ct: ct.clone(),
+            ty: Some(IsqType::Q8_0),
+            promote_default: false,
+            shard: Some(mistralrs_quant::Shard::default()),
+        };
+
+        requantize_from_source(&[module], &[file], IsqType::Q8_0, &HashMap::new())?;
+
+        let indices = Tensor::from_vec(vec![0u32, 2, 1, 3], (2, 2), &Device::Cpu)?;
+        let input = Tensor::zeros((2, 1, 32), DType::F32, &Device::Cpu)?;
+        let actual = ct.gather_forward(&input, &indices)?;
+        let expected = Tensor::stack(&biases, 0)?
+            .index_select(&indices.flatten_all()?, 0)?
+            .reshape((2, 2, INTER))?;
+        let diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(diff < 1e-6, "max diff {diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn from_source_respects_stacked_expert_output_shard_and_bias() -> Result<()> {
+        use mistralrs_quant::{QuantMethod, Shard, TrackedModule};
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let truth = Tensor::randn(0f32, 1f32, (E, INTER, 32), &Device::Cpu)?;
+        let bias = Tensor::from_vec(
+            (0..E * INTER)
+                .map(|value| f32::from(u16::try_from(value).expect("test value")))
+                .collect::<Vec<_>>(),
+            (E, INTER),
+            &Device::Cpu,
+        )?;
+        write_st(
+            &file,
+            vec![
+                ("m.experts.gate_proj.weight".to_string(), truth.clone()),
+                ("m.experts.gate_proj.bias".to_string(), bias.clone()),
+            ],
+        );
+
+        let zeros = candle_core::quantized::QTensor::quantize(
+            &Tensor::zeros((E, INTER / 2, 32), DType::F32, &Device::Cpu)?,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        let resident = Arc::new(mistralrs_quant::GgufMatMul::new(
+            mistralrs_quant::QuantMethodConfig::Gguf {
+                q_weight: Arc::new(zeros),
+                b: Some(Tensor::zeros((E, INTER / 2), DType::F32, &Device::Cpu)?),
+            },
+        )?) as Arc<dyn QuantMethod>;
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))?;
+        let ct = Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
+        let module = TrackedModule {
+            key: "m.experts.gate_proj".to_string(),
+            ct: ct.clone(),
+            ty: Some(IsqType::Q8_0),
+            promote_default: false,
+            shard: Some(Shard::Simple {
+                dim: 1,
+                rank: 1,
+                world_size: 2,
+            }),
+        };
+
+        requantize_from_source(&[module], &[file], IsqType::Q8_0, &HashMap::new())?;
+
+        let swapped = ct.resolve()?;
+        assert_eq!(swapped.dequantize_w()?.dims(), [E, INTER / 2, 32]);
+        let indices = Tensor::from_vec(vec![0u32, 2, 1, 3], (2, 2), &Device::Cpu)?;
+        let input = Tensor::zeros((2, 1, 32), DType::F32, &Device::Cpu)?;
+        let actual = swapped.gather_forward(&input, &indices)?;
+        let expected_bias = bias
+            .narrow(1, INTER / 2, INTER / 2)?
+            .contiguous()?
+            .index_select(&indices.flatten_all()?, 0)?
+            .reshape((2, 2, INTER / 2))?;
+        let expected_weight = truth.narrow(1, INTER / 2, INTER / 2)?;
+        let weight_diff = (swapped.dequantize_w()? - expected_weight)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        let bias_diff = (actual - expected_bias)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(weight_diff < 0.05, "weight max diff {weight_diff}");
+        assert!(bias_diff < 1e-6, "bias max diff {bias_diff}");
+        Ok(())
+    }
+
+    #[test]
+    fn from_source_rejects_biased_expert_input_shard() -> Result<()> {
+        use mistralrs_quant::{QuantMethod, Shard, TrackedModule};
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        write_st(
+            &file,
+            vec![
+                (
+                    "m.experts.down_proj.weight".to_string(),
+                    Tensor::zeros((E, INTER, 64), DType::F32, &Device::Cpu)?,
+                ),
+                (
+                    "m.experts.down_proj.bias".to_string(),
+                    Tensor::zeros((E, INTER), DType::F32, &Device::Cpu)?,
+                ),
+            ],
+        );
+        let zeros = candle_core::quantized::QTensor::quantize(
+            &Tensor::zeros((E, INTER, 32), DType::F32, &Device::Cpu)?,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        let resident = Arc::new(mistralrs_quant::GgufMatMul::new(
+            mistralrs_quant::QuantMethodConfig::Gguf {
+                q_weight: Arc::new(zeros),
+                b: None,
+            },
+        )?) as Arc<dyn QuantMethod>;
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))?;
+        let module = TrackedModule {
+            key: "m.experts.down_proj".to_string(),
+            ct: Arc::new(mistralrs_quant::PendingIsqLayer::new(rx)),
+            ty: Some(IsqType::Q8_0),
+            promote_default: false,
+            shard: Some(Shard::Simple {
+                dim: 2,
+                rank: 0,
+                world_size: 2,
+            }),
+        };
+
+        let error = requantize_from_source(&[module], &[file], IsqType::Q8_0, &HashMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cannot be input-sharded"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn from_source_rejects_stacked_expert_target_without_gather() -> Result<()> {
+        use mistralrs_quant::{QuantMethod, TrackedModule};
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        write_st(
+            &file,
+            vec![(
+                "m.experts.gate_proj.weight".to_string(),
+                Tensor::zeros((E, INTER, 32), DType::F32, &Device::Cpu)?,
+            )],
+        );
+        let zeros = candle_core::quantized::QTensor::quantize(
+            &Tensor::zeros((E, INTER, 32), DType::F32, &Device::Cpu)?,
+            candle_core::quantized::GgmlDType::Q8_0,
+        )?;
+        let resident = Arc::new(mistralrs_quant::GgufMatMul::new(
+            mistralrs_quant::QuantMethodConfig::Gguf {
+                q_weight: Arc::new(zeros),
+                b: None,
+            },
+        )?) as Arc<dyn QuantMethod>;
+        let (tx, rx) = mistralrs_quant::pending_isq_channel();
+        tx.send(Ok(mistralrs_quant::IsqJobOutput::ready(resident)))?;
+        let ct = Arc::new(mistralrs_quant::PendingIsqLayer::new(rx));
+        let module = TrackedModule {
+            key: "m.experts.gate_proj".to_string(),
+            ct,
+            ty: Some(IsqType::HQQ4),
+            promote_default: false,
+            shard: Some(mistralrs_quant::Shard::default()),
+        };
+
+        let error = requantize_from_source(&[module], &[file], IsqType::HQQ4, &HashMap::new())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("does not support stacked expert gather"),
+            "{error}"
+        );
         Ok(())
     }
 }

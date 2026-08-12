@@ -424,6 +424,16 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         }
     }
 
+    pub fn weight_source_with_topology(
+        source: &'a dyn QuantizedWeightSource,
+        topology: Option<&'a Topology>,
+    ) -> Self {
+        Self {
+            source: AutoDeviceMapQuantizationSource::WeightSource(source),
+            topology,
+        }
+    }
+
     pub fn uqff(source: &'a dyn QuantizedWeightSource) -> Self {
         Self::weight_source(source)
     }
@@ -447,6 +457,26 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         self.pack_factor_for_candidates(&[name], dtype, fallback, true)
     }
 
+    pub fn conservative_pack_factor(&self, dtype: DType, fallback: usize) -> usize {
+        let topology_pack_factors = self.topology.into_iter().flat_map(|topology| {
+            topology
+                .layers
+                .iter()
+                .filter_map(|entry| entry.as_ref().and_then(|entry| entry.isq))
+                .chain(topology.patterns.iter().filter_map(|(_, entry)| entry.isq))
+        });
+        topology_pack_factors.fold(fallback, |factor, ty| factor.min(ty.pack_factor(dtype)))
+    }
+
+    pub fn conservative_moqe_pack_factor(
+        &self,
+        dtype: DType,
+        source_pack_factor: usize,
+        target: IsqType,
+    ) -> usize {
+        self.conservative_pack_factor(dtype, source_pack_factor.min(target.pack_factor(dtype)))
+    }
+
     fn pack_factor_for_candidates(
         &self,
         names: &[&str],
@@ -454,8 +484,16 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         fallback: usize,
         promote_default: bool,
     ) -> Result<usize> {
+        let topology_ty = names.iter().find_map(|name| {
+            self.topology
+                .and_then(|topology| topology.match_for_name(name))
+                .and_then(|topology| topology.isq)
+        });
         match self.source {
             AutoDeviceMapQuantizationSource::WeightSource(source) => {
+                if let Some(ty) = topology_ty {
+                    return Ok(ty.pack_factor(dtype));
+                }
                 for name in names {
                     if let Some(pack_factor) = source.pack_factor_for(name, dtype)? {
                         return Ok(pack_factor);
@@ -464,22 +502,15 @@ impl<'a> AutoDeviceMapQuantization<'a> {
                 Ok(1)
             }
             AutoDeviceMapQuantizationSource::Isq(default) => {
-                let ty = names
-                    .iter()
-                    .find_map(|name| {
-                        self.topology
-                            .and_then(|topology| topology.match_for_name(name))
-                            .and_then(|topology| topology.isq)
+                let ty = topology_ty.or_else(|| {
+                    default.map(|ty| {
+                        if promote_default {
+                            ty.promote_for_sensitive_tensor()
+                        } else {
+                            ty
+                        }
                     })
-                    .or_else(|| {
-                        default.map(|ty| {
-                            if promote_default {
-                                ty.promote_for_sensitive_tensor()
-                            } else {
-                                ty
-                            }
-                        })
-                    });
+                });
                 Ok(ty.map(|ty| ty.pack_factor(dtype)).unwrap_or(fallback))
             }
         }
@@ -592,6 +623,12 @@ pub trait DeviceMappedModelLoader {
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
     }
+    fn non_mapped_sub_models_for_config(
+        &self,
+        _config: &str,
+    ) -> Result<Option<Vec<NonMappedSubModel>>> {
+        Ok(self.non_mapped_sub_models())
+    }
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
 
@@ -689,6 +726,43 @@ pub trait Loader: Send + Sync {
 mod auto_device_map_quantization_tests {
     use super::*;
 
+    struct PackFactorWeightSource(usize);
+
+    impl QuantizedWeightSource for PackFactorWeightSource {
+        fn contains(&self, _name: &str) -> bool {
+            true
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: mistralrs_quant::Shard,
+        ) -> candle_core::Result<Option<std::sync::Arc<dyn mistralrs_quant::QuantMethod>>> {
+            unreachable!()
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<candle_core::Tensor>> {
+            unreachable!()
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(self.0)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(self.0))
+        }
+    }
+
     const EMBEDDING: &str = "model.embed_tokens.weight";
     const HEAD: &str = "lm_head.weight";
 
@@ -752,6 +826,60 @@ mod auto_device_map_quantization_tests {
             IsqType::AFQ8.pack_factor(dtype)
         );
         assert_eq!(quantization.unpromoted_pack_factor_for(HEAD, dtype, 3)?, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn topology_pack_factor_is_conservative_for_mapped_layers() -> Result<()> {
+        let dtype = DType::BF16;
+        let topology = Topology::from_str("'0':\n  isq: Q8_0\n")?;
+        let quantization = AutoDeviceMapQuantization::isq(Some(IsqType::Q2K), Some(&topology));
+        assert_eq!(
+            quantization.conservative_pack_factor(dtype, IsqType::Q2K.pack_factor(dtype)),
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn topology_isq_overlays_prepared_weight_source_sizing() -> Result<()> {
+        let dtype = DType::BF16;
+        let source = PackFactorWeightSource(IsqType::Q2K.pack_factor(dtype));
+        let topology = Topology::from_str("'/^model\\.embed_tokens\\.weight$/':\n  isq: Q8_0\n")?;
+        let quantization =
+            AutoDeviceMapQuantization::weight_source_with_topology(&source, Some(&topology));
+
+        assert_eq!(
+            quantization.promoted_pack_factor_for(
+                EMBEDDING,
+                dtype,
+                IsqType::Q2K.pack_factor(dtype),
+            )?,
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        assert_eq!(
+            quantization.conservative_pack_factor(dtype, source.pack_factor(dtype)?),
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn moqe_sizing_keeps_source_precision_for_the_unquantized_trunk() -> Result<()> {
+        let dtype = DType::BF16;
+        let source_factor = IsqType::Q4K.pack_factor(dtype);
+        let source = PackFactorWeightSource(source_factor);
+        let prepared = AutoDeviceMapQuantization::weight_source(&source);
+        assert_eq!(
+            prepared.conservative_moqe_pack_factor(dtype, source_factor, IsqType::Q2K),
+            source_factor.min(IsqType::Q2K.pack_factor(dtype))
+        );
+
+        let checkpoint = AutoDeviceMapQuantization::isq(None, None);
+        assert_eq!(
+            checkpoint.conservative_moqe_pack_factor(dtype, 1, IsqType::Q2K),
+            1
+        );
         Ok(())
     }
 }

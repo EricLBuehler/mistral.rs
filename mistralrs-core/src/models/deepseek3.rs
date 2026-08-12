@@ -646,6 +646,17 @@ impl MoeGate {
     }
 }
 
+fn add_moe_gate_residual_tensors(
+    uvb: &UnVarBuilder,
+    weight: &Tensor,
+    correction_bias: Option<&Tensor>,
+) {
+    uvb.add_tensor("weight", weight.clone());
+    if let Some(bias) = correction_bias {
+        uvb.add_tensor("e_score_correction_bias", bias.clone());
+    }
+}
+
 struct Moe {
     experts: MoEExperts,
     shared_experts: Option<Mlp>,
@@ -1050,10 +1061,11 @@ impl IsqModel for DeepSeekV3 {
 
             match &layer.moe_or_mlp {
                 MoeOrMlp::Moe(moe) => {
-                    uvb_l
-                        .pp("mlp")
-                        .pp("gate")
-                        .add_tensor("weight", moe.gate.weight.clone());
+                    add_moe_gate_residual_tensors(
+                        &uvb_l.pp("mlp").pp("gate"),
+                        &moe.gate.weight,
+                        moe.gate.e_score_correction_bias.as_ref(),
+                    );
                 }
                 MoeOrMlp::Mlp(_) => (),
             }
@@ -1090,10 +1102,11 @@ impl IsqModel for DeepSeekV3 {
 
             match &layer.moe_or_mlp {
                 MoeOrMlp::Moe(moe) => {
-                    uvb_l
-                        .pp("mlp")
-                        .pp("gate")
-                        .add_tensor("weight", moe.gate.weight.clone());
+                    add_moe_gate_residual_tensors(
+                        &uvb_l.pp("mlp").pp("gate"),
+                        &moe.gate.weight,
+                        moe.gate.e_score_correction_bias.as_ref(),
+                    );
                 }
                 MoeOrMlp::Mlp(_) => (),
             }
@@ -1171,3 +1184,34 @@ impl NormalModel for DeepSeekV3 {
 }
 
 impl AnyMoeBaseModelMixin for DeepSeekV3 {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn residual_names(correction_bias: Option<Tensor>) -> Result<Vec<String>> {
+        let weight = Tensor::zeros((2, 4), DType::F32, &Device::Cpu)?;
+        let uvb = UnVarBuilder::new().pp("model.layers.0.mlp.gate");
+        add_moe_gate_residual_tensors(&uvb, &weight, correction_bias.as_ref());
+        let mut names = uvb
+            .to_safetensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>();
+        names.sort();
+        Ok(names)
+    }
+
+    #[test]
+    fn moe_gate_residual_includes_optional_correction_bias() -> Result<()> {
+        assert_eq!(
+            residual_names(Some(Tensor::zeros(2, DType::F32, &Device::Cpu)?))?,
+            [
+                "model.layers.0.mlp.gate.e_score_correction_bias",
+                "model.layers.0.mlp.gate.weight",
+            ]
+        );
+        assert_eq!(residual_names(None)?, ["model.layers.0.mlp.gate.weight"]);
+        Ok(())
+    }
+}

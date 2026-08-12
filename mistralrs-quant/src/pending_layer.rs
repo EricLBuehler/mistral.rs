@@ -100,6 +100,10 @@ impl QuantizedSerde for PendingIsqLayer {
         }
     }
 
+    fn uqff_type(&self) -> Option<IsqType> {
+        self.resolve().ok()?.uqff_type()
+    }
+
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<crate::UqffTensor>> {
         self.resolve()?.serialize_uqff(prefix, ty)
     }

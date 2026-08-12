@@ -15,8 +15,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, dense_embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker,
-        Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
+        self, dense_embedding, embedding, embedding_with_legacy_tied_uqff, Activation,
+        CausalMasker, Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{
@@ -1148,11 +1148,83 @@ pub(crate) fn handle_matformer_slicing(
     }
 }
 
+enum PerLayerTokenEmbedding {
+    Method(Arc<dyn QuantMethod>),
+    Dense(ScaledEmbedding),
+}
+
+impl PerLayerTokenEmbedding {
+    fn forward(&self, input_ids: &Tensor, dtype: DType, scale: f64) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.embedding_forward(input_ids, dtype)? * scale,
+            Self::Dense(embedding) => embedding.forward(input_ids),
+        }
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.dequantize_w(),
+            Self::Dense(embedding) => Ok(embedding.embedding.clone()),
+        }
+    }
+}
+
+fn load_per_layer_token_embedding(
+    vocab_size: usize,
+    hidden_size_per_layer: usize,
+    orig_num_hidden_layers: usize,
+    kept_layers_indices: Option<&Tensor>,
+    scale: f64,
+    vb: ShardedVarBuilder,
+    quantization_config: &Option<mistralrs_quant::QuantizedConfig>,
+) -> Result<(PerLayerTokenEmbedding, bool)> {
+    if let Some(kept_layers_indices) = kept_layers_indices {
+        let mut embedding = ScaledEmbedding::new(
+            scale,
+            dense_embedding(
+                vocab_size,
+                hidden_size_per_layer * orig_num_hidden_layers,
+                vb,
+                quantization_config,
+            )?,
+        );
+        let weight = embedding.embedding.clone();
+        let weight = weight.reshape((
+            weight.dim(0)?,
+            orig_num_hidden_layers,
+            weight.dim(1)? / orig_num_hidden_layers,
+        ))?;
+        embedding.embedding = weight
+            .index_select(&kept_layers_indices.to_device(weight.device())?, 1)?
+            .reshape((weight.dim(0)?, ()))?
+            .contiguous()?;
+        return Ok((PerLayerTokenEmbedding::Dense(embedding), true));
+    }
+
+    let weight_name = format!("{}.weight", vb.prefix());
+    let source_has_weight = vb
+        .weight_source()
+        .is_some_and(|source| source.contains(&weight_name));
+    let tracked = mistralrs_quant::should_apply_immediate_isq(&vb);
+    let embedding = embedding(
+        vocab_size,
+        hidden_size_per_layer * orig_num_hidden_layers,
+        vb,
+        quantization_config,
+    )?;
+    Ok((
+        PerLayerTokenEmbedding::Method(embedding),
+        !source_has_weight && !tracked,
+    ))
+}
+
 pub struct TextModel {
     embed_tokens: Arc<dyn QuantMethod>,
     embed_tokens_scale: f64,
     dtype: DType,
-    embed_tokens_per_layer: ScaledEmbedding,
+    embed_tokens_per_layer: PerLayerTokenEmbedding,
+    embed_tokens_per_layer_scale: f64,
+    embed_tokens_per_layer_in_residual: bool,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -1278,28 +1350,16 @@ impl TextModel {
         } else {
             vb.pp("embed_tokens_per_layer").set_device(Device::Cpu)
         };
-        let mut embed_tokens_per_layer = ScaledEmbedding::new(
-            per_layer_embed_scale,
-            dense_embedding(
+        let (embed_tokens_per_layer, embed_tokens_per_layer_in_residual) =
+            load_per_layer_token_embedding(
                 cfg.vocab_size_per_layer_input,
-                cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
+                cfg.hidden_size_per_layer_input,
+                orig_num_hidden_layers,
+                kept_layers_indices.as_ref(),
+                per_layer_embed_scale,
                 embed_tokens_per_layer_vb,
                 &cfg.quantization_config,
-            )?,
-        );
-        if let Some(kept_layers_indices) = &kept_layers_indices {
-            let embedding = embed_tokens_per_layer.embedding.clone();
-            let embedding_reshaped = embedding.reshape((
-                embedding.dim(0)?,
-                orig_num_hidden_layers,
-                embedding.dim(1)? / orig_num_hidden_layers,
-            ))?;
-
-            embed_tokens_per_layer.embedding = embedding_reshaped
-                .index_select(kept_layers_indices, 1)?
-                .reshape((embedding_reshaped.dim(0)?, ()))?
-                .contiguous()?;
-        }
+            )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..orig_num_hidden_layers {
@@ -1505,6 +1565,8 @@ impl TextModel {
             embed_tokens_scale: embed_scale,
             dtype,
             embed_tokens_per_layer,
+            embed_tokens_per_layer_scale: per_layer_embed_scale,
+            embed_tokens_per_layer_in_residual,
             layers,
             norm,
             lm_head,
@@ -1547,11 +1609,19 @@ impl TextModel {
         // Only cast to CPU if not using Metal
         let per_layer_embeds = if input_ids_device.is_metal() {
             // On Metal, use input_ids directly
-            self.embed_tokens_per_layer.forward(input_ids)?
+            self.embed_tokens_per_layer.forward(
+                input_ids,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         } else {
             // On non-Metal devices, cast input to CPU for embedding computation
             let input_ids_cpu = input_ids.to_device(&Device::Cpu)?;
-            self.embed_tokens_per_layer.forward(&input_ids_cpu)?
+            self.embed_tokens_per_layer.forward(
+                &input_ids_cpu,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         };
 
         let original_dtype = per_layer_embeds.dtype();
@@ -1865,8 +1935,14 @@ impl IsqModel for TextModel {
 
         // Embeddings
         uvb.pp("embed_tokens").add(&self.embed_tokens);
-        uvb.pp("embed_tokens_per_layer")
-            .add(&self.embed_tokens_per_layer);
+        if self.embed_tokens_per_layer_in_residual {
+            let weight = self
+                .embed_tokens_per_layer
+                .dequantize_w()
+                .expect("dense Gemma3n PLE embedding missing");
+            uvb.pp("embed_tokens_per_layer")
+                .add_tensor("weight", weight);
+        }
 
         // Layer components
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1976,14 +2052,224 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        io::Write,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
-    use candle_core::{DType, Device, Tensor};
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        DType, Device, Tensor,
+    };
+    use candle_nn::Linear;
+    use mistralrs_quant::{
+        create_isq_executor, GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource,
+        ImmediateIsqConfig, IsqCaptureMode, IsqExecutorConfig, QuantMethod, QuantMethodConfig,
+        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
+    };
+    use tempfile::NamedTempFile;
 
     use super::{
-        is_paged_decode_forward, kv_shared_layer_index_for_layout, sliding_decode_kv_window,
-        KvCacheTopology, PagedAttentionInputMetadata, PrefillQuerySelection,
+        is_paged_decode_forward, kv_shared_layer_index_for_layout, load_per_layer_token_embedding,
+        sliding_decode_kv_window, KvCacheTopology, PagedAttentionInputMetadata,
+        PerLayerTokenEmbedding, PrefillQuerySelection,
     };
+
+    #[derive(Debug)]
+    struct PerLayerEmbeddingSource {
+        weight: Tensor,
+        available: bool,
+        loads: Arc<AtomicUsize>,
+    }
+
+    impl QuantizedWeightSource for PerLayerEmbeddingSource {
+        fn contains(&self, name: &str) -> bool {
+            self.available && name == "model.language_model.embed_tokens_per_layer.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            if !self.available || key != "model.language_model.embed_tokens_per_layer" {
+                return Ok(None);
+            }
+            self.loads.fetch_add(1, Ordering::Relaxed);
+            let layer = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                self.weight.to_device(device)?,
+                None,
+            )))?;
+            Ok(Some(Arc::new(layer)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(if self.available { 2 } else { 1 })
+        }
+
+        fn pack_factor_for(&self, key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(self.contains(key).then_some(2))
+        }
+    }
+
+    fn per_layer_weight(rows: usize, cols: usize) -> candle_core::Result<Tensor> {
+        Tensor::from_vec(
+            (0..rows * cols).map(|value| value as f32).collect(),
+            (rows, cols),
+            &Device::Cpu,
+        )
+    }
+
+    #[test]
+    fn default_per_layer_embedding_uses_weight_source_gather() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let weight = per_layer_weight(4, 32)?;
+        let q_weight = QTensor::quantize(&weight, GgmlDType::Q4_0)?;
+        let expected_weight = q_weight.dequantize(&Device::Cpu)?.narrow(0, 0, 3)?;
+        let mut file = NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &[("per_layer_token_embd.weight", &q_weight)],
+        )?;
+        file.as_file_mut()
+            .flush()
+            .map_err(candle_core::Error::wrap)?;
+
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let bindings = GgufBindingMap::new().with_binding(
+            "model.language_model.embed_tokens_per_layer.weight",
+            GgufTensorBinding::tensor("per_layer_token_embd.weight").slice(0, 0, 3),
+        );
+        let source = Arc::new(GgufWeightSource::new(archive, &bindings, DType::F32)?);
+        let vb = source
+            .sharded_var_builder(Device::Cpu)
+            .pp("model.language_model.embed_tokens_per_layer");
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 16, 2, None, 2.0, vb, &None)?;
+
+        let PerLayerTokenEmbedding::Method(method) = &embedding else {
+            panic!("default Gemma3n PLE embedding was materialized dense");
+        };
+        assert!(!in_residual);
+        assert_eq!(method.name(), "gguf");
+        let packed = method
+            .get_qtensor()
+            .expect("GGUF PLE embedding lost its packed QTensor");
+        assert_eq!(packed.dtype(), GgmlDType::Q4_0);
+        assert_eq!(packed.shape().dims(), &[3, 32]);
+        let ids = Tensor::new(&[2u32, 0], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 2.0)?.to_vec2::<f32>()?,
+            expected_weight
+                .index_select(&ids, 0)?
+                .affine(2.0, 0.0)?
+                .to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matformer_per_layer_embedding_selects_dense_layer_groups() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 6)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let kept = Tensor::new(&[0u32, 2], &Device::Cpu)?;
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 3, Some(&kept), 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Dense(_)));
+        assert!(in_residual);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![6.0, 7.0, 10.0, 11.0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_uqff_per_layer_embedding_stays_in_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let weight = per_layer_weight(3, 4)?;
+        let source = Arc::new(PerLayerEmbeddingSource {
+            weight: weight.clone(),
+            available: false,
+            loads: Arc::new(AtomicUsize::new(0)),
+        });
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), weight.clone())]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .with_weight_source(source)
+        .pp(prefix);
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Method(_)));
+        assert!(in_residual);
+        assert_eq!(
+            embedding.dequantize_w()?.to_vec2::<f32>()?,
+            weight.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_capture_tracks_per_layer_embedding_without_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 4)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let tracker = vb.tracker().clone();
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(None));
+        mistralrs_quant::set_immediate_isq_config(
+            ImmediateIsqConfig::new(None, Vec::new(), IsqCaptureMode::CaptureAll),
+            executor,
+        );
+        let result = load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None);
+        mistralrs_quant::clear_immediate_isq();
+        let (embedding, in_residual) = result?;
+
+        assert!(!in_residual);
+        let tracked = tracker.get();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].key, prefix);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![4.0, 5.0, 6.0, 7.0]]
+        );
+        Ok(())
+    }
 
     fn layer_types(types: &[&str]) -> Vec<String> {
         types.iter().map(|ty| (*ty).to_string()).collect()

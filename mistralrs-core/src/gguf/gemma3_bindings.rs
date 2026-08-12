@@ -14,34 +14,26 @@ pub(crate) fn build_gemma3_bindings(archive: &GgufArchive) -> Result<GgufBinding
     build_gemma3_bindings_from_inventory(&TensorInventory::from_archive(archive))
 }
 
+pub(crate) fn build_gemma3_text_bindings(
+    archive: &GgufArchive,
+    use_language_model_prefix: bool,
+) -> Result<GgufBindingMap> {
+    validate_architecture(archive, "gemma3")?;
+    build_gemma3_text_bindings_from_inventory(
+        &TensorInventory::from_archive(archive),
+        use_language_model_prefix,
+    )
+}
+
 fn build_gemma3_bindings_from_inventory(inventory: &TensorInventory<'_>) -> Result<GgufBindingMap> {
     let mut bindings = GgufBindingMap::new();
 
-    bind_required(
+    bind_text(
         inventory,
         &mut bindings,
-        "language_model.model.embed_tokens.weight",
-        "token_embd.weight",
+        "language_model.model",
+        "language_model.lm_head",
     )?;
-    bind_shifted_norm(
-        inventory,
-        &mut bindings,
-        "language_model.model.norm.weight",
-        "output_norm.weight",
-    )?;
-    if inventory.contains("output.weight") {
-        bind_required(
-            inventory,
-            &mut bindings,
-            "language_model.lm_head.weight",
-            "output.weight",
-        )?;
-    }
-
-    for layer in inventory.require_layers("blk.", FAMILY)? {
-        bind_text_layer(inventory, &mut bindings, layer)?;
-    }
-
     bind_required(
         inventory,
         &mut bindings,
@@ -59,12 +51,60 @@ fn build_gemma3_bindings_from_inventory(inventory: &TensorInventory<'_>) -> Resu
     Ok(bindings)
 }
 
+fn build_gemma3_text_bindings_from_inventory(
+    inventory: &TensorInventory<'_>,
+    use_language_model_prefix: bool,
+) -> Result<GgufBindingMap> {
+    let mut bindings = GgufBindingMap::new();
+    let (model, lm_head) = if use_language_model_prefix {
+        ("language_model.model", "language_model.lm_head")
+    } else {
+        ("model", "lm_head")
+    };
+    bind_text(inventory, &mut bindings, model, lm_head)?;
+    Ok(bindings)
+}
+
+fn bind_text(
+    inventory: &TensorInventory<'_>,
+    bindings: &mut GgufBindingMap,
+    model: &str,
+    lm_head: &str,
+) -> Result<()> {
+    bind_required(
+        inventory,
+        bindings,
+        format!("{model}.embed_tokens.weight"),
+        "token_embd.weight",
+    )?;
+    bind_shifted_norm(
+        inventory,
+        bindings,
+        format!("{model}.norm.weight"),
+        "output_norm.weight",
+    )?;
+    if inventory.contains("output.weight") {
+        bind_required(
+            inventory,
+            bindings,
+            format!("{lm_head}.weight"),
+            "output.weight",
+        )?;
+    }
+
+    for layer in inventory.require_layers("blk.", FAMILY)? {
+        bind_text_layer(inventory, bindings, model, layer)?;
+    }
+    Ok(())
+}
+
 fn bind_text_layer(
     inventory: &TensorInventory<'_>,
     bindings: &mut GgufBindingMap,
+    model: &str,
     layer: usize,
 ) -> Result<()> {
-    let native = format!("language_model.model.layers.{layer}");
+    let native = format!("{model}.layers.{layer}");
     let source = format!("blk.{layer}");
     for (target, role) in [
         ("self_attn.q_proj", "attn_q"),
@@ -192,6 +232,56 @@ mod tests {
             bindings.get("vision_tower.vision_model.encoder.layers.0.self_attn.out_proj.bias"),
             Some(&GgufTensorBinding::tensor("v.blk.0.attn_out.bias"))
         );
+    }
+
+    #[test]
+    fn maps_projectorless_gemma3_to_text_roots() {
+        let tensors = tensor_inventory()
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with("mm.") && !name.starts_with("v."))
+            .collect::<Vec<_>>();
+        let inventory = TensorInventory::new(
+            tensors
+                .iter()
+                .map(|(name, shape)| (name.as_str(), shape.as_slice())),
+        );
+        let bindings = build_gemma3_text_bindings_from_inventory(&inventory, false).unwrap();
+        let expected = tensors
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(binding_sources(&bindings), expected);
+        assert!(bindings.get("model.embed_tokens.weight").is_some());
+        assert!(bindings
+            .get("model.layers.0.self_attn.q_proj.weight")
+            .is_some());
+        assert!(bindings.get("lm_head.weight").is_some());
+        assert!(!bindings
+            .iter()
+            .any(|(name, _)| name.starts_with("language_model.")
+                || name.starts_with("multi_modal_projector.")
+                || name.starts_with("vision_tower.")));
+    }
+
+    #[test]
+    fn maps_conditional_generation_text_to_language_model_roots() {
+        let tensors = tensor_inventory()
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with("mm.") && !name.starts_with("v."))
+            .collect::<Vec<_>>();
+        let inventory = TensorInventory::new(
+            tensors
+                .iter()
+                .map(|(name, shape)| (name.as_str(), shape.as_slice())),
+        );
+        let bindings = build_gemma3_text_bindings_from_inventory(&inventory, true).unwrap();
+
+        assert!(bindings
+            .get("language_model.model.layers.0.self_attn.q_proj.weight")
+            .is_some());
+        assert!(bindings.get("language_model.lm_head.weight").is_some());
+        assert!(!bindings.iter().any(|(name, _)| name.starts_with("model.")));
     }
 
     fn tensor_inventory() -> Vec<(String, Vec<usize>)> {

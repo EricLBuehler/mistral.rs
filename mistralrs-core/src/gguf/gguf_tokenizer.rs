@@ -23,8 +23,6 @@ use tokenizers::{
 };
 use tracing::info;
 
-use super::Content;
-
 type BpeVocab = AHashMap<String, u32>;
 type BpeMerges = Vec<(String, String)>;
 
@@ -64,6 +62,79 @@ pub(crate) struct GgufTokenizerConversion {
     pub bos: Option<String>,
     pub eos: Option<String>,
     pub unk: Option<String>,
+}
+
+struct GgufTokenizerMetadata {
+    tokens: Vec<String>,
+    bos: Option<u32>,
+    eos: Option<u32>,
+    unk: Option<u32>,
+}
+
+impl GgufTokenizerMetadata {
+    fn from_values(values: &HashMap<String, Value>) -> Result<Self> {
+        let metadata = ContentMetadata {
+            path_prefix: "tokenizer.ggml",
+            metadata: values,
+        };
+        let tokens: Vec<String> = metadata.get_value("tokens")?;
+        anyhow::ensure!(!tokens.is_empty(), "GGUF tokenizer vocabulary is empty");
+        anyhow::ensure!(
+            u32::try_from(tokens.len()).is_ok(),
+            "GGUF tokenizer vocabulary is too large"
+        );
+        let result = Self {
+            tokens,
+            bos: metadata.get_option_value("bos_token_id")?,
+            eos: metadata.get_option_value("eos_token_id")?,
+            unk: metadata.get_option_value("unknown_token_id")?,
+        };
+        for (name, id) in [
+            ("bos", result.bos),
+            ("eos", result.eos),
+            ("unknown", result.unk),
+        ] {
+            if let Some(id) = id {
+                anyhow::ensure!(
+                    (id as usize) < result.tokens.len(),
+                    "GGUF `{name}` token id {id} is out of bounds for vocab size {}",
+                    result.tokens.len()
+                );
+            }
+        }
+        Ok(result)
+    }
+
+    fn token(&self, id: Option<u32>) -> Option<String> {
+        id.map(|id| self.tokens[id as usize].clone())
+    }
+}
+
+pub(crate) fn validate_external_gguf_tokenizer(
+    tokenizer: Tokenizer,
+    values: &HashMap<String, Value>,
+) -> Result<GgufTokenizerConversion> {
+    let metadata = GgufTokenizerMetadata::from_values(values)?;
+    anyhow::ensure!(
+        tokenizer.get_vocab_size(true) == metadata.tokens.len(),
+        "Tokenizer vocabulary has {} entries, but the GGUF model has {}",
+        tokenizer.get_vocab_size(true),
+        metadata.tokens.len()
+    );
+    for (id, expected) in (0u32..).zip(&metadata.tokens) {
+        let actual = tokenizer.id_to_token(id);
+        anyhow::ensure!(
+            actual.as_deref() == Some(expected),
+            "Tokenizer token ID {id} is {:?}, but the GGUF model expects {expected:?}",
+            actual
+        );
+    }
+    Ok(GgufTokenizerConversion {
+        tokenizer,
+        bos: metadata.token(metadata.bos),
+        eos: metadata.token(metadata.eos),
+        unk: metadata.token(metadata.unk),
+    })
 }
 
 struct PropsGGUF {
@@ -121,12 +192,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
 
         Ok(props)
     }
-}
-
-pub fn convert_gguf_to_hf_tokenizer<R: std::io::Seek + std::io::Read>(
-    content: &Content<'_, R>,
-) -> Result<GgufTokenizerConversion> {
-    convert_gguf_metadata_to_hf_tokenizer(content.get_metadata())
 }
 
 pub(crate) fn convert_gguf_metadata_to_hf_tokenizer(
@@ -660,10 +725,13 @@ impl TryFrom<Normalizer<'_>> for NormalizerWrapper {
 mod tests {
     use super::{
         bpe_pre_tokenizer_spec, bpe_tokenizer, convert_gguf_metadata_to_hf_tokenizer,
-        gemma4_tokenizer, BpePreTokenizerKind, PropsGGUF, SENTENCEPIECE_UNDERLINE,
+        gemma4_tokenizer, validate_external_gguf_tokenizer, BpePreTokenizerKind, PropsGGUF,
+        SENTENCEPIECE_UNDERLINE,
     };
     use anyhow::Result;
+    use candle_core::quantized::gguf_file::Value;
     use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+    use std::collections::HashMap;
     use tokenizers::Tokenizer;
 
     #[allow(dead_code)]
@@ -782,6 +850,82 @@ mod tests {
             add_bos: false,
             add_space_prefix: false,
         }
+    }
+
+    fn tokenizer_with_tokens(tokens: &[&str]) -> Tokenizer {
+        let mut props = test_bpe_props(Some("gpt-2"));
+        props.tokens = tokens.iter().map(|token| (*token).to_string()).collect();
+        bpe_tokenizer(&props).unwrap().0
+    }
+
+    fn tokenizer_metadata(tokens: &[&str]) -> HashMap<String, Value> {
+        HashMap::from([
+            (
+                "tokenizer.ggml.tokens".to_string(),
+                Value::Array(
+                    tokens
+                        .iter()
+                        .map(|token| Value::String((*token).to_string()))
+                        .collect(),
+                ),
+            ),
+            ("tokenizer.ggml.bos_token_id".to_string(), Value::U32(1)),
+            ("tokenizer.ggml.eos_token_id".to_string(), Value::U32(0)),
+            ("tokenizer.ggml.unknown_token_id".to_string(), Value::U32(2)),
+        ])
+    }
+
+    #[test]
+    fn accepts_matching_external_tokenizer_and_preserves_special_tokens() {
+        let tokens = ["<eos>", "a", "b", "ab"];
+        let conversion = validate_external_gguf_tokenizer(
+            tokenizer_with_tokens(&tokens),
+            &tokenizer_metadata(&tokens),
+        )
+        .unwrap();
+
+        assert_eq!(conversion.bos.as_deref(), Some("a"));
+        assert_eq!(conversion.eos.as_deref(), Some("<eos>"));
+        assert_eq!(conversion.unk.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn rejects_external_tokenizer_with_remapped_ids() {
+        let metadata = tokenizer_metadata(&["<eos>", "a", "b", "ab"]);
+        let error = validate_external_gguf_tokenizer(
+            tokenizer_with_tokens(&["<eos>", "b", "a", "ab"]),
+            &metadata,
+        )
+        .err()
+        .expect("remapped tokenizer must fail");
+
+        assert!(error.to_string().contains("token ID 1"));
+    }
+
+    #[test]
+    fn rejects_external_tokenizer_with_different_vocab_size() {
+        let metadata = tokenizer_metadata(&["<eos>", "a", "b", "ab"]);
+        for tokens in [
+            &["<eos>", "a", "b"][..],
+            &["<eos>", "a", "b", "ab", "extra"][..],
+        ] {
+            let error = validate_external_gguf_tokenizer(tokenizer_with_tokens(tokens), &metadata)
+                .err()
+                .expect("different vocabulary size must fail");
+            assert!(error.to_string().contains("vocabulary has"));
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_gguf_special_token_metadata() {
+        let tokens = ["<eos>", "a", "b", "ab"];
+        let mut metadata = tokenizer_metadata(&tokens);
+        metadata.insert("tokenizer.ggml.eos_token_id".to_string(), Value::U32(4));
+        let error = validate_external_gguf_tokenizer(tokenizer_with_tokens(&tokens), &metadata)
+            .err()
+            .expect("out-of-range special token must fail");
+
+        assert!(error.to_string().contains("out of bounds"));
     }
 
     fn gemma4_props(add_bos: bool, add_space_prefix: bool) -> PropsGGUF {

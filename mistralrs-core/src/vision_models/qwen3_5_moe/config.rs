@@ -1,5 +1,6 @@
 use mistralrs_quant::QuantizedConfig;
 
+use crate::gdn::GdnVHeadLayout;
 use crate::layers::Activation;
 use crate::serde_default_fn;
 
@@ -66,6 +67,8 @@ pub struct TextConfig {
     pub tie_word_embeddings: bool,
     #[serde(default)]
     pub quantization_config: Option<QuantizedConfig>,
+    #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
+    pub(crate) gdn_v_head_layout: GdnVHeadLayout,
 }
 
 impl TextConfig {

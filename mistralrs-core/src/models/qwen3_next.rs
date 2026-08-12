@@ -23,8 +23,8 @@ use crate::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{
-        embedding_with_legacy_tied_uqff, linear_no_bias, CausalMasker, GemmaRmsNorm,
-        RotaryEmbedding, Sdpa,
+        contains_tensor_or_weight_source, embedding_with_legacy_tied_uqff, linear_no_bias,
+        CausalMasker, GemmaRmsNorm, RotaryEmbedding, Sdpa,
     },
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
@@ -505,6 +505,18 @@ enum LayerImpl {
     LinearAttention(GatedDeltaNet),
 }
 
+fn gdn_input_projection_kind(vb: &ShardedVarBuilder) -> GdnInputProjectionKind {
+    if contains_tensor_or_weight_source(vb, "in_proj_b.weight")
+        && contains_tensor_or_weight_source(vb, "in_proj_a.weight")
+    {
+        GdnInputProjectionKind::Split
+    } else if contains_tensor_or_weight_source(vb, "in_proj_qkv.weight") {
+        GdnInputProjectionKind::SplitQkvzGroupedBa
+    } else {
+        GdnInputProjectionKind::Grouped
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PackedGdnSegment {
     token_range: Range<usize>,
@@ -820,15 +832,7 @@ impl Model {
                 }
                 LayerType::LinearAttention => {
                     let vb_linear_attn = vb_layer.pp("linear_attn");
-                    let projection_kind = if vb_linear_attn.contains_tensor("in_proj_b.weight")
-                        && vb_linear_attn.contains_tensor("in_proj_a.weight")
-                    {
-                        GdnInputProjectionKind::Split
-                    } else if vb_linear_attn.contains_tensor("in_proj_qkv.weight") {
-                        GdnInputProjectionKind::SplitQkvzGroupedBa
-                    } else {
-                        GdnInputProjectionKind::Grouped
-                    };
+                    let projection_kind = gdn_input_projection_kind(&vb_linear_attn);
                     LayerImpl::LinearAttention(GatedDeltaNet::load(
                         vb_layer.clone(),
                         cfg as &dyn GdnConfig,
@@ -1202,7 +1206,99 @@ impl AnyMoeBaseModelMixin for Model {}
 
 #[cfg(test)]
 mod tests {
-    use super::{packed_gdn_segments, validate_packed_gdn_state_rows, PackedGdnSegment};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
+
+    use candle_core::{DType, Device, Result, Tensor};
+    use mistralrs_quant::{
+        QuantMethod, QuantizedWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder,
+    };
+
+    use super::{
+        gdn_input_projection_kind, packed_gdn_segments, validate_packed_gdn_state_rows,
+        GdnInputProjectionKind, PackedGdnSegment,
+    };
+
+    struct ProjectionWeightSource(HashSet<String>);
+
+    impl QuantizedWeightSource for ProjectionWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            self.0.contains(name)
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: Shard,
+        ) -> Result<Option<Arc<dyn QuantMethod>>> {
+            unreachable!()
+        }
+
+        fn load_optional_tensor(&self, _name: &str, _device: &Device) -> Result<Option<Tensor>> {
+            unreachable!()
+        }
+
+        fn shard_alignment(&self, _key: &str) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    fn projection_vb(residual: &[&str], source: &[&str]) -> Result<ShardedVarBuilder> {
+        let tensors = residual
+            .iter()
+            .map(|name| {
+                Ok((
+                    format!("model.layers.0.linear_attn.{name}"),
+                    Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let source = source
+            .iter()
+            .map(|name| format!("model.layers.0.linear_attn.{name}"))
+            .collect();
+        Ok(ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu)
+            .with_weight_source(Arc::new(ProjectionWeightSource(source)))
+            .pp("model.layers.0.linear_attn"))
+    }
+
+    #[test]
+    fn gdn_projection_kind_reads_residual_and_weight_source_tensors() -> Result<()> {
+        let split = [
+            "in_proj_qkv.weight",
+            "in_proj_z.weight",
+            "in_proj_b.weight",
+            "in_proj_a.weight",
+        ];
+        assert_eq!(
+            gdn_input_projection_kind(&projection_vb(&[], &split)?),
+            GdnInputProjectionKind::Split
+        );
+        assert_eq!(
+            gdn_input_projection_kind(&projection_vb(&split, &[])?),
+            GdnInputProjectionKind::Split
+        );
+        assert_eq!(
+            gdn_input_projection_kind(&projection_vb(&[], &["in_proj_qkv.weight"])?),
+            GdnInputProjectionKind::SplitQkvzGroupedBa
+        );
+        assert_eq!(
+            gdn_input_projection_kind(&projection_vb(&[], &[])?),
+            GdnInputProjectionKind::Grouped
+        );
+        Ok(())
+    }
 
     #[test]
     fn packed_gdn_maps_unequal_queries_to_matching_state_rows() {

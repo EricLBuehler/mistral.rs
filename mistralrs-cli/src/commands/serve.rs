@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result};
 use axum::middleware;
-use std::{collections::BTreeSet, fs, path::Path};
-use tracing::{debug, info};
+use std::path::Path;
+use tracing::{debug, info, warn};
 
 use mistralrs_core::{
     initialize_logging, DiffusionLoaderType, McpClientConfig, ModelSelected, PagedCacheType,
-    SpeechLoaderType, GGUF_MULTI_FILE_DELIMITER,
+    SpeechLoaderType,
 };
 use mistralrs_server_core::{
     approvals::ApprovalBroker,
@@ -985,6 +985,13 @@ pub(crate) async fn apply_quant_resolution(
             format.format = Some(ModelFormat::Gguf);
             format.quantized_file = Some(artifact.file_spec());
             if let Some(quantization) = model_quantization_mut(model_type) {
+                // The CLI rejects these alongside `--quant`, but a TOML config can still set both.
+                if quantization.in_situ_quant.is_some() || quantization.from_uqff.is_some() {
+                    warn!(
+                        "quant: `--quant {raw}` selected a published GGUF artifact, ignoring the \
+                         configured `isq`/`from_uqff` target"
+                    );
+                }
                 quantization.quant = None;
                 quantization.in_situ_quant = None;
                 quantization.from_uqff = None;
@@ -995,8 +1002,7 @@ pub(crate) async fn apply_quant_resolution(
         let format = model_format_mut(model_type)
             .context("GGUF artifacts are not supported for this model type")?;
         if format.mmproj.is_none()
-            && (is_confident_gguf_repo || is_explicit_multimodal)
-            && !format.direct_file_only
+            && (is_confident_gguf_repo || is_explicit_multimodal || format.direct_file_only)
         {
             if let Some(projector) = crate::commands::quant::resolve_gguf_projector(files, dtype)? {
                 info!(
@@ -1058,7 +1064,7 @@ fn selected_model_files(
     let path = Path::new(model_id);
     if path.exists() {
         if let Some(exact_file) = exact_file {
-            return list_local_gguf_companions(path, exact_file).map(Some);
+            return crate::commands::quant::list_local_gguf_companions(path, exact_file).map(Some);
         }
         return crate::commands::quant::list_local_files_recursive(path).map(Some);
     }
@@ -1067,45 +1073,6 @@ fn selected_model_files(
         "main",
         token_source,
     ))
-}
-
-fn list_local_gguf_companions(root: &Path, exact_file: &str) -> Result<Vec<String>> {
-    let mut directories = BTreeSet::from([root.to_path_buf()]);
-    for filename in exact_file.split(GGUF_MULTI_FILE_DELIMITER).map(str::trim) {
-        let path = Path::new(filename);
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            root.join(path)
-        };
-        if let Some(parent) = resolved.parent() {
-            directories.insert(parent.to_path_buf());
-        }
-    }
-
-    let mut files = BTreeSet::new();
-    for directory in directories {
-        if !directory.is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(&directory).with_context(|| {
-            format!("Cannot list local GGUF directory `{}`", directory.display())
-        })? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            if !file_type.is_file() && !file_type.is_symlink() {
-                continue;
-            }
-            let path = entry.path();
-            files.insert(
-                path.strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/"),
-            );
-        }
-    }
-    Ok(files.into_iter().collect())
 }
 
 fn model_name_looks_gguf(model_id: &str) -> bool {
@@ -1668,12 +1635,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn direct_file_shorthand_does_not_discover_a_projector() {
+    async fn direct_file_shorthand_discovers_only_a_sibling_projector() {
         let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
-        for file in ["model.gguf", "mmproj-BF16.gguf"] {
+        fs::create_dir_all(root.join("unrelated")).unwrap();
+        for file in ["model.gguf", "mmproj-BF16.gguf", "model.safetensors"] {
             fs::write(root.join(file), []).unwrap();
         }
+        fs::write(root.join("unrelated/mmproj-BF16.gguf"), []).unwrap();
 
         let mut model = test_model();
         model.model_id = root.to_string_lossy().into_owned();
@@ -1703,7 +1671,7 @@ mod tests {
             unreachable!()
         };
         assert_eq!(format.format, Some(ModelFormat::Gguf));
-        assert!(format.mmproj.is_none());
+        assert_eq!(format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
 
         fs::remove_dir_all(root).unwrap();
     }

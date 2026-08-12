@@ -170,6 +170,13 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         // Default is false, specific model must override.
         false
     }
+    fn auto_device_map_params(
+        &self,
+        _config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<AutoDeviceMapParams> {
+        Ok(params.maybe_promote_to_multimodal())
+    }
     fn modalities(&self, config: &str) -> Result<Modalities>;
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
     /// Return a default chat template (Jinja string) for models that don't ship a
@@ -477,6 +484,14 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
             .supports_prefix_cacher(config)
     }
 
+    fn auto_device_map_params(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<AutoDeviceMapParams> {
+        Self::get_loader(config)?.auto_device_map_params(config, params)
+    }
+
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Self::get_loader(config)
             .expect("AutoMultimodalLoader")
@@ -564,6 +579,12 @@ impl DeviceMappedModelLoader for AutoMultimodalLoader {
             weight_pack_factor,
             _matformer_config,
         )
+    }
+    fn non_mapped_sub_models_for_config(
+        &self,
+        config: &str,
+    ) -> Result<Option<Vec<NonMappedSubModel>>> {
+        Self::get_loader(config)?.non_mapped_sub_models_for_config(config)
     }
     fn num_layers(&self, config: &str) -> Result<usize> {
         Self::get_loader(config)?.num_layers(config)
@@ -3964,9 +3985,28 @@ impl MultimodalModelLoader for Gemma3Loader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Gemma3Prefixer)
     }
-    fn modalities(&self, _config: &str) -> Result<Modalities> {
+    fn auto_device_map_params(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<AutoDeviceMapParams> {
+        Ok(match serde_json::from_str::<Gemma3Config>(config)? {
+            Gemma3Config::Text(_) => AutoDeviceMapParams::Text {
+                max_seq_len: params.max_seq_len(),
+                max_batch_size: params.max_batch_size(),
+            },
+            Gemma3Config::WithVision { .. } => params.maybe_promote_to_multimodal(),
+        })
+    }
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let config: Gemma3Config = serde_json::from_str(config)?;
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: match config {
+                Gemma3Config::Text(_) => vec![SupportedModality::Text],
+                Gemma3Config::WithVision { .. } => {
+                    vec![SupportedModality::Text, SupportedModality::Vision]
+                }
+            },
             output: vec![SupportedModality::Text],
         })
     }
@@ -3996,16 +4036,30 @@ impl IsqModelLoader for Gemma3Loader {
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"^(?:language_model\.)?lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            )?,
             // MLP
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"language_model\.model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(?:language_model\.)?model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+            )?,
         ])
     }
 }
@@ -4016,27 +4070,39 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        let AutoDeviceMapParams::Multimodal {
-            max_seq_len,
-            max_batch_size,
-            max_image_shape: _,
-            max_num_images,
-        } = params
-        else {
-            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
-        };
-
         let cfg: Gemma3Config = serde_json::from_str(config)?;
 
         match cfg {
-            Gemma3Config::Text(text_config) => Ok(max_batch_size
-                * text_config.num_attention_heads
-                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2)),
+            Gemma3Config::Text(text_config) => {
+                let (max_seq_len, max_batch_size) = match params {
+                    AutoDeviceMapParams::Text {
+                        max_seq_len,
+                        max_batch_size,
+                    }
+                    | AutoDeviceMapParams::Multimodal {
+                        max_seq_len,
+                        max_batch_size,
+                        ..
+                    } => (*max_seq_len, *max_batch_size),
+                };
+                Ok(max_batch_size
+                    * text_config.num_attention_heads
+                    * max_seq_len.min(ATTENTION_CHUNK_SIZE).pow(2))
+            }
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
                 ..
             } => {
+                let AutoDeviceMapParams::Multimodal {
+                    max_seq_len,
+                    max_batch_size,
+                    max_num_images,
+                    ..
+                } = params
+                else {
+                    anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+                };
                 let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
                 let img_seq_len = (num_patches + 1) * max_num_images;
 
@@ -4055,6 +4121,10 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
+        let cfg: Gemma3Config = serde_json::from_str(config)?;
+        let Gemma3Config::WithVision { vision_config, .. } = cfg else {
+            return Ok(0);
+        };
         let AutoDeviceMapParams::Multimodal {
             max_seq_len: _,
             max_batch_size,
@@ -4064,25 +4134,12 @@ impl DeviceMappedModelLoader for Gemma3Loader {
         else {
             anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
         };
-
-        let cfg: Gemma3Config = serde_json::from_str(config)?;
-
-        match cfg {
-            Gemma3Config::WithVision { vision_config, .. } => {
-                let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
-                let img_seq_len = num_patches + 1;
-
-                let max_vision_attn = {
-                    (max_batch_size * max_num_images)
-                        * vision_config.num_attention_heads
-                        * img_seq_len
-                        * img_seq_len
-                };
-
-                Ok(max_vision_attn)
-            }
-            Gemma3Config::Text(_) => Ok(0),
-        }
+        let num_patches = (vision_config.image_size / vision_config.patch_size).pow(2);
+        let img_seq_len = num_patches + 1;
+        Ok((max_batch_size * max_num_images)
+            * vision_config.num_attention_heads
+            * img_seq_len
+            * img_seq_len)
     }
 
     fn non_mapped_size_in_bytes(
@@ -4247,8 +4304,8 @@ impl DeviceMappedModelLoader for Gemma3Loader {
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
             sliding_window: None, // None to be more forgiving, some do not
-            k_head_dim: cfg.hidden_size / cfg.num_attention_heads,
-            v_head_dim: cfg.hidden_size / cfg.num_attention_heads,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
             kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
         };
 
@@ -4257,6 +4314,17 @@ impl DeviceMappedModelLoader for Gemma3Loader {
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision])
+    }
+
+    fn non_mapped_sub_models_for_config(
+        &self,
+        config: &str,
+    ) -> Result<Option<Vec<NonMappedSubModel>>> {
+        let config: Gemma3Config = serde_json::from_str(config)?;
+        Ok(match config {
+            Gemma3Config::Text(_) => None,
+            Gemma3Config::WithVision { .. } => self.non_mapped_sub_models(),
+        })
     }
 }
 
@@ -4690,9 +4758,9 @@ impl IsqModelLoader for VLlama4Loader {
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.up_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.experts\.down_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.router\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.gate_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.up_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.feed_forward\.shared_expert\.down_proj\.(weight|bias)$")?,
             // FF MLP
             Regex::new(r"layers\.(\d+)\.feed_forward\.gate_proj\.(weight|bias)$")?,
             Regex::new(r"layers\.(\d+)\.feed_forward\.up_proj\.(weight|bias)$")?,
@@ -4727,13 +4795,13 @@ impl IsqModelLoader for VLlama4Loader {
                 r"language_model\.model\.layers\.(\d+)\.feed_forward\.router\.(weight|bias)$",
             )?,
             Regex::new(
-                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.(weight|bias)$",
+                r"language_model\.model\.layers\.(\d+)\.feed_forward\.shared_expert\.down_proj\.(weight|bias)$",
             )?,
             // FF MLP
             Regex::new(
@@ -4888,8 +4956,7 @@ impl DeviceMappedModelLoader for VLlama4Loader {
             let layernorm_post_elems = cfg.hidden_size;
 
             let pixel_shuffle_elems = cfg.intermediate_size * cfg.projector_input_dim
-                / weight_pack_factor
-                + cfg.projector_input_dim * cfg.projector_output_dim / weight_pack_factor;
+                + cfg.projector_input_dim * cfg.projector_output_dim;
 
             let encoder_layer = {
                 let input_layernorm = cfg.hidden_size + cfg.hidden_size;
@@ -4897,22 +4964,16 @@ impl DeviceMappedModelLoader for VLlama4Loader {
 
                 let head_dim = cfg.hidden_size / cfg.num_attention_heads;
                 let q_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-                    / weight_pack_factor
                     + cfg.num_attention_heads * head_dim;
                 let k_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-                    / weight_pack_factor
                     + cfg.num_attention_heads * head_dim;
                 let v_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-                    / weight_pack_factor
                     + cfg.num_attention_heads * head_dim;
                 let o_proj = cfg.hidden_size * cfg.num_attention_heads * head_dim
-                    / weight_pack_factor
                     + cfg.num_attention_heads * head_dim;
 
-                let fc1 = (cfg.hidden_size * cfg.intermediate_size) / weight_pack_factor
-                    + cfg.intermediate_size;
-                let fc2 = (cfg.intermediate_size * cfg.hidden_size) / weight_pack_factor
-                    + cfg.hidden_size;
+                let fc1 = cfg.hidden_size * cfg.intermediate_size + cfg.intermediate_size;
+                let fc2 = cfg.intermediate_size * cfg.hidden_size + cfg.hidden_size;
 
                 input_layernorm
                     + post_attention_layernorm
@@ -5105,6 +5166,7 @@ impl IsqModelLoader for Gemma3nLoader {
     fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^model\.language_model\.embed_tokens_per_layer\.weight$")?,
             Regex::new(r"^model\.language_model\.lm_head\.(weight|bias)$")?,
         ])
     }
@@ -5146,6 +5208,7 @@ impl IsqModelLoader for Gemma3nLoader {
     }
     fn immediate_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
+            Regex::new(r"model\.language_model\.embed_tokens_per_layer\.weight$")?,
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Language model attention
             Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
@@ -5410,9 +5473,20 @@ impl DeviceMappedModelLoader for Gemma3nLoader {
                 )?;
             let embed_tokens =
                 text_cfg.hidden_size * text_cfg.vocab_size / embed_tokens_pack_factor;
+            let ple_embedding_pack_factor = if matformer_config.is_some() {
+                1
+            } else {
+                super::promoted_tensor_pack_factor(
+                    quantization,
+                    "model.language_model.embed_tokens_per_layer.weight",
+                    dtype,
+                    weight_pack_factor,
+                )?
+            };
             let embed_tokens_per_layer = text_cfg.num_hidden_layers
                 * text_cfg.hidden_size_per_layer_input
-                * text_cfg.vocab_size_per_layer_input;
+                * text_cfg.vocab_size_per_layer_input
+                / ple_embedding_pack_factor;
 
             // LM head (if not tied)
             let lm_head = if !text_cfg.tie_word_embeddings {
@@ -5994,14 +6068,28 @@ impl IsqModelLoader for Qwen3VLLoader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            )?,
             // MLP
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -6335,28 +6423,44 @@ impl IsqModelLoader for Qwen3VLMoELoader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Attention
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            )?,
             // MLP (dense layers)
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+            )?,
             // MoE router
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.gate\.(weight|bias)$",
+            )?,
             // MoE experts - now unpacked into individual experts
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
         ])
     }
@@ -6365,25 +6469,18 @@ impl IsqModelLoader for Qwen3VLMoELoader {
     }
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
-            // MLP (dense layers)
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-            // MoE router
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate\.(weight|bias)$")?,
             // MoE experts
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
         ])
     }
@@ -6740,30 +6837,44 @@ impl IsqModelLoader for Qwen3_5Loader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Full attention projections
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            )?,
             // GDN linear attention projections
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
             // Dense MLP
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.up_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
+            )?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
@@ -6968,9 +7079,10 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
                     let hidden = text_cfg.hidden_size;
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    let in_proj_qkv = hidden * conv_dim;
-                    let in_proj_z = hidden * value_dim;
-                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
+                    let in_proj_qkv = hidden * conv_dim / weight_pack_factor;
+                    let in_proj_z = hidden * value_dim / weight_pack_factor;
+                    let in_proj_ba =
+                        hidden * (text_cfg.linear_num_value_heads * 2) / weight_pack_factor;
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     let conv1d = conv_dim * text_cfg.linear_conv_kernel_dim;
                     let dt_bias = text_cfg.linear_num_value_heads;
@@ -7112,52 +7224,62 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
             // Full attention projections
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$",
+            )?,
             // GDN linear attention projections
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_qkv\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_z\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_b\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.in_proj_a\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.linear_attn\.out_proj\.(weight|bias)$",
             )?,
             // MoE experts
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
             )?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
+            Regex::new(
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$",
+            )?,
             // Shared expert
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.up_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.shared_expert\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.shared_expert\.down_proj\.(weight|bias)$",
             )?,
         ])
     }
@@ -7166,33 +7288,24 @@ impl IsqModelLoader for Qwen3_5MoeLoader {
     }
     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
             // MoE experts
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.gate_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.up_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(\d+)\.down_proj\.(weight|bias)$",
             )?,
             Regex::new(
-                r"(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
-            )?,
-            Regex::new(r"model\.language_model\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$")?,
-            // Shared expert
-            Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.gate_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.gate_up_proj\.weight$",
             )?,
             Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.up_proj\.(weight|bias)$",
-            )?,
-            Regex::new(
-                r"model\.language_model\.layers\.(\d+)\.mlp\.shared_expert\.down_proj\.(weight|bias)$",
+                r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.experts\.down_proj\.weight$",
             )?,
         ])
     }
@@ -7398,9 +7511,10 @@ impl DeviceMappedModelLoader for Qwen3_5MoeLoader {
                     let hidden = text_cfg.hidden_size;
                     let value_dim = text_cfg.linear_value_dim();
                     let conv_dim = text_cfg.linear_conv_dim();
-                    let in_proj_qkv = hidden * conv_dim;
-                    let in_proj_z = hidden * value_dim;
-                    let in_proj_ba = hidden * (text_cfg.linear_num_value_heads * 2);
+                    let in_proj_qkv = hidden * conv_dim / weight_pack_factor;
+                    let in_proj_z = hidden * value_dim / weight_pack_factor;
+                    let in_proj_ba =
+                        hidden * (text_cfg.linear_num_value_heads * 2) / weight_pack_factor;
                     // out_proj: value_dim -> hidden
                     let out_proj = value_dim * hidden / weight_pack_factor;
                     // conv1d weight
@@ -8130,9 +8244,9 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                 let hidden_size = vc.hidden_size();
                 let patch_dim = vc.patch_size() * vc.patch_size() * 3;
                 let patch_norms = 2 * patch_dim + 4 * hidden_size;
-                let patch_dense = hidden_size * patch_dim / weight_pack_factor + hidden_size;
+                let patch_dense = hidden_size * patch_dim + hidden_size;
                 let pos_embedding = 2 * vc.position_embedding_size * hidden_size;
-                let embed_vision = hidden_size * tc.hidden_size / weight_pack_factor;
+                let embed_vision = hidden_size * tc.hidden_size;
                 patch_norms + patch_dense + pos_embedding + embed_vision
             } else {
                 let vision_layer_elems = {
@@ -8141,13 +8255,13 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                         + 2 * (vc.hidden_size * vc.intermediate_size)
                         + vc.intermediate_size * vc.hidden_size;
                     let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
-                    quantized / weight_pack_factor + norms
+                    quantized + norms
                 };
                 let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
                 let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
-                let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+                let patch_embedder = patch_embed + position_embedding_table;
                 let encoder = vc.num_hidden_layers * vision_layer_elems;
-                let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+                let embed_vision = vc.hidden_size * tc.hidden_size;
 
                 patch_embedder + encoder + embed_vision
             }
@@ -8155,7 +8269,7 @@ impl DeviceMappedModelLoader for Gemma4Loader {
 
         let audio_elems = cfg.audio_config.as_ref().map_or(0, |audio_cfg| {
             if cfg.is_unified() {
-                audio_cfg.input_feat_size() * tc.hidden_size / weight_pack_factor
+                audio_cfg.input_feat_size() * tc.hidden_size
             } else {
                 let mut f_out = audio_cfg.input_feat_size();
                 for i in 0..2 {
@@ -8177,14 +8291,12 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                     let norms =
                         audio_cfg.sscp_conv_channel_size[0] + audio_cfg.sscp_conv_channel_size[1];
                     let input_proj =
-                        audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size
-                            / weight_pack_factor;
+                        audio_cfg.sscp_conv_channel_size[1] * f_out * audio_cfg.hidden_size;
                     conv_0 + conv_1 + norms + input_proj
                 };
 
                 let conformer_block = {
                     let attention = 5 * (audio_cfg.hidden_size * audio_cfg.hidden_size)
-                        / weight_pack_factor
                         + 2 * audio_cfg.hidden_size
                         + audio_cfg.hidden_size / audio_cfg.conf_num_attention_heads
                         + audio_cfg.hidden_size / 2
@@ -8199,21 +8311,20 @@ impl DeviceMappedModelLoader for Gemma4Loader {
                         + 1;
                     let ffw = 2
                         * (2 * audio_cfg.hidden_size
-                            + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4))
-                                / weight_pack_factor);
+                            + 2 * (audio_cfg.hidden_size * (audio_cfg.hidden_size * 4)));
                     let conv = 2 * audio_cfg.hidden_size
-                        + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2) / weight_pack_factor
-                        + audio_cfg.hidden_size * audio_cfg.hidden_size / weight_pack_factor
+                        + audio_cfg.hidden_size * (audio_cfg.hidden_size * 2)
+                        + audio_cfg.hidden_size * audio_cfg.hidden_size
                         + audio_cfg.hidden_size * audio_cfg.conf_conv_kernel_size;
                     attention + ffw + conv + audio_cfg.hidden_size
                 };
 
                 let output_proj = audio_cfg.output_proj_dims.map_or(0, |output_dim| {
-                    audio_cfg.hidden_size * output_dim / weight_pack_factor + output_dim
+                    audio_cfg.hidden_size * output_dim + output_dim
                 });
                 let audio_embed_hidden =
                     audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
-                let embed_audio = audio_embed_hidden * tc.hidden_size / weight_pack_factor;
+                let embed_audio = audio_embed_hidden * tc.hidden_size;
 
                 subsample_conv_projection
                     + audio_cfg.conf_num_hidden_layers * conformer_block
@@ -8596,17 +8707,14 @@ impl DeviceMappedModelLoader for Lfm2VlLoader {
         let vision = {
             let vc = &cfg.vision_config;
             let patch_embedding =
-                (vc.num_channels * vc.patch_size * vc.patch_size * vc.hidden_size
-                    / weight_pack_factor)
-                    + vc.hidden_size;
+                vc.num_channels * vc.patch_size * vc.patch_size * vc.hidden_size + vc.hidden_size;
             let position_embedding = vc.num_patches * vc.hidden_size;
             let post_layernorm = 2 * vc.hidden_size;
             let layer = {
-                let attn =
-                    4 * (vc.hidden_size * vc.hidden_size / weight_pack_factor + vc.hidden_size);
-                let mlp = vc.hidden_size * vc.intermediate_size / weight_pack_factor
+                let attn = 4 * (vc.hidden_size * vc.hidden_size + vc.hidden_size);
+                let mlp = vc.hidden_size * vc.intermediate_size
                     + vc.intermediate_size
-                    + vc.intermediate_size * vc.hidden_size / weight_pack_factor
+                    + vc.intermediate_size * vc.hidden_size
                     + vc.hidden_size;
                 let norms = 4 * vc.hidden_size;
                 attn + mlp + norms
@@ -8942,13 +9050,13 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
                     + 2 * (vc.hidden_size * vc.intermediate_size)
                     + vc.intermediate_size * vc.hidden_size;
                 let norms = 2 * vc.head_dim + 4 * vc.hidden_size;
-                quantized / weight_pack_factor + norms
+                quantized + norms
             };
             let patch_embed = vc.patch_size * vc.patch_size * 3 * vc.hidden_size;
             let position_embedding_table = 2 * vc.position_embedding_size * vc.hidden_size;
-            let patch_embedder = patch_embed / weight_pack_factor + position_embedding_table;
+            let patch_embedder = patch_embed + position_embedding_table;
             let encoder = vc.num_hidden_layers * vision_layer_elems;
-            let embed_vision = vc.hidden_size * tc.hidden_size / weight_pack_factor;
+            let embed_vision = vc.hidden_size * tc.hidden_size;
             patch_embedder + encoder + embed_vision
         });
 
@@ -9049,16 +9157,21 @@ impl DeviceMappedModelLoader for DiffusionGemmaLoader {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::super::AutoDeviceMapQuantization;
     use super::*;
-    use crate::device_map::DummyDeviceMapper;
+    use crate::{
+        device_map::DummyDeviceMapper,
+        matformer::{MatformerConfig, MatformerSliceConfig, Slice},
+    };
     use mistralrs_quant::IsqType;
 
     fn matches_any(regexes: &[Regex], name: &str) -> bool {
         regexes.iter().any(|regex| regex.is_match(name))
     }
 
-    fn assert_fused_moe_isq_predicates(
+    fn assert_fused_moe_default_isq_predicates(
         loader_name: &str,
         loader: &dyn IsqModelLoader,
         prefixes: &[&str],
@@ -9066,8 +9179,6 @@ mod tests {
         let predicate_sets = [
             ("isq", loader.isq_layer_regexes("")?),
             ("immediate", loader.immediate_isq_predicates("")?),
-            ("moqe", loader.isq_layer_regexes_moqe("")?),
-            ("immediate moqe", loader.immediate_isq_predicates_moqe("")?),
         ];
         for (kind, predicates) in predicate_sets {
             for prefix in prefixes {
@@ -9243,6 +9354,7 @@ mod tests {
                 loader: Box::new(Gemma3nLoader),
                 accepted: vec![
                     "model.language_model.embed_tokens.weight",
+                    "model.language_model.embed_tokens_per_layer.weight",
                     "model.language_model.lm_head.weight",
                     "model.language_model.lm_head.bias",
                 ],
@@ -9379,14 +9491,11 @@ mod tests {
         let gemma3n = Gemma3nLoader.promoted_isq_predicates("")?;
         for name in [
             "model.language_model.embed_tokens.weight",
+            "model.language_model.embed_tokens_per_layer.weight",
             "model.language_model.lm_head.weight",
         ] {
             assert!(matches_any(&gemma3n, name), "Gemma3n missed {name}");
         }
-        assert!(!matches_any(
-            &gemma3n,
-            "model.language_model.embed_tokens_per_layer.weight"
-        ));
 
         Ok(())
     }
@@ -9428,6 +9537,8 @@ mod tests {
         let names = [
             "model.language_model.layers.0.mlp.experts.gate_up_proj.weight",
             "model.language_model.layers.0.mlp.experts.down_proj.weight",
+            "language_model.model.layers.0.mlp.experts.gate_up_proj.weight",
+            "language_model.model.layers.0.mlp.experts.down_proj.weight",
         ];
 
         for regexes in [
@@ -9443,13 +9554,84 @@ mod tests {
     }
 
     #[test]
+    fn qwen3_multimodal_isq_accepts_both_text_namespaces() -> Result<()> {
+        let cases: [(&dyn IsqModelLoader, &[&str]); 4] = [
+            (
+                &Qwen3VLLoader,
+                &["self_attn.q_proj.weight", "mlp.gate_proj.weight"],
+            ),
+            (
+                &Qwen3VLMoELoader,
+                &[
+                    "self_attn.q_proj.weight",
+                    "mlp.experts.0.gate_proj.weight",
+                    "mlp.experts.gate_proj.weight",
+                ],
+            ),
+            (
+                &Qwen3_5Loader,
+                &[
+                    "self_attn.q_proj.weight",
+                    "linear_attn.in_proj_qkv.weight",
+                    "mlp.gate_proj.weight",
+                ],
+            ),
+            (
+                &Qwen3_5MoeLoader,
+                &[
+                    "self_attn.q_proj.weight",
+                    "linear_attn.in_proj_qkv.weight",
+                    "mlp.experts.0.gate_proj.weight",
+                    "mlp.experts.gate_up_proj.weight",
+                    "mlp.shared_expert.gate_proj.weight",
+                ],
+            ),
+        ];
+
+        for (loader, suffixes) in cases {
+            for predicates in [
+                loader.isq_layer_regexes("")?,
+                loader.immediate_isq_predicates("")?,
+            ] {
+                for prefix in ["model.language_model", "language_model.model"] {
+                    for suffix in suffixes {
+                        let name = format!("{prefix}.layers.0.{suffix}");
+                        assert!(matches_any(&predicates, &name), "{name} was not matched");
+                    }
+                }
+            }
+        }
+
+        for loader in [
+            &Qwen3VLMoELoader as &dyn IsqModelLoader,
+            &Qwen3_5MoeLoader as &dyn IsqModelLoader,
+        ] {
+            for predicates in [
+                loader.isq_layer_regexes_moqe("")?,
+                loader.immediate_isq_predicates_moqe("")?,
+            ] {
+                for prefix in ["model.language_model", "language_model.model"] {
+                    for suffix in [
+                        "mlp.experts.0.gate_proj.weight",
+                        "mlp.experts.gate_proj.weight",
+                    ] {
+                        let name = format!("{prefix}.layers.0.{suffix}");
+                        assert!(matches_any(&predicates, &name), "{name} was not matched");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn multimodal_moe_loaders_match_canonical_fused_experts() -> Result<()> {
-        assert_fused_moe_isq_predicates(
+        assert_fused_moe_default_isq_predicates(
             "VLlama4Loader",
             &VLlama4Loader,
             &["language_model.model.layers.0.feed_forward.experts"],
         )?;
-        assert_fused_moe_isq_predicates(
+        assert_fused_moe_default_isq_predicates(
             "Qwen3VLMoELoader",
             &Qwen3VLMoELoader,
             &[
@@ -9457,7 +9639,7 @@ mod tests {
                 "language_model.model.layers.0.mlp.experts",
             ],
         )?;
-        assert_fused_moe_isq_predicates(
+        assert_fused_moe_default_isq_predicates(
             "Qwen3_5MoeLoader",
             &Qwen3_5MoeLoader,
             &[
@@ -9465,7 +9647,7 @@ mod tests {
                 "language_model.model.layers.0.mlp.experts",
             ],
         )?;
-        assert_fused_moe_isq_predicates(
+        assert_fused_moe_default_isq_predicates(
             "Gemma4Loader",
             &Gemma4Loader,
             &[
@@ -9473,6 +9655,104 @@ mod tests {
                 "model.language_model.layers.0.experts",
             ],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_multimodal_moqe_predicates_are_empty() -> Result<()> {
+        for (loader_name, loader) in [
+            ("VLlama4Loader", &VLlama4Loader as &dyn IsqModelLoader),
+            ("Gemma4Loader", &Gemma4Loader as &dyn IsqModelLoader),
+        ] {
+            assert!(
+                loader.isq_layer_regexes_moqe("")?.is_empty(),
+                "{loader_name} unexpectedly exposes MoQE predicates"
+            );
+            assert!(
+                loader.immediate_isq_predicates_moqe("")?.is_empty(),
+                "{loader_name} unexpectedly exposes immediate MoQE predicates"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn llama4_isq_matches_shared_expert_projections() -> Result<()> {
+        let loader = VLlama4Loader;
+        let names = [
+            "language_model.model.layers.0.feed_forward.shared_expert.gate_proj.weight",
+            "language_model.model.layers.0.feed_forward.shared_expert.up_proj.weight",
+            "language_model.model.layers.0.feed_forward.shared_expert.down_proj.weight",
+        ];
+
+        for predicates in [
+            loader.isq_layer_regexes("")?,
+            loader.immediate_isq_predicates("")?,
+        ] {
+            for name in names {
+                assert!(matches_any(&predicates, name), "{name} was not matched");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn qwen_multimodal_moqe_only_matches_routed_experts() -> Result<()> {
+        let qwen35 = Qwen3_5MoeLoader;
+        for predicates in [
+            qwen35.isq_layer_regexes("")?,
+            qwen35.immediate_isq_predicates("")?,
+        ] {
+            for projection in ["gate_proj", "up_proj", "down_proj"] {
+                let name =
+                    format!("model.language_model.layers.0.mlp.shared_expert.{projection}.weight");
+                assert!(matches_any(&predicates, &name), "{name} was not matched");
+            }
+        }
+
+        let accepted = [
+            "model.language_model.layers.0.mlp.experts.0.gate_proj.weight",
+            "model.language_model.layers.0.mlp.experts.0.up_proj.weight",
+            "model.language_model.layers.0.mlp.experts.0.down_proj.weight",
+            "model.language_model.layers.0.mlp.experts.gate_proj.weight",
+            "model.language_model.layers.0.mlp.experts.up_proj.weight",
+            "model.language_model.layers.0.mlp.experts.down_proj.weight",
+        ];
+        let rejected = [
+            "lm_head.weight",
+            "model.language_model.layers.0.self_attn.q_proj.weight",
+            "model.language_model.layers.0.mlp.gate_proj.weight",
+            "model.language_model.layers.0.mlp.gate.weight",
+            "model.language_model.layers.0.mlp.shared_expert.gate_proj.weight",
+            "model.language_model.layers.0.mlp.shared_expert.up_proj.weight",
+            "model.language_model.layers.0.mlp.shared_expert.down_proj.weight",
+            "model.visual.blocks.0.mlp.linear_fc1.weight",
+        ];
+
+        for (loader_name, loader) in [
+            ("Qwen3VLMoELoader", &Qwen3VLMoELoader as &dyn IsqModelLoader),
+            ("Qwen3_5MoeLoader", &Qwen3_5MoeLoader as &dyn IsqModelLoader),
+        ] {
+            for (kind, predicates) in [
+                ("moqe", loader.isq_layer_regexes_moqe("")?),
+                ("immediate moqe", loader.immediate_isq_predicates_moqe("")?),
+            ] {
+                for name in accepted {
+                    assert!(
+                        matches_any(&predicates, name),
+                        "{loader_name} {kind} predicates did not match {name}"
+                    );
+                }
+                for name in rejected {
+                    assert!(
+                        !matches_any(&predicates, name),
+                        "{loader_name} {kind} predicates matched {name}"
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -9623,39 +9903,227 @@ mod tests {
         let loader = Gemma4Loader;
         let dtype = DType::BF16;
 
-        for (default, tied, untied) in [
-            (IsqType::AFQ4, 444, 636),
-            (IsqType::AFQ6, 636, 924),
-            (IsqType::Q4K, 444, 636),
-            (IsqType::Q5K, 636, 924),
-            (IsqType::Q6K, 636, 924),
+        for default in [
+            IsqType::AFQ4,
+            IsqType::AFQ6,
+            IsqType::Q4K,
+            IsqType::Q5K,
+            IsqType::Q6K,
         ] {
             let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
             let pack_factor = default.pack_factor(dtype);
-            assert_eq!(
-                loader.non_mapped_size_in_bytes(
-                    &gemma4_estimator_config(true),
-                    dtype,
-                    pack_factor,
-                    Some(&quantization),
-                    None,
-                )?,
-                tied,
-                "{default} tied"
-            );
-            assert_eq!(
-                loader.non_mapped_size_in_bytes(
-                    &gemma4_estimator_config(false),
-                    dtype,
-                    pack_factor,
-                    Some(&quantization),
-                    None,
-                )?,
-                untied,
-                "{default} untied"
-            );
+            let promoted_pack_factor = default.promote_for_sensitive_tensor().pack_factor(dtype);
+            for tied in [true, false] {
+                let config = gemma4_estimator_config(tied);
+                let cfg: Gemma4Config = serde_json::from_str(&config)?;
+                let tc = cfg.text_config;
+                let ple_dim = tc.hidden_size_per_layer_input.unwrap();
+                let ple_vocab = tc.vocab_size_per_layer_input.unwrap();
+                let embedding_count = if tied { 1 } else { 2 };
+                let expected_elements = embedding_count * tc.hidden_size * tc.vocab_size
+                    / promoted_pack_factor
+                    + ple_vocab * tc.num_hidden_layers * ple_dim / promoted_pack_factor
+                    + tc.hidden_size * tc.num_hidden_layers * ple_dim / pack_factor
+                    + tc.hidden_size
+                    + ple_dim;
+                assert_eq!(
+                    loader.non_mapped_size_in_bytes(
+                        &config,
+                        dtype,
+                        pack_factor,
+                        Some(&quantization),
+                        None,
+                    )?,
+                    expected_elements * dtype.size_in_bytes(),
+                    "{default} tied={tied}"
+                );
+            }
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn gemma4_estimator_keeps_multimodal_weights_dense_for_isq() -> Result<()> {
+        let loader = Gemma4Loader;
+        let dtype = DType::BF16;
+        let text_only = gemma4_estimator_config(true);
+        let mut multimodal: serde_json::Value = serde_json::from_str(&text_only)?;
+        let multimodal = {
+            let object = multimodal.as_object_mut().unwrap();
+            object.insert("vision_config".to_string(), serde_json::json!({}));
+            object.insert("audio_config".to_string(), serde_json::json!({}));
+            serde_json::to_string(&multimodal)?
+        };
+
+        let dense_text = loader.non_mapped_size_in_bytes(&text_only, dtype, 1, None, None)?;
+        let dense_multimodal =
+            loader.non_mapped_size_in_bytes(&multimodal, dtype, 1, None, None)?;
+        let dense_multimodal_bytes = dense_multimodal - dense_text;
+        assert!(dense_multimodal_bytes > 0);
+
+        let isq = IsqType::Q4K;
+        let pack_factor = isq.pack_factor(dtype);
+        let quantization = AutoDeviceMapQuantization::isq(Some(isq), None);
+        let isq_text = loader.non_mapped_size_in_bytes(
+            &text_only,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+        let isq_multimodal = loader.non_mapped_size_in_bytes(
+            &multimodal,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+
+        assert_eq!(isq_multimodal - isq_text, dense_multimodal_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn llama4_estimator_keeps_vision_weights_dense_for_isq() -> Result<()> {
+        let config = serde_json::json!({
+            "text_config": {
+                "hidden_act": "silu",
+                "hidden_size": 12,
+                "intermediate_size": 24,
+                "vocab_size": 24,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "rms_norm_eps": 1e-6,
+                "rope_theta": 10000.0,
+                "max_position_embeddings": 128,
+                "rope_scaling": null,
+                "tie_word_embeddings": true,
+                "use_qk_norm": false,
+                "moe_layers": [],
+                "interleave_moe_layer_step": 1,
+                "intermediate_size_mlp": 24,
+                "num_local_experts": 1,
+                "num_experts_per_tok": 1,
+                "attention_chunk_size": 16
+            },
+            "vision_config": {
+                "hidden_size": 8,
+                "hidden_act": "gelu",
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_channels": 3,
+                "intermediate_size": 16,
+                "vision_output_dim": 8,
+                "image_size": 8,
+                "patch_size": 4,
+                "norm_eps": 1e-6,
+                "pixel_shuffle_ratio": 1.0,
+                "projector_input_dim": 8,
+                "projector_output_dim": 12,
+                "vision_feature_layer": -1,
+                "rope_theta": 10000.0
+            },
+            "image_token_index": 0
+        })
+        .to_string();
+        let loader = VLlama4Loader;
+        let dtype = DType::BF16;
+        let dense = loader.non_mapped_size_in_bytes(&config, dtype, 1, None, None)?;
+        let dense_text_elems = 12 * 24 + 12;
+        let dense_vision = dense - dense_text_elems * dtype.size_in_bytes();
+
+        let isq = IsqType::Q4K;
+        let pack_factor = isq.pack_factor(dtype);
+        let promoted_pack_factor = isq.promote_for_sensitive_tensor().pack_factor(dtype);
+        let quantization = AutoDeviceMapQuantization::isq(Some(isq), None);
+        let quantized = loader.non_mapped_size_in_bytes(
+            &config,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+        let quantized_text_elems = 12 * 24 / promoted_pack_factor + 12;
+
+        assert_eq!(
+            quantized,
+            dense_vision + quantized_text_elems * dtype.size_in_bytes()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lfm2vl_estimator_only_packs_selected_non_mapped_weights() -> Result<()> {
+        let config = serde_json::json!({
+            "text_config": {
+                "hidden_size": 12,
+                "vocab_size": 24,
+                "tie_word_embeddings": true
+            },
+            "vision_config": {
+                "hidden_size": 8,
+                "intermediate_size": 16,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_channels": 3,
+                "num_patches": 4,
+                "patch_size": 2
+            },
+            "projector_hidden_size": 10,
+            "downsample_factor": 2,
+            "projector_bias": true,
+            "projector_use_layernorm": true
+        })
+        .to_string();
+        let loader = Lfm2VlLoader;
+        let dtype = DType::BF16;
+        let dense = loader.non_mapped_size_in_bytes(&config, dtype, 1, None, None)?;
+
+        let isq = IsqType::Q4K;
+        let pack_factor = isq.pack_factor(dtype);
+        let promoted_pack_factor = isq.promote_for_sensitive_tensor().pack_factor(dtype);
+        let quantization = AutoDeviceMapQuantization::isq(Some(isq), None);
+        let quantized = loader.non_mapped_size_in_bytes(
+            &config,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+
+        let embedding = 12 * 24;
+        let projector_linears = (8 * 2usize.pow(2)) * 10 + 10 * 12;
+        let expected_savings = embedding - embedding / promoted_pack_factor + projector_linears
+            - projector_linears / pack_factor;
+        assert_eq!(dense - quantized, expected_savings * dtype.size_in_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn diffusion_gemma_estimator_keeps_vision_weights_dense_for_isq() -> Result<()> {
+        let mut config: serde_json::Value = serde_json::from_str(&gemma4_estimator_config(true))?;
+        let object = config.as_object_mut().unwrap();
+        object.remove("architectures");
+        object.insert("vision_config".to_string(), serde_json::json!({}));
+        let config = serde_json::to_string(&config)?;
+        let loader = DiffusionGemmaLoader;
+        let dtype = DType::BF16;
+        let dense = loader.non_mapped_size_in_bytes(&config, dtype, 1, None, None)?;
+
+        let isq = IsqType::Q4K;
+        let pack_factor = isq.pack_factor(dtype);
+        let quantization = AutoDeviceMapQuantization::isq(Some(isq), None);
+        let quantized = loader.non_mapped_size_in_bytes(
+            &config,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+
+        assert_eq!(quantized, dense);
         Ok(())
     }
 
@@ -9687,7 +10155,7 @@ mod tests {
                 "text_config": {{
                     "hidden_size": 12,
                     "intermediate_size": 24,
-                    "num_hidden_layers": 2,
+                    "num_hidden_layers": 12,
                     "num_kv_shared_layers": 0,
                     "vocab_size": 24,
                     "sliding_window": 16,
@@ -9696,12 +10164,20 @@ mod tests {
                     "vocab_size_per_layer_input": {ple_vocab_size},
                     "hidden_size_per_layer_input": 6,
                     "altup_num_inputs": 2,
-                    "layer_types": ["sliding_attention", "full_attention"],
+                    "layer_types": [
+                        "sliding_attention", "full_attention", "sliding_attention",
+                        "full_attention", "sliding_attention", "full_attention",
+                        "sliding_attention", "full_attention", "sliding_attention",
+                        "full_attention", "sliding_attention", "full_attention"
+                    ],
                     "altup_active_idx": 0,
                     "altup_coef_clip": null,
                     "laurel_rank": 4,
                     "altup_correct_scale": true,
-                    "activation_sparsity_pattern": [0.0, 0.0],
+                    "activation_sparsity_pattern": [
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                        0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                    ],
                     "final_logit_softcapping": null
                 }},
                 "vision_config": {{}},
@@ -9712,14 +10188,27 @@ mod tests {
     }
 
     #[test]
-    fn gemma3n_estimator_keeps_ple_embedding_dense_for_q_defaults() -> Result<()> {
+    fn gemma3n_estimator_packs_default_ple_and_keeps_matformer_ple_dense() -> Result<()> {
         let loader = Gemma3nLoader;
         let dtype = DType::BF16;
-        let expected_ple_vocab_delta = 2 * 6 * dtype.size_in_bytes();
+        let matformer = MatformerSliceConfig::new(
+            "slice".to_string(),
+            Arc::new(MatformerConfig {
+                slices: HashMap::from([(
+                    "slice".to_string(),
+                    Slice {
+                        effective_params: 0.0,
+                        ffn_hidden_dimensions: vec![24; 12],
+                        layers_skipped: Some(vec![0]),
+                    },
+                )]),
+            }),
+        );
 
         for default in [IsqType::Q4K, IsqType::Q5K, IsqType::Q6K] {
             let quantization = AutoDeviceMapQuantization::isq(Some(default), None);
             let pack_factor = default.pack_factor(dtype);
+            let promoted_pack_factor = default.promote_for_sensitive_tensor().pack_factor(dtype);
             let base = loader.non_mapped_size_in_bytes(
                 &gemma3n_estimator_config(18),
                 dtype,
@@ -9734,9 +10223,130 @@ mod tests {
                 Some(&quantization),
                 None,
             )?;
-            assert_eq!(expanded - base, expected_ple_vocab_delta, "{default}");
+            assert_eq!(
+                expanded - base,
+                12 * 6 * dtype.size_in_bytes() / promoted_pack_factor,
+                "{default}"
+            );
+
+            let matformer_base = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(18),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                Some(&matformer),
+            )?;
+            let matformer_expanded = loader.non_mapped_size_in_bytes(
+                &gemma3n_estimator_config(19),
+                dtype,
+                pack_factor,
+                Some(&quantization),
+                Some(&matformer),
+            )?;
+            assert_eq!(
+                matformer_expanded - matformer_base,
+                11 * 6 * dtype.size_in_bytes(),
+                "{default} MatFormer"
+            );
         }
 
+        Ok(())
+    }
+
+    fn gemma3_text_loader_config() -> serde_json::Value {
+        serde_json::json!({
+            "architectures": ["Gemma3ForCausalLM"],
+            "hidden_size": 1152,
+            "intermediate_size": 6912,
+            "num_attention_heads": 4,
+            "num_hidden_layers": 26,
+            "num_key_value_heads": 1,
+            "head_dim": 256,
+            "sliding_window": 512
+        })
+    }
+
+    #[test]
+    fn gemma3_reports_text_only_modalities_without_vision_config() -> Result<()> {
+        let loader = Gemma3Loader;
+        let text = gemma3_text_loader_config().to_string();
+        assert_eq!(
+            loader.modalities(&text)?.input,
+            vec![SupportedModality::Text]
+        );
+        assert!(loader.non_mapped_sub_models_for_config(&text)?.is_none());
+
+        let params = AutoDeviceMapParams::Multimodal {
+            max_seq_len: 4096,
+            max_batch_size: 2,
+            max_image_shape: (1024, 1024),
+            max_num_images: 1,
+        };
+        assert!(matches!(
+            AutoMultimodalLoader.auto_device_map_params(&text, &params)?,
+            AutoDeviceMapParams::Text {
+                max_seq_len: 4096,
+                max_batch_size: 2
+            }
+        ));
+        assert!(AutoMultimodalLoader
+            .non_mapped_sub_models_for_config(&text)?
+            .is_none());
+
+        let multimodal = serde_json::json!({
+            "architectures": ["Gemma3ForConditionalGeneration"],
+            "text_config": gemma3_text_loader_config(),
+            "vision_config": {},
+            "image_token_index": 7,
+            "mm_tokens_per_image": 256
+        })
+        .to_string();
+        assert_eq!(
+            loader.modalities(&multimodal)?.input,
+            vec![SupportedModality::Text, SupportedModality::Vision]
+        );
+        let sub_models = loader
+            .non_mapped_sub_models_for_config(&multimodal)?
+            .expect("vision sub-model");
+        assert!(matches!(sub_models.as_slice(), [NonMappedSubModel::Vision]));
+        Ok(())
+    }
+
+    #[test]
+    fn gemma3_device_map_uses_explicit_head_dimension() -> Result<()> {
+        let config = gemma3_text_loader_config().to_string();
+        let model_config = Gemma3Loader.model_config(&config)?;
+        let params = AutoDeviceMapParams::Text {
+            max_seq_len: 4096,
+            max_batch_size: 1,
+        };
+
+        assert_eq!(model_config.k_head_dim(), 256);
+        assert_eq!(model_config.v_head_dim(), 256);
+        assert!(Gemma3Loader.mapped_max_act_size_elems(&config, &params)? > 0);
+        assert_eq!(
+            Gemma3Loader.non_mapped_max_act_size_elems(&config, &params)?,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gemma3_immediate_isq_accepts_both_text_namespaces() -> Result<()> {
+        let predicates = Gemma3Loader.immediate_isq_predicates("")?;
+        for name in [
+            "model.layers.0.self_attn.q_proj.weight",
+            "model.layers.0.mlp.down_proj.weight",
+            "language_model.model.layers.0.self_attn.q_proj.weight",
+            "language_model.model.layers.0.mlp.down_proj.weight",
+            "lm_head.weight",
+            "language_model.lm_head.weight",
+        ] {
+            assert!(
+                predicates.iter().any(|predicate| predicate.is_match(name)),
+                "missing immediate ISQ predicate for {name}"
+            );
+        }
         Ok(())
     }
 }

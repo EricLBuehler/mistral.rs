@@ -191,7 +191,8 @@ loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
 - **AFQ** (`afq2`-`afq8`): affine quantization optimized for Apple Silicon. Runs on Metal
   (native kernels), CUDA (dedicated backend), and CPU (fallback).
 - **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
-- **FP8** (`fp8`, `f8q8`): native FP8 matmul on NVIDIA compute capability 8.9+.
+- **FP8** (`fp8`): native FP8 matmul on NVIDIA compute capability 8.9+.
+- **F8Q8** (`f8q8`): CPU-only 8-bit format.
 - **MXFP4** (4-bit microscaling): native fast path on Blackwell.
 - **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
 
@@ -207,9 +208,10 @@ and incompatible combinations are rejected at load time. Full constraint table:
 
 - `default`: every linear layer the pipeline exposes for quantization.
 - `moqe` (MoQE, Mixture of Quantization Experts): only MoE (Mixture of Experts) expert layers;
-  the shared (non-expert) trunk stays at native precision.
+  the shared (non-expert) trunk stays at its source precision.
 
 `moqe` is useful on MoE models where the experts dominate parameter count.
+It applies when mistral.rs performs ISQ, including UQFF generation. Loading a pre-quantized GGUF or UQFF with `--quant` does not change that artifact's layer organization.
 
 ### imatrix
 

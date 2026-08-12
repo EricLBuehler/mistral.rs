@@ -4,8 +4,9 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    apply_immediate_isq, ColumnParallelLayer, MXFP4Layer, QuantMethod, QuantMethodConfig,
-    QuantizedConfig, ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder, UnquantLinear,
+    apply_immediate_isq, get_immediate_isq, immediate_isq_match, ColumnParallelLayer,
+    IsqCaptureMode, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -25,7 +26,7 @@ use crate::{
         NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
 serde_default_fn!(bool, default_tie_word_embeddings, false);
@@ -355,8 +356,9 @@ fn load_gpt_oss_expert_projection(
 ) -> Result<Arc<dyn QuantMethod>> {
     let projection_vb = vb.pp(name);
     if let Some(source) = vb.weight_source() {
+        let load_device = mistralrs_quant::weight_source_load_device(&projection_vb);
         if let Some(layer) =
-            source.load_linear(&projection_vb.prefix(), vb.device(), Shard::default())?
+            source.load_linear(&projection_vb.prefix(), &load_device, Shard::default())?
         {
             return apply_immediate_isq(layer, projection_vb);
         }
@@ -371,6 +373,46 @@ fn load_gpt_oss_expert_projection(
         Linear::new(weight, bias),
     ))?) as Arc<dyn QuantMethod>;
     apply_immediate_isq(layer, projection_vb)
+}
+
+fn load_gpt_oss_packed_expert_projection(
+    num_local_experts: usize,
+    in_dim: usize,
+    out_dim: usize,
+    name: &str,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let projection_vb = vb.pp(name);
+    if get_immediate_isq().is_some_and(|params| params.capture == IsqCaptureMode::Immediate) {
+        if let Some(target) = immediate_isq_match(&projection_vb).and_then(|matched| matched.ty) {
+            if !MXFP4Layer::supports_stacked_isq(target) {
+                candle_core::bail!(
+                    "Cannot requantize raw GPT-OSS MXFP4 expert `{}` to {target}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ.",
+                    projection_vb.prefix()
+                );
+            }
+        }
+    }
+    if let Some(source) = vb.weight_source() {
+        let load_device = mistralrs_quant::weight_source_load_device(&projection_vb);
+        if let Some(layer) =
+            source.load_linear(&projection_vb.prefix(), &load_device, Shard::default())?
+        {
+            return apply_immediate_isq(layer, projection_vb);
+        }
+    }
+    let layer =
+        MXFP4Layer::packed_gptoss_linear(num_local_experts, in_dim, out_dim, true, name, vb)?;
+    apply_immediate_isq(layer, projection_vb)
+}
+
+fn has_interleaved_expert_projection(vb: &ShardedVarBuilder) -> bool {
+    if vb.contains_tensor("gate_up_proj_blocks") {
+        return true;
+    }
+    let weight = format!("{}.gate_up_proj.weight", vb.prefix());
+    vb.weight_source()
+        .is_some_and(|source| source.contains(&weight))
 }
 
 impl GptOssMoE {
@@ -407,21 +449,19 @@ impl GptOssMoE {
             None => None,
         };
 
-        let projections = if experts_vb.contains_tensor("gate_up_proj_blocks") {
+        let projections = if has_interleaved_expert_projection(&experts_vb) {
             GptOssExpertProjections::Interleaved {
-                gate_up: MXFP4Layer::packed_gptoss_linear(
+                gate_up: load_gpt_oss_packed_expert_projection(
                     cfg.num_local_experts,
                     cfg.hidden_size,
                     cfg.intermediate_size * 2,
-                    true,
                     "gate_up_proj",
                     experts_vb.clone(),
                 )?,
-                down: MXFP4Layer::packed_gptoss_linear(
+                down: load_gpt_oss_packed_expert_projection(
                     cfg.num_local_experts,
                     cfg.intermediate_size,
                     cfg.hidden_size,
-                    true,
                     "down_proj",
                     experts_vb,
                 )?,
@@ -903,11 +943,37 @@ impl Model {
 
         self.lm_head.forward(&xs)
     }
+
+    fn residual_tensors_inner(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("norm").add(&self.norm);
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+
+            let uvb_attn = uvb_l.pp("self_attn");
+            if let Some(sinks) = &layer.self_attn.sdpa_params.sinks {
+                uvb_attn.add_tensor("sinks", sinks.clone());
+            }
+            uvb_l.pp("mlp").pp("router").add(&layer.mlp.gate);
+        }
+
+        uvb.to_safetensors()
+    }
 }
 
 impl IsqModel for Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        Vec::new()
+        self.residual_tensors_inner()
+    }
+
+    fn residual_tensors_moe_experts_only(&self) -> Option<Vec<(String, Tensor)>> {
+        Some(self.residual_tensors_inner())
     }
 }
 
@@ -972,6 +1038,142 @@ impl AnyMoeBaseModelMixin for Model {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mistralrs_quant::{
+        uqff_version_tensors, IsqType, QuantizedSerde, ShardedSafeTensors, UqffReader, UqffTensor,
+    };
+
+    fn test_tensor<S: Into<candle_core::Shape>>(shape: S) -> Result<Tensor> {
+        Tensor::zeros(shape, DType::F32, &Device::Cpu)
+    }
+
+    fn append_mxfp4_expert_layer(
+        tensors: &mut Vec<UqffTensor>,
+        prefix: &str,
+        experts: usize,
+        out_dim: usize,
+        in_dim: usize,
+    ) -> Result<()> {
+        let layer = MXFP4Layer::from_parts(
+            Tensor::zeros((experts, out_dim, in_dim / 2), DType::U8, &Device::Cpu)?,
+            Tensor::zeros((experts, out_dim, in_dim / 32), DType::U8, &Device::Cpu)?,
+            Some(Tensor::zeros((experts, out_dim), DType::F32, &Device::Cpu)?),
+        );
+        tensors.extend(layer.serialize_uqff(prefix, IsqType::MXFP4)?);
+        Ok(())
+    }
+
+    fn residual_test_model() -> Result<Model> {
+        let cfg = Config {
+            vocab_size: 8,
+            hidden_size: 4,
+            intermediate_size: 6,
+            num_hidden_layers: 1,
+            num_attention_heads: 2,
+            num_key_value_heads: 1,
+            max_position_embeddings: 8,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.,
+            head_dim: Some(2),
+            tie_word_embeddings: false,
+            num_local_experts: 2,
+            num_experts_per_tok: 1,
+            layer_types: vec![LayerType::FullAttention],
+            alpha: 1.702,
+            swiglu_limit: 7.,
+            attention_bias: true,
+            ..Default::default()
+        };
+        let mut tensors = HashMap::from([
+            (
+                "model.embed_tokens.weight".to_string(),
+                test_tensor((8, 4))?,
+            ),
+            ("model.norm.weight".to_string(), test_tensor(4)?),
+            ("lm_head.weight".to_string(), test_tensor((8, 4))?),
+            (
+                "model.layers.0.input_layernorm.weight".to_string(),
+                test_tensor(4)?,
+            ),
+            (
+                "model.layers.0.post_attention_layernorm.weight".to_string(),
+                test_tensor(4)?,
+            ),
+            (
+                "model.layers.0.self_attn.q_proj.weight".to_string(),
+                test_tensor((4, 4))?,
+            ),
+            (
+                "model.layers.0.self_attn.q_proj.bias".to_string(),
+                test_tensor(4)?,
+            ),
+            (
+                "model.layers.0.self_attn.k_proj.weight".to_string(),
+                test_tensor((2, 4))?,
+            ),
+            (
+                "model.layers.0.self_attn.k_proj.bias".to_string(),
+                test_tensor(2)?,
+            ),
+            (
+                "model.layers.0.self_attn.v_proj.weight".to_string(),
+                test_tensor((2, 4))?,
+            ),
+            (
+                "model.layers.0.self_attn.v_proj.bias".to_string(),
+                test_tensor(2)?,
+            ),
+            (
+                "model.layers.0.self_attn.o_proj.weight".to_string(),
+                test_tensor((4, 4))?,
+            ),
+            (
+                "model.layers.0.self_attn.o_proj.bias".to_string(),
+                test_tensor(4)?,
+            ),
+            (
+                "model.layers.0.self_attn.sinks".to_string(),
+                test_tensor(2)?,
+            ),
+            (
+                "model.layers.0.mlp.router.weight".to_string(),
+                test_tensor((2, 4))?,
+            ),
+            (
+                "model.layers.0.mlp.router.bias".to_string(),
+                test_tensor(2)?,
+            ),
+        ]);
+        for (name, shape) in [
+            ("gate_proj", (2, 6, 4)),
+            ("up_proj", (2, 6, 4)),
+            ("down_proj", (2, 4, 6)),
+        ] {
+            tensors.insert(
+                format!("model.layers.0.mlp.experts.{name}.weight"),
+                test_tensor(shape)?,
+            );
+        }
+
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+        let metadata = NormalLoadingMetadata {
+            mapper: Box::new(crate::device_map::DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(indicatif::MultiProgress::new()),
+            matformer_slicing_config: None,
+            rope_pairing: None,
+        };
+        Model::new(&cfg, vb, true, metadata, AttentionImplementation::Eager)
+    }
+
+    fn residual_shapes(residual: Vec<(String, Tensor)>) -> HashMap<String, Vec<usize>> {
+        residual
+            .into_iter()
+            .map(|(name, tensor)| (name, tensor.dims().to_vec()))
+            .collect()
+    }
 
     fn quant(weight: Tensor) -> Result<Arc<dyn QuantMethod>> {
         let weight = candle_core::quantized::QTensor::quantize(
@@ -984,6 +1186,102 @@ mod tests {
                 b: None,
             },
         )?))
+    }
+
+    #[test]
+    fn residual_tensors_cover_all_untracked_checkpoint_tensors() -> Result<()> {
+        let model = residual_test_model()?;
+        let expected = HashMap::from([
+            ("model.norm.weight".to_string(), vec![4]),
+            ("model.layers.0.input_layernorm.weight".to_string(), vec![4]),
+            (
+                "model.layers.0.post_attention_layernorm.weight".to_string(),
+                vec![4],
+            ),
+            ("model.layers.0.self_attn.sinks".to_string(), vec![2]),
+            ("model.layers.0.mlp.router.weight".to_string(), vec![2, 4]),
+            ("model.layers.0.mlp.router.bias".to_string(), vec![2]),
+        ]);
+
+        assert_eq!(residual_shapes(model.residual_tensors()), expected);
+        assert_eq!(
+            residual_shapes(
+                model
+                    .residual_tensors_moe_experts_only()
+                    .expect("GPT-OSS supports MoQE residual serialization")
+            ),
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_experts_load_from_canonical_uqff_layers_without_raw_tensors() -> Result<()> {
+        const EXPERTS: usize = 2;
+        const HIDDEN: usize = 32;
+        const INTERMEDIATE: usize = 32;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gpt-oss-experts.uqff");
+        let prefix = "model.layers.0.mlp.experts";
+        let mut tensors = uqff_version_tensors();
+        append_mxfp4_expert_layer(
+            &mut tensors,
+            &format!("{prefix}.gate_up_proj"),
+            EXPERTS,
+            INTERMEDIATE * 2,
+            HIDDEN,
+        )?;
+        append_mxfp4_expert_layer(
+            &mut tensors,
+            &format!("{prefix}.down_proj"),
+            EXPERTS,
+            HIDDEN,
+            INTERMEDIATE,
+        )?;
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let residual = HashMap::from([
+            (
+                "model.layers.0.mlp.router.weight".to_string(),
+                Tensor::zeros((EXPERTS, HIDDEN), DType::F32, &Device::Cpu)?,
+            ),
+            (
+                "model.layers.0.mlp.router.bias".to_string(),
+                Tensor::zeros(EXPERTS, DType::F32, &Device::Cpu)?,
+            ),
+        ]);
+        let vb = ShardedSafeTensors::wrap(residual, DType::F32, Device::Cpu)
+            .with_uqff_reader(Arc::new(UqffReader::open(&[path])?))
+            .pp("model.layers.0.mlp");
+        assert!(!vb.pp("experts").contains_tensor("gate_up_proj_blocks"));
+
+        let cfg = Config {
+            hidden_size: HIDDEN,
+            intermediate_size: INTERMEDIATE,
+            num_local_experts: EXPERTS,
+            num_experts_per_tok: 1,
+            ..Default::default()
+        };
+        let moe = GptOssMoE::new(&cfg, vb, Device::Cpu)?;
+        match &moe.projections {
+            GptOssExpertProjections::Interleaved { gate_up, down } => {
+                assert_eq!(gate_up.name(), "mxfp4-layer");
+                assert_eq!(down.name(), "mxfp4-layer");
+            }
+            GptOssExpertProjections::Split { .. } => {
+                panic!("canonical UQFF expert layers must remain interleaved")
+            }
+        }
+
+        let output = moe.forward(&Tensor::zeros((1, 1, HIDDEN), DType::F32, &Device::Cpu)?, 0)?;
+        assert_eq!(output.dims(), &[1, 1, HIDDEN]);
+        Ok(())
     }
 
     #[test]

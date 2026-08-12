@@ -17,6 +17,7 @@ Fine-tunes and model sizes within a family use the same entry.
 | Mistral 3 text weights | `mistral3` |
 | Gemma | `gemma` |
 | Gemma 2 | `gemma2` |
+| Gemma 3 text weights | `gemma3` |
 | Phi-2 | `phi2` |
 | Phi-3 and Phi-3.5 | `phi3` |
 | Phi-3.5 MoE | `phimoe` |
@@ -50,7 +51,8 @@ GLM GGUFs configured for multimodal input are not supported as text-only models.
 
 Multimodal GGUF requires a compatible companion projector plus the original configuration. Some
 models also use processor assets. Repository loading selects the available supporting files
-automatically when the repository and GGUF metadata identify them unambiguously.
+automatically when the repository and GGUF metadata identify them unambiguously. The direct local
+`-f /path/model.gguf` shorthand also selects an unambiguous projector stored beside the model.
 
 | Model family | GGUF architecture |
 |---|---|
@@ -70,6 +72,10 @@ automatically when the repository and GGUF metadata identify them unambiguously.
 Input modalities depend on the model. A listed family does not imply that every checkpoint accepts
 image, audio, and video. Use the model card and [multimodal input guide](/mistral.rs/guides/models/multimodal-input/)
 for its supported request types.
+
+The `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, and `qwen3vlmoe` architectures always need a
+projector. Architectures that appear in both tables above, including `gemma3`, `llama`, `mistral3`,
+`lfm2`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied.
 
 ## Storage formats
 
@@ -95,7 +101,7 @@ Big-endian GGUF files are not supported.
 | Hugging Face exact-file loading | Yes, with `-m` and `-f` |
 | Automatic artifact selection | Yes, with `-m` and `--quant` |
 | Automatic text tokenizer and chat template | Yes, when supplied by the GGUF or model assets |
-| Automatic multimodal projector selection | Yes, for an unambiguous GGUF repository |
+| Automatic multimodal projector selection | Yes, for an unambiguous GGUF repository or the direct local `-f` shorthand with an adjacent projector |
 | Dynamic LoRA | Yes, for language-model adapters accepted by the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/) |
 | Multimodal LoRA | Language-model adapters only; projector, vision, and audio adapters are not supported |
 | Legacy static LoRA | Text GGUF with `llama`, `mistral3`, or `phi3` architecture; not supported with multimodal GGUF |

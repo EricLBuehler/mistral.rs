@@ -6,7 +6,7 @@
 
 mod backends;
 mod checkpoint;
-pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_stack};
+pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_projection};
 mod config;
 mod forward;
 

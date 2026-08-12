@@ -11,18 +11,26 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::WorkerTransferData;
 use crate::gguf::{
     base_model::infer_hf_base_model_id,
-    convert_gguf_metadata_to_hf_tokenizer, convert_gguf_to_hf_tokenizer, get_gguf_chat_template,
-    get_gguf_chat_template_from_metadata,
+    convert_gguf_metadata_to_hf_tokenizer,
+    gemma3_bindings::build_gemma3_text_bindings,
+    gemma3_config::{
+        ensure_gemma3_vision_config, gemma3_text_uses_language_model_prefix,
+        prepare_gemma3_text_config,
+    },
+    get_gguf_chat_template, get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
     normal_bindings::build_normal_bindings,
     normal_config::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
-        synthesize_normal_config,
+        synthesize_normal_config, validate_normal_config_tensor_inventory,
     },
     normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
-    qwen_multimodal_bindings::{build_qwen_multimodal_bindings, qwen_multimodal_loader_type},
-    GgufTokenizerConversion,
+    qwen_multimodal_bindings::{
+        build_qwen_multimodal_bindings, normalize_qwen_multimodal_config,
+        qwen_multimodal_loader_type,
+    },
+    validate_external_gguf_tokenizer, GgufTokenizerConversion,
 };
 use crate::gguf::{Content, GGUFArchitecture};
 use crate::kv_cache::FullCacheManager;
@@ -57,6 +65,7 @@ use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -66,7 +75,6 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
-    "gemma3",
     "gemma3n",
     "gemma4",
     "llama4",
@@ -170,6 +178,14 @@ struct NativeMultimodalLoadArgs<'a> {
     paged_attn_config: Option<PagedAttentionConfig>,
 }
 
+fn prepare_native_multimodal_config(
+    loader_type: &MultimodalLoaderType,
+    config: &str,
+) -> Result<String> {
+    let config = super::isq::sanitize_quantized_weight_source_config(config)?;
+    normalize_qwen_multimodal_config(loader_type, &config)
+}
+
 struct NativeNormalLoadArgs<'a> {
     paths: &'a dyn ModelPaths,
     dtype: &'a dyn TryIntoDType,
@@ -184,6 +200,48 @@ struct NativeNormalLoadArgs<'a> {
 struct DynamicLoraConfig {
     adapters: Vec<LoraAdapterSpec>,
     runtime: LoraRuntimeConfig,
+}
+
+struct ResolvedGgufTokenizer {
+    conversion: GgufTokenizerConversion,
+    generation_config_compatible: bool,
+}
+
+fn resolve_tokenizer_candidate(
+    path: &Path,
+    automatic: bool,
+    external: Result<GgufTokenizerConversion>,
+    embedded: impl FnOnce() -> Result<GgufTokenizerConversion>,
+) -> Result<ResolvedGgufTokenizer> {
+    match external {
+        Ok(conversion) => Ok(ResolvedGgufTokenizer {
+            conversion,
+            generation_config_compatible: true,
+        }),
+        Err(error) if automatic => {
+            warn!(
+                "Ignoring automatically discovered tokenizer `{}` because it does not match the \
+                 GGUF vocabulary: {error}",
+                path.display()
+            );
+            Ok(ResolvedGgufTokenizer {
+                conversion: embedded().with_context(|| {
+                    format!(
+                        "Automatically discovered tokenizer `{}` was rejected ({error}); GGUF \
+                         tokenizer conversion also failed",
+                        path.display()
+                    )
+                })?,
+                generation_config_compatible: false,
+            })
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "Tokenizer `{}` is incompatible with the GGUF model vocabulary",
+                path.display()
+            )
+        }),
+    }
 }
 
 #[derive(Default)]
@@ -375,6 +433,67 @@ impl GGUFLoader {
             .map(|config| config.adapters.as_slice())
     }
 
+    fn resolve_tokenizer(
+        &self,
+        paths: &dyn ModelPaths,
+        metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    ) -> Result<ResolvedGgufTokenizer> {
+        let (path, automatic) = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
+            (PathBuf::from(tokenizer_json), false)
+        } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
+            return Ok(ResolvedGgufTokenizer {
+                conversion: convert_gguf_metadata_to_hf_tokenizer(metadata)?,
+                generation_config_compatible: true,
+            });
+        } else {
+            (
+                paths.get_tokenizer_filename().clone(),
+                self.model_id.is_none(),
+            )
+        };
+
+        let external = get_tokenizer(&path, None)
+            .and_then(|tokenizer| validate_external_gguf_tokenizer(tokenizer, metadata));
+        resolve_tokenizer_candidate(&path, automatic, external, || {
+            convert_gguf_metadata_to_hf_tokenizer(metadata)
+        })
+    }
+
+    fn resolve_generation_config(
+        &self,
+        paths: &dyn ModelPaths,
+        tokenizer: &ResolvedGgufTokenizer,
+    ) -> Option<GenerationConfig> {
+        let filename = paths.get_gen_conf_filename()?;
+        if !tokenizer.generation_config_compatible {
+            warn!(
+                "Ignoring generation config `{}` because its automatically discovered tokenizer \
+                 was incompatible with the GGUF model",
+                filename.display()
+            );
+            return None;
+        }
+        let config = match fs::read_to_string(filename)
+            .with_context(|| format!("Failed to read `{}`", filename.display()))
+            .and_then(|raw| {
+                serde_json::from_str::<GenerationConfig>(&raw)
+                    .context("Failed to parse generation_config.json")
+            }) {
+            Ok(config) => config,
+            Err(error) => {
+                warn!("Ignoring generation config: {error:#}");
+                return None;
+            }
+        };
+        if let Err(error) =
+            config.validate_token_ids(tokenizer.conversion.tokenizer.get_vocab_size(true))
+        {
+            warn!("Ignoring generation config: {error}");
+            return None;
+        }
+        Some(config)
+    }
+
     fn load_native_normal(
         &self,
         args: NativeNormalLoadArgs<'_>,
@@ -398,6 +517,20 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
+        if architecture.eq_ignore_ascii_case("gemma3") {
+            return self.load_native_gemma3_text(
+                archive,
+                NativeNormalLoadArgs {
+                    paths,
+                    dtype,
+                    device,
+                    silent,
+                    mapper,
+                    in_situ_quant,
+                    paged_attn_config,
+                },
+            );
+        }
         let metadata_keys = archive
             .metadata()
             .keys()
@@ -414,9 +547,9 @@ impl GGUFLoader {
         };
         if requires_multimodal_projector(architecture) {
             bail!(
-                "GGUF architecture `{architecture}` requires a companion multimodal projector; \
-                 pass `--mmproj <file>` or use a GGUF repository containing one. Main-only text \
-                 loading is not supported for this architecture"
+                "GGUF architecture `{architecture}` is supported only as a multimodal model. Pass \
+                 its companion projector with `--mmproj <file>`, or load from a GGUF repository \
+                 that publishes one; text-only `{architecture}` checkpoints are not supported"
             );
         }
         let descriptor = GgufDescriptor::new(architecture, &metadata_keys, &tensor_names)?
@@ -444,14 +577,18 @@ impl GGUFLoader {
             resolved.adapter.layouts
         );
         let loader_type = resolved.adapter.loader.clone();
+        let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
         let config = match external_config {
             Some(config) => {
-                normalize_external_normal_config(&loader_type, descriptor.architecture, &config)?
+                let config = normalize_external_normal_config(
+                    &loader_type,
+                    descriptor.architecture,
+                    &config,
+                )?;
+                validate_normal_config_tensor_inventory(&config, &tensor_names)?;
+                config
             }
-            None => {
-                let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
-                synthesize_normal_config(&loader_type, archive.metadata(), &tensor_names)?
-            }
+            None => synthesize_normal_config(&loader_type, archive.metadata(), &tensor_names)?,
         };
         let bindings = build_normal_bindings(&archive, &loader_type, descriptor.architecture)?;
         let internal_dtype = dtype.try_into_dtype(&[device])?;
@@ -462,23 +599,8 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
 
-        let tokenizer = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
-            crate::gguf::GgufTokenizerConversion {
-                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
-            convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?
-        } else {
-            crate::gguf::GgufTokenizerConversion {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        };
+        let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
+        let generation_config = self.resolve_generation_config(paths, &tokenizer);
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -488,11 +610,12 @@ impl GGUFLoader {
         let source = PreparedNormalSource {
             config,
             weights,
-            tokenizer: tokenizer.tokenizer,
+            tokenizer: tokenizer.conversion.tokenizer,
+            generation_config,
             chat_template: gguf_chat_template,
-            bos_token: tokenizer.bos,
-            eos_token: tokenizer.eos,
-            unk_token: tokenizer.unk,
+            bos_token: tokenizer.conversion.bos,
+            eos_token: tokenizer.conversion.eos,
+            unk_token: tokenizer.conversion.unk,
             source_weight_files: paths.get_weight_filenames().to_vec(),
             rope_pairing: crate::gguf::normal_registry::schema_for(descriptor.architecture)
                 .rope_pairing,
@@ -519,6 +642,85 @@ impl GGUFLoader {
             loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
         }
         let loader = loader.build_with_source(loader_type, source, self.kind.clone())?;
+        loader.load_model_from_path(
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
+    }
+
+    fn load_native_gemma3_text(
+        &self,
+        archive: Arc<mistralrs_quant::GgufArchive>,
+        args: NativeNormalLoadArgs<'_>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let NativeNormalLoadArgs {
+            paths,
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        } = args;
+        let external_config = if paths.get_config_filename().as_os_str().is_empty() {
+            None
+        } else {
+            Some(fs::read_to_string(paths.get_config_filename())?)
+        };
+        let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
+        let config = prepare_gemma3_text_config(
+            external_config.as_deref(),
+            archive.metadata(),
+            &tensor_names,
+        )?;
+        let use_language_model_prefix = gemma3_text_uses_language_model_prefix(&config)?;
+        let bindings = build_gemma3_text_bindings(&archive, use_language_model_prefix)?;
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
+        let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
+            archive.clone(),
+            &bindings,
+            internal_dtype,
+        )?);
+        let weights = source.sharded_var_builder(Device::Cpu);
+        let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
+        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let gguf_chat_template =
+            if paths.get_template_filename().is_none() && self.chat_template.is_none() {
+                get_gguf_chat_template_from_metadata(archive.metadata())?
+            } else {
+                None
+            };
+        let source = PreparedMultimodalSource {
+            config,
+            weights,
+            tokenizer: tokenizer.conversion.tokenizer,
+            generation_config,
+            chat_template: gguf_chat_template,
+            bos_token: tokenizer.conversion.bos,
+            eos_token: tokenizer.conversion.eos,
+            unk_token: tokenizer.conversion.unk,
+            processor_config: None,
+            preprocessor_config: None,
+            source_weight_files: paths.get_weight_filenames().to_vec(),
+            rope_pairing: RopePairing::HalfSplit,
+        };
+        let mut loader = MultimodalLoaderBuilder::new(
+            self.config.multimodal_config(),
+            None,
+            None,
+            Some(self.quantized_model_id.clone()),
+            self.jinja_explicit.clone(),
+        );
+        if let Some(dynamic_lora) = self.dynamic_lora.as_ref() {
+            loader = loader.with_lora(dynamic_lora.adapters.clone(), dynamic_lora.runtime);
+        }
+        let loader =
+            loader.build_with_source(MultimodalLoaderType::Gemma3, source, self.kind.clone());
         loader.load_model_from_path(
             paths,
             dtype,
@@ -588,7 +790,13 @@ impl GGUFLoader {
                 "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
             );
         }
-        let config = fs::read_to_string(paths.get_config_filename())?;
+        let config = prepare_native_multimodal_config(
+            &loader_type,
+            &fs::read_to_string(paths.get_config_filename())?,
+        )?;
+        if architecture == "gemma3" {
+            ensure_gemma3_vision_config(&config)?;
+        }
         let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
@@ -596,23 +804,8 @@ impl GGUFLoader {
             internal_dtype,
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
-        let tokenizer = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
-            GgufTokenizerConversion {
-                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
-            convert_gguf_metadata_to_hf_tokenizer(archive.metadata())?
-        } else {
-            GgufTokenizerConversion {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        };
+        let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
+        let generation_config = self.resolve_generation_config(paths, &tokenizer);
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -634,11 +827,12 @@ impl GGUFLoader {
         let source = PreparedMultimodalSource {
             config,
             weights,
-            tokenizer: tokenizer.tokenizer,
+            tokenizer: tokenizer.conversion.tokenizer,
+            generation_config,
             chat_template: gguf_chat_template,
-            bos_token: tokenizer.bos,
-            eos_token: tokenizer.eos,
-            unk_token: tokenizer.unk,
+            bos_token: tokenizer.conversion.bos,
+            eos_token: tokenizer.conversion.eos,
+            unk_token: tokenizer.conversion.unk,
             processor_config,
             preprocessor_config,
             source_weight_files,
@@ -680,6 +874,7 @@ impl GGUFLoader {
         if !paths.get_config_filename().as_os_str().is_empty()
             && paths.get_preprocessor_config().is_some()
             && paths.get_processor_config().is_some()
+            && !paths.get_tokenizer_filename().as_os_str().is_empty()
         {
             return Ok(None);
         }
@@ -795,15 +990,24 @@ impl GGUFLoader {
             Some(filename) => Some(filename.clone()),
             None => get_optional("processor_config.json"),
         };
+        let tokenizer_filename = if paths.get_tokenizer_filename().as_os_str().is_empty() {
+            get_optional("tokenizer.json").unwrap_or_default()
+        } else {
+            paths.get_tokenizer_filename().clone()
+        };
+        let gen_conf = paths
+            .get_gen_conf_filename()
+            .cloned()
+            .or_else(|| get_optional("generation_config.json"));
 
         info!("Using GGUF base-model assets from `{inferred_model_id}`.");
         Ok(Some(LocalModelPaths {
-            tokenizer_filename: PathBuf::new(),
+            tokenizer_filename,
             config_filename,
             template_filename: paths.get_template_filename().clone(),
             filenames: paths.get_weight_filenames().to_vec(),
             adapter_paths: paths.get_adapter_paths().clone(),
-            gen_conf: paths.get_gen_conf_filename().cloned(),
+            gen_conf,
             preprocessor_config,
             processor_config,
             chat_template_json_filename: paths.get_chat_template_explicit().clone(),
@@ -1008,28 +1212,14 @@ impl Loader for GGUFLoader {
             &available_devices,
         )?;
 
+        let tokenizer = self.resolve_tokenizer(paths, model.get_metadata())?;
+        let gen_conf = self.resolve_generation_config(paths, &tokenizer);
         let GgufTokenizerConversion {
             tokenizer,
             bos,
             eos,
             unk,
-        } = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
-            GgufTokenizerConversion {
-                tokenizer: get_tokenizer(PathBuf::from(tokenizer_json), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        } else if paths.get_tokenizer_filename().to_string_lossy().is_empty() {
-            convert_gguf_to_hf_tokenizer(&model)?
-        } else {
-            GgufTokenizerConversion {
-                tokenizer: get_tokenizer(paths.get_tokenizer_filename(), None)?,
-                bos: None,
-                eos: None,
-                unk: None,
-            }
-        };
+        } = tokenizer.conversion;
 
         // Only load gguf chat template if there is nothing else
         let gguf_chat_template =
@@ -1062,9 +1252,6 @@ impl Loader for GGUFLoader {
             _ => unreachable!(),
         };
 
-        let gen_conf: Option<GenerationConfig> = paths
-            .get_gen_conf_filename()
-            .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap());
         let chat_template_explicit = paths
             .get_chat_template_explicit()
             .as_ref()
@@ -1307,16 +1494,114 @@ impl AnyMoePipelineMixin for GGUFPipeline {}
 
 #[cfg(test)]
 mod tests {
-    use super::{preferred_hf_config, requires_multimodal_projector, GGUFSpecificConfig};
-    use std::path::PathBuf;
+    use super::{
+        preferred_hf_config, prepare_native_multimodal_config, requires_multimodal_projector,
+        resolve_tokenizer_candidate, GGUFSpecificConfig, GgufTokenizerConversion,
+    };
+    use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, MultimodalLoaderType};
+    use std::path::{Path, PathBuf};
+    use tokenizers::{models::bpe::BPE, Tokenizer};
+
+    fn tokenizer_conversion(marker: &str) -> GgufTokenizerConversion {
+        GgufTokenizerConversion {
+            tokenizer: Tokenizer::new(BPE::default()),
+            bos: None,
+            eos: Some(marker.to_string()),
+            unk: None,
+        }
+    }
 
     #[test]
     fn scopes_main_only_multimodal_architectures() {
         assert!(!requires_multimodal_projector("qwen35"));
         assert!(!requires_multimodal_projector("QWEN35"));
+        assert!(!requires_multimodal_projector("gemma3"));
+        assert!(requires_multimodal_projector("gemma3n"));
         assert!(requires_multimodal_projector("gemma4"));
         assert!(!requires_multimodal_projector("qwen35moe"));
         assert!(!requires_multimodal_projector("mistral3"));
+    }
+
+    #[test]
+    fn native_multimodal_configs_ignore_checkpoint_quantization_metadata() {
+        let raw = r#"{
+            "architectures":["ExampleForConditionalGeneration"],
+            "quantization_config":{"quant_method":"awq"},
+            "text_config":{
+                "hidden_size":128,
+                "quantization_config":{"quant_method":"fp8"},
+                "rope_parameters":{"quantization_config":{"quant_method":"gptq"}}
+            },
+            "vision_config":{"hidden_size":64}
+        }"#;
+        for loader_type in [
+            MultimodalLoaderType::Gemma3,
+            MultimodalLoaderType::Gemma3n,
+            MultimodalLoaderType::Gemma4,
+            MultimodalLoaderType::Idefics3,
+            MultimodalLoaderType::Llama4,
+            MultimodalLoaderType::Lfm2Vl,
+            MultimodalLoaderType::Mistral3,
+            MultimodalLoaderType::Qwen2VL,
+            MultimodalLoaderType::Qwen2_5VL,
+            MultimodalLoaderType::Qwen3VL,
+            MultimodalLoaderType::Qwen3VLMoE,
+            MultimodalLoaderType::Qwen3_5,
+            MultimodalLoaderType::Qwen3_5Moe,
+        ] {
+            let config = prepare_native_multimodal_config(&loader_type, raw).unwrap();
+            let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+            assert!(config["quantization_config"].is_null(), "{loader_type:?}");
+            assert!(
+                config["text_config"]["quantization_config"].is_null(),
+                "{loader_type:?}"
+            );
+            assert!(
+                config["text_config"]["rope_parameters"]
+                    .get("quantization_config")
+                    .is_none(),
+                "{loader_type:?}"
+            );
+            assert_eq!(
+                config["architectures"][0],
+                "ExampleForConditionalGeneration"
+            );
+            assert_eq!(config["vision_config"]["hidden_size"], 64);
+            if matches!(
+                loader_type,
+                MultimodalLoaderType::Qwen3_5 | MultimodalLoaderType::Qwen3_5Moe
+            ) {
+                assert_eq!(config["text_config"][GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
+            }
+        }
+    }
+
+    #[test]
+    fn automatic_tokenizer_mismatch_falls_back_to_embedded_metadata() {
+        let resolved = resolve_tokenizer_candidate(
+            Path::new("automatic-tokenizer.json"),
+            true,
+            Err(anyhow::anyhow!("vocabulary mismatch")),
+            || Ok(tokenizer_conversion("embedded")),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.conversion.eos.as_deref(), Some("embedded"));
+        assert!(!resolved.generation_config_compatible);
+    }
+
+    #[test]
+    fn explicit_tokenizer_mismatch_is_an_error() {
+        let error = resolve_tokenizer_candidate(
+            Path::new("explicit-tokenizer.json"),
+            false,
+            Err(anyhow::anyhow!("vocabulary mismatch")),
+            || Ok(tokenizer_conversion("unused")),
+        )
+        .err()
+        .expect("explicit mismatch must fail");
+
+        assert!(error.to_string().contains("incompatible"));
     }
 
     #[test]

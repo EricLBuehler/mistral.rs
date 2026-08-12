@@ -33,23 +33,23 @@ impl QuantMethod for GptqLayer {
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
-        todo!()
+        candle_core::bail!("GPTQ is only supported on CUDA.")
     }
 
     fn forward_raw(&self, _a: &Tensor) -> Result<Tensor> {
-        todo!()
+        candle_core::bail!("GPTQ is only supported on CUDA.")
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
-        todo!()
+        None
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        candle_core::bail!("GPTQ is only supported on CUDA.")
     }
 
     fn dtype_and_device(&self) -> (DType, candle_core::Device) {
-        todo!()
+        (DType::F32, Device::Cpu)
     }
 
     fn plan_isq(&self, _request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
@@ -64,7 +64,7 @@ impl QuantMethod for GptqLayer {
         _imatrix_weight: Option<Vec<f32>>,
         _guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        candle_core::bail!("GPTQ is only supported on CUDA.")
     }
 }
 
@@ -156,4 +156,24 @@ pub fn gptq_linear(
         is_awq,
     };
     Ok(Arc::new(GptqLayer::new(config)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_cpu_gptq_methods_return_errors() {
+        let layer = Arc::new(GptqLayer);
+        assert!(layer.dequantize_w().is_err());
+        assert!(layer
+            .apply_isq(
+                None,
+                Device::Cpu,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )
+            .is_err());
+    }
 }
