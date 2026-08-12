@@ -192,6 +192,10 @@ name = "paged_attn"
 path = "examples/advanced/paged_attn/main.rs"
 
 [[example]]
+name = "kv_cache_connector"
+path = "examples/advanced/kv_cache_connector/main.rs"
+
+[[example]]
 name = "auto_device_map"
 path = "examples/advanced/auto_device_map/main.rs"
 

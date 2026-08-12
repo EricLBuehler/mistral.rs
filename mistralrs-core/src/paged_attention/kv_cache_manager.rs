@@ -818,6 +818,34 @@ mod tests {
     }
 
     #[test]
+    fn test_in_memory_connector_serves_prefix_hit() {
+        let external = Arc::new(crate::paged_attention::InMemoryKvCacheConnector::new());
+        let mut mgr = KVCacheManager::with_connector(
+            16,
+            4,
+            true,
+            vec![0],
+            Arc::clone(&external) as Arc<dyn KvCacheConnector>,
+        );
+
+        let tokens: Vec<u32> = (1..=8).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+        mgr.allocate_slots(1, 8, &[]).unwrap();
+        mgr.cache_blocks(1, &hashes, 8);
+        mgr.free(1);
+
+        // Drop the local prefix map so only the external connector can hit.
+        assert!(mgr.reset_prefix_cache());
+
+        let computed = mgr.get_computed_blocks(&hashes, 12);
+        assert_eq!(computed.num_computed_tokens, 8);
+        assert_eq!(computed.block_ids.len(), 2);
+        assert!(external.lookup_count() >= 1);
+        assert!(external.hit_count() >= 1);
+        assert_eq!(external.len(), 2);
+    }
+
+    #[test]
     fn test_connector_observes_evict_on_reallocation() {
         use crate::paged_attention::block_hash::hash_block_tokens;
         use crate::paged_attention::block_pool::BlockPool;

@@ -156,8 +156,9 @@ pub use mistralrs_mcp::{
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
 pub use paged_attention::{
-    BlockHash, BlockHashWithGroupId, KvCacheConnector, MemoryGpuConfig, NoopKvCacheConnector,
-    PagedAttentionConfig, PagedCacheType,
+    compute_block_hashes, BlockHash, BlockHashWithGroupId, InMemoryKvCacheConnector,
+    KVCacheManager, KvCacheConnector, MemoryGpuConfig, NoopKvCacheConnector, PagedAttentionConfig,
+    PagedCacheType,
 };
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
