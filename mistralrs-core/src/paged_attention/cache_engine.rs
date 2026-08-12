@@ -38,12 +38,25 @@ impl FromStr for PagedCacheType {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CacheConfig {
     pub block_size: usize,
     pub num_gpu_blocks: usize,
     pub cache_type: PagedCacheType,
     pub kv_cache_group_ids: Vec<u32>,
+    pub kv_cache_connector: std::sync::Arc<dyn super::KvCacheConnector>,
+}
+
+impl std::fmt::Debug for CacheConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CacheConfig")
+            .field("block_size", &self.block_size)
+            .field("num_gpu_blocks", &self.num_gpu_blocks)
+            .field("cache_type", &self.cache_type)
+            .field("kv_cache_group_ids", &self.kv_cache_group_ids)
+            .field("kv_cache_connector", &"Arc<dyn KvCacheConnector>")
+            .finish()
+    }
 }
 
 pub type KVCache = (Tensor, Tensor);

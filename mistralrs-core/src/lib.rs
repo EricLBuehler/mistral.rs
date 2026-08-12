@@ -2693,7 +2693,7 @@ impl MistralRs {
                 loader_config.silent,
                 loader_config.device_map_setting.clone(),
                 loader_config.isq,
-                loader_config.paged_attn_config,
+                loader_config.paged_attn_config.clone(),
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 

@@ -1,59 +1,91 @@
-//! Example external KV cache manager using the `KvCacheConnector` seam.
+//! Realistic usage of an external KV cache connector with paged attention.
 //!
-//! This uses an in-memory connector as a stand-in for a future disk/S3 tier.
-//! It indexes `BlockHash -> local block id` outside the block pool's own map.
+//! Installs `InMemoryKvCacheConnector` through the normal model builder path
+//! (same place you'd later plug disk/S3), then runs two chats that share a
+//! prefix so the connector sees store/lookup traffic.
 //!
 //! Run with:
-//! `cargo run -p mistralrs --example kv_cache_connector`
+//! `cargo run --release -p mistralrs --example kv_cache_connector`
 
 use std::sync::Arc;
 
 use anyhow::Result;
-use mistralrs::{compute_block_hashes, InMemoryKvCacheConnector, KVCacheManager, KvCacheConnector};
+use mistralrs::{
+    InMemoryKvCacheConnector, IsqBits, KvCacheConnector, MemoryGpuConfig, ModelBuilder,
+    PagedAttentionMetaBuilder, TextMessageRole, TextMessages,
+};
 
-fn main() -> Result<()> {
-    let external = Arc::new(InMemoryKvCacheConnector::new());
-    let mut mgr = KVCacheManager::with_connector(
-        16,
-        4,
-        true,
-        vec![0],
-        Arc::clone(&external) as Arc<dyn KvCacheConnector>,
+#[tokio::main]
+async fn main() -> Result<()> {
+    let connector = Arc::new(InMemoryKvCacheConnector::new());
+
+    let model = ModelBuilder::new("Qwen/Qwen3-4B")
+        .with_auto_isq(IsqBits::Eight)
+        .with_logging()
+        .with_paged_attn(
+            PagedAttentionMetaBuilder::default()
+                .with_block_size(32)
+                .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
+                .with_kv_cache_connector(Arc::clone(&connector) as Arc<dyn KvCacheConnector>)
+                .build()?,
+        )
+        .build()
+        .await?;
+
+    let shared = "You are a concise assistant.";
+    let first = TextMessages::new()
+        .add_message(TextMessageRole::System, shared)
+        .add_message(TextMessageRole::User, "Say hello in one short sentence.");
+    let second = TextMessages::new()
+        .add_message(TextMessageRole::System, shared)
+        .add_message(
+            TextMessageRole::User,
+            "Say hello in one short sentence. Then add a second short sentence.",
+        );
+
+    let response_a = model.send_chat_request(first).await?;
+    println!(
+        "turn A: {}",
+        response_a.choices[0]
+            .message
+            .content
+            .as_deref()
+            .unwrap_or("")
+    );
+    println!(
+        "after turn A: stores={}, lookups={}, hits={}, external_entries={}",
+        connector.store_count(),
+        connector.lookup_count(),
+        connector.hit_count(),
+        connector.len()
     );
 
-    // Request A: compute and store two full blocks.
-    let tokens_a: Vec<u32> = (1..=8).collect();
-    let hashes_a = compute_block_hashes(&tokens_a, 4, &[], &[]);
-    mgr.allocate_slots(1, 8, &[])
-        .ok_or_else(|| anyhow::anyhow!("allocate request A"))?;
-    mgr.cache_blocks(1, &hashes_a, 8);
-    mgr.free(1);
-
+    let response_b = model.send_chat_request(second).await?;
     println!(
-        "after store: external_entries={}, stores={}",
-        external.len(),
-        external.store_count()
+        "turn B: {}",
+        response_b.choices[0]
+            .message
+            .content
+            .as_deref()
+            .unwrap_or("")
     );
-
-    // Request B: same prefix should hit through the external connector first.
-    let tokens_b: Vec<u32> = (1..=12).collect();
-    let hashes_b = compute_block_hashes(&tokens_b, 4, &[], &[]);
-    let computed = mgr.get_computed_blocks(&hashes_b, 12);
-
     println!(
-        "prefix hit: computed_tokens={}, block_ids={:?}, lookups={}, hits={}",
-        computed.num_computed_tokens,
-        computed.block_ids,
-        external.lookup_count(),
-        external.hit_count()
+        "after turn B: stores={}, lookups={}, hits={}, external_entries={}",
+        connector.store_count(),
+        connector.lookup_count(),
+        connector.hit_count(),
+        connector.len()
     );
 
     anyhow::ensure!(
-        computed.num_computed_tokens == 8,
-        "expected a 2-block prefix hit via the external connector"
+        connector.store_count() > 0,
+        "expected the live paged-attention path to observe_store via the connector"
     );
-    anyhow::ensure!(external.hit_count() >= 1, "expected observe_hit");
+    anyhow::ensure!(
+        connector.lookup_count() > 0,
+        "expected the live paged-attention path to call lookup_blocks via the connector"
+    );
 
-    println!("ok: external in-memory KV connector served a prefix hit");
+    println!("ok: connector received traffic from the real paged-attention scheduler");
     Ok(())
 }

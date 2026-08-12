@@ -79,11 +79,23 @@ mod tests {
 }
 
 /// All memory counts in MB. Default for block size is 32.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
+    pub(crate) kv_cache_connector: std::sync::Arc<dyn KvCacheConnector>,
+}
+
+impl std::fmt::Debug for PagedAttentionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PagedAttentionConfig")
+            .field("block_size", &self.block_size)
+            .field("mem_gpu", &self.mem_gpu)
+            .field("cache_type", &self.cache_type)
+            .field("kv_cache_connector", &"Arc<dyn KvCacheConnector>")
+            .finish()
+    }
 }
 
 impl PagedAttentionConfig {
@@ -96,7 +108,16 @@ impl PagedAttentionConfig {
             block_size,
             mem_gpu,
             cache_type,
+            kv_cache_connector: std::sync::Arc::new(NoopKvCacheConnector),
         })
+    }
+
+    pub fn with_kv_cache_connector(
+        mut self,
+        connector: std::sync::Arc<dyn KvCacheConnector>,
+    ) -> Self {
+        self.kv_cache_connector = connector;
+        self
     }
 }
 
@@ -277,5 +298,6 @@ pub fn calculate_cache_config(
         num_gpu_blocks,
         cache_type,
         kv_cache_group_ids: config.kv_cache_group_ids(),
+        kv_cache_connector: std::sync::Arc::new(NoopKvCacheConnector),
     })
 }
