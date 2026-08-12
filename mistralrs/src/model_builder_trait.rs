@@ -60,10 +60,10 @@ impl AnyModelBuilder {
 
     fn paged_attn_cfg(&self) -> Option<PagedAttentionConfig> {
         match self {
-            AnyModelBuilder::Text(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Auto(b) => b.paged_attn_cfg,
-            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg,
+            AnyModelBuilder::Text(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Multimodal(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Auto(b) => b.paged_attn_cfg.clone(),
+            AnyModelBuilder::Gguf(b) => b.paged_attn_cfg.clone(),
             AnyModelBuilder::Diffusion(_)
             | AnyModelBuilder::Speech(_)
             | AnyModelBuilder::Embedding(_) => None,
@@ -445,7 +445,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         !builder.with_logging,
         device_map_setting,
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -498,7 +498,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         !builder.with_logging,
         device_map_setting,
         None,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
 
     let scheduler_config =
@@ -607,7 +607,7 @@ pub async fn build_text_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -665,7 +665,7 @@ pub async fn build_text_pipeline(
         device,
         device_map_setting,
         isq: isq_type,
-        paged_attn_config: builder.paged_attn_cfg,
+        paged_attn_config: builder.paged_attn_cfg.clone(),
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
@@ -732,7 +732,7 @@ pub async fn build_multimodal_pipeline(
                 AutoDeviceMapParams::default_multimodal(),
             )),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -795,7 +795,7 @@ pub async fn build_multimodal_pipeline(
         device,
         device_map_setting,
         isq: isq_type,
-        paged_attn_config: builder.paged_attn_cfg,
+        paged_attn_config: builder.paged_attn_cfg.clone(),
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
@@ -850,7 +850,7 @@ pub async fn build_gguf_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         None,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
 
     let scheduler_config = scheduler_config_from_pipeline(
@@ -891,7 +891,7 @@ pub async fn build_gguf_pipeline(
         device,
         device_map_setting,
         isq: None,
-        paged_attn_config: builder.paged_attn_cfg,
+        paged_attn_config: builder.paged_attn_cfg.clone(),
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),
@@ -1208,7 +1208,7 @@ pub async fn build_auto_pipeline(
             .clone()
             .unwrap_or(DeviceMapSetting::Auto(AutoDeviceMapParams::default_text())),
         isq_type,
-        builder.paged_attn_cfg,
+        builder.paged_attn_cfg.clone(),
     )?;
     if let Some(mtp_config) = builder.mtp_config.clone() {
         pipeline
@@ -1268,7 +1268,7 @@ pub async fn build_auto_pipeline(
         device,
         device_map_setting,
         isq: isq_type,
-        paged_attn_config: builder.paged_attn_cfg,
+        paged_attn_config: builder.paged_attn_cfg.clone(),
         silent: !builder.with_logging,
         chat_template: builder.chat_template.clone(),
         jinja_explicit: builder.jinja_explicit.clone(),

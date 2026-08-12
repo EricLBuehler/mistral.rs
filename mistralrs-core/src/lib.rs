@@ -155,7 +155,11 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
+pub use paged_attention::{
+    compute_block_hashes, BlockHash, BlockHashWithGroupId, InMemoryKvCacheConnector,
+    KVCacheManager, KvCacheConnector, MemoryGpuConfig, NoopKvCacheConnector, PagedAttentionConfig,
+    PagedCacheType,
+};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
     list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
@@ -2689,7 +2693,7 @@ impl MistralRs {
                 loader_config.silent,
                 loader_config.device_map_setting.clone(),
                 loader_config.isq,
-                loader_config.paged_attn_config,
+                loader_config.paged_attn_config.clone(),
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 

@@ -8,7 +8,7 @@ pub enum PagedKvPolicy {
     FairContext,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PagedKvModelRequest {
     pub paged_attn: Option<PagedAttentionConfig>,
     pub max_num_seqs: usize,
@@ -54,6 +54,7 @@ fn plan_fair_context_paged_kv(models: &[PagedKvModelRequest]) -> anyhow::Result<
         .map(|model| {
             model
                 .paged_attn
+                .clone()
                 .map(|config| split_paged_config(config, model.max_num_seqs.max(1), active_weight))
                 .transpose()
         })
@@ -96,5 +97,8 @@ fn split_paged_config(
         MemoryGpuConfig::ContextSize(tokens) => MemoryGpuConfig::ContextSize(share(tokens)),
     };
 
-    PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)
+    Ok(
+        PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?
+            .with_kv_cache_connector(config.kv_cache_connector),
+    )
 }

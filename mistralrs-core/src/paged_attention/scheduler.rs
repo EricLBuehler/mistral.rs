@@ -87,11 +87,12 @@ impl PagedAttentionScheduler {
         Self {
             waiting: VecDeque::new(),
             running: VecDeque::new(),
-            kv_cache_manager: Arc::new(tokio::sync::Mutex::new(KVCacheManager::new(
+            kv_cache_manager: Arc::new(tokio::sync::Mutex::new(KVCacheManager::with_connector(
                 cache_config.num_gpu_blocks,
                 cache_config.block_size,
                 true,
                 cache_config.kv_cache_group_ids.clone(),
+                cache_config.kv_cache_connector,
             ))),
             block_size: cache_config.block_size,
             config,
@@ -799,6 +800,9 @@ mod tests {
                 num_gpu_blocks: 128,
                 cache_type: PagedCacheType::Auto,
                 kv_cache_group_ids: vec![0],
+                kv_cache_connector: std::sync::Arc::new(
+                    crate::paged_attention::NoopKvCacheConnector,
+                ),
             },
         )
     }

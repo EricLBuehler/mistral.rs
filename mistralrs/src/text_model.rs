@@ -74,6 +74,7 @@ pub struct PagedAttentionMetaBuilder {
     block_size: Option<usize>,
     mem_gpu: MemoryGpuConfig,
     cache_type: PagedCacheType,
+    kv_cache_connector: Option<Arc<dyn KvCacheConnector>>,
 }
 
 impl Default for PagedAttentionMetaBuilder {
@@ -82,6 +83,7 @@ impl Default for PagedAttentionMetaBuilder {
             block_size: None,
             mem_gpu: MemoryGpuConfig::ContextSize(4096),
             cache_type: PagedCacheType::Auto,
+            kv_cache_connector: None,
         }
     }
 }
@@ -105,9 +107,19 @@ impl PagedAttentionMetaBuilder {
         self
     }
 
+    /// Install an external KV cache connector used by the paged-attention scheduler.
+    pub fn with_kv_cache_connector(mut self, connector: Arc<dyn KvCacheConnector>) -> Self {
+        self.kv_cache_connector = Some(connector);
+        self
+    }
+
     /// Build the [`PagedAttentionConfig`]. Returns an error if the configuration is invalid.
     pub fn build(self) -> anyhow::Result<PagedAttentionConfig> {
-        PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)
+        let mut cfg = PagedAttentionConfig::new(self.block_size, self.mem_gpu, self.cache_type)?;
+        if let Some(connector) = self.kv_cache_connector {
+            cfg = cfg.with_kv_cache_connector(connector);
+        }
+        Ok(cfg)
     }
 }
 

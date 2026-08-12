@@ -10,6 +10,10 @@ mod cache_engine;
 mod config;
 /// Encoder output cache for multimodal models (vision/audio encoder outputs).
 pub mod encoder_cache;
+/// In-memory reference external KV cache connector.
+pub mod in_memory_kv_cache_connector;
+/// Optional external KV cache connector seam.
+pub mod kv_cache_connector;
 /// KV Cache Manager: high-level block allocation, prefix cache lookups, per-request tracking.
 pub mod kv_cache_manager;
 mod layers;
@@ -20,9 +24,12 @@ mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
 pub use attention_backend::AttentionBackendKind;
+pub use block_hash::{compute_block_hashes, BlockHash, BlockHashWithGroupId};
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
 pub use config::{KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata};
+pub use in_memory_kv_cache_connector::InMemoryKvCacheConnector;
+pub use kv_cache_connector::{KvCacheConnector, NoopKvCacheConnector};
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
 pub use scheduler::{
@@ -72,11 +79,23 @@ mod tests {
 }
 
 /// All memory counts in MB. Default for block size is 32.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
+    pub(crate) kv_cache_connector: std::sync::Arc<dyn KvCacheConnector>,
+}
+
+impl std::fmt::Debug for PagedAttentionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PagedAttentionConfig")
+            .field("block_size", &self.block_size)
+            .field("mem_gpu", &self.mem_gpu)
+            .field("cache_type", &self.cache_type)
+            .field("kv_cache_connector", &"Arc<dyn KvCacheConnector>")
+            .finish()
+    }
 }
 
 impl PagedAttentionConfig {
@@ -89,7 +108,16 @@ impl PagedAttentionConfig {
             block_size,
             mem_gpu,
             cache_type,
+            kv_cache_connector: std::sync::Arc::new(NoopKvCacheConnector),
         })
+    }
+
+    pub fn with_kv_cache_connector(
+        mut self,
+        connector: std::sync::Arc<dyn KvCacheConnector>,
+    ) -> Self {
+        self.kv_cache_connector = connector;
+        self
     }
 }
 
@@ -270,5 +298,6 @@ pub fn calculate_cache_config(
         num_gpu_blocks,
         cache_type,
         kv_cache_group_ids: config.kv_cache_group_ids(),
+        kv_cache_connector: std::sync::Arc::new(NoopKvCacheConnector),
     })
 }

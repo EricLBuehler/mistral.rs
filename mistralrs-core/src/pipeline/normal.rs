@@ -888,7 +888,7 @@ impl Loader for NormalLoader {
         }
         let model_metadata = model.model_config();
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-            let cache_config = calculate_cache_config(
+            let mut cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
                 paged_attn_config.block_size,
                 dtype,
@@ -904,6 +904,7 @@ impl Loader for NormalLoader {
                 None,
                 max_kv_tokens,
             )?;
+            cache_config.kv_cache_connector = paged_attn_config.kv_cache_connector;
 
             let mut layer_devices = Vec::new();
             for layer in 0..self.inner.num_layers(&config)? {

@@ -305,6 +305,10 @@ pub use mistralrs_core::{
 
 // ========== Config Types ==========
 pub use mistralrs_core::{
+    compute_block_hashes, BlockHash, BlockHashWithGroupId, InMemoryKvCacheConnector,
+    KVCacheManager, KvCacheConnector, NoopKvCacheConnector,
+};
+pub use mistralrs_core::{
     DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
     PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
