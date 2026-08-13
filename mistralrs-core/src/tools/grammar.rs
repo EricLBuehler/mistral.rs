@@ -133,7 +133,7 @@ mod tests {
 
     fn tool_control_token_trie() -> toktrie::TokTrie {
         let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
-        let eos = tokens.len() as u32;
+        let eos = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
         for token in [
             "<eos>",
             "<tool_call>",
@@ -147,7 +147,8 @@ mod tests {
             bytes.extend_from_slice(token.as_bytes());
             tokens.push(bytes);
         }
-        toktrie::TokTrie::from(&toktrie::TokRxInfo::new(tokens.len() as u32, eos), &tokens)
+        let vocab_size = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        toktrie::TokTrie::from(&toktrie::TokRxInfo::new(vocab_size, eos), &tokens)
     }
 
     #[test]
