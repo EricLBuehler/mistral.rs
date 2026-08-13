@@ -6,6 +6,7 @@ pub(crate) mod state;
 pub(crate) mod strategy;
 
 use candle_core::Result;
+pub(crate) use parsers::specialize_required_tool_call_grammar;
 pub(crate) use parsers::ToolCallFormat;
 pub use request::*;
 pub use response::*;

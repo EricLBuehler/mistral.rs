@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -78,9 +78,64 @@ fn ensure_pack_factor_representable(
     Ok(())
 }
 
+fn is_version_key(name: &str) -> bool {
+    matches!(
+        name,
+        super::UQFF_VERSION_MAJOR_KEY
+            | super::UQFF_VERSION_MINOR_KEY
+            | super::UQFF_VERSION_PATCH_KEY
+    )
+}
+
+fn version_scalar(
+    name: &str,
+    tensor: &safetensors::tensor::TensorView<'_>,
+    path: &Path,
+) -> Result<u32> {
+    if tensor.dtype() != Dtype::U32 || !tensor.shape().is_empty() || tensor.data().len() != 4 {
+        candle_core::bail!(
+            "UQFF version tensor `{name}` in `{}` must be a scalar U32.",
+            path.display()
+        );
+    }
+    Ok(u32::from_le_bytes(
+        tensor.data().try_into().expect("U32 scalar is 4 bytes"),
+    ))
+}
+
+fn validate_shard_tensor_keys(paths: &[PathBuf], artifacts: &MmapedSafetensors) -> Result<()> {
+    let mut seen = HashMap::<String, (PathBuf, Option<u32>)>::new();
+    for (path, tensors) in paths.iter().zip(artifacts.tensors_by_file()) {
+        for (name, tensor) in tensors {
+            let value = is_version_key(&name)
+                .then(|| version_scalar(&name, &tensor, path))
+                .transpose()?;
+            let Some((previous_path, previous_value)) = seen.get(&name) else {
+                seen.insert(name, (path.clone(), value));
+                continue;
+            };
+            match (*previous_value, value) {
+                (Some(previous), Some(current)) if previous == current => {}
+                (Some(previous), Some(current)) => candle_core::bail!(
+                    "Conflicting UQFF version tensor `{name}` found in `{}` ({previous}) and `{}` ({current}).",
+                    previous_path.display(),
+                    path.display()
+                ),
+                _ => candle_core::bail!(
+                    "Duplicate tensor key `{name}` found in `{}` and `{}`.",
+                    previous_path.display(),
+                    path.display()
+                ),
+            }
+        }
+    }
+    Ok(())
+}
+
 impl UqffReader {
     pub fn open(paths: &[PathBuf]) -> Result<Self> {
-        let artifacts = unsafe { MmapedSafetensors::multi_unique(paths)? };
+        let artifacts = unsafe { MmapedSafetensors::multi(paths)? };
+        validate_shard_tensor_keys(paths, &artifacts)?;
         let names = artifacts
             .tensors()
             .into_iter()
@@ -598,7 +653,8 @@ mod tests {
         let second = dir.path().join("q4k-1.uqff");
         let mut first_tensors = uqff_version_tensors();
         first_tensors.push(UqffTensor::from_u8_scalar("first.tensor", 1));
-        let second_tensors = [UqffTensor::from_u8_scalar("second.tensor", 2)];
+        let mut second_tensors = uqff_version_tensors();
+        second_tensors.push(UqffTensor::from_u8_scalar("second.tensor", 2));
         safetensors::serialize_to_file(
             first_tensors.iter().map(|tensor| (tensor.name(), tensor)),
             None,
@@ -615,6 +671,83 @@ mod tests {
         let reader = UqffReader::open(&[first, second]).unwrap();
         assert!(reader.contains("first.tensor"));
         assert!(reader.contains("second.tensor"));
+    }
+
+    #[test]
+    fn uqff_reader_rejects_conflicting_versions_across_shards() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("q4k-0.uqff");
+        let second = dir.path().join("q4k-1.uqff");
+        let first_tensors = uqff_version_tensors();
+        let second_tensors = [
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_MAJOR_KEY,
+                super::super::UQFF_VERSION_MAJOR + 1,
+            ),
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_MINOR_KEY,
+                super::super::UQFF_VERSION_MINOR,
+            ),
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_PATCH_KEY,
+                super::super::UQFF_VERSION_PATCH,
+            ),
+        ];
+        safetensors::serialize_to_file(
+            first_tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &first,
+        )
+        .unwrap();
+        safetensors::serialize_to_file(
+            second_tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &second,
+        )
+        .unwrap();
+
+        let error = UqffReader::open(&[first, second])
+            .err()
+            .expect("conflicting UQFF versions must be rejected")
+            .to_string();
+        assert!(error.contains("Conflicting UQFF version tensor"), "{error}");
+    }
+
+    #[test]
+    fn uqff_reader_rejects_malformed_version_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("q4k-0.uqff");
+        let second = dir.path().join("q4k-1.uqff");
+        let first_tensors = uqff_version_tensors();
+        let second_tensors = [
+            UqffTensor::from_u8_scalar(super::super::UQFF_VERSION_MAJOR_KEY, 1),
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_MINOR_KEY,
+                super::super::UQFF_VERSION_MINOR,
+            ),
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_PATCH_KEY,
+                super::super::UQFF_VERSION_PATCH,
+            ),
+        ];
+        safetensors::serialize_to_file(
+            first_tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &first,
+        )
+        .unwrap();
+        safetensors::serialize_to_file(
+            second_tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &second,
+        )
+        .unwrap();
+
+        let error = UqffReader::open(&[first, second])
+            .err()
+            .expect("malformed UQFF version copies must be rejected")
+            .to_string();
+        assert!(error.contains("must be a scalar U32"), "{error}");
     }
 
     #[test]

@@ -29,7 +29,7 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
-| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a compatible Llama, Mistral3, or Phi3 GGUF model |
+| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
@@ -115,7 +115,7 @@ mistralrs run auto [OPTIONS] --model-id <MODEL_ID>
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
-| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a compatible Llama, Mistral3, or Phi3 GGUF model |
+| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
@@ -166,7 +166,7 @@ mistralrs run text [OPTIONS] --model-id <MODEL_ID>
 | `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
-| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a compatible Llama, Mistral3, or Phi3 GGUF model |
+| `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
 | `--legacy-lora-order <LEGACY_LORA_ORDER>` |  | Ordering JSON file for a legacy raw GGUF or GGML LoRA adapter |
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |

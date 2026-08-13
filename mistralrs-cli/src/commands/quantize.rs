@@ -432,10 +432,10 @@ base_model_relation: quantized
 
 # `{base_model}`, UQFF quantization
 
-Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistralrs_version}. Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/perf/use-uqff/).
+Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistralrs_version}. Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/uqff/).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
-2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
+2) **Versioned**: Embedded semantic-version metadata lets mistral.rs detect incompatible artifacts before loading.
 3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
 4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 
@@ -463,11 +463,7 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
         mistralrs_version = mistralrs_core::MISTRALRS_VERSION,
     );
 
-    let model_type_flag = if is_multimodal {
-        " multimodal-plain"
-    } else {
-        ""
-    };
+    let model_type = if is_multimodal { "multimodal " } else { "" };
 
     for (prefix, paths) in &groups {
         // Sort shards by numeric suffix
@@ -489,7 +485,7 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 
         let quant_name = prefix.to_uppercase();
         output += &format!(
-            "|{quant_name}|`mistralrs run -m {repo_display}{model_type_flag} --from-uqff {first_file}`|\n"
+            "|{quant_name}|`mistralrs run {model_type}-m {repo_display} --from-uqff {first_file}`|\n"
         );
     }
 
@@ -764,7 +760,7 @@ mod tests {
     use clap::Parser;
 
     use super::*;
-    use crate::args::{resolve_quantize_model_type, Cli, Command};
+    use crate::args::{resolve_quantize_model_type, Cli, Command, ModelType};
 
     fn parse(args: &[&str]) -> QuantizeModelType {
         let cli = Cli::try_parse_from(
@@ -781,6 +777,43 @@ mod tests {
             unreachable!()
         };
         resolve_quantize_model_type(model_type, default_quantize).unwrap()
+    }
+
+    #[test]
+    fn multimodal_model_card_commands_parse() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("q4k.uqff"), []).unwrap();
+
+        generate_model_card(&root, "org/base", Some("org/quantized"), true).unwrap();
+        let readme = fs::read_to_string(root.join("README.md")).unwrap();
+        let command = readme
+            .lines()
+            .find(|line| line.starts_with("|Q4K|"))
+            .and_then(|line| line.split('`').nth(1))
+            .expect("Q4K command in generated model card");
+        assert_eq!(
+            command,
+            "mistralrs run multimodal -m org/quantized --from-uqff q4k.uqff"
+        );
+
+        let cli = Cli::try_parse_from(command.split_whitespace()).unwrap();
+        let Command::Run {
+            model_type:
+                Some(ModelType::Multimodal {
+                    model,
+                    quantization,
+                    ..
+                }),
+            ..
+        } = cli.command
+        else {
+            panic!("expected a multimodal run command")
+        };
+        assert_eq!(model.model_id, "org/quantized");
+        assert_eq!(quantization.from_uqff.as_deref(), Some("q4k.uqff"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -400,6 +400,7 @@ impl Loader for MultimodalLoader {
         } else {
             config
         };
+        super::loaders::validate_lora_qk_rope_layout(&config, self.lora_adapters.is_some())?;
         let modalities = self.inner.modalities(&config)?;
         let runtime_config = self
             .inner

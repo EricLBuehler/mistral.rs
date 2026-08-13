@@ -576,6 +576,8 @@ class Which(Enum):
 
     @dataclass
     class XLoraGGUF:
+        """Select X-LoRA for a Phi3 GGUF configuration."""
+
         quantized_model_id: str
         quantized_filename: str | list[str]
         xlora_model_id: str
@@ -588,7 +590,7 @@ class Which(Enum):
 
     @dataclass
     class LoraGGUF:
-        """Select legacy static LoRA for a compatible Llama, Mistral3, or Phi3 GGUF configuration.
+        """Select legacy static LoRA for a Phi3 GGUF configuration.
 
         For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
         """

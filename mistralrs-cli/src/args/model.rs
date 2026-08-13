@@ -313,7 +313,7 @@ pub struct AdapterOptions {
     #[serde(default = "default_lora_max_bytes")]
     pub lora_max_bytes: u64,
 
-    /// Static LoRA adapter source for GGML or a compatible Llama, Mistral3, or Phi3 GGUF model
+    /// Static LoRA adapter source for GGML or a Phi3 GGUF model
     #[arg(
         long,
         value_name = "SOURCE",

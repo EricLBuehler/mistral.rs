@@ -124,6 +124,8 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 
 ### `Which.XLoraGGUF`
 
+Select X-LoRA for a Phi3 GGUF configuration.
+
 | Field | Type | Default |
 | --- | --- | --- |
 | `quantized_model_id` | `str` | required |
@@ -138,7 +140,7 @@ Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loa
 
 ### `Which.LoraGGUF`
 
-Select legacy static LoRA for a compatible Llama, Mistral3, or Phi3 GGUF configuration.
+Select legacy static LoRA for a Phi3 GGUF configuration.
 
 For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 

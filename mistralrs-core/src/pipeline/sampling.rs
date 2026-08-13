@@ -73,13 +73,14 @@ fn activate_required_tool_call_grammar(
     let grm = seq.tool_call_state.as_mut().and_then(|state| {
         state.maybe_force_required_grammar(remaining, max_generation_len, force_now)
     });
-    let Some(grm) = grm else {
+    let Some(mut grm) = grm else {
         return;
     };
     let Some(factory) = factory else {
         tracing::warn!("Cannot force required tool call: llguidance is unavailable");
         return;
     };
+    crate::tools::specialize_required_tool_call_grammar(&mut grm, factory.tok_env().tok_trie());
     match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
         Ok(matcher) => {
             seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));

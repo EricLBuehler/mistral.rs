@@ -29,12 +29,12 @@ base_model_relation: quantized
 output += f"# `{model_id}`, UQFF quantization\n\n"
 
 output += """
-Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://github.com/EricLBuehler/mistral.rs/blob/master/docs/UQFF.md).
+Run with [mistral.rs](https://github.com/EricLBuehler/mistral.rs). Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/uqff/).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
-2) **Reliable** 🔒: Compatibility ensured with *embedded* and *checked* semantic versioning information from day 1.
+2) **Versioned**: Embedded semantic-version metadata lets mistral.rs detect incompatible artifacts before loading.
 3) **Easy** 🤗: Download UQFF models *easily* and *quickly* from Hugging Face, or use a local file.
-3) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
+4) **Customizable** 🛠️: Make and publish your own UQFF files in minutes.
 """
 
 print(" NOTE: Getting metadata now, press CTRL-C when you have entered all files")

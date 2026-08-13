@@ -19,7 +19,7 @@ const SIZE_IN_GIB: usize = 1024 * 1024 * 1024;
 const LARGE_JOB_THRESHOLD_BYTES: usize = SIZE_IN_GIB;
 const HOST_BUDGET_NUMERATOR: usize = 9;
 const HOST_BUDGET_DENOMINATOR: usize = 10;
-const FP8_PERSISTENT_SCALE_COUNT: usize = 2;
+const FP8_PERSISTENT_SCALE_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IsqConsumer {
@@ -696,7 +696,7 @@ mod tests {
     fn fp8_estimate_includes_persistent_scales() {
         assert_eq!(
             estimate_output_bytes(&[4, 8], DType::BF16, IsqType::F8E4M3),
-            40
+            44
         );
     }
 

@@ -18,6 +18,15 @@ use llguidance::api::TopLevelGrammar;
 
 use crate::Tool;
 
+const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
+    "<tool_call>",
+    "</tool_call>",
+    "<|python_tag|>",
+    "[TOOL_CALLS]",
+    "<tool_calls>",
+    "</tool_calls>",
+];
+
 /// Identifies the detected tool call format so that the correct grammar
 /// can be constructed for mid-stream constrained decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,6 +142,25 @@ pub fn build_required_tool_call_grammar(
     }
 
     qwen::QwenParser.required_tool_call_grammar(tools)
+}
+
+pub fn specialize_required_tool_call_grammar(
+    grammar: &mut TopLevelGrammar,
+    tok_trie: &toktrie::TokTrie,
+) {
+    let Some(lark) = grammar
+        .grammars
+        .first_mut()
+        .and_then(|grammar| grammar.lark_grammar.as_mut())
+    else {
+        return;
+    };
+
+    for token in REQUIRED_TOOL_CALL_CONTROL_TOKENS {
+        if tok_trie.get_special_token(token).is_some() {
+            *lark = lark.replace(&format!(r#""{token}""#), token);
+        }
+    }
 }
 
 /// Try each parser in order to extract tool calls from `message`.

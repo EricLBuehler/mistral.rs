@@ -182,8 +182,7 @@ lora = [
 
 Multimodal GGUF supports dynamic language-model LoRA. Vision, audio, and projector adapters are not
 supported. Legacy LoRA and X-LoRA remain unavailable with multimodal GGUF. GGML uses `legacy_lora`
-together with `legacy_lora_order`; legacy static GGUF mode remains available for Llama, Mistral3,
-and Phi3.
+together with `legacy_lora_order`; legacy static GGUF mode remains available for Phi3.
 
 ## Multi-model example
 
@@ -257,7 +256,7 @@ Flag interactions that hold on the command line and as TOML keys:
   the configuration, tokenizer, and processor source. Dynamic language-model LoRA keeps the
   selected projector. Vision, audio, and projector adapters are unsupported. Legacy LoRA and
   X-LoRA cannot be combined with a multimodal projector.
-- Dynamic LoRA (`enable_lora` or `lora`), legacy GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. Supported GGUF uses dynamic LoRA; GGML uses legacy mode, and legacy static GGUF mode remains available for Llama, Mistral3, and Phi3. `tgt_non_granular_index` requires `xlora`.
+- Dynamic LoRA (`enable_lora` or `lora`), legacy GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. Supported GGUF uses dynamic LoRA; GGML uses legacy mode, and legacy static GGUF mode remains available for Phi3. `tgt_non_granular_index` requires `xlora`.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
 - `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.

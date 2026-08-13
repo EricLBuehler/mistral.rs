@@ -73,6 +73,10 @@ Input modalities depend on the model. A listed family does not imply that every 
 image, audio, and video. Use the model card and [multimodal input guide](/mistral.rs/guides/models/multimodal-input/)
 for its supported request types.
 
+Multimodal Qwen3.5 and Qwen3.6 accept image and video input, but not audio. Gemma 4 accepts
+image/video and audio when the matching components are present in the model configuration and
+projector files.
+
 The `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, and `qwen3vlmoe` architectures always need a
 projector. Architectures that appear in both tables above, including `gemma3`, `llama`, `mistral3`,
 `lfm2`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied.
@@ -102,12 +106,18 @@ Big-endian GGUF files are not supported.
 | Automatic artifact selection | Yes, with `-m` and `--quant` |
 | Tokenizer and chat-template discovery | From embedded GGUF metadata or supplied model assets |
 | Multimodal projector discovery | From an unambiguous GGUF repository, or an adjacent projector with the direct local `-f` shorthand |
-| Dynamic LoRA | Language-model adapters for supported model architectures; see the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/) |
+| Serving, tool calling, and agents | Same runtime paths as other loads; checkpoint and chat-template support still apply |
+| Dynamic LoRA | Language-model adapters for compatible rotary layouts; adjacent-RoPE layouts are rejected |
 | Multimodal LoRA | Language-model adapters only; projector, vision, and audio adapters are not supported |
-| Legacy static LoRA | Text GGUF with `llama`, `mistral3`, or `phi3` architecture; not supported with multimodal GGUF |
-| X-LoRA | Text GGUF with `llama`, `mistral3`, or `phi3` architecture; not supported with multimodal GGUF |
+| Legacy static LoRA | Text GGUF with the `phi3` architecture; not supported with multimodal GGUF |
+| X-LoRA | Text GGUF with the `phi3` architecture; not supported with multimodal GGUF |
 | ISQ requantization | Yes, for compatible weights selected with `-f` |
 | Offline loading | Yes, when every required file is local or cached |
+
+Dynamic LoRA is currently rejected for native GGUF architectures that store Q/K features in
+adjacent rotary order: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `granite`,
+`granitemoe`, `granitehybrid`, and `llama4`. This also covers multimodal models routed through those
+architectures, including Idefics3, Mistral 3/Pixtral, and Llama 4. Base-model loading is unaffected.
 
 GGUF support covers text generation and the multimodal families listed above. GGUF is not a
 loading format for embedding, speech, diffusion, or image-generation pipelines.

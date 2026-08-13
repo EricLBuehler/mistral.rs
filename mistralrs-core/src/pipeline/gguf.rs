@@ -37,7 +37,7 @@ use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::hf::{build_api, get_file, list_repo_files};
-use crate::pipeline::loaders::DeviceMappedModelLoader;
+use crate::pipeline::loaders::{stamp_qk_rope_layout, DeviceMappedModelLoader};
 use crate::pipeline::multimodal::{
     MultimodalLoaderBuilder, MultimodalSpecificConfig, PreparedMultimodalSource,
 };
@@ -82,6 +82,31 @@ const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
     "qwen3vl",
     "qwen3vlmoe",
 ];
+
+fn validate_native_dynamic_lora(
+    dynamic_lora: Option<&DynamicLoraConfig>,
+    rope_pairing: RopePairing,
+    architecture: &str,
+) -> Result<()> {
+    if dynamic_lora.is_some() && rope_pairing == RopePairing::Adjacent {
+        bail!(
+            "dynamic LoRA is not supported for native GGUF architecture `{architecture}` because its Q/K tensors use converter-permuted adjacent RoPE order; load the original safetensors model or omit the LoRA adapter"
+        );
+    }
+    Ok(())
+}
+
+fn validate_legacy_gguf_adapter_qk_layout(architecture: GGUFArchitecture) -> Result<()> {
+    if matches!(
+        architecture,
+        GGUFArchitecture::Llama | GGUFArchitecture::Mistral3
+    ) {
+        bail!(
+            "legacy LoRA and X-LoRA are not supported for GGUF `{architecture}` models because their Q/K tensors use converter-permuted adjacent RoPE order; load the original safetensors model or omit the adapter"
+        );
+    }
+    Ok(())
+}
 
 fn preferred_hf_config(files: &[String]) -> Option<&'static str> {
     if files.iter().any(|file| file == "config.json") {
@@ -207,9 +232,16 @@ struct ResolvedGgufTokenizer {
     generation_config_compatible: bool,
 }
 
+#[derive(Clone, Copy)]
+enum TokenizerFallback {
+    Strict,
+    Automatic,
+    ModelAssets,
+}
+
 fn resolve_tokenizer_candidate(
     path: &Path,
-    automatic: bool,
+    fallback: TokenizerFallback,
     external: Result<GgufTokenizerConversion>,
     embedded: impl FnOnce() -> Result<GgufTokenizerConversion>,
 ) -> Result<ResolvedGgufTokenizer> {
@@ -218,17 +250,25 @@ fn resolve_tokenizer_candidate(
             conversion,
             generation_config_compatible: true,
         }),
-        Err(error) if automatic => {
-            warn!(
-                "Ignoring automatically discovered tokenizer `{}` because it does not match the \
-                 GGUF vocabulary: {error}",
-                path.display()
-            );
+        Err(error) if !matches!(fallback, TokenizerFallback::Strict) => {
+            match fallback {
+                TokenizerFallback::Automatic => warn!(
+                    "Ignoring automatically discovered tokenizer `{}` because it does not match \
+                     the GGUF vocabulary: {error}",
+                    path.display()
+                ),
+                TokenizerFallback::ModelAssets => warn!(
+                    "Tokenizer from model assets `{}` does not match the GGUF vocabulary; using \
+                     the tokenizer embedded in the GGUF instead: {error}",
+                    path.display()
+                ),
+                TokenizerFallback::Strict => unreachable!(),
+            }
             Ok(ResolvedGgufTokenizer {
                 conversion: embedded().with_context(|| {
                     format!(
-                        "Automatically discovered tokenizer `{}` was rejected ({error}); GGUF \
-                         tokenizer conversion also failed",
+                        "Tokenizer `{}` was rejected ({error}); GGUF tokenizer conversion also \
+                         failed",
                         path.display()
                     )
                 })?,
@@ -438,8 +478,8 @@ impl GGUFLoader {
         paths: &dyn ModelPaths,
         metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
     ) -> Result<ResolvedGgufTokenizer> {
-        let (path, automatic) = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
-            (PathBuf::from(tokenizer_json), false)
+        let (path, fallback) = if let Some(tokenizer_json) = self.tokenizer_json.as_ref() {
+            (PathBuf::from(tokenizer_json), TokenizerFallback::Strict)
         } else if paths.get_tokenizer_filename().as_os_str().is_empty() {
             return Ok(ResolvedGgufTokenizer {
                 conversion: convert_gguf_metadata_to_hf_tokenizer(metadata)?,
@@ -448,13 +488,27 @@ impl GGUFLoader {
         } else {
             (
                 paths.get_tokenizer_filename().clone(),
-                self.model_id.is_none(),
+                if self.model_id.is_none() {
+                    TokenizerFallback::Automatic
+                } else {
+                    TokenizerFallback::ModelAssets
+                },
             )
         };
 
-        let external = get_tokenizer(&path, None)
-            .and_then(|tokenizer| validate_external_gguf_tokenizer(tokenizer, metadata));
-        resolve_tokenizer_candidate(&path, automatic, external, || {
+        let external = match get_tokenizer(&path, None) {
+            Ok(tokenizer) => validate_external_gguf_tokenizer(tokenizer, metadata),
+            Err(error) if matches!(fallback, TokenizerFallback::ModelAssets) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "Failed to load tokenizer from model assets `{}`",
+                        path.display()
+                    )
+                })
+            }
+            Err(error) => Err(error),
+        };
+        resolve_tokenizer_candidate(&path, fallback, external, || {
             convert_gguf_metadata_to_hf_tokenizer(metadata)
         })
     }
@@ -467,8 +521,8 @@ impl GGUFLoader {
         let filename = paths.get_gen_conf_filename()?;
         if !tokenizer.generation_config_compatible {
             warn!(
-                "Ignoring generation config `{}` because its automatically discovered tokenizer \
-                 was incompatible with the GGUF model",
+                "Ignoring generation config `{}` because the external tokenizer was incompatible \
+                 with the GGUF model",
                 filename.display()
             );
             return None;
@@ -569,6 +623,13 @@ impl GGUFLoader {
             .transpose()?;
         let explicit_loader = explicit_loader.flatten();
         let resolved = resolve_native_adapter(&descriptor, explicit_loader)?;
+        let rope_pairing =
+            crate::gguf::normal_registry::schema_for(descriptor.architecture).rope_pairing;
+        validate_native_dynamic_lora(
+            self.dynamic_lora.as_ref(),
+            rope_pairing,
+            descriptor.architecture.as_str(),
+        )?;
         debug!(
             "Loading GGUF architecture `{}` through native {:?} ({:?}, layouts {:?})",
             descriptor.architecture,
@@ -590,6 +651,7 @@ impl GGUFLoader {
             }
             None => synthesize_normal_config(&loader_type, archive.metadata(), &tensor_names)?,
         };
+        let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         let bindings = build_normal_bindings(&archive, &loader_type, descriptor.architecture)?;
         let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
@@ -617,8 +679,7 @@ impl GGUFLoader {
             eos_token: tokenizer.conversion.eos,
             unk_token: tokenizer.conversion.unk,
             source_weight_files: paths.get_weight_filenames().to_vec(),
-            rope_pairing: crate::gguf::normal_registry::schema_for(descriptor.architecture)
-                .rope_pairing,
+            rope_pairing,
         };
         let mut loader = NormalLoaderBuilder::new(
             NormalSpecificConfig {
@@ -678,6 +739,7 @@ impl GGUFLoader {
             archive.metadata(),
             &tensor_names,
         )?;
+        let config = stamp_qk_rope_layout(&config, RopePairing::HalfSplit)?;
         let use_language_model_prefix = gemma3_text_uses_language_model_prefix(&config)?;
         let bindings = build_gemma3_text_bindings(&archive, use_language_model_prefix)?;
         let internal_dtype = dtype.try_into_dtype(&[device])?;
@@ -785,6 +847,7 @@ impl GGUFLoader {
                 )
             }
         };
+        validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
         if paths.get_config_filename().as_os_str().is_empty() {
             bail!(
                 "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
@@ -794,6 +857,7 @@ impl GGUFLoader {
             &loader_type,
             &fs::read_to_string(paths.get_config_filename())?,
         )?;
+        let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         if architecture == "gemma3" {
             ensure_gemma3_vision_config(&config)?;
         }
@@ -1148,6 +1212,7 @@ impl Loader for GGUFLoader {
         }
 
         let arch = model.arch();
+        validate_legacy_gguf_adapter_qk_layout(arch)?;
 
         // If auto, convert to Map
         let num_layers = model.get_metadata()[&format!("{arch}.block_count")].to_u32()? as usize;
@@ -1496,9 +1561,15 @@ impl AnyMoePipelineMixin for GGUFPipeline {}
 mod tests {
     use super::{
         preferred_hf_config, prepare_native_multimodal_config, requires_multimodal_projector,
-        resolve_tokenizer_candidate, GGUFSpecificConfig, GgufTokenizerConversion,
+        resolve_tokenizer_candidate, validate_legacy_gguf_adapter_qk_layout,
+        validate_native_dynamic_lora, DynamicLoraConfig, GGUFSpecificConfig,
+        GgufTokenizerConversion, TokenizerFallback,
     };
-    use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, MultimodalLoaderType};
+    use crate::{
+        gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY,
+        gguf::{normal_registry::RopePairing, GGUFArchitecture},
+        MultimodalLoaderType,
+    };
     use std::path::{Path, PathBuf};
     use tokenizers::{models::bpe::BPE, Tokenizer};
 
@@ -1520,6 +1591,38 @@ mod tests {
         assert!(requires_multimodal_projector("gemma4"));
         assert!(!requires_multimodal_projector("qwen35moe"));
         assert!(!requires_multimodal_projector("mistral3"));
+    }
+
+    #[test]
+    fn native_dynamic_lora_rejects_adjacent_rope_gguf() {
+        let dynamic_lora = DynamicLoraConfig {
+            adapters: Vec::new(),
+            runtime: Default::default(),
+        };
+        let error =
+            validate_native_dynamic_lora(Some(&dynamic_lora), RopePairing::Adjacent, "llama")
+                .unwrap_err();
+        let error = error.to_string();
+        assert!(error.contains("converter-permuted adjacent RoPE order"));
+        assert!(error.contains("original safetensors model"));
+        assert!(validate_native_dynamic_lora(
+            Some(&dynamic_lora),
+            RopePairing::HalfSplit,
+            "qwen35",
+        )
+        .is_ok());
+        assert!(validate_native_dynamic_lora(None, RopePairing::Adjacent, "llama").is_ok());
+    }
+
+    #[test]
+    fn legacy_gguf_adapters_reject_adjacent_qk_layouts() {
+        for architecture in [GGUFArchitecture::Llama, GGUFArchitecture::Mistral3] {
+            let error = validate_legacy_gguf_adapter_qk_layout(architecture).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("converter-permuted adjacent RoPE order"));
+        }
+        assert!(validate_legacy_gguf_adapter_qk_layout(GGUFArchitecture::Phi3).is_ok());
     }
 
     #[test]
@@ -1580,7 +1683,7 @@ mod tests {
     fn automatic_tokenizer_mismatch_falls_back_to_embedded_metadata() {
         let resolved = resolve_tokenizer_candidate(
             Path::new("automatic-tokenizer.json"),
-            true,
+            TokenizerFallback::Automatic,
             Err(anyhow::anyhow!("vocabulary mismatch")),
             || Ok(tokenizer_conversion("embedded")),
         )
@@ -1591,10 +1694,38 @@ mod tests {
     }
 
     #[test]
-    fn explicit_tokenizer_mismatch_is_an_error() {
+    fn model_asset_tokenizer_mismatch_falls_back_to_embedded_metadata() {
+        let resolved = resolve_tokenizer_candidate(
+            Path::new("model-assets/tokenizer.json"),
+            TokenizerFallback::ModelAssets,
+            Err(anyhow::anyhow!("vocabulary mismatch")),
+            || Ok(tokenizer_conversion("embedded")),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.conversion.eos.as_deref(), Some("embedded"));
+        assert!(!resolved.generation_config_compatible);
+    }
+
+    #[test]
+    fn compatible_model_asset_tokenizer_is_preserved() {
+        let resolved = resolve_tokenizer_candidate(
+            Path::new("model-assets/tokenizer.json"),
+            TokenizerFallback::ModelAssets,
+            Ok(tokenizer_conversion("external")),
+            || Ok(tokenizer_conversion("unused")),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.conversion.eos.as_deref(), Some("external"));
+        assert!(resolved.generation_config_compatible);
+    }
+
+    #[test]
+    fn explicit_tokenizer_file_mismatch_is_an_error() {
         let error = resolve_tokenizer_candidate(
             Path::new("explicit-tokenizer.json"),
-            false,
+            TokenizerFallback::Strict,
             Err(anyhow::anyhow!("vocabulary mismatch")),
             || Ok(tokenizer_conversion("unused")),
         )

@@ -150,11 +150,19 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         Ok(Cow::Borrowed(config))
     }
     fn is_gptx(&self, config: &str) -> bool;
-    fn is_gptx_for(&self, config: &str, normal_loading_metadata: &NormalLoadingMetadata) -> bool {
+    fn is_gptx_for(
+        &self,
+        config: &str,
+        normal_loading_metadata: &NormalLoadingMetadata,
+    ) -> Result<bool> {
         match normal_loading_metadata.rope_pairing {
-            Some(RopePairing::Adjacent) => false,
-            Some(RopePairing::HalfSplit) => true,
-            None => self.is_gptx(config),
+            Some(RopePairing::Adjacent) => Ok(false),
+            Some(RopePairing::HalfSplit) => Ok(true),
+            None => match super::qk_rope_layout_from_config(config)? {
+                Some(RopePairing::Adjacent) => Ok(false),
+                Some(RopePairing::HalfSplit) => Ok(true),
+                None => Ok(self.is_gptx(config)),
+            },
         }
     }
     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>>;
@@ -681,7 +689,7 @@ impl MultimodalModelLoader for Phi3VLoader {
         Ok(Box::new(Phi3::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -973,7 +981,7 @@ impl MultimodalModelLoader for Idefics2Loader {
         Ok(Box::new(Idefics2::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1340,7 +1348,7 @@ impl MultimodalModelLoader for LLaVANextLoader {
         Ok(Box::new(LLaVANext::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1630,7 +1638,7 @@ impl MultimodalModelLoader for LLaVALoader {
         Ok(Box::new(LLaVA::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -1912,7 +1920,7 @@ impl MultimodalModelLoader for VLlamaLoader {
         Ok(Box::new(MLlamaModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2323,7 +2331,7 @@ impl MultimodalModelLoader for Qwen2VLLoader {
         Ok(Box::new(Qwen2VLModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2635,7 +2643,7 @@ impl MultimodalModelLoader for Idefics3Loader {
         Ok(Box::new(Idefics3Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -2976,7 +2984,7 @@ impl MultimodalModelLoader for MiniCpmOLoader {
         Ok(Box::new(MiniCpmOModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3292,7 +3300,7 @@ impl MultimodalModelLoader for Phi4MMLoader {
         Ok(Box::new(Phi4MMModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3644,7 +3652,7 @@ impl MultimodalModelLoader for Qwen2_5VLLoader {
         Ok(Box::new(Qwen2_5VLModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -3950,7 +3958,7 @@ impl MultimodalModelLoader for Gemma3Loader {
         Ok(Box::new(Gemma3Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4356,7 +4364,7 @@ impl MultimodalModelLoader for Mistral3Loader {
         Ok(Box::new(Mistral3Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -4700,7 +4708,7 @@ impl MultimodalModelLoader for VLlama4Loader {
         Ok(Box::new(Llama4Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -5116,7 +5124,7 @@ impl MultimodalModelLoader for Gemma3nLoader {
         Ok(Box::new(Gemma3nModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6018,7 +6026,7 @@ impl MultimodalModelLoader for Qwen3VLLoader {
         Ok(Box::new(Qwen3VLModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6050,7 +6058,11 @@ impl MultimodalModelLoader for Qwen3VLLoader {
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
@@ -6373,7 +6385,7 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
         Ok(Box::new(Qwen3VLMoEModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6405,7 +6417,11 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
@@ -6787,7 +6803,7 @@ impl MultimodalModelLoader for Qwen3_5Loader {
         Ok(Box::new(Qwen3_5Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -6819,7 +6835,11 @@ impl MultimodalModelLoader for Qwen3_5Loader {
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
@@ -7174,7 +7194,7 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
         Ok(Box::new(Qwen3_5MoeModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -7206,7 +7226,11 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
-            input: vec![SupportedModality::Text, SupportedModality::Vision],
+            input: vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video,
+            ],
             output: vec![SupportedModality::Text],
         })
     }
@@ -7623,7 +7647,7 @@ impl MultimodalModelLoader for VoxtralLoader {
         Ok(Box::new(VoxtralModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -7929,7 +7953,7 @@ impl MultimodalModelLoader for Gemma4Loader {
         Ok(Box::new(Gemma4Model::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -8502,7 +8526,7 @@ impl MultimodalModelLoader for Lfm2VlLoader {
         Ok(Box::new(Lfm2VlModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -8830,7 +8854,7 @@ impl MultimodalModelLoader for DiffusionGemmaLoader {
         Ok(Box::new(DiffusionGemmaModel::new(
             &cfg,
             vb,
-            self.is_gptx_for(config, &normal_loading_metadata),
+            self.is_gptx_for(config, &normal_loading_metadata)?,
             normal_loading_metadata,
             attention_mechanism,
         )?))
@@ -9169,6 +9193,25 @@ mod tests {
 
     fn matches_any(regexes: &[Regex], name: &str) -> bool {
         regexes.iter().any(|regex| regex.is_match(name))
+    }
+
+    #[test]
+    fn qwen3_vl_family_reports_video_input() -> Result<()> {
+        let expected_input = vec![
+            SupportedModality::Text,
+            SupportedModality::Vision,
+            SupportedModality::Video,
+        ];
+        for (name, modalities) in [
+            ("Qwen3VL", Qwen3VLLoader.modalities("")?),
+            ("Qwen3VLMoE", Qwen3VLMoELoader.modalities("")?),
+            ("Qwen3.5", Qwen3_5Loader.modalities("")?),
+            ("Qwen3.5 MoE", Qwen3_5MoeLoader.modalities("")?),
+        ] {
+            assert_eq!(modalities.input, expected_input, "{name}");
+            assert_eq!(modalities.output, vec![SupportedModality::Text], "{name}");
+        }
+        Ok(())
     }
 
     fn assert_fused_moe_default_isq_predicates(
@@ -9789,7 +9832,22 @@ mod tests {
             &Mistral3Loader as &dyn MultimodalModelLoader,
         ] {
             assert!(loader.is_gptx(""));
-            assert!(!loader.is_gptx_for("", &metadata));
+            assert!(!loader.is_gptx_for("{}", &metadata).unwrap());
+            assert!(!loader
+                .is_gptx_for(
+                    r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#,
+                    &NormalLoadingMetadata {
+                        mapper: Box::new(DummyDeviceMapper {
+                            nm_device: Device::Cpu,
+                        }),
+                        loading_isq: false,
+                        real_device: Device::Cpu,
+                        multi_progress: Arc::new(crate::utils::progress::new_multi_progress()),
+                        matformer_slicing_config: None,
+                        rope_pairing: None,
+                    },
+                )
+                .unwrap());
         }
     }
 

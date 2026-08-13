@@ -26,7 +26,7 @@ completion = client.chat.completions.create(
                 {"type": "image_url", "image_url": {"url": IMAGE_URL}},
                 {
                     "type": "text",
-                    "text": "Describe the image, then summarize what you hear.",
+                    "text": "Describe the image, then transcribe the audio.",
                 },
                 {"type": "audio_url", "audio_url": {"url": AUDIO_URL}},
             ],

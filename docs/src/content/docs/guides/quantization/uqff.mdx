@@ -105,6 +105,9 @@ mistralrs quantize \
   -o output/
 ```
 
+A UQFF produced from GGUF preserves the source Q/K rotary layout. If that layout is adjacent,
+dynamic LoRA and X-LoRA remain unsupported after conversion; UQFF does not reorder those features.
+
 `--quant` and `-f` are mutually exclusive, and `--quant auto` does not select a GGUF artifact.
 Starting from a high-precision or higher-bit GGUF avoids compounding quantization loss. Supported
 multimodal repositories select their projector and supporting assets when the candidates are

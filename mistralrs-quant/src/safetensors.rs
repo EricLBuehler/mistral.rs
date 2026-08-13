@@ -333,6 +333,13 @@ impl MmapedSafetensors {
         tensors.into_iter().flatten().collect()
     }
 
+    pub(crate) fn tensors_by_file(&self) -> Vec<Vec<(String, st::TensorView<'_>)>> {
+        self.safetensors
+            .iter()
+            .map(|safetensors| safetensors.get().0.tensors())
+            .collect()
+    }
+
     pub fn get(&self, name: &str) -> Result<st::TensorView<'_>> {
         let index = match &self.routing {
             None => 0,

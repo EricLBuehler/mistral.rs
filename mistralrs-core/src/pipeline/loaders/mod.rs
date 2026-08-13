@@ -55,6 +55,64 @@ use crate::{
 
 use super::{paths::AdapterPaths, Pipeline};
 
+pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
+
+pub(crate) fn qk_rope_layout_from_config(
+    config: &str,
+) -> Result<Option<crate::gguf::normal_registry::RopePairing>> {
+    let config: serde_json::Value = serde_json::from_str(config)?;
+    let Some(layout) = config
+        .get(QK_ROPE_LAYOUT_CONFIG_KEY)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    match layout {
+        "adjacent" => Ok(Some(
+            crate::gguf::normal_registry::RopePairing::Adjacent,
+        )),
+        "half_split" => Ok(Some(
+            crate::gguf::normal_registry::RopePairing::HalfSplit,
+        )),
+        layout => anyhow::bail!(
+            "model config `{QK_ROPE_LAYOUT_CONFIG_KEY}` must be `adjacent` or `half_split`, got `{layout}`"
+        ),
+    }
+}
+
+pub(crate) fn stamp_qk_rope_layout(
+    config: &str,
+    layout: crate::gguf::normal_registry::RopePairing,
+) -> Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(config)?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    object.insert(
+        QK_ROPE_LAYOUT_CONFIG_KEY.to_string(),
+        serde_json::Value::String(
+            match layout {
+                crate::gguf::normal_registry::RopePairing::Adjacent => "adjacent",
+                crate::gguf::normal_registry::RopePairing::HalfSplit => "half_split",
+            }
+            .to_string(),
+        ),
+    );
+    Ok(serde_json::to_string(&config)?)
+}
+
+pub(crate) fn validate_lora_qk_rope_layout(config: &str, has_adapter: bool) -> Result<()> {
+    if has_adapter
+        && qk_rope_layout_from_config(config)?
+            == Some(crate::gguf::normal_registry::RopePairing::Adjacent)
+    {
+        anyhow::bail!(
+            "LoRA and X-LoRA adapters are not supported when Q/K tensors use adjacent RoPE layout; load the original safetensors model or omit the adapter"
+        );
+    }
+    Ok(())
+}
+
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
 pub trait ModelPaths: AsAny + Debug + Send + Sync {
@@ -725,6 +783,37 @@ pub trait Loader: Send + Sync {
 #[cfg(test)]
 mod auto_device_map_quantization_tests {
     use super::*;
+
+    #[test]
+    fn qk_rope_layout_marker_round_trips() -> Result<()> {
+        for layout in [
+            crate::gguf::normal_registry::RopePairing::Adjacent,
+            crate::gguf::normal_registry::RopePairing::HalfSplit,
+        ] {
+            let stamped = stamp_qk_rope_layout(r#"{"hidden_size":16}"#, layout)?;
+            assert_eq!(qk_rope_layout_from_config(&stamped)?, Some(layout));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&stamped)?["hidden_size"],
+                16
+            );
+        }
+        assert!(qk_rope_layout_from_config(r#"{"_mistralrs_qk_rope_layout":"invalid"}"#).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn adjacent_qk_rope_layout_rejects_lora_adapters() -> Result<()> {
+        assert!(
+            validate_lora_qk_rope_layout(r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#, true,)
+                .is_err()
+        );
+        assert!(
+            validate_lora_qk_rope_layout(r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#, false,)
+                .is_ok()
+        );
+        assert!(validate_lora_qk_rope_layout(r#"{"hidden_size":16}"#, true).is_ok());
+        Ok(())
+    }
 
     struct PackFactorWeightSource(usize);
 

@@ -1579,7 +1579,10 @@ mod tests {
     #[test]
     fn uqff_config_removes_source_quantization_metadata_recursively() -> Result<()> {
         let source = serde_json::json!({
+            "architectures": ["Qwen3NextForCausalLM"],
             "model_type": "test",
+            "_mistralrs_gdn_v_head_layout": "tiled",
+            "_mistralrs_qk_rope_layout": "adjacent",
             "quantization_config": {"quant_method": "gptq", "bits": 4},
             "text_config": {
                 "hidden_size": 128,
@@ -1592,7 +1595,10 @@ mod tests {
 
         let sanitized = sanitize_quantized_weight_source_config(&serde_json::to_string(&source)?)?;
         let sanitized: serde_json::Value = serde_json::from_str(&sanitized)?;
+        assert_eq!(sanitized["architectures"][0], "Qwen3NextForCausalLM");
         assert_eq!(sanitized["model_type"], "test");
+        assert_eq!(sanitized["_mistralrs_gdn_v_head_layout"], "tiled");
+        assert_eq!(sanitized["_mistralrs_qk_rope_layout"], "adjacent");
         assert_eq!(sanitized["text_config"]["hidden_size"], 128);
         assert_eq!(sanitized["submodels"][0]["layers"], 2);
         assert!(sanitized.get("quantization_config").is_none());

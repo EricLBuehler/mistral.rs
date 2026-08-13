@@ -681,6 +681,39 @@ mod tests {
     }
 
     #[test]
+    fn site_prefix_alias_loads_canonical_qwen35_moe_adapter_names() -> Result<()> {
+        let device = Device::Cpu;
+        let runtime_path = "model.layers.0.self_attn.q_proj";
+        let canonical_path = "model.language_model.layers.0.self_attn.q_proj";
+        let backend = HashMap::from([
+            (
+                format!("base_model.model.{canonical_path}.lora_A.default.weight"),
+                Tensor::new(&[[1f32, 0.]], &device)?,
+            ),
+            (
+                format!("base_model.model.{canonical_path}.lora_B.default.weight"),
+                Tensor::new(&[[1f32], [0.]], &device)?,
+            ),
+        ]);
+        let weights = ShardedSafeTensors::wrap(backend, DType::F32, device.clone());
+        let registry =
+            LoraLayerRegistry::new_with_site_prefix_alias("model", "model.language_model")?;
+        let site = registry.register(
+            LoraSiteKey::new(runtime_path),
+            LoraLinearSpec::replicated(2, 2),
+            DType::F32,
+            device,
+        )?;
+        registry.finalize()?;
+
+        let loaded = load_dynamic_lora_weights(&registry, &config("q_proj", 1, 1.0), &weights)?;
+        assert_eq!(site.key().path(), canonical_path);
+        assert_eq!(loaded.linear.len(), 1);
+        assert!(loaded.experts.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn loads_compact_expert_site_from_safetensors_metadata() -> Result<()> {
         let device = Device::Cpu;
         let path = "model.layers.0.mlp.experts";

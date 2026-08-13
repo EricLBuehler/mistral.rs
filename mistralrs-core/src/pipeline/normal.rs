@@ -277,6 +277,31 @@ pub(crate) struct PreparedNormalSource {
     pub rope_pairing: crate::gguf::normal_registry::RopePairing,
 }
 
+pub(crate) fn new_dynamic_lora_registry(
+    config: &str,
+) -> Result<Arc<mistralrs_quant::LoraLayerRegistry>> {
+    let config = serde_json::from_str::<serde_json::Value>(config)?;
+    let qwen35_moe_identity = config
+        .get("architectures")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|architectures| architectures.first())
+        .and_then(serde_json::Value::as_str)
+        == Some("Qwen3NextForCausalLM")
+        && config
+            .get(crate::gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY)
+            .and_then(serde_json::Value::as_str)
+            == Some("tiled");
+    let registry = if qwen35_moe_identity {
+        mistralrs_quant::LoraLayerRegistry::new_with_site_prefix_alias(
+            "model",
+            "model.language_model",
+        )?
+    } else {
+        mistralrs_quant::LoraLayerRegistry::new()
+    };
+    Ok(Arc::new(registry))
+}
+
 #[derive(Default)]
 /// A builder for a loader for a "normal" (non-quantized) model.
 pub struct NormalLoaderBuilder {
@@ -545,6 +570,10 @@ impl Loader for NormalLoader {
         } else {
             config
         };
+        super::loaders::validate_lora_qk_rope_layout(
+            &config,
+            self.lora_adapters.is_some() || self.xlora_model_id.is_some(),
+        )?;
 
         if !self.inner.supports_paged_attention(&config)? {
             paged_attn_config = None;
@@ -965,7 +994,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let layers = new_dynamic_lora_registry(&config)?;
                         let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
                         let tracker = sharded_vb.tracker().clone();
                         let model = self.inner.load(
@@ -1093,7 +1122,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let layers = new_dynamic_lora_registry(&config)?;
                         let vb = source
                             .weights
                             .clone()
@@ -2019,7 +2048,7 @@ impl AnyMoePipelineMixin for NormalPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::normal_model_requires_uniform_prompt_batch;
+    use super::{new_dynamic_lora_registry, normal_model_requires_uniform_prompt_batch};
     use crate::pipeline::finish_dynamic_lora_runtime;
     use crate::pipeline::{AdapterPaths, LocalModelPaths};
     use crate::LoraRuntimeConfig;
@@ -2088,5 +2117,48 @@ mod tests {
                 .unwrap_err();
             assert!(error.to_string().contains("after registry finalization"));
         }
+    }
+
+    #[test]
+    fn persisted_qwen35_moe_config_restores_lora_namespace_alias() {
+        let config = r#"{
+            "architectures":["Qwen3NextForCausalLM"],
+            "_mistralrs_gdn_v_head_layout":"tiled"
+        }"#;
+        let registry = new_dynamic_lora_registry(config).unwrap();
+        let site = registry
+            .register(
+                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                LoraLinearSpec::replicated(2, 2),
+                DType::F32,
+                Device::Cpu,
+            )
+            .unwrap();
+
+        assert_eq!(
+            site.key().path(),
+            "model.language_model.layers.0.self_attn.q_proj"
+        );
+    }
+
+    #[test]
+    fn dense_qwen35_config_does_not_alias_lora_namespace() {
+        let registry = new_dynamic_lora_registry(
+            r#"{
+                "architectures":["Qwen3_5ForCausalLM"],
+                "_mistralrs_gdn_v_head_layout":"tiled"
+            }"#,
+        )
+        .unwrap();
+        let site = registry
+            .register(
+                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                LoraLinearSpec::replicated(2, 2),
+                DType::F32,
+                Device::Cpu,
+            )
+            .unwrap();
+
+        assert_eq!(site.key().path(), "model.layers.0.self_attn.q_proj");
     }
 }

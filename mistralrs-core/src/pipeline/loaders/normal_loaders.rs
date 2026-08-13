@@ -121,7 +121,11 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         match normal_loading_metadata.rope_pairing {
             Some(RopePairing::Adjacent) => Ok(false),
             Some(RopePairing::HalfSplit) => Ok(true),
-            None => self.is_gptx(config),
+            None => match super::qk_rope_layout_from_config(config)? {
+                Some(RopePairing::Adjacent) => Ok(false),
+                Some(RopePairing::HalfSplit) => Ok(true),
+                None => self.is_gptx(config),
+            },
         }
     }
     fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
@@ -6356,6 +6360,35 @@ impl DeviceMappedModelLoader for Lfm2Loader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn loading_metadata(rope_pairing: Option<RopePairing>) -> NormalLoadingMetadata {
+        NormalLoadingMetadata {
+            mapper: Box::new(crate::device_map::DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(crate::utils::progress::new_multi_progress()),
+            matformer_slicing_config: None,
+            rope_pairing,
+        }
+    }
+
+    #[test]
+    fn persisted_qk_rope_layout_overrides_loader_default() -> Result<()> {
+        let loader = LlamaLoader;
+        assert!(loader.is_gptx("{}")?);
+        assert!(!loader.is_gptx_for(
+            r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#,
+            &loading_metadata(None),
+        )?);
+        assert!(loader.is_gptx_for(
+            r#"{"_mistralrs_qk_rope_layout":"half_split"}"#,
+            &loading_metadata(None),
+        )?);
+        assert!(!loader.is_gptx_for("{}", &loading_metadata(Some(RopePairing::Adjacent)))?);
+        Ok(())
+    }
 
     const PROMOTED_TENSORS: [&str; 3] = [
         "model.embed_tokens.weight",

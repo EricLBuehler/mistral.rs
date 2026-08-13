@@ -253,6 +253,7 @@ struct GroupScan {
     shards: Vec<String>,
     tensors: HashMap<String, TensorMeta>,
     tensor_sources: HashMap<String, String>,
+    version_tensors: HashMap<String, Vec<(String, TensorMeta)>>,
     duplicate_names: Vec<String>,
     metadata: Vec<UqffMetadataSummary>,
 }
@@ -701,6 +702,7 @@ async fn scan_groups_lossy(groups: &[UqffArtifactGroup], mode: ScanMode) -> Vec<
 async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupScan> {
     let mut tensors = HashMap::new();
     let mut tensor_sources = HashMap::new();
+    let mut version_tensors = HashMap::<String, Vec<(String, TensorMeta)>>::new();
     let mut duplicate_names = Vec::new();
     let mut metadata = Vec::new();
     let mut seen = HashSet::new();
@@ -709,6 +711,7 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
         let shard_name = file.name().to_string();
         let (data_offset, header) = read_safetensors_metadata(file).await?;
         let mut data_ranges = Vec::new();
+        let mut version_names = Vec::new();
 
         if let Some(header_metadata) = header.metadata() {
             for (key, value) in header_metadata {
@@ -721,7 +724,9 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
         }
 
         for (name, info) in header.tensors() {
-            if !is_version_key(&name) && !seen.insert(name.clone()) {
+            if is_version_key(&name) {
+                version_names.push(name.clone());
+            } else if !seen.insert(name.clone()) {
                 duplicate_names.push(name.clone());
             }
             let size_bytes = info.data_offsets.1 - info.data_offsets.0;
@@ -748,6 +753,16 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
                 meta.data = Some(data);
             }
         }
+        for name in version_names {
+            let meta = tensors
+                .get(&name)
+                .expect("version tensor was inserted above")
+                .clone();
+            version_tensors
+                .entry(name)
+                .or_default()
+                .push((shard_name.clone(), meta));
+        }
     }
 
     Ok(GroupScan {
@@ -759,6 +774,7 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
             .collect(),
         tensors,
         tensor_sources,
+        version_tensors,
         duplicate_names,
         metadata,
     })
@@ -975,6 +991,29 @@ fn validate_version_tensor_headers(scan: &GroupScan, errors: &mut Vec<String>) {
         super::UQFF_VERSION_PATCH_KEY,
     ] {
         validate_header_tensor(scan, key, Dtype::U32, &[], errors);
+        let Some(copies) = scan.version_tensors.get(key) else {
+            continue;
+        };
+        let mut expected = None;
+        for (shard, tensor) in copies {
+            let Some(value) = scalar_u32(tensor) else {
+                errors.push(format!(
+                    "{}: invalid `{key}` scalar U32 in `{shard}`",
+                    scan.quant
+                ));
+                continue;
+            };
+            if let Some(expected) = expected {
+                if value != expected {
+                    errors.push(format!(
+                        "{}: conflicting `{key}` value {value} in `{shard}`; expected {expected}",
+                        scan.quant
+                    ));
+                }
+            } else {
+                expected = Some(value);
+            }
+        }
     }
 }
 
@@ -1622,7 +1661,7 @@ fn is_fallback_storage(stored: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UqffTensor;
+    use crate::{UqffReader, UqffTensor};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -2272,6 +2311,72 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("invalid old-format tensor key")));
+    }
+
+    #[tokio::test]
+    async fn verified_self_contained_shards_open_in_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("afq3-0.uqff");
+        let second = dir.path().join("afq3-1.uqff");
+        write_synthetic_afq_shard(&first, "model.layers.0");
+        write_synthetic_afq_shard(&second, "model.layers.1");
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.ok, "{:?}", result.errors);
+
+        let reader = UqffReader::open(&[first, second]).unwrap();
+        assert!(reader.contains("model.layers.0.weight"));
+        assert!(reader.contains("model.layers.1.weight"));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_conflicting_version_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("afq3-0.uqff");
+        let second = dir.path().join("afq3-1.uqff");
+        write_synthetic_afq_shard(&first, "model.layers.0");
+
+        let mut tensors = vec![
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_MAJOR_KEY,
+                UQFF_VERSION_MAJOR + 1,
+            ),
+            UqffTensor::from_u32_scalar(super::super::UQFF_VERSION_MINOR_KEY, UQFF_VERSION_MINOR),
+            UqffTensor::from_u32_scalar(super::super::UQFF_VERSION_PATCH_KEY, UQFF_VERSION_PATCH),
+        ];
+        push_synthetic_afq_layer(&mut tensors, "model.layers.1", 3);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            Some(HashMap::from([
+                ("uqff.producer".to_string(), "test".to_string()),
+                ("uqff.version".to_string(), current_uqff_version()),
+            ])),
+            &second,
+        )
+        .unwrap();
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!result.ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("conflicting `uqff.version.major`")));
     }
 
     #[test]

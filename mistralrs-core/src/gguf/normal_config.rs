@@ -2902,6 +2902,7 @@ mod tests {
         assert_eq!(config["head_dim"], 256);
         assert_eq!(config["partial_rotary_factor"], 0.25);
         assert_eq!(config[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
+        assert_eq!(config["architectures"][0], "Qwen3NextForCausalLM");
         let native: models::qwen3_next::Config = serde_json::from_value(config.clone()).unwrap();
         assert_eq!(
             crate::gdn::GdnConfig::v_head_layout(&native),
@@ -3362,6 +3363,7 @@ mod tests {
         assert_eq!(value["partial_rotary_factor"], 0.25);
         assert_eq!(value["intermediate_size"], 512);
         assert_eq!(value[GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
+        assert_eq!(value["architectures"][0], "Qwen3NextForCausalLM");
         assert_native_config_deserializes(&NormalLoaderType::Qwen3Next, value);
     }
 

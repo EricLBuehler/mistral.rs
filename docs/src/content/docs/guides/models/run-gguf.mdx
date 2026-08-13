@@ -26,6 +26,11 @@ mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 The `.gguf` suffix selects GGUF automatically. `--format gguf` remains available, but is not needed
 for these commands.
 
+GGUF changes how model weights and companion assets are loaded, not the inference surface. Once
+loaded, the model uses the same Chat Completions, Responses, structured-output, tool-calling, and
+CLI agent paths as its non-GGUF counterpart. Tool calling still depends on checkpoint behavior and
+a compatible chat template.
+
 ## Select a GGUF file
 
 | Goal | Command |
@@ -199,6 +204,11 @@ Each request can select a loaded adapter by alias, and base-model requests can r
 requests. Multimodal GGUF applies adapters to the language model; projector, vision, and audio
 adapters are not supported. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for
 request routing and runtime adapter management.
+
+Dynamic LoRA is rejected for GGUF architectures whose rotary Q/K layout does not match canonical
+adapter weights. This prevents an adapter from loading successfully with the wrong feature order.
+The [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) lists the affected
+architectures.
 
 ## Requantize with ISQ
 

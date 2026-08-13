@@ -16,8 +16,8 @@ This page documents the breaking dynamic LoRA API on the current source tree, wh
 | Mode | Base model support | Request behavior | Live updates |
 |---|---|---|---|
 | Dynamic LoRA | Compatible text and multimodal language models, including GGUF | Select zero or one adapter per request | Yes |
-| Legacy LoRA | GGML and compatible static GGUF configurations | One static adapter configuration | No |
-| X-LoRA | Compatible plain, GGUF, and GGML text models | Learned per-token mixture | No |
+| Legacy LoRA | GGML and Phi3 GGUF | One static adapter configuration | No |
+| X-LoRA | Compatible plain and GGML text models, plus Phi3 GGUF | Learned per-token mixture | No |
 
 For GGUF file and projector selection, see [Run GGUF models](/mistral.rs/guides/models/run-gguf/). The [GGUF support reference](/mistral.rs/reference/gguf-support/) summarizes adapter and multimodal boundaries.
 

@@ -1030,7 +1030,7 @@ macro_rules! lora_model_loader {
         } else {
             vb
         };
-        let lora_layers = std::sync::Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let lora_layers = $crate::pipeline::normal::new_dynamic_lora_registry(&$config)?;
         let vb = vb.with_lora_registry(lora_layers.clone());
 
         let tracker = vb.tracker().clone();
