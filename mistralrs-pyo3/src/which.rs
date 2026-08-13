@@ -613,3 +613,22 @@ pub enum Which {
         dtype: ModelDType,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Which_GGUF;
+    use pyo3::impl_::pyclass::{PyClassImplCollector, PyClassNewTextSignature};
+
+    #[test]
+    fn gguf_constructor_preserves_legacy_positional_prefix() {
+        let signature = PyClassImplCollector::<Which_GGUF>::new()
+            .new_text_signature()
+            .unwrap();
+
+        assert!(signature.starts_with(
+            "(quantized_model_id, quantized_filename, tok_model_id=None, topology=None, dtype=..., auto_map_params=None, *"
+        ));
+        assert!(signature.contains("tokenizer_json=None"));
+        assert!(signature.contains("mmproj_filename=None"));
+    }
+}

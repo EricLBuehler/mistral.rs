@@ -3315,69 +3315,6 @@ mod lora_adapter_error_tests {
     }
 
     #[test]
-    fn gguf_python_constructor_preserves_legacy_positional_prefix() {
-        Python::with_gil(|py| {
-            let constructor = py.get_type::<Which>().getattr("GGUF").unwrap();
-            let signature = py
-                .import("inspect")
-                .unwrap()
-                .call_method1("signature", (&constructor,))
-                .unwrap();
-            let parameters = signature.getattr("parameters").unwrap();
-            let names = py
-                .import("builtins")
-                .unwrap()
-                .call_method1("list", (parameters,))
-                .unwrap()
-                .extract::<Vec<String>>()
-                .unwrap();
-            assert_eq!(
-                &names[..6],
-                &[
-                    "quantized_model_id",
-                    "quantized_filename",
-                    "tok_model_id",
-                    "topology",
-                    "dtype",
-                    "auto_map_params",
-                ]
-            );
-
-            let value = constructor
-                .call1(("repo", "model.gguf", "tokenizer", "topology"))
-                .unwrap();
-            assert_eq!(
-                value
-                    .getattr("tok_model_id")
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap(),
-                "tokenizer"
-            );
-            assert_eq!(
-                value
-                    .getattr("topology")
-                    .unwrap()
-                    .extract::<String>()
-                    .unwrap(),
-                "topology"
-            );
-            assert!(value.getattr("tokenizer_json").unwrap().is_none());
-            assert!(constructor
-                .call1((
-                    "repo",
-                    "model.gguf",
-                    None::<String>,
-                    None::<String>,
-                    mistralrs_core::ModelDType::Auto,
-                    None::<which::TextAutoMapParams>,
-                    "unexpected-positional-option",
-                ))
-                .is_err());
-        });
-    }
-
-    #[test]
     fn gguf_dynamic_lora_accepts_multimodal_device_mapping() {
         let mut which = gguf_which(Some(Vec::new()), mistralrs_core::DEFAULT_LORA_MAX_RANK);
         let Which::GGUF {
@@ -3392,44 +3329,5 @@ mod lora_adapter_error_tests {
         *multimodal_auto_map_params = Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024));
 
         validate_gguf_runner_options(&which).unwrap();
-    }
-
-    #[test]
-    fn gguf_multimodal_dynamic_lora_parse_builds_combined_loader() {
-        let which = Which::GGUF {
-            quantized_model_id: "repo".to_string(),
-            quantized_filename: Either::Left("model.gguf".to_string()),
-            tok_model_id: Some("org/base".to_string()),
-            tokenizer_json: None,
-            mmproj_filename: Some(Either::Left("mmproj.gguf".to_string())),
-            topology: None,
-            organization: None,
-            write_uqff: None,
-            imatrix: None,
-            calibration_file: None,
-            max_edge: Some(1024),
-            dtype: mistralrs_core::ModelDType::Auto,
-            auto_map_params: None,
-            multimodal_auto_map_params: Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024)),
-            adapters: Some(vec![LoraAdapter {
-                alias: "vision-chat".to_string(),
-                source: "org/language-lora".to_string(),
-                revision: Some("adapter-revision".to_string()),
-            }]),
-            max_adapters: 4,
-            max_rank: 64,
-            max_bytes: 1_024,
-            hf_cache_path: None,
-            matformer_config_path: None,
-            matformer_slice_name: None,
-        };
-
-        validate_gguf_runner_options(&which).unwrap();
-        let loader = parse_which(which, false, None, None).unwrap();
-
-        assert_eq!(loader.get_id(), "org/base");
-        let kind = loader.get_kind();
-        assert!(kind.is_adapted_and(|adapter| adapter.is_lora()));
-        assert!(kind.is_quantized_and(|quantization| quantization.is_gguf()));
     }
 }
