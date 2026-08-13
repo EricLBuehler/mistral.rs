@@ -38,7 +38,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <LinkCard
     title="Run GGUF models"
     href="/mistral.rs/guides/models/run-gguf/"
-    description="Take the same GGUF from local chat to high-throughput serving."
+    description="Load a local GGUF file or select an artifact from a Hugging Face repository."
   />
   <LinkCard
     title="Quantize a model"
@@ -87,9 +87,10 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [Quickstart](/mistral.rs/quickstart/)
   </Card>
   <Card title="Quantization" icon="puzzle">
-    `--quant` selects a matching GGUF artifact from GGUF repositories. Other
-    models prefer prebuilt [UQFF](/mistral.rs/reference/uqff-format/) and fall
-    back to in-situ quantization.
+    For a GGUF repository, `--quant` selects a matching artifact. For other
+    Hugging Face repositories, it loads a prebuilt
+    [UQFF](/mistral.rs/reference/uqff-format/) when available and otherwise
+    applies in-situ quantization.
     [Quantization guide](/mistral.rs/guides/quantization/quantize-a-model/)
   </Card>
   <Card title="Tuning and diagnostics" icon="seti:config">

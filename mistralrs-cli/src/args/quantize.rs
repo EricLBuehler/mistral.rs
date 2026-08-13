@@ -128,7 +128,7 @@ pub struct QuantizeFormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// GGUF projector override; normally selected automatically (semicolon-separated for multiple)
+    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple)
     #[arg(long)]
     pub mmproj: Option<String>,
 

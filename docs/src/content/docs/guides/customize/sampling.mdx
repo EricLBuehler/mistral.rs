@@ -58,12 +58,12 @@ DRY penalizes continuing token sequences that would reproduce spans from the pre
 
 ## Stopping
 
-Generation ends at the model's EOS tokens, at any `stop` string or token the request supplies, or at
-the token limit (`max_tokens`), whichever comes first.
+Generation stops at the model's EOS tokens, a request-supplied `stop` string or token, or the token
+limit (`max_tokens`), whichever comes first.
 
-Set `ignore_eos: true` to keep generating past the model's EOS tokens. Explicit stops and the token
-limit still apply, so pair it with `max_tokens` or a `stop` value to bound the response. It is useful
-for base (non-instruct) models that emit EOS early, and for measuring raw decode throughput.
+Set `ignore_eos: true` to continue after the model emits EOS. Explicit stops and the token limit
+still apply, so set `max_tokens` or `stop` to bound the response. This option can be used with base
+(non-instruct) models that emit EOS early or when measuring decode throughput.
 
 ## Setting parameters
 

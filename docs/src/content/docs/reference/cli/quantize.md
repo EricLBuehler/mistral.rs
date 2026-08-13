@@ -20,7 +20,7 @@ mistralrs quantize [OPTIONS] [COMMAND]
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` |  | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
@@ -56,7 +56,7 @@ mistralrs quantize auto [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
@@ -92,7 +92,7 @@ mistralrs quantize text [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `-a, --arch <ARCH>` |  | Model architecture (required for text models) |
@@ -126,7 +126,7 @@ mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_P
 | `--dtype <DTYPE>` | `auto` | Model data type |
 | `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; normally selected automatically (semicolon-separated for multiple) |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
 | `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
 | `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |

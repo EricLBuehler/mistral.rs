@@ -52,7 +52,7 @@ pub struct FormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// GGUF projector override; normally selected automatically (semicolon-separated for multiple)
+    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple)
     #[arg(long)]
     pub mmproj: Option<String>,
 
@@ -613,10 +613,10 @@ fn default_lora_max_bytes() -> u64 {
 /// Quantization options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
-    /// Quantization target. Inference selects a matching GGUF from GGUF repositories, otherwise
-    /// prefers prebuilt UQFF and falls back to in-situ quantization; `tune` evaluates the level.
-    /// Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or quant names. IQ names apply to
-    /// UQFF and ISQ; GGUF files do not yet support IQ storage.
+    /// Quantization target. Inference commands select a matching GGUF or UQFF artifact when
+    /// available. Source checkpoints without a matching UQFF use in-situ quantization. `tune`
+    /// evaluates the requested level instead of selecting an artifact. Accepts numeric levels
+    /// (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
@@ -626,13 +626,10 @@ pub struct QuantizationOptions {
     #[serde(rename = "isq", alias = "in_situ_quant")]
     pub in_situ_quant: Option<String>,
 
-    /// UQFF file(s) to load from. Accepts numeric shorthands (2, 3, 4, 5, 6, 8)
-    /// to auto-detect the appropriate UQFF file (e.g., `--from-uqff 8` finds
-    /// q8_0-0.uqff or afq8-0.uqff). Also accepts ISQ type names (e.g., q4k, afq8).
-    /// Shards are auto-discovered: specifying the first shard (e.g., q4k-0.uqff)
-    /// automatically finds q4k-1.uqff, etc. Use semicolons to list shard files
-    /// manually when auto-discovery is unavailable. Listed files must be disjoint
-    /// parts of one artifact.
+    /// UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`,
+    /// `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and
+    /// conventional shard names expand to all of their shards. Use semicolons only to list
+    /// disjoint shards manually.
     #[arg(long)]
     pub from_uqff: Option<String>,
 

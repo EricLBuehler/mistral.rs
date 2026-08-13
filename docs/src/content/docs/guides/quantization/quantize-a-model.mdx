@@ -7,7 +7,8 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 Quantization stores weights at lower precision so a model fits in less memory. A 14B model in
 BF16 (2 bytes/param) needs about 28 GB for weights; at 4 bits the same model is about 7 GB.
-`--quant` is the front door:
+For `run`, `serve`, and `bench`, `--quant` selects an available pre-quantized artifact. With a
+safetensors source, it falls back to runtime quantization when no matching UQFF is available:
 
 ```bash
 mistralrs run --quant 4 -m google/gemma-4-E4B-it
@@ -33,14 +34,17 @@ context length, not on weight quantization. Use `nvidia-smi` (or equivalent) to 
 
 ## Picking a bit width
 
-Supported widths: 2, 3, 4, 5, 6, 8. Fewer bits means less memory and more quality loss:
+Supported widths are 2, 3, 4, 5, 6, and 8. Lower bit widths reduce weight memory and generally
+increase quantization error:
 
-- 8 bits is near-lossless.
-- 5-6 bits is a good middle ground.
-- 4 bits is the common sweet spot for fitting larger models.
-- 2-3 bits degrades noticeably; use only when nothing else fits.
+- 8-bit formats preserve the most weight precision in this set.
+- 5- and 6-bit formats trade some additional precision for lower memory use.
+- 4-bit formats reduce memory further and are commonly used for larger models.
+- 2- and 3-bit formats are the most aggressive options.
 
-At 4 bits and below, an [importance matrix](#imatrix) recovers a meaningful amount of quality.
+An [importance matrix](#imatrix) can reduce quality loss for K-quant formats at low bit widths.
+Evaluate the selected format on the target model and workload; bit width alone does not determine
+output quality.
 
 ## Picking a specific format
 
@@ -70,6 +74,9 @@ mistralrs run --quant auto -m google/gemma-4-E4B-it
 It runs the same analysis as `mistralrs tune` with the balanced profile. If the model fits at
 full precision, no quantization is applied; otherwise the recommended type is resolved like an
 explicit `--quant` value (prebuilt UQFF preferred, ISQ fallback).
+
+`--quant auto` does not select a GGUF file. For a GGUF repository, pass an explicit bit width or
+format name.
 
 ### Estimate with mistralrs tune
 
@@ -106,7 +113,7 @@ recommender. All flags: [CLI reference](/mistral.rs/reference/cli/tune/).
 <Tabs>
 <TabItem label="CLI">
 
-`--quant` for the resolve-then-fallback front door, `--isq` to force runtime ISQ:
+Use `--quant` for artifact selection with an ISQ fallback, or `--isq` to force runtime ISQ:
 
 ```bash
 mistralrs serve -m google/gemma-4-E4B-it --quant 4
@@ -193,7 +200,7 @@ loads, [save the result as UQFF](/mistral.rs/guides/quantization/uqff/).
 - **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
 - **FP8** (`fp8`): native FP8 matmul on NVIDIA compute capability 8.9+.
 - **F8Q8** (`f8q8`): CPU-only 8-bit format.
-- **MXFP4** (4-bit microscaling): native fast path on Blackwell.
+- **MXFP4** (4-bit microscaling): CUDA and Metal; CPU is not supported.
 - **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
 
 The numeric shorthand picks a format the active device supports; explicit names override that,
@@ -266,6 +273,6 @@ By default, these load directly with no ISQ conversion:
 - [Quantization types reference](/mistral.rs/reference/quantization-types/) for the full type
   list, shorthand resolution, and hardware constraints.
 - [UQFF guide](/mistral.rs/guides/quantization/uqff/) to quantize once and reuse.
-- [Online calibration](/mistral.rs/guides/quantization/online-calibration/) to improve a served
+- [Online calibration](/mistral.rs/guides/quantization/online-calibration/) to calibrate a served
   model from its own traffic.
 - [Topology](/mistral.rs/guides/perf/topology/) to pin individual layers to a different type.

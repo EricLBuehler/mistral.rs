@@ -1,10 +1,7 @@
-//! Load and run a standalone GGUF model from Hugging Face.
+//! Load a GGUF model from Hugging Face.
 //!
 //! Configuration and tokenizer assets are discovered automatically. Use `with_tok_model_id`
 //! only to override that choice or when the source cannot be identified.
-//!
-//! `GgufModelBuilder` also supports ISQ, imatrix and calibration input, MoE expert-only
-//! quantization, UQFF output, multimodal projectors, and dynamic LoRA.
 //!
 //! Run with: `cargo run --release --example gguf -p mistralrs`
 

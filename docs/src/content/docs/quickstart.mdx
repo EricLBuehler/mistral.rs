@@ -162,19 +162,18 @@ With multimodal models, include image, audio, or video paths or URLs directly in
 
 ### Run GGUF models
 
-Already have a GGUF? Use an exact local file for chat, or select a published quantization and serve
-it directly:
+Load an exact local file for chat, or select a published quantization from a Hugging Face repository:
 
 ```bash
 mistralrs run -f /path/to/model.gguf
 mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 ```
 
-The filename selects GGUF automatically. From a recognized GGUF repository, mistral.rs discovers
-the tokenizer, configuration, chat template, and multimodal projector; explicit flags remain
-available as overrides. See [Run GGUF models](/mistral.rs/guides/models/run-gguf/) for loading and
-serving workflows, or [GGUF support](/mistral.rs/reference/gguf-support/) for the compatibility
-matrix.
+The `.gguf` filename selects the format. mistral.rs uses embedded tokenizer and chat-template
+metadata when present, and discovers configuration and multimodal projector files when the
+repository identifies them unambiguously. See [Run GGUF models](/mistral.rs/guides/models/run-gguf/)
+for loading and serving workflows, or [GGUF support](/mistral.rs/reference/gguf-support/) for the
+compatibility matrix.
 
 ## Serve an API
 
@@ -313,7 +312,7 @@ async fn main() -> anyhow::Result<()> {
 
 ## Next steps
 
-- [Run models](/mistral.rs/guides/models/run-any-model/): Hugging Face IDs, local files, GGUF, and quantization flags.
+- [Run models](/mistral.rs/guides/models/run-any-model/): Hugging Face IDs, local model directories, pipeline detection, and quantization flags.
 - [Run GGUF models](/mistral.rs/guides/models/run-gguf/): local files, Hub artifacts, multimodal input, LoRA, and overrides.
 - [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/): the canonical serving guide.
 - [Quantization](/mistral.rs/guides/quantization/quantize-a-model/): fit larger models on the same hardware.

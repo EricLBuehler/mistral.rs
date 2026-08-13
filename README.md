@@ -25,7 +25,7 @@
 
 ## Latest
 
-- **Your GGUFs are ready for serious serving.** Go from local chat to high-throughput serving with the same GGUF. Run a local file directly or select a quantized Hub artifact automatically. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/run-gguf/)
+- **GGUF loading**: load a local file with `-f`, or select a published artifact with `--quant`. Tokenizer, configuration, and multimodal projector files are discovered when the available metadata identifies them unambiguously. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/run-gguf/)
 - **OpenAI-compatible Skills**: upload `/v1/skills` bundles and reference them from Responses requests for reusable procedures, helper scripts, and local data. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/skills/)
 - **OpenAI-compatible file inputs**: upload `/v1/files`, attach Responses `input_file` or Chat `file` parts, and mount request files into shell/code sessions. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/file-inputs/)
 - **DiffusionGemma**: block-diffusion text generation. Fully integrated: paged attention, prefix caching, ISQ, multimodal, and tool calling. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/use-block-diffusion/)
@@ -89,9 +89,9 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 
 ## Why mistral.rs?
 
-- **Hugging Face models and GGUFs, zero config**: Point mistral.rs at a model. Architecture, quantization format, and chat template are auto-detected.
+- **Automatic model loading**: Architecture, weight format, and chat template are detected for supported Hugging Face models and GGUF files, with flags available for explicit selection.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
-- **Smart quantization**: `--quant` selects a matching GGUF from GGUF repositories; other models use a prebuilt UQFF when available and otherwise apply ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/quantize-a-model/)
+- **Quantization selection**: `--quant` selects a matching artifact from GGUF repositories. For other Hugging Face repositories, it uses a prebuilt UQFF when available and otherwise applies ISQ. [Docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/quantize-a-model/)
 - **OpenAI + Anthropic compatible serving**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints.
 - **Prometheus metrics**: `mistralrs serve` exposes a `/metrics` endpoint in Prometheus format, recording per-request counts and latency labeled by method, route, and status. [Docs](https://ericlbuehler.github.io/mistral.rs/reference/http-api/)
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
@@ -144,12 +144,12 @@ For the server command, visit `http://localhost:1234/ui` for the web chat interf
 
 ### The `mistralrs` CLI
 
-The CLI is designed to be **zero-config**: just point it at a model and go.
+The CLI uses the same `run`, `serve`, and `bench` commands for model repositories, local directories, and GGUF files.
 
 - **Auto-detection**: Automatically detects model architecture, quantization format, and chat template
 - **All-in-one**: Single binary for chat, server, benchmarks, and web UI (`run`, `serve`, `bench`)
 - **Hardware-aware tuning**: `mistralrs tune` recommends quantization and device mapping for your model and hardware
-- **Format-agnostic**: One interface for Hugging Face models, [GGUF files](https://ericlbuehler.github.io/mistral.rs/guides/models/run-gguf/), and [UQFF quantizations](https://ericlbuehler.github.io/mistral.rs/reference/uqff-format/)
+- **Model formats**: Hugging Face checkpoints, [GGUF files](https://ericlbuehler.github.io/mistral.rs/guides/models/run-gguf/), and [UQFF quantizations](https://ericlbuehler.github.io/mistral.rs/reference/uqff-format/)
 
 ```bash
 # Recommend settings for your hardware and emit a config file

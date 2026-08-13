@@ -5,7 +5,9 @@ description: How mistral.rs resolves a model's chat template, and how to overrid
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-A chat template formats messages into the string the model receives. The wrong format produces output that is coherent but degraded. mistral.rs resolves the template from the model files automatically for almost every supported model; when that fails, override it with a template file:
+A chat template formats messages into the string the model receives. An incorrect template can
+degrade output or expose special tokens. mistral.rs normally resolves the template from the model
+files; when it cannot, provide a template file explicitly:
 
 ```bash
 mistralrs run -m <model> --chat-template my-template.jinja
@@ -13,7 +15,9 @@ mistralrs run -m <model> --chat-template my-template.jinja
 
 ## How the template is resolved
 
-Highest priority first: `--jinja-explicit`; then a multimodal `processor_config.json` template; then `--chat-template`; then the model repo's own template; then GGUF metadata as a last resort.
+Template precedence, from highest to lowest, is `--jinja-explicit`, a multimodal
+`processor_config.json` template, `--chat-template`, the model repository's template, and GGUF
+metadata.
 
 The base source (when no override flag is set) is picked in this order:
 

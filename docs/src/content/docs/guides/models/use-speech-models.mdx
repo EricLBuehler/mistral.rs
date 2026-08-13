@@ -1,28 +1,33 @@
 ---
 title: Speech models
-description: Voxtral for speech transcription, Dia for text-to-speech.
+description: Voxtral Realtime for speech transcription, Dia for text-to-speech.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 mistral.rs supports two speech-related model families:
 
-- **Voxtral**: multimodal model accepting audio input. Used for speech transcription through `/v1/chat/completions`.
+- **Voxtral Realtime**: multimodal model accepting audio input for speech transcription through
+  `/v1/chat/completions`.
 - **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
 
-Voxtral is classified as a multimodal model (audio is one of its input modalities); Dia is classified as a dedicated speech model.
+Voxtral Realtime is classified as a multimodal model because audio is an input modality. Dia is a
+dedicated speech model.
 
-## Voxtral: audio in, text out
+## Voxtral Realtime: audio in, text out
 
 ```bash
 mistralrs serve -m mistralai/Voxtral-Mini-4B-Realtime-2602
 ```
 
-`-m` alone is enough: the auto-loader detects Voxtral's native Mistral layout (`params.json`, `consolidated.safetensors`, `tekken.json`).
+The auto-loader recognizes the Voxtral Realtime layout from `params.json`,
+`consolidated.safetensors`, and `tekken.json`. The earlier `VoxtralForConditionalGeneration`
+architecture is not supported.
 
-Voxtral fits the multimodal chat shape: audio is an input content part and the response is its
-transcription. Voxtral Realtime does not use the accompanying text instruction to select other
-audio tasks such as summarization or speaker analysis.
+Voxtral Realtime uses the multimodal chat request shape: audio is an input content part and the
+response is its transcription. The supported checkpoint is intended for transcription; the text
+part in these examples does not imply support for summarization, speaker analysis, or other audio
+tasks.
 
 <Tabs>
 <TabItem label="HTTP">

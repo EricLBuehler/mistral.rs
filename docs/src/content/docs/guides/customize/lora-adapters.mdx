@@ -33,7 +33,7 @@ mistralrs serve -m <base-model> \
 
 The vLLM-compatible alias also accepts several modules after one option: `--lora-modules code=<code-lora-repo> math=./math-adapter`.
 
-The same dynamic runtime works with GGUF:
+Dynamic LoRA is also available for supported GGUF language models:
 
 ```bash
 mistralrs serve \
@@ -42,7 +42,8 @@ mistralrs serve \
   --lora philosophy=closestfriend/brie-qwen2.5-0.5b
 ```
 
-GGUF uses the same aliases, request routing, and lifecycle APIs described below. Model files and companion projectors follow the normal [GGUF selection rules](/mistral.rs/guides/models/run-gguf/).
+The alias, request-routing, and lifecycle APIs below also apply to GGUF. Model files and companion
+projectors follow the [GGUF selection rules](/mistral.rs/guides/models/run-gguf/).
 
 Aliases are trimmed, case-sensitive, nonempty UTF-8 strings of at most 256 bytes.
 
@@ -70,7 +71,7 @@ The runtime has three configurable admission limits:
 
 An adapter that exceeds a limit is rejected. `--lora-max-bytes` applies only to adapters, not total model memory. Replacing an alias does not interrupt requests already using its previous generation, so leave enough capacity for both versions during a replacement.
 
-Python exposes the same limits on `Which.Lora` and `Which.GGUF`. Rust uses
+Python exposes these limits on `Which.Lora` and `Which.GGUF`. Rust uses
 `LoraModelBuilder::with_runtime_config(...)` or
 `GgufModelBuilder::with_lora_runtime_config(...)`.
 
@@ -136,7 +137,8 @@ let response = model
 </TabItem>
 </Tabs>
 
-For a GGUF base, select an exact file and pass the same adapter specification. The [GGUF guide](/mistral.rs/guides/models/run-gguf/) covers automatic selection from the CLI.
+Python and Rust require an exact GGUF filename. The
+[GGUF guide](/mistral.rs/guides/models/run-gguf/) covers automatic CLI selection.
 
 <Tabs>
 <TabItem label="Python">
@@ -168,21 +170,23 @@ let model = GgufModelBuilder::new("<gguf-repo>", vec!["<model.gguf>"])
 </TabItem>
 </Tabs>
 
-The same builders support multimodal GGUF. Configure the model and companion assets exactly as you would without LoRA; the language-model adapter remains selectable for text and media requests.
+These builders also support multimodal GGUF. Configure the model and companion assets as described
+in the GGUF guide; adapters apply only to the language-model component.
 
-Use `adapters=[]` in Python or `.with_lora()` in Rust to enable an initially empty runtime. In
-Python, setting any LoRA limit to a non-default value also enables an empty runtime.
+Use `adapters=[]` in Python or `.with_lora()` in Rust to enable a runtime without preloaded
+adapters. In Python, setting any LoRA limit to a non-default value also enables that runtime.
 
 ## Routed MoE adapters
 
-Dynamic LoRA supports compatible adapters for the routed experts of selected text MoE models. They use the same aliases, per-request selection, preload limits, and hot-load API as dense LoRA.
+Routed-expert adapters use the aliases, per-request selection, preload limits, and lifecycle API
+described above.
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-30B-A3B \
   --lora domain=<moe-lora-repo>
 ```
 
-Routed expert LoRA is available for these model families:
+Routed-expert LoRA is available for the language-model component of these families:
 
 - DeepSeek V2, DeepSeek V3, and DeepSeek R1
 - GLM-4.7 and GLM-4.7-Flash
@@ -208,9 +212,8 @@ mistralrs serve -m Qwen/Qwen3.6-35B-A3B \
   --lora domain=jeeejeee/qwen36-35ba3b-moe-all-linear-poken-lora
 ```
 
-The default `auto` model selection is recommended for safetensors multimodal LoRA. Image options
-such as `--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is
-enabled.
+Use the default `auto` model selection for safetensors multimodal LoRA. Image options such as
+`--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is enabled.
 
 ## Select an adapter per request
 
@@ -379,7 +382,7 @@ Runtime-loaded aliases do not survive a server restart or model reload; put requ
 | Area | Support |
 |---|---|
 | Model category | Compatible text and multimodal language models, including supported GGUF models. Vision, audio, and projector adapters are unsupported. |
-| Request APIs | Chat Completions, Completions, and Responses, including multimodal requests supported by the selected model. Not Embeddings, Anthropic Messages, diffusion, or speech requests. |
+| Request APIs | Chat Completions, Completions, and Responses, including multimodal requests supported by the selected model. Adapter selection is not supported for Embeddings, Anthropic Messages, diffusion, or dedicated speech requests. |
 | Adapter files | PEFT `adapter_config.json` and one `adapter_model.safetensors` file. Pickle `.bin`, sharded adapter files, adapter tokenizers, and added vocabulary are not supported. |
 | Adapter formats | Standard LoRA and RS-LoRA, including compatible routed expert adapters. PEFT `rank_pattern`, `alpha_pattern`, `target_modules`, `target_parameters`, and `exclude_modules` are supported where applicable. |
 | Base weights | Plain and supported prequantized safetensors, in-situ quantization, UQFF, and supported GGUF. |
@@ -479,7 +482,9 @@ Python uses `invalid_lora_generation` when `expected_generation` is not a value 
 
 ## Legacy raw LoRA
 
-Use dynamic LoRA for GGUF whenever possible. Legacy mode remains available for GGML and the static GGUF configurations listed in the [GGUF support reference](/mistral.rs/reference/gguf-support/).
+GGUF supports dynamic LoRA for compatible language-model adapters. Legacy mode remains available
+for GGML and the static GGUF configurations listed in the
+[GGUF support reference](/mistral.rs/reference/gguf-support/).
 
 Use the ordering JSON published with the raw adapter when one is available. For a single adapter without a supplied file, the minimum shape is:
 

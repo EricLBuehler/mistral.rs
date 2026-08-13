@@ -174,7 +174,7 @@ impl NormalLoaderType {
             Self::Qwen3_5 => ArchMetadata {
                 families: &["Qwen3.5"],
                 modalities: m,
-                examples: &[ex!("Qwen/Qwen3.5-4B")],
+                examples: &[],
             },
             Self::Lfm2 => ArchMetadata {
                 families: &["LFM2", "LFM2.5"],
@@ -459,14 +459,14 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. Not listed? Check the [GGUF support reference](/mistral.rs/reference/gguf-support/) for a GGUF build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
+3. If the architecture is not listed, check the [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand the example in any row to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
 
 The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/mistral.rs/guides/models/model-family-notes/).
 
@@ -492,6 +492,9 @@ fn families_cell(meta: &ArchMetadata) -> String {
 }
 
 fn examples_cell(meta: &ArchMetadata) -> String {
+    if meta.examples.is_empty() {
+        return "No published example".to_string();
+    }
     let label = |e: &ModelExample| {
         if e.label.is_empty() {
             format!("<code>{}</code>", e.repo)

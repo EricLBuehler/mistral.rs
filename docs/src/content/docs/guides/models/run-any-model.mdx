@@ -5,7 +5,9 @@ description: Load models from Hugging Face IDs, local directories, or GGUF files
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Point mistral.rs at a model and it figures out the rest: text, multimodal, embedding, speech, and diffusion models are detected automatically from the checkpoint, so one command shape covers all of them.
+mistral.rs detects text, multimodal, embedding, speech, and diffusion pipelines from supported
+checkpoints. The same `run` and `serve` commands accept Hugging Face model IDs and local model
+directories.
 
 <Tabs>
 <TabItem label="CLI">
@@ -60,16 +62,17 @@ async fn main() -> Result<()> {
 </TabItem>
 </Tabs>
 
-## Quantize on the way in with `--quant`
+## Select a quantization with `--quant`
 
-`--quant <level>` is the quantization front door. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`)
-work across model sources. Standard model repositories also accept
+Use `--quant <level>` to request a quantization level. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`)
+can be used with standard and GGUF model sources. Standard model repositories also accept
 [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) names such as `q4k` and
 `afq8`; GGUF repositories accept supported Q/K artifact names such as `q4k`. See
-[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the available storage formats. A GGUF
-repository supplies its matching GGUF variant. Other model repositories prefer a prebuilt
+[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the available storage formats. For a
+GGUF repository, `--quant` selects a matching file already present in the repository. Other Hugging
+Face repositories load a matching prebuilt
 [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) from
-`mistralrs-community/<model-name>-UQFF` and fall back to ISQ.
+`mistralrs-community/<model-name>-UQFF` when available and otherwise apply ISQ.
 
 ```bash
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
@@ -101,7 +104,7 @@ from its original model repository; set `HF_HUB_OFFLINE=1` to require cache-only
 
 ## Run GGUF models
 
-Use the same GGUF for local chat, continuous batching, or an OpenAI-compatible API:
+GGUF files can be used with interactive chat and the OpenAI-compatible server:
 
 ```bash
 # Run an exact local file.
@@ -111,10 +114,10 @@ mistralrs run -f /path/to/model.gguf
 mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 ```
 
-The `.gguf` filename selects the format automatically. When loading from a recognized GGUF
-repository, mistral.rs discovers the assets needed for chat and multimodal input; `--tok-model-id`
-and `--mmproj` remain available as explicit overrides. The same command shape works with `run`,
-`serve`, and `bench`.
+The `.gguf` filename selects the format. mistral.rs uses embedded tokenizer and chat-template
+metadata when present, and discovers external configuration and projector files when the repository
+identifies them unambiguously. Use `--tok-model-id` and `--mmproj` to override those selections. The
+same model flags work with `run`, `serve`, and `bench`.
 
 See [Run GGUF models](/mistral.rs/guides/models/run-gguf/) for exact Hub files, automatic
 quantization selection, multimodal input, LoRA, ISQ, offline loading, and Python and Rust examples.

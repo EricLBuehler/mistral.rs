@@ -1,4 +1,4 @@
-//! Resolution for the `--quant` front-door.
+//! Resolution for `--quant`.
 
 mod gguf_discovery;
 

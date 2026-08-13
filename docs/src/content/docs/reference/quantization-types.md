@@ -1,18 +1,21 @@
 ---
 title: Quantization types
-description: Every runtime ISQ (in-situ quantization) type mistralrs supports, what hardware it works on, and how it compares.
+description: Supported runtime ISQ formats, numeric shorthands, and backend constraints.
 ---
 
 ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
 
 For `run`, `serve`, and `bench`:
 
-- `--quant N` - normal usage.
-- `--isq N` - force runtime ISQ and skip the [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
+- `--quant N` selects a matching pre-quantized artifact. For safetensors sources, a missing UQFF
+  falls back to runtime ISQ.
+- `--isq N` forces runtime ISQ and skips the
+  [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
 
 For a GGUF repository, `--quant` selects a matching published file. To requantize GGUF weights
 instead, select an exact file with `-f` and pass `--isq`. See
-[GGUF support](/mistral.rs/reference/gguf-support/) for the accepted file formats.
+[GGUF support](/mistral.rs/reference/gguf-support/) for the accepted file formats. GGUF selection
+requires an explicit bit width or format name; `--quant auto` is not supported.
 
 ## Numeric shorthands
 
@@ -104,7 +107,8 @@ E4M3 FP8 has native acceleration on NVIDIA Ada/Hopper (compute 8.9+). F8Q8 is CP
 
 ### MXFP4
 
-4-bit microscaling format. Native on Blackwell; emulated elsewhere.
+4-bit microscaling format for CUDA and Metal. CPU is not supported; CUDA kernel availability
+depends on the build and GPU.
 
 | Type | Bits |
 |---|---|

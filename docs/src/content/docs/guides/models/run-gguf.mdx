@@ -1,13 +1,14 @@
 ---
 title: Run GGUF models
-description: Run a local GGUF or select one from Hugging Face, with automatic model assets, multimodal projectors, and LoRA support.
+description: Load local or Hugging Face GGUF files, including multimodal projectors, LoRA adapters, and asset overrides.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Use the GGUF files you already have for local chat, agents, and concurrent serving. A self-contained
-text GGUF can run with one argument, while a Hugging Face repository can be selected by exact
-filename or quantization level.
+This guide covers local and Hugging Face GGUF files for interactive chat, agents, and API serving.
+Select a local file by filename, or select a repository artifact by exact filename or quantization
+level. When a model needs external configuration or processor assets, mistral.rs resolves them as
+described below.
 
 ## Quick start
 
@@ -25,7 +26,7 @@ mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 The `.gguf` suffix selects GGUF automatically. `--format gguf` remains available, but is not needed
 for these commands.
 
-## Choose a model
+## Select a GGUF file
 
 | Goal | Command |
 |---|---|
@@ -40,9 +41,8 @@ directory containing the local `-f` file is used as the model directory.
 `--quant` selects an existing artifact. For example, `--quant 4` ranks the repository's 4-bit files
 and prefers `Q4_K_M` when it is available. Use `-f` when you need an exact variant, or when a
 repository contains several models rather than variants of one model. Use a supported bit width or
-quant name for GGUF. For standard model repositories, `--quant auto` uses hardware-aware tuning; it
-does not select a GGUF artifact. IQ GGUF artifacts are not supported yet; choose a Q/K variant from
-the repository.
+quant name for GGUF. `--quant auto` is for standard model repositories and does not select GGUF
+artifacts. IQ GGUF artifacts are not supported yet; choose a Q/K variant from the repository.
 
 Split GGUF files use semicolon-separated names:
 
@@ -93,22 +93,22 @@ let model = GgufModelBuilder::new(
 </TabItem>
 </Tabs>
 
-## Automatic model assets
+## Model assets and projectors
 
 For text models, mistral.rs reads the tokenizer and chat template from the GGUF when they are
 available. It also uses the selected repository or the file's base-model information to find
 configuration and processor files when the model needs them.
 
-For recognized multimodal GGUF repositories, mistral.rs selects the companion projector that best
-matches the model dtype. The direct local shorthand, `-f /path/model.gguf` with `-m` omitted, also
-selects an unambiguous projector stored beside the model. Model files, projector files, tokenizer
-assets, and processor assets can therefore be loaded with one repository command:
+For supported multimodal GGUF repositories, mistral.rs selects a compatible companion projector,
+preferring one that matches the model dtype. The direct local shorthand, `-f /path/model.gguf` with
+`-m` omitted, also selects an unambiguous projector stored beside the model. No explicit projector
+or asset flags are needed when these selections are unambiguous:
 
 ```bash
 mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
 ```
 
-The automatic choices can always be overridden:
+Use these options to select files explicitly:
 
 | Option | Use it when |
 |---|---|
@@ -242,18 +242,18 @@ token configuration.
 
 ## Migrating existing GGUF commands
 
-Existing explicit commands continue to work. The shorter forms remove information that mistral.rs
-can now discover itself:
+Existing explicit commands remain accepted. Arguments inferred from the file or repository can be
+omitted:
 
 | Existing form | Shorter form |
 |---|---|
 | `mistralrs run -m . --format gguf -f model.gguf` | `mistralrs run -f model.gguf` |
 | `mistralrs run -m owner/repo --format gguf -f model.gguf` | `mistralrs run -m owner/repo -f model.gguf` |
 | `... --tok-model-id owner/base` | Omit when the GGUF identifies its base model. |
-| `... --mmproj mmproj-BF16.gguf` | Omit for a recognized GGUF repository or the direct local shorthand with an adjacent, unambiguous projector. |
+| `... --mmproj mmproj-BF16.gguf` | Omit when the repository identifies one projector, or when the direct local shorthand finds one adjacent projector. |
 
 Keep an explicit override when a repository contains several independent models, several equally
-good projectors, or incomplete GGUF metadata.
+ranked projectors, or incomplete GGUF metadata.
 
 ## Troubleshooting
 
