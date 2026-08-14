@@ -347,8 +347,8 @@ pub(crate) fn get_rope_index(
             mrope_position_deltas.push(max_position + 1 - seq_len as i64);
         }
         let device = attention_mask.device();
-        let position_ids = Tensor::from_vec(flat_positions, (1, batch, seq_len), device)?
-            .repeat((3, 1, 1))?;
+        let position_ids =
+            Tensor::from_vec(flat_positions, (1, batch, seq_len), device)?.repeat((3, 1, 1))?;
         let mrope_position_deltas = Tensor::from_vec(mrope_position_deltas, (batch, 1), device)?;
 
         Ok((position_ids, mrope_position_deltas))
