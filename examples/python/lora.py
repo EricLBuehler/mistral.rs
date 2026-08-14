@@ -1,9 +1,5 @@
 """Run the complete dynamic LoRA lifecycle on a small public model.
 
-> This example targets the current source API. Published v0.9.0 packages do not
-> include dynamic LoRA; use a [current source build](/mistral.rs/developer/from-source/)
-> until the next release.
-
 Run with:
 
 ~~~bash
