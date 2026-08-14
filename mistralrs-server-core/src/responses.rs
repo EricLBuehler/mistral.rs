@@ -305,10 +305,10 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 /// Reasoning configuration for models that support extended thinking
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReasoningConfig {
-    /// Effort level for reasoning (low, medium, high)
+    /// Effort level for reasoning (off, low, medium, high, xhigh). "none" aliases "off".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<crate::responses_types::enums::ReasoningEffort>,
-    /// Whether to generate a summary of reasoning
+    /// Accepted for compatibility; currently does not change the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummary>,
 }
@@ -1675,22 +1675,13 @@ async fn parse_openresponses_request(
         }
     }
 
-    // Extract reasoning configuration
-    let (enable_thinking, reasoning_effort) = if let Some(ref reasoning) = oairequest.reasoning {
-        let effort = reasoning.effort.map(|e| match e {
-            crate::responses_types::enums::ReasoningEffort::None => "none".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Low => "low".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Medium => "medium".to_string(),
-            crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
-        });
-        // Enable thinking if reasoning is configured with any effort level
-        let thinking = reasoning
-            .effort
-            .map(|e| !matches!(e, crate::responses_types::enums::ReasoningEffort::None));
-        (thinking, effort)
-    } else {
-        (None, None)
-    };
+    let reasoning_effort = oairequest
+        .reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.effort);
+    mistralrs_core::resolve_reasoning_controls(None, reasoning_effort)?;
+    let reasoning_effort = reasoning_effort.map(|effort| effort.as_str().to_string());
+    let enable_thinking = None;
 
     // Convert truncation enum to truncate_sequence bool
     let truncate_sequence = oairequest

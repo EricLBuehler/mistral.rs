@@ -20,10 +20,11 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
-    AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, Constraint, MessageContent, MistralRs, ModelCategory, NormalRequest,
-    ReasoningEffort, Request, RequestMessage, Response, SamplingParams,
+    resolve_reasoning_controls, AgentPermission, AgentToolApprovalHandler,
+    AgentToolApprovalNotifier, AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MessageContent, MistralRs,
+    ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
+    SamplingParams,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -528,16 +529,13 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
-/// Parse reasoning_effort string to ReasoningEffort enum
-fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+fn parse_reasoning_controls(
+    enable_thinking: Option<bool>,
+    effort: Option<&str>,
+) -> Result<(Option<bool>, Option<ReasoningEffort>)> {
+    let effort = effort.map(str::parse).transpose()?;
+    resolve_reasoning_controls(enable_thinking, effort)?;
+    Ok((enable_thinking, effort))
 }
 
 fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, message: &Message) {
@@ -583,8 +581,10 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
-    // Parse reasoning effort for templates that support it.
-    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+    let (enable_thinking, reasoning_effort) = parse_reasoning_controls(
+        oairequest.enable_thinking,
+        oairequest.reasoning_effort.as_deref(),
+    )?;
 
     let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
@@ -974,13 +974,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     videos,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             }
@@ -994,7 +994,7 @@ pub async fn parse_request(
             messages.push(message_map);
             RequestMessage::Chat {
                 messages,
-                enable_thinking: oairequest.enable_thinking,
+                enable_thinking,
                 reasoning_effort,
             }
         }
@@ -1334,6 +1334,26 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reasoning_controls_normalize_http_values() {
+        assert_eq!(parse_reasoning_controls(None, None).unwrap(), (None, None));
+        assert_eq!(
+            parse_reasoning_controls(None, Some(" NONE ")).unwrap(),
+            (None, Some(ReasoningEffort::Off))
+        );
+        assert_eq!(
+            parse_reasoning_controls(None, Some("XHIGH")).unwrap(),
+            (None, Some(ReasoningEffort::XHigh))
+        );
+    }
+
+    #[test]
+    fn reasoning_controls_validate_http_values() {
+        assert!(parse_reasoning_controls(None, Some("extreme")).is_err());
+        assert!(parse_reasoning_controls(Some(true), Some("off")).is_err());
+        assert!(parse_reasoning_controls(Some(false), Some("high")).is_err());
+    }
 
     #[test]
     fn assistant_reasoning_content_reaches_the_core_message() {

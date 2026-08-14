@@ -210,8 +210,11 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         sandbox,
         models,
         thinking,
+        reasoning_effort,
         adapter,
     } = cfg;
+
+    mistralrs_core::resolve_reasoning_controls(thinking, reasoning_effort)?;
 
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
@@ -310,6 +313,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
             do_shell,
             agent_permission: runtime.code_exec_permission.into(),
             enable_thinking: thinking,
+            reasoning_effort,
             adapter,
         },
     )

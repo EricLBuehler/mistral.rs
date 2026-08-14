@@ -238,7 +238,7 @@ class ChatStore {
       top_k: settingsStore.topK,
       max_tokens: settingsStore.maxTokens,
       repetition_penalty: settingsStore.repetitionPenalty,
-      enable_thinking: settingsStore.enableThinking || undefined,
+      reasoning_effort: settingsStore.reasoningEffort || undefined,
       agent_permission:
         settingsStore.agentPermission !== "auto" ? settingsStore.agentPermission : undefined,
       session_id: this.currentSessionId ?? undefined,

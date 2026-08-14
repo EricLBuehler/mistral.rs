@@ -7,9 +7,9 @@ use either::Either;
 use mistralrs_core::{
     AdapterGenerationId, AdapterSelection as CoreAdapterSelection, AgentPermission,
     AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
-    ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
-    ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
-    WebSearchReturnTokenBudget, WebSearchUserLocation,
+    ImageGenerationResponseFormat, LlguidanceGrammar, ReasoningEffort, SearchContextSize, Tool,
+    ToolChoice, ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1180,7 +1180,9 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Reasoning effort level for models and templates that support it.
-    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    /// Valid values are "off", "low", "medium", "high", and "xhigh".
+    /// "none" is accepted as an alias for "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
@@ -1886,15 +1888,14 @@ pub struct ResponsesCreateRequest {
     /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    /// Toggle thinking output for models that support it.
+    /// Legacy schema field. The active Responses endpoint ignores this top-level control.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
 }

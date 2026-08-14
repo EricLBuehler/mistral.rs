@@ -17,7 +17,7 @@ pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use mistralrs_core::TokenSource;
+use mistralrs_core::{ReasoningEffort, TokenSource};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -78,9 +78,14 @@ pub enum Command {
 
         /// Control thinking mode for models that support it.
         /// Use --thinking or --thinking true to force on, --thinking false to force off.
-        /// Omit to defer to the chat template default.
+        /// If both reasoning controls are omitted, effort is unspecified and thinking is enabled.
         #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
         thinking: Option<bool>,
+
+        /// Set reasoning effort without changing the model's sampling parameters.
+        /// Values are off, low, medium, high, or xhigh. "none" is an alias for off.
+        #[arg(long)]
+        reasoning_effort: Option<ReasoningEffort>,
 
         /// One-shot text prompt. When provided, sends a single request and exits
         /// instead of entering interactive mode.
@@ -1289,6 +1294,27 @@ mod tests {
         assert!(default_model.adapter.enable_lora);
         assert_eq!(default_model.adapter.lora.len(), 2);
         assert_eq!(default_model.adapter.lora[1].alias, "math");
+    }
+
+    #[test]
+    fn run_parses_reasoning_effort() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--reasoning-effort",
+            "XHIGH",
+        ])
+        .unwrap();
+
+        let Command::Run {
+            reasoning_effort, ..
+        } = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(reasoning_effort, Some(ReasoningEffort::XHigh));
     }
 
     #[test]
