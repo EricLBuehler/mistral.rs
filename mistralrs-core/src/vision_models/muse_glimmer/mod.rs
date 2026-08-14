@@ -26,7 +26,6 @@ use crate::{
 };
 
 pub(crate) mod config;
-mod dflash;
 mod inputs_processor;
 mod text;
 mod vision;
@@ -51,11 +50,9 @@ fn split_model_builders(
 
 pub struct MuseGlimmerModel {
     text: TextModel,
-    text_config: config::TextConfig,
     vision: VisionModel,
     merge_size: usize,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
-    dflash: Mutex<Option<dflash::DFlashRuntime>>,
 }
 
 impl MuseGlimmerModel {
@@ -83,11 +80,9 @@ impl MuseGlimmerModel {
         )?;
         Ok(Self {
             text,
-            text_config: cfg.text_config.clone(),
             vision,
             merge_size: cfg.vision_config.merge_size,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(ENCODER_CACHE_CAPACITY))),
-            dflash: Mutex::new(None),
         })
     }
 
@@ -309,89 +304,7 @@ pub(crate) struct MuseGlimmerSpecificArgs {
     pub(crate) packed_layout: Option<PackedMultimodalLayout>,
 }
 
-impl crate::speculative::SpeculativeTargetMixin for MuseGlimmerModel {
-    fn attach_speculative(
-        &mut self,
-        config: crate::speculative::SpeculativeConfig,
-    ) -> Result<Option<crate::speculative::SpeculativeAttachInfo>> {
-        match config {
-            crate::speculative::SpeculativeConfig::Off => {
-                *self.dflash.lock().expect("DFlash mutex poisoned") = None;
-                self.text.set_dflash_capture_layers(None);
-                Ok(None)
-            }
-            crate::speculative::SpeculativeConfig::Mtp(_) => {
-                candle_core::bail!("Muse-Glimmer supports DFlash, not MTP speculative decoding")
-            }
-            crate::speculative::SpeculativeConfig::DFlash(config) => {
-                let runtime = dflash::DFlashRuntime::load(
-                    config,
-                    &self.text_config,
-                    &self.text.device,
-                    self.text.dtype(),
-                )?;
-                let info = crate::speculative::SpeculativeAttachInfo::dflash(
-                    runtime.assistant().to_string(),
-                    runtime.proposal_len(),
-                );
-                self.text
-                    .set_dflash_capture_layers(Some(runtime.target_layer_ids().to_vec()));
-                *self.dflash.lock().expect("DFlash mutex poisoned") = Some(runtime);
-                Ok(Some(info))
-            }
-        }
-    }
-
-    fn has_speculative_proposer(&self) -> bool {
-        self.dflash.lock().is_ok_and(|runtime| runtime.is_some())
-    }
-
-    fn speculative_proposal_len(&self) -> Option<usize> {
-        self.dflash
-            .lock()
-            .ok()
-            .and_then(|runtime| runtime.as_ref().map(dflash::DFlashRuntime::proposal_len))
-    }
-
-    fn speculative_propose(
-        &mut self,
-        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
-    ) -> Result<Option<crate::speculative::SpeculativeProposalBatch>> {
-        let runtime = self.dflash.lock().expect("DFlash mutex poisoned");
-        let Some(runtime) = runtime.as_ref() else {
-            return Ok(None);
-        };
-        runtime.propose(ctx, &self.text).map(Some)
-    }
-
-    fn speculative_bind_target_capture(
-        &self,
-        sequences: &[&crate::sequence::Sequence],
-        is_prompt: bool,
-    ) -> Result<()> {
-        let runtime = self.dflash.lock().expect("DFlash mutex poisoned");
-        let Some(runtime) = runtime.as_ref() else {
-            return Ok(());
-        };
-        let capture = self.text.take_dflash_capture().ok_or_else(|| {
-            candle_core::Error::msg("DFlash target forward did not produce a capture")
-        })?;
-        runtime.bind_capture(capture, sequences, is_prompt)
-    }
-
-    fn speculative_commit_target_capture(
-        &self,
-        sequences: &[&crate::sequence::Sequence],
-        rows: &[Option<usize>],
-        expected_lens: &[usize],
-    ) -> Result<()> {
-        let runtime = self.dflash.lock().expect("DFlash mutex poisoned");
-        let Some(runtime) = runtime.as_ref() else {
-            return Ok(());
-        };
-        runtime.commit_capture(sequences, rows, expected_lens)
-    }
-}
+impl crate::speculative::SpeculativeTargetMixin for MuseGlimmerModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for MuseGlimmerModel {}
 
 impl MultimodalModel for MuseGlimmerModel {

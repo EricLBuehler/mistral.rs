@@ -7,14 +7,10 @@ use crate::pipeline::{
     TokenSource,
 };
 
-pub const DFLASH_DEFAULT_N_PREDICT: usize = 15;
-pub const DFLASH_MAX_N_PREDICT: usize = 15;
-
 #[derive(Clone, Debug)]
 pub enum SpeculativeConfig {
     Off,
     Mtp(MtpConfig),
-    DFlash(DFlashConfig),
 }
 
 #[derive(Clone, Debug)]
@@ -38,41 +34,6 @@ impl MtpConfig {
         } else {
             resolve_hf_mtp_path(&self.model)
         }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct DFlashConfig {
-    pub model: String,
-    pub filename: Option<String>,
-    pub n_predict: Option<usize>,
-}
-
-impl DFlashConfig {
-    pub fn new(
-        model: impl Into<String>,
-        filename: Option<String>,
-        n_predict: Option<usize>,
-    ) -> Self {
-        Self {
-            model: model.into(),
-            filename,
-            n_predict,
-        }
-    }
-
-    pub fn resolve_path(&self) -> candle_core::Result<PathBuf> {
-        let path = PathBuf::from(&self.model);
-        if path.exists() || self.model.starts_with('.') || self.model.starts_with('/') {
-            return match &self.filename {
-                Some(filename) if path.is_dir() => Ok(path.join(filename)),
-                Some(_) if path.is_file() => candle_core::bail!(
-                    "DFlash filename cannot be used when model already names a local file"
-                ),
-                _ => Ok(path),
-            };
-        }
-        resolve_hf_dflash_path(&self.model, self.filename.as_deref())
     }
 }
 
@@ -108,37 +69,6 @@ fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
 
     try_get_file(&api, model_id, "generation_config.json", revision)
         .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
-
-    config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
-        candle_core::Error::Msg(format!("config path has no parent: {config_path:?}"))
-    })
-}
-
-fn resolve_hf_dflash_path(id: &str, filename: Option<&str>) -> candle_core::Result<PathBuf> {
-    let revision = "main";
-    let api = build_hf_api(id, revision)?;
-    let model_id = Path::new(id);
-    if let Some(filename) = filename {
-        return get_file(&api, model_id, filename, revision).map_err(candle_core::Error::msg);
-    }
-
-    let config_path =
-        get_file(&api, model_id, "config.json", revision).map_err(candle_core::Error::msg)?;
-    let files = list_repo_files(&api, model_id, true, revision).map_err(candle_core::Error::msg)?;
-    let mut weight_files = files
-        .iter()
-        .filter(|file| file.ends_with(".safetensors"))
-        .cloned()
-        .collect::<Vec<_>>();
-    weight_files.sort();
-    if weight_files.is_empty() {
-        candle_core::bail!(
-            "DFlash model `{id}` has no safetensors weights; specify the GGUF sidecar filename"
-        );
-    }
-    for file in weight_files {
-        get_file(&api, model_id, &file, revision).map_err(candle_core::Error::msg)?;
-    }
 
     config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
         candle_core::Error::Msg(format!("config path has no parent: {config_path:?}"))

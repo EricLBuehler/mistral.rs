@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
@@ -27,11 +24,7 @@ use crate::{
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
 
-pub(super) fn rms_norm_f32(
-    xs: &Tensor,
-    weight: Option<(&Tensor, bool)>,
-    eps: f64,
-) -> Result<Tensor> {
+fn rms_norm_f32(xs: &Tensor, weight: Option<(&Tensor, bool)>, eps: f64) -> Result<Tensor> {
     let dtype = xs.dtype();
     let xs = xs.to_dtype(DType::F32)?;
     let variance = xs.sqr()?.mean_keepdim(D::Minus1)?;
@@ -431,19 +424,6 @@ pub(super) struct TextModel {
     sliding_window: usize,
     output_multiplier: f64,
     final_logit_softcapping: f64,
-    dflash_capture_layers: Mutex<Option<Vec<usize>>>,
-    dflash_capture: Mutex<Option<DFlashTargetCaptureBatch>>,
-}
-
-pub(super) struct DFlashTargetCapture {
-    pub(super) states: Vec<Tensor>,
-    pub(super) start: usize,
-    pub(super) end: usize,
-}
-
-pub(super) struct DFlashTargetCaptureBatch {
-    pub(super) rows: Vec<DFlashTargetCapture>,
-    pub(super) is_first_prompt_chunk: bool,
 }
 
 impl TextModel {
@@ -563,43 +543,14 @@ impl TextModel {
             sliding_window: cfg.sliding_window,
             output_multiplier: cfg.output_multiplier,
             final_logit_softcapping: cfg.final_logit_softcapping,
-            dflash_capture_layers: Mutex::new(None),
-            dflash_capture: Mutex::new(None),
         })
     }
 
     pub(super) fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        normalize_input_embeddings(&self.raw_embed_tokens(input_ids)?, self.norm.eps)
-    }
-
-    pub(super) fn raw_embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
-    }
-
-    pub(super) fn raw_lm_head(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        self.lm_head.forward(hidden_states)
-    }
-
-    pub(super) fn dtype(&self) -> DType {
-        self.dtype
-    }
-
-    pub(super) fn set_dflash_capture_layers(&self, layers: Option<Vec<usize>>) {
-        *self
-            .dflash_capture_layers
-            .lock()
-            .expect("DFlash capture layer mutex poisoned") = layers;
-        *self
-            .dflash_capture
-            .lock()
-            .expect("DFlash capture mutex poisoned") = None;
-    }
-
-    pub(super) fn take_dflash_capture(&self) -> Option<DFlashTargetCaptureBatch> {
-        self.dflash_capture
-            .lock()
-            .expect("DFlash capture mutex poisoned")
-            .take()
+        normalize_input_embeddings(
+            &self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.norm.eps,
+        )
     }
 
     pub(super) fn supports_packed_prefill(&self) -> bool {
@@ -646,14 +597,6 @@ impl TextModel {
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
 
-        let capture_layers = self
-            .dflash_capture_layers
-            .lock()
-            .expect("DFlash capture layer mutex poisoned")
-            .clone();
-        let mut captured = capture_layers
-            .as_ref()
-            .map(|layers| Vec::with_capacity(layers.len()));
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             xs = self.mapper.map(xs, layer_idx)?;
             let positions = if layer.self_attn.rotary_emb.is_some() {
@@ -672,37 +615,11 @@ impl TextModel {
                     positions,
                 },
             )?;
-            if capture_layers
-                .as_ref()
-                .is_some_and(|layers| layers.contains(&layer_idx))
-            {
-                captured
-                    .as_mut()
-                    .expect("DFlash capture storage missing")
-                    .push(xs.clone());
-            }
-        }
-        if let Some(captured) = captured {
-            let expected = capture_layers
-                .as_ref()
-                .expect("DFlash capture layers missing")
-                .len();
-            if captured.len() != expected {
-                candle_core::bail!(
-                    "DFlash captured {} target layers, expected {expected}",
-                    captured.len()
-                );
-            }
-            *self
-                .dflash_capture
-                .lock()
-                .expect("DFlash capture mutex poisoned") =
-                Some(split_dflash_capture(&captured, ctx, self.sliding_window)?);
         }
         let xs = xs.to_device(&self.device)?.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
         transform_output_logits(
-            &self.raw_lm_head(&xs)?,
+            &self.lm_head.forward(&xs)?,
             self.output_multiplier,
             self.final_logit_softcapping,
         )
@@ -736,78 +653,6 @@ impl TextModel {
         }
         uvb.to_safetensors()
     }
-}
-
-fn split_dflash_capture(
-    captured: &[Tensor],
-    ctx: &ModelForwardContext<'_>,
-    sliding_window: usize,
-) -> Result<DFlashTargetCaptureBatch> {
-    let (physical_batch, physical_len, _) = captured[0].dims3()?;
-    let offsets = ctx.seqlen_offsets();
-    if offsets.is_empty() {
-        candle_core::bail!("DFlash target capture requires text sequence offsets");
-    }
-    let query_lens = ctx
-        .paged_input_metadata()
-        .and_then(|metadata| metadata.query_lens.clone())
-        .unwrap_or_else(|| vec![physical_len; physical_batch]);
-    if query_lens.len() != offsets.len() {
-        candle_core::bail!(
-            "DFlash target query count {} does not match {} sequence offsets",
-            query_lens.len(),
-            offsets.len()
-        );
-    }
-    let packed = physical_batch == 1
-        && query_lens.len() > 1
-        && query_lens.iter().sum::<usize>() == physical_len;
-    if !packed && physical_batch != query_lens.len() {
-        candle_core::bail!(
-            "DFlash target physical batch {physical_batch} does not match logical batch {}",
-            query_lens.len()
-        );
-    }
-
-    let mut packed_offset = 0usize;
-    let mut rows = Vec::with_capacity(query_lens.len());
-    for (batch_idx, (&offset, &query_len)) in offsets.iter().zip(&query_lens).enumerate() {
-        if query_len == 0 {
-            candle_core::bail!("DFlash target capture cannot bind an empty query");
-        }
-        let retain = query_len.min(sliding_window);
-        let skip = query_len - retain;
-        let states = captured
-            .iter()
-            .map(|state| {
-                if packed {
-                    state
-                        .narrow(1, packed_offset + skip, retain)?
-                        .squeeze(0)
-                } else {
-                    if query_len > physical_len {
-                        candle_core::bail!(
-                            "DFlash target query length {query_len} exceeds physical length {physical_len}"
-                        );
-                    }
-                    state
-                        .narrow(0, batch_idx, 1)?
-                        .narrow(1, skip, retain)?
-                        .squeeze(0)
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        rows.push(DFlashTargetCapture {
-            states,
-            start: offset + skip,
-            end: offset + query_len,
-        });
-        packed_offset += query_len;
-    }
-    Ok(DFlashTargetCaptureBatch {
-        rows,
-        is_first_prompt_chunk: ctx.is_first_prompt_chunk(),
-    })
 }
 
 impl IsqModel for TextModel {
@@ -950,23 +795,6 @@ mod tests {
                 .zip(expected)
                 .all(|(actual, expected)| (actual - expected).abs() < 1e-6));
         }
-        Ok(())
-    }
-
-    #[test]
-    fn raw_dflash_paths_bypass_main_input_and_output_transforms() -> Result<()> {
-        let raw_embedding = Tensor::new(&[[1.0f32, -2.0, 0.5, 3.0]], &Device::Cpu)?;
-        let main_embedding = normalize_input_embeddings(&raw_embedding, 1e-5)?;
-        assert_eq!(raw_embedding.to_vec2::<f32>()?, [[1.0, -2.0, 0.5, 3.0]]);
-        assert_ne!(
-            raw_embedding.to_vec2::<f32>()?,
-            main_embedding.to_vec2::<f32>()?
-        );
-
-        let raw_logits = Tensor::new(&[[10.0f32, -5.0, 1.0]], &Device::Cpu)?;
-        let main_logits = transform_output_logits(&raw_logits, 0.196_116_135_138_184_04, 20.0)?;
-        assert_eq!(raw_logits.to_vec2::<f32>()?, [[10.0, -5.0, 1.0]]);
-        assert_ne!(raw_logits.to_vec2::<f32>()?, main_logits.to_vec2::<f32>()?);
         Ok(())
     }
 

@@ -939,22 +939,6 @@ impl GeneralMetadata {
     }
 }
 
-pub(crate) fn apply_speculative_attach_policy(
-    metadata: &mut Arc<GeneralMetadata>,
-    info: &crate::speculative::SpeculativeAttachInfo,
-) -> candle_core::Result<()> {
-    if info.disables_prefix_cache() {
-        Arc::get_mut(metadata)
-            .ok_or_else(|| {
-                candle_core::Error::msg(
-                    "cannot disable prefix caching after pipeline metadata was shared",
-                )
-            })?
-            .no_prefix_cache = true;
-    }
-    Ok(())
-}
-
 #[derive(Clone, Copy)]
 pub enum CacheInstruction {
     In,
@@ -1301,14 +1285,6 @@ pub trait Pipeline:
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
-    fn bind_speculative_target_capture(
-        &self,
-        _sequences: &[&Sequence],
-        _is_prompt: bool,
-    ) -> Result<(), candle_core::Error> {
-        Ok(())
-    }
-
     /// Append pre-sampled token blocks (block-diffusion canvases) to the sequences via the
     /// standard per-token finalize path. Overridden by pipelines whose models emit
     /// `ForwardInputsResult::BlockGeneration`.
@@ -1439,13 +1415,8 @@ pub trait Pipeline:
                         && self.supports_batched_cuda_sampling()
                         && sampling::can_sample_batch_cuda(input_seqs);
                     let start = Instant::now();
-                    let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
-                    let capture_sequences = seq_indices
-                        .iter()
-                        .map(|&seq_idx| &*input_seqs[seq_idx] as &Sequence)
-                        .collect::<Vec<_>>();
-                    self.bind_speculative_target_capture(&capture_sequences, is_prompt)?;
-                    let raw_logits = raw_logits
+                    let raw_logits = self
+                        .forward_inputs(inputs, return_raw_logits)?
                         .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
@@ -1881,13 +1852,8 @@ pub trait Pipeline:
                                 .set_state_indices_with_host(Some(state_indices), Some(indices));
                         }
                         let start = Instant::now();
-                        let raw_logits = self.forward_inputs(inputs, return_raw_logits)?;
-                        let capture_sequences = seq_indices
-                            .iter()
-                            .map(|&seq_idx| &*input_seqs[seq_idx] as &Sequence)
-                            .collect::<Vec<_>>();
-                        self.bind_speculative_target_capture(&capture_sequences, is_prompt)?;
-                        let raw_logits = raw_logits
+                        let raw_logits = self
+                            .forward_inputs(inputs, return_raw_logits)?
                             .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
@@ -2129,54 +2095,15 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use super::{
-        apply_speculative_attach_policy, resolve_lora_execution, ForwardCache, GeneralMetadata,
-        LogitsSelection, Modalities, ModelForwardContext,
-    };
+    use super::{resolve_lora_execution, ForwardCache, LogitsSelection, ModelForwardContext};
     use crate::{
-        pipeline::{
-            loaders::ModelKind,
-            text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        },
-        speculative::SpeculativeAttachInfo,
+        pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         MessageContent,
     };
     use candle_core::{Device, Tensor};
     use either::Either;
     use indexmap::IndexMap;
     use serde_json::Value;
-
-    #[test]
-    fn dflash_attach_marks_unique_metadata_before_engine_creation() -> candle_core::Result<()> {
-        let mut metadata = Arc::new(GeneralMetadata {
-            max_seq_len: 128,
-            llg_factory: None,
-            no_kv_cache: false,
-            no_prefix_cache: false,
-            num_hidden_layers: 1,
-            eos_tok: Vec::new(),
-            kind: ModelKind::Normal,
-            is_xlora: false,
-            activation_dtype: candle_core::DType::F32,
-            sliding_window: None,
-            cache_config: None,
-            cache_engine: None,
-            model_metadata: None,
-            modalities: Modalities {
-                input: Vec::new(),
-                output: Vec::new(),
-            },
-            loaded_for_uqff_write: false,
-        });
-        apply_speculative_attach_policy(
-            &mut metadata,
-            &SpeculativeAttachInfo::dflash("assistant".to_string(), 15),
-        )?;
-        assert!(metadata.no_prefix_cache);
-        Ok(())
-    }
 
     #[test]
     fn base_lora_routes_still_validate_dense_batch_cardinality() -> candle_core::Result<()> {

@@ -486,8 +486,7 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding](/mistral.rs/guides/perf/speculative-decoding/) |
-| DFlash | `MuseGlimmerForConditionalGeneration` | Muse Glimmer BF16 or GGUF DFlash assistant, PagedAttention required | [Speculative decoding](/mistral.rs/guides/perf/speculative-decoding/#dflash) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
 "#;
 
 fn md_cell(s: &str) -> String {

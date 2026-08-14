@@ -194,9 +194,7 @@ pub use sampler::{
 pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{
-    DFlashConfig, MtpConfig, SpeculativeConfig, DFLASH_DEFAULT_N_PREDICT, DFLASH_MAX_N_PREDICT,
-};
+pub use speculative::{MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};
@@ -340,8 +338,6 @@ pub struct ModelLoaderConfig {
     pub max_model_len: Option<usize>,
     /// Optional speculative decoding attachment to recreate after reload.
     pub mtp_config: Option<MtpConfig>,
-    /// Optional DFlash assistant attachment to recreate after reload.
-    pub dflash_config: Option<DFlashConfig>,
 }
 
 /// State preserved when a model is unloaded.
@@ -2712,16 +2708,6 @@ impl MistralRs {
                 .map_err(|e| {
                     MistralRsError::ReloadFailed(format!(
                         "Failed to attach MTP speculative decoding: {e}"
-                    ))
-                })?;
-        }
-        if let Some(dflash_config) = loader_config.dflash_config.clone() {
-            pipeline
-                .blocking_lock()
-                .attach_speculative(SpeculativeConfig::DFlash(dflash_config))
-                .map_err(|e| {
-                    MistralRsError::ReloadFailed(format!(
-                        "Failed to attach DFlash speculative decoding: {e}"
                     ))
                 })?;
         }

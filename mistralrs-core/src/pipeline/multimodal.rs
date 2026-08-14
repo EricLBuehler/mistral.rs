@@ -1472,16 +1472,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.speculative_propose(ctx)
     }
 
-    fn speculative_commit_target_capture(
-        &self,
-        sequences: &[&Sequence],
-        rows: &[Option<usize>],
-        expected_lens: &[usize],
-    ) -> candle_core::Result<()> {
-        self.model
-            .speculative_commit_target_capture(sequences, rows, expected_lens)
-    }
-
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
@@ -1862,30 +1852,17 @@ impl Pipeline for MultimodalPipeline {
         if self.dynamic_lora.is_some() {
             candle_core::bail!("dynamic LoRA does not support speculative decoding");
         }
-        if matches!(
-            config,
-            crate::speculative::SpeculativeConfig::Mtp(_)
-                | crate::speculative::SpeculativeConfig::DFlash(_)
-        ) && self.get_metadata().cache_engine.is_none()
+        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
+            && self.get_metadata().cache_engine.is_none()
         {
             candle_core::bail!(
-                "speculative decoding currently requires PagedAttention for this pipeline."
+                "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
         if let Some(info) = self.model.attach_speculative(config)? {
-            super::apply_speculative_attach_policy(&mut self.metadata, &info)?;
             self.model.log_speculative_attach(&info);
         }
         Ok(())
-    }
-
-    fn bind_speculative_target_capture(
-        &self,
-        sequences: &[&Sequence],
-        is_prompt: bool,
-    ) -> candle_core::Result<()> {
-        self.model
-            .speculative_bind_target_capture(sequences, is_prompt)
     }
 
     #[allow(clippy::too_many_arguments)]

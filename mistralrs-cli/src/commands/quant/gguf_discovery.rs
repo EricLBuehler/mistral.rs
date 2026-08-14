@@ -1097,29 +1097,12 @@ mod tests {
     fn auxiliary_ggufs_are_not_model_candidates() {
         let listing = files(&[
             "MTP/mtp-model-Q4_K_M.gguf",
-            "dflash-Muse-Glimmer-30B-Q4_K_M.gguf",
             "lora-model-Q4_K_M.gguf",
             "model-MTP-Q4_K_M.gguf",
             "model-LoRA-Q4_K_M.gguf",
             "model-Q4_K_S.gguf",
         ]);
         assert_eq!(resolve_gguf_quant(&listing, "4").unwrap().label, "Q4_K_S");
-    }
-
-    #[test]
-    fn dflash_sidecars_are_never_primary_model_candidates() {
-        let listing = files(&[
-            "Muse-Glimmer-30B-Q4_K_M.gguf",
-            "dflash-Muse-Glimmer-30B-Q4_K_M.gguf",
-        ]);
-        assert_eq!(
-            resolve_gguf_quant(&listing, "4").unwrap().files,
-            files(&["Muse-Glimmer-30B-Q4_K_M.gguf"])
-        );
-
-        let sidecar_only = files(&["assistants/muse-dflash-Q4_K_M.gguf"]);
-        assert!(!has_gguf_model_files(&sidecar_only));
-        assert!(resolve_gguf_quant(&sidecar_only, "4").is_err());
     }
 
     #[test]

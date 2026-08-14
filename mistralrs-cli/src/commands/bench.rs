@@ -83,7 +83,6 @@ pub async fn run_bench(
     config: BenchRunConfig,
 ) -> Result<()> {
     initialize_logging();
-    runtime.validate_speculative_options()?;
 
     let BenchRunConfig {
         prompt_lens,
@@ -142,7 +141,6 @@ pub async fn run_bench(
         .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
-        .with_dflash_config_optional(runtime.dflash_config())
         .set_paged_attn(paged_attn)
         .with_cpu(cpu)
         .with_seed_optional(global.seed)

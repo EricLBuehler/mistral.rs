@@ -16,12 +16,11 @@ use crate::{
 };
 use candle_core::Tensor;
 use std::{
-    any::Any,
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, RwLock},
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use tokio::sync::{
@@ -697,7 +696,6 @@ pub struct Sequence {
     // Speculative
     staged_speculative_tokens: Vec<u32>,
     staged_speculative_logits: Option<Tensor>,
-    speculative_aux_state: StdMutex<Option<Box<dyn Any + Send>>>,
 
     // Prefix caching
     prefill_prompt_toks: Option<PrefillTokens>,
@@ -851,7 +849,6 @@ impl Sequence {
             last_is_done: None,
             staged_speculative_tokens: Vec::new(),
             staged_speculative_logits: None,
-            speculative_aux_state: StdMutex::new(None),
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -1109,35 +1106,6 @@ impl Sequence {
 
     pub(crate) fn active_staged_speculative_len(&self) -> usize {
         self.active_staged_speculative_tokens().len()
-    }
-
-    pub(crate) fn with_speculative_aux_state<T, R>(
-        &self,
-        init: impl FnOnce() -> T,
-        f: impl FnOnce(&mut T) -> candle_core::Result<R>,
-    ) -> candle_core::Result<R>
-    where
-        T: Any + Send,
-    {
-        let mut state = self
-            .speculative_aux_state
-            .lock()
-            .map_err(|_| candle_core::Error::msg("speculative sequence state mutex poisoned"))?;
-        if state.is_none() {
-            *state = Some(Box::new(init()));
-        }
-        let typed = state
-            .as_deref_mut()
-            .and_then(|state| state.downcast_mut::<T>())
-            .ok_or_else(|| candle_core::Error::msg("speculative sequence state type mismatch"))?;
-        f(typed)
-    }
-
-    pub(crate) fn clear_speculative_aux_state(&self) {
-        *self
-            .speculative_aux_state
-            .lock()
-            .expect("speculative sequence state mutex poisoned") = None;
     }
 
     pub(crate) fn set_staged_speculative(&mut self, tokens: Vec<u32>, logits: Option<Tensor>) {
