@@ -411,6 +411,22 @@ pub(crate) fn join_path_list(paths: Option<&[PathBuf]>, delimiter: &str) -> Opti
     })
 }
 
+async fn attach_speculative<P: Pipeline + ?Sized>(
+    pipeline: &Arc<Mutex<P>>,
+    mtp_config: Option<mistralrs_core::MtpConfig>,
+    dflash_config: Option<mistralrs_core::DFlashConfig>,
+) -> anyhow::Result<()> {
+    let config = match (mtp_config, dflash_config) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("MTP and DFlash assistants cannot be attached together")
+        }
+        (Some(config), None) => mistralrs_core::SpeculativeConfig::Mtp(config),
+        (None, Some(config)) => mistralrs_core::SpeculativeConfig::DFlash(config),
+        (None, None) => return Ok(()),
+    };
+    Ok(pipeline.lock().await.attach_speculative(config)?)
+}
+
 pub(crate) async fn build_pipeline_from_text_loader(
     builder: crate::TextModelBuilder,
     loader: Box<dyn mistralrs_core::Loader>,
@@ -447,12 +463,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -506,12 +522,12 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config =
         scheduler_config_from_pipeline(&pipeline, paged_attn_requested, builder.max_num_seqs)
@@ -621,12 +637,12 @@ pub async fn build_text_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -683,6 +699,7 @@ pub async fn build_text_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: None,
         mtp_config: builder.mtp_config.clone(),
+        dflash_config: builder.dflash_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -746,12 +763,12 @@ pub async fn build_multimodal_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -813,6 +830,7 @@ pub async fn build_multimodal_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
         mtp_config: builder.mtp_config.clone(),
+        dflash_config: builder.dflash_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -889,12 +907,12 @@ pub async fn build_gguf_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -986,6 +1004,7 @@ pub async fn build_gguf_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: builder.max_model_len,
         mtp_config: builder.mtp_config.clone(),
+        dflash_config: builder.dflash_config.clone(),
     };
 
     let add_model_config = AddModelConfig {
@@ -1047,6 +1066,7 @@ pub async fn build_diffusion_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        dflash_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1112,6 +1132,7 @@ pub async fn build_speech_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        dflash_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1208,6 +1229,7 @@ pub async fn build_embedding_pipeline(
         jinja_explicit: None,
         max_model_len: None,
         mtp_config: None,
+        dflash_config: None,
     };
 
     let add_model_config = AddModelConfig {
@@ -1299,12 +1321,12 @@ pub async fn build_auto_pipeline(
         isq_type,
         builder.paged_attn_cfg,
     )?;
-    if let Some(mtp_config) = builder.mtp_config.clone() {
-        pipeline
-            .lock()
-            .await
-            .attach_speculative(SpeculativeConfig::Mtp(mtp_config))?;
-    }
+    attach_speculative(
+        &pipeline,
+        builder.mtp_config.clone(),
+        builder.dflash_config.clone(),
+    )
+    .await?;
 
     let scheduler_config = scheduler_config_from_pipeline(
         &pipeline,
@@ -1363,6 +1385,7 @@ pub async fn build_auto_pipeline(
         jinja_explicit: builder.jinja_explicit.clone(),
         max_model_len: None,
         mtp_config: builder.mtp_config.clone(),
+        dflash_config: builder.dflash_config.clone(),
     };
 
     let add_model_config = AddModelConfig {

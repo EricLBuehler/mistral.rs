@@ -3,6 +3,7 @@
 //! Each model family emits tool calls in a different format.  Parsers are
 //! registered in [`PARSERS`] and tried in order — the first match wins.
 
+pub(crate) mod atem;
 mod deepseek;
 mod gemma4;
 mod gemma4_strict;
@@ -25,12 +26,17 @@ const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
     "[TOOL_CALLS]",
     "<tool_calls>",
     "</tool_calls>",
+    "<|message|>",
+    "<|eom|>",
+    "<|start|>",
 ];
 
 /// Identifies the detected tool call format so that the correct grammar
 /// can be constructed for mid-stream constrained decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallFormat {
+    /// Muse Glimmer ATEM recipient message with XML-like function markup.
+    Atem,
     /// `<tool_call>{"name":"...","arguments":{...}}</tool_call>`
     Qwen,
     /// `<|python_tag|>{"name":"...","parameters":{...}}`
@@ -92,6 +98,7 @@ pub trait ToolFormatParser: Send + Sync {
 static PARSERS: std::sync::LazyLock<Vec<Box<dyn ToolFormatParser>>> =
     std::sync::LazyLock::new(|| {
         vec![
+            Box::new(atem::AtemParser),
             Box::new(gemma4::Gemma4Parser),
             Box::new(liquid::LiquidParser),
             Box::new(llama::LlamaParser),
@@ -198,6 +205,9 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
         ToolCallFormat::Liquid => {
             strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
+        }
+        ToolCallFormat::Atem => {
+            strip_delimited_segments(message, "<atem:function_calls>", "</atem:function_calls>")
         }
         ToolCallFormat::Harmony => message.to_string(),
     }

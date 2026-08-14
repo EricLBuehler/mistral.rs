@@ -142,6 +142,9 @@ mod tests {
             "[TOOL_CALLS]",
             "<tool_calls>",
             "</tool_calls>",
+            "<|message|>",
+            "<|eom|>",
+            "<|start|>",
         ] {
             let mut bytes = vec![toktrie::TokTrie::SPECIAL_TOKEN_MARKER];
             bytes.extend_from_slice(token.as_bytes());
@@ -198,6 +201,10 @@ mod tests {
                 parsers::ToolCallFormat::Harmony,
                 "start: harmony_tool_0 | harmony_tool_1",
             ),
+            (
+                parsers::ToolCallFormat::Atem,
+                r#"start: required_0 | required_1"#,
+            ),
         ];
 
         for (format, expected) in cases {
@@ -217,6 +224,10 @@ mod tests {
             (parsers::ToolCallFormat::Llama, "start: <|python_tag|>"),
             (parsers::ToolCallFormat::MistralNemo, "start: [TOOL_CALLS]"),
             (parsers::ToolCallFormat::Hunyuan, "start: <tool_calls>"),
+            (
+                parsers::ToolCallFormat::Atem,
+                "<|message|> \"<atem:function_calls>\"",
+            ),
         ];
         let trie = tool_control_token_trie();
 

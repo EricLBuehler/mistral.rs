@@ -55,6 +55,7 @@ pub struct GgufModelBuilder {
     pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
     pub(crate) lora_runtime_config: LoraRuntimeConfig,
     pub(crate) mtp_config: Option<MtpConfig>,
+    pub(crate) dflash_config: Option<DFlashConfig>,
 }
 
 impl GgufModelBuilder {
@@ -104,6 +105,7 @@ impl GgufModelBuilder {
             lora_adapters: None,
             lora_runtime_config: LoraRuntimeConfig::default(),
             mtp_config: None,
+            dflash_config: None,
             organization: IsqOrganization::Default,
             isq: None,
         }
@@ -338,6 +340,23 @@ impl GgufModelBuilder {
         self
     }
 
+    /// Attach a DFlash assistant for Muse speculative decoding.
+    pub fn with_dflash_config(mut self, dflash_config: DFlashConfig) -> Self {
+        self.dflash_config = Some(dflash_config);
+        self
+    }
+
+    /// Attach a DFlash assistant by model id or path.
+    pub fn with_dflash_model(
+        mut self,
+        model: impl Into<String>,
+        filename: Option<String>,
+        n_predict: Option<usize>,
+    ) -> Self {
+        self.dflash_config = Some(DFlashConfig::new(model, filename, n_predict));
+        self
+    }
+
     /// Set the model topology for use during loading. If there is an overlap, the topology type is used over the ISQ type.
     pub fn with_topology(mut self, topology: Topology) -> Self {
         self.topology = Some(topology);
@@ -446,7 +465,8 @@ impl GgufModelBuilder {
 mod tests {
     use super::GgufModelBuilder;
     use mistralrs_core::{
-        IsqOrganization, IsqType, LoraRuntimeConfig, McpClientConfig, ModelDType, MtpConfig,
+        DFlashConfig, IsqOrganization, IsqType, LoraRuntimeConfig, McpClientConfig, ModelDType,
+        MtpConfig,
     };
     use std::path::PathBuf;
 
@@ -529,6 +549,31 @@ mod tests {
             .with_mtp_config(MtpConfig::new("local-mtp", None));
 
         assert_eq!(builder.mtp_config.unwrap().model, "local-mtp");
+    }
+
+    #[test]
+    fn dflash_configuration_is_preserved() {
+        let builder = GgufModelBuilder::new("repo", vec!["model.gguf"]).with_dflash_model(
+            "meta-models/Muse-Glimmer-30B-GGUF",
+            Some("dflash-Muse-Glimmer-30B-Q4_K_M.gguf".to_string()),
+            Some(12),
+        );
+        let dflash = builder.dflash_config.unwrap();
+
+        assert_eq!(dflash.model, "meta-models/Muse-Glimmer-30B-GGUF");
+        assert_eq!(
+            dflash.filename.as_deref(),
+            Some("dflash-Muse-Glimmer-30B-Q4_K_M.gguf")
+        );
+        assert_eq!(dflash.n_predict, Some(12));
+
+        let builder =
+            GgufModelBuilder::new("repo", vec!["model.gguf"]).with_dflash_config(DFlashConfig {
+                model: "local-dflash".to_string(),
+                filename: None,
+                n_predict: None,
+            });
+        assert_eq!(builder.dflash_config.unwrap().model, "local-dflash");
     }
 
     #[test]

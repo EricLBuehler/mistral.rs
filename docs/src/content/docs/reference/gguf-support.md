@@ -63,6 +63,7 @@ files when the repository and GGUF metadata identify them unambiguously. The dir
 | Mistral 3 and Pixtral | `mistral3` |
 | Llama 4 | `llama4` |
 | LFM2-VL and LFM2.5-VL | `lfm2` |
+| Muse Glimmer | `muse-glimmer` |
 | Qwen2-VL and Qwen2.5-VL | `qwen2vl` |
 | Qwen3-VL | `qwen3vl` |
 | Qwen3-VL MoE | `qwen3vlmoe` |
@@ -76,6 +77,12 @@ for its supported request types.
 Multimodal Qwen3.5 and Qwen3.6 accept image and video input, but not audio. Gemma 4 accepts
 image/video and audio when the matching components are present in the model configuration and
 projector files.
+
+Muse Glimmer GGUFs require a companion `muse-glimmer` projector. Current published GGUF
+repositories also require `--tok-model-id meta-models/Muse-Glimmer-30B` because they do not carry
+enough base-model configuration metadata for standalone loading. Image input is supported. Video
+input is rejected because the llama.cpp conversion irreversibly sums each pair of temporal patch
+weights in the projector.
 
 The `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, and `qwen3vlmoe` architectures always need a
 projector. Architectures that appear in both tables above, including `gemma3`, `llama`, `mistral3`,
@@ -116,8 +123,9 @@ Big-endian GGUF files are not supported.
 
 Dynamic LoRA is currently rejected for native GGUF architectures that store Q/K features in
 adjacent rotary order: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `granite`,
-`granitemoe`, `granitehybrid`, and `llama4`. This also covers multimodal models routed through those
-architectures, including Idefics3, Mistral 3/Pixtral, and Llama 4. Base-model loading is unaffected.
+`granitemoe`, `granitehybrid`, `llama4`, and `muse-glimmer`. This also covers multimodal models
+routed through those architectures, including Idefics3, Mistral 3/Pixtral, Llama 4, and Muse
+Glimmer. Base-model loading is unaffected.
 
 GGUF support covers text generation and the multimodal families listed above. GGUF is not a
 loading format for embedding, speech, diffusion, or image-generation pipelines.

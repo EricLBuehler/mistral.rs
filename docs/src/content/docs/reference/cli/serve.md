@@ -75,6 +75,9 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
 | `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
 | `--mtp-n-predict <MTP_N_PREDICT>` |  | Number of MTP draft tokens to propose per target step |
+| `--dflash-model <DFLASH_MODEL>` |  | DFlash assistant model id or path for Muse |
+| `--dflash-file <DFLASH_FILE>` |  | DFlash GGUF filename within the assistant model repository |
+| `--dflash-n-predict <DFLASH_N_PREDICT>` |  | Number of DFlash draft tokens to propose per target step (1 to 15) |
 | `--mcp-config <MCP_CONFIG>` |  | Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset |
 | `--agent` | `false` | Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic tool loop with a per-session temp workdir. Equivalent to passing `--enable-search --enable-code-execution --enable-shell` together |
 | `--enable-search` | `false` | Enable web search (requires embedding model) |

@@ -54,6 +54,9 @@ quant = "4"
 | `matformer_slice_name` | `--matformer-slice-name` | not set | MatFormer slice to load. Requires `matformer_config_path`. |
 | `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
+| `dflash_model` | `--dflash-model` | not set | [DFlash](/mistral.rs/guides/perf/speculative-decoding/#dflash) assistant model id or path for Muse. Conflicts with MTP options. |
+| `dflash_file` | `--dflash-file` | not set | GGUF filename within the DFlash assistant repository. Requires `dflash_model`. |
+| `dflash_n_predict` | `--dflash-n-predict` | not set (15 proposals) | DFlash draft tokens proposed per target step, from 1 to 15. Requires `dflash_model`. |
 | `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |

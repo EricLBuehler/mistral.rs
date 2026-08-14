@@ -128,7 +128,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
         if let Some(ref mut state) = seq.tool_call_state {
             let (_tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
 
-            if tool_use_is_done {
+            if tool_use_is_done && state.stops_after_complete_tool_call() {
                 if let Ok(tools) = state.complete_if_tool_call(d.as_str()) {
                     if !tools.is_empty() {
                         seq.set_state(SequenceState::Done(StopReason::Eos));

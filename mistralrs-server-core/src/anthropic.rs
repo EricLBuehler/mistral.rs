@@ -728,6 +728,7 @@ fn append_anthropic_blocks(
             name: None,
             tool_calls,
             tool_call_id: None,
+            reasoning_content: None,
         });
         return Ok(());
     }
@@ -790,6 +791,7 @@ fn flush_user_content(
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     });
     text_parts.clear();
 }
@@ -801,6 +803,7 @@ fn message_with_text(role: impl Into<String>, text: String) -> Message {
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     }
 }
 
@@ -843,6 +846,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         name: None,
         tool_calls: None,
         tool_call_id: Some(tool_call_id),
+        reasoning_content: None,
     })
 }
 

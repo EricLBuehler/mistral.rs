@@ -336,7 +336,9 @@ pub use mistralrs_core::{
 };
 
 // ========== Speculative Types ==========
-pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
+pub use mistralrs_core::{
+    DFlashConfig, MtpConfig, SpeculativeConfig, DFLASH_DEFAULT_N_PREDICT, DFLASH_MAX_N_PREDICT,
+};
 
 // ========== Device Mapping ==========
 pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};

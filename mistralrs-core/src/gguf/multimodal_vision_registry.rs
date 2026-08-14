@@ -11,6 +11,7 @@ use super::{
     llama4_bindings::build_llama4_bindings,
     mistral3_bindings::build_mistral3_bindings,
     multimodal_binding_utils::{metadata_string, projector_type},
+    muse_glimmer_bindings::build_muse_glimmer_bindings,
     normal_registry::RopePairing,
 };
 
@@ -22,6 +23,7 @@ pub(crate) enum NativeMultimodalGgufFamily {
     Mistral3,
     Llama4,
     Lfm2Vl,
+    MuseGlimmer,
 }
 
 pub(crate) struct NativeMultimodalGguf {
@@ -54,13 +56,16 @@ impl NativeMultimodalGgufFamily {
             Self::Mistral3 => MultimodalLoaderType::Mistral3,
             Self::Llama4 => MultimodalLoaderType::Llama4,
             Self::Lfm2Vl => MultimodalLoaderType::Lfm2Vl,
+            Self::MuseGlimmer => MultimodalLoaderType::MuseGlimmer,
         }
     }
 
     fn rope_pairing(self) -> RopePairing {
         match self {
             Self::Gemma3 | Self::Gemma3n | Self::Lfm2Vl => RopePairing::HalfSplit,
-            Self::Idefics3 | Self::Mistral3 | Self::Llama4 => RopePairing::Adjacent,
+            Self::Idefics3 | Self::Mistral3 | Self::Llama4 | Self::MuseGlimmer => {
+                RopePairing::Adjacent
+            }
         }
     }
 
@@ -72,6 +77,7 @@ impl NativeMultimodalGgufFamily {
             Self::Mistral3 => build_mistral3_bindings(archive),
             Self::Llama4 => build_llama4_bindings(archive),
             Self::Lfm2Vl => build_lfm2_vl_bindings(archive),
+            Self::MuseGlimmer => build_muse_glimmer_bindings(archive),
         }
     }
 }
@@ -104,6 +110,10 @@ fn family_from_names(
         Some("lfm2") => {
             require_architecture(architecture, "lfm2", "lfm2")?;
             NativeMultimodalGgufFamily::Lfm2Vl
+        }
+        Some("muse-glimmer") => {
+            require_architecture(architecture, "muse-glimmer", "muse-glimmer")?;
+            NativeMultimodalGgufFamily::MuseGlimmer
         }
         Some(_) | None => return Ok(None),
     };
@@ -162,6 +172,12 @@ mod tests {
                 "lfm2",
                 NativeMultimodalGgufFamily::Lfm2Vl,
                 RopePairing::HalfSplit,
+            ),
+            (
+                "muse-glimmer",
+                "muse-glimmer",
+                NativeMultimodalGgufFamily::MuseGlimmer,
+                RopePairing::Adjacent,
             ),
         ] {
             let detected = family_from_names(architecture, Some(projector))

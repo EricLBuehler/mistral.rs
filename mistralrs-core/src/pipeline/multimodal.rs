@@ -12,8 +12,8 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader,
-    Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader,
+    Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -247,6 +247,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
+            Some(MultimodalLoaderType::MuseGlimmer) => Box::new(MuseGlimmerLoader),
             Some(MultimodalLoaderType::DiffusionGemma) => Box::new(DiffusionGemmaLoader),
             None => Box::new(AutoMultimodalLoader),
         };
@@ -318,6 +319,7 @@ pub(super) fn supports_dynamic_lora_loader(loader: &MultimodalLoaderType) -> boo
             | MultimodalLoaderType::Llama4
             | MultimodalLoaderType::Lfm2Vl
             | MultimodalLoaderType::Gemma4
+            | MultimodalLoaderType::MuseGlimmer
     )
 }
 
@@ -1470,6 +1472,16 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.speculative_propose(ctx)
     }
 
+    fn speculative_commit_target_capture(
+        &self,
+        sequences: &[&Sequence],
+        rows: &[Option<usize>],
+        expected_lens: &[usize],
+    ) -> candle_core::Result<()> {
+        self.model
+            .speculative_commit_target_capture(sequences, rows, expected_lens)
+    }
+
     fn build_speculative_verify_inputs(
         &self,
         input_meta: InputMetadata,
@@ -1850,17 +1862,30 @@ impl Pipeline for MultimodalPipeline {
         if self.dynamic_lora.is_some() {
             candle_core::bail!("dynamic LoRA does not support speculative decoding");
         }
-        if matches!(config, crate::speculative::SpeculativeConfig::Mtp(_))
-            && self.get_metadata().cache_engine.is_none()
+        if matches!(
+            config,
+            crate::speculative::SpeculativeConfig::Mtp(_)
+                | crate::speculative::SpeculativeConfig::DFlash(_)
+        ) && self.get_metadata().cache_engine.is_none()
         {
             candle_core::bail!(
-                "MTP speculative decoding currently requires PagedAttention for this pipeline."
+                "speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
         if let Some(info) = self.model.attach_speculative(config)? {
+            super::apply_speculative_attach_policy(&mut self.metadata, &info)?;
             self.model.log_speculative_attach(&info);
         }
         Ok(())
+    }
+
+    fn bind_speculative_target_capture(
+        &self,
+        sequences: &[&Sequence],
+        is_prompt: bool,
+    ) -> candle_core::Result<()> {
+        self.model
+            .speculative_bind_target_capture(sequences, is_prompt)
     }
 
     #[allow(clippy::too_many_arguments)]

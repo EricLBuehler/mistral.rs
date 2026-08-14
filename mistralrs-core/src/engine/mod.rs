@@ -64,6 +64,25 @@ pub enum EngineInstruction {
     Terminate,
 }
 
+#[cfg(test)]
+mod prefix_cache_policy_tests {
+    use super::PrefixCachePolicy;
+
+    #[test]
+    fn pipeline_disable_reaches_scheduler_and_sequence_cache() {
+        let policy = PrefixCachePolicy::resolve(false, false, true, 16);
+        assert!(policy.disabled);
+        assert!(!policy.scheduler_enabled());
+    }
+
+    #[test]
+    fn ordinary_paged_pipeline_keeps_prefix_cache_enabled() {
+        let policy = PrefixCachePolicy::resolve(false, false, false, 16);
+        assert!(!policy.disabled);
+        assert!(policy.scheduler_enabled());
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 /// Embedding model used for ranking web search results internally.
@@ -258,6 +277,28 @@ impl Drop for Engine {
     }
 }
 
+#[derive(Clone, Copy)]
+struct PrefixCachePolicy {
+    disabled: bool,
+}
+
+impl PrefixCachePolicy {
+    fn resolve(
+        requested_disabled: bool,
+        no_kv_cache: bool,
+        pipeline_disabled: bool,
+        capacity: usize,
+    ) -> Self {
+        Self {
+            disabled: requested_disabled || no_kv_cache || pipeline_disabled || capacity == 0,
+        }
+    }
+
+    fn scheduler_enabled(self) -> bool {
+        !self.disabled
+    }
+}
+
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -279,10 +320,13 @@ impl Engine {
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
 
-        no_prefix_cache = no_prefix_cache
-            || no_kv_cache
-            || get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache
-            || prefix_cache_n == 0;
+        let prefix_cache_policy = PrefixCachePolicy::resolve(
+            no_prefix_cache,
+            no_kv_cache,
+            get_mut_arcmutex!(pipeline).get_metadata().no_prefix_cache,
+            prefix_cache_n,
+        );
+        no_prefix_cache = prefix_cache_policy.disabled;
 
         let search_pipeline = match search_embedding_model {
             Some(search_embedding_model) => Some(SearchPipeline::new(
@@ -329,7 +373,8 @@ impl Engine {
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
         // This ensures PagedAttention prefix caching respects the same setting
-        get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
+        get_mut_arcmutex!(scheduler)
+            .set_prefix_caching_enabled(prefix_cache_policy.scheduler_enabled());
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
 

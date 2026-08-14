@@ -40,7 +40,7 @@ pub enum ImageGenerationResponseFormat {
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
-/// Reasoning effort level for models that support it (e.g., GPT-OSS with Harmony format).
+/// Reasoning effort level for models and templates that support it.
 /// Controls the depth of reasoning/analysis in the model's response.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
@@ -73,7 +73,7 @@ pub enum RequestMessage {
     Chat {
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
-        /// Reasoning effort level for Harmony-format models
+        /// Reasoning effort level for templates with configurable reasoning
         reasoning_effort: Option<ReasoningEffort>,
     },
     Completion {
@@ -91,7 +91,7 @@ pub enum RequestMessage {
         videos: Vec<VideoInput>,
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
-        /// Reasoning effort level for Harmony-format models
+        /// Reasoning effort level for templates with configurable reasoning
         reasoning_effort: Option<ReasoningEffort>,
     },
     ImageGeneration {

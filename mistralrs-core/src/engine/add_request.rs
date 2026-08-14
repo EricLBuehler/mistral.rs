@@ -25,6 +25,18 @@ use crate::{
 
 use super::{agentic_loop, Engine, TERMINATE_ALL_NEXT_STEP};
 
+fn tools_for_chat_template(
+    tools: Option<&[crate::Tool]>,
+    tool_choice: Option<&ToolChoice>,
+    format: Option<ToolCallFormat>,
+) -> Vec<crate::Tool> {
+    if format == Some(ToolCallFormat::Atem) && matches!(tool_choice, Some(ToolChoice::None)) {
+        Vec::new()
+    } else {
+        tools.unwrap_or_default().to_vec()
+    }
+}
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -228,15 +240,17 @@ impl Engine {
                 .get_chat_template()
                 .and_then(|chat_template| chat_template.tool_call_format())
         };
-        let uses_harmony_tool_call_strategy =
-            preferred_tool_call_format == Some(ToolCallFormat::Harmony);
+        let uses_channel_tool_call_strategy = matches!(
+            preferred_tool_call_format,
+            Some(ToolCallFormat::Harmony | ToolCallFormat::Atem)
+        );
         let validates_forced_tool_choice = request
             .tool_choice
             .as_ref()
             .is_some_and(|choice| choice.forced_function_name().is_some());
         let needs_tool_call_state =
-            has_tools || uses_harmony_tool_call_strategy || validates_forced_tool_choice;
-        if uses_harmony_tool_call_strategy
+            has_tools || uses_channel_tool_call_strategy || validates_forced_tool_choice;
+        if preferred_tool_call_format == Some(ToolCallFormat::Harmony)
             && !crate::reasoning_parsers::harmony::is_harmony_encoding_ready()
         {
             if let Err(e) = tokio::task::block_in_place(|| {
@@ -287,7 +301,11 @@ impl Engine {
                 reasoning_effort,
             } => {
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let tools = request.tools.clone().unwrap_or_default();
+                let tools = tools_for_chat_template(
+                    request.tools.as_deref(),
+                    request.tool_choice.as_ref(),
+                    preferred_tool_call_format,
+                );
                 let template = pipeline.get_processor().process(
                     pipeline,
                     messages,
@@ -987,5 +1005,65 @@ impl Engine {
             .send(Ok(txt))
             .await
             .expect("Sender disconnected unexpectedly!");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::chat_template::{apply_chat_template_to, ChatTemplateValue};
+    use crate::{Function, Tool, ToolType};
+    use indexmap::IndexMap;
+
+    fn tool() -> Tool {
+        Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        }
+    }
+
+    #[test]
+    fn atem_tool_choice_none_omits_tools_from_the_rendered_prompt() {
+        let tools = vec![tool()];
+        let rendered_tools = tools_for_chat_template(
+            Some(&tools),
+            Some(&ToolChoice::None),
+            Some(ToolCallFormat::Atem),
+        );
+        let messages = vec![IndexMap::from([
+            ("role".to_string(), Either::Left("user".to_string())),
+            ("content".to_string(), Either::Left("hello".to_string())),
+        ])];
+        let template = ChatTemplateValue(Either::Left(
+            "{% if tools %}tools{% else %}no-tools{% endif %}<atem:function_calls><atem:invoke"
+                .to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            messages,
+            true,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            rendered_tools,
+        )
+        .unwrap();
+
+        assert!(rendered.starts_with("no-tools"));
+        let qwen_tools = tools_for_chat_template(
+            Some(&tools),
+            Some(&ToolChoice::None),
+            Some(ToolCallFormat::Qwen),
+        );
+        assert_eq!(qwen_tools.len(), 1);
+        assert_eq!(qwen_tools[0].function.name, "get_weather");
     }
 }

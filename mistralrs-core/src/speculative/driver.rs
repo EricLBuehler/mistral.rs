@@ -27,6 +27,13 @@ pub trait SpeculativePipelineExt: Pipeline {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>>;
 
+    fn speculative_commit_target_capture(
+        &self,
+        sequences: &[&Sequence],
+        rows: &[Option<usize>],
+        expected_lens: &[usize],
+    ) -> Result<()>;
+
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
 }
 
@@ -147,6 +154,7 @@ where
     let mut sampled_tokens = Vec::new();
     let mut base_lens = Vec::new();
     let mut hidden_rows = Vec::new();
+    let mut commit_rows = Vec::new();
 
     for (idx, (seq, logits)) in seqs.iter_mut().zip(logits.iter()).enumerate() {
         let base_len = seq.get_toks().len();
@@ -172,6 +180,7 @@ where
             sampled_tokens.push(sampled_token);
             base_lens.push(base_len);
             hidden_rows.push((idx, 0));
+            commit_rows.push(None);
         }
     }
 
@@ -182,6 +191,7 @@ where
         &sampled_tokens,
         &base_lens,
         &hidden_rows,
+        &commit_rows,
         rng,
         cache,
     )
@@ -255,6 +265,7 @@ where
     let mut sampled_tokens = Vec::new();
     let mut base_lens = Vec::new();
     let mut hidden_rows = Vec::new();
+    let mut commit_rows = Vec::new();
     for (idx, outcome) in outcomes.iter().enumerate() {
         let Some(outcome) = outcome else {
             continue;
@@ -266,6 +277,7 @@ where
         sampled_tokens.push(continuation_token);
         base_lens.push(outcome.keep_len);
         hidden_rows.push((idx, outcome.accepted_drafts));
+        commit_rows.push(Some(outcome.accepted_drafts + 1));
     }
 
     propose_and_stage_batch(
@@ -275,6 +287,7 @@ where
         &sampled_tokens,
         &base_lens,
         &hidden_rows,
+        &commit_rows,
         rng,
         cache,
     )
@@ -288,6 +301,7 @@ fn propose_and_stage_batch<P, C>(
     sampled_tokens: &[u32],
     base_lens: &[usize],
     hidden_rows: &[(usize, usize)],
+    commit_rows: &[Option<usize>],
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
 ) -> Result<()>
@@ -312,6 +326,20 @@ where
     if active_indices.is_empty() {
         return Ok(());
     }
+    if commit_rows.len() != active_indices.len() {
+        candle_core::bail!(
+            "speculative target commit count {} does not match {} active sequences",
+            commit_rows.len(),
+            active_indices.len()
+        );
+    }
+    {
+        let sequences = active_indices
+            .iter()
+            .map(|idx| &*seqs[*idx] as &Sequence)
+            .collect::<Vec<_>>();
+        target.speculative_commit_target_capture(&sequences, commit_rows, base_lens)?;
+    }
     let Some(proposal_len) = target.speculative_proposal_len() else {
         clear_active_staged(seqs, active_indices);
         return Ok(());
@@ -333,13 +361,7 @@ where
         return Ok(());
     }
 
-    let target_hiddens = match target.speculative_target_hiddens(hidden_rows)? {
-        Some(hidden) => Some(hidden),
-        None => {
-            clear_active_staged(seqs, active_indices);
-            return Ok(());
-        }
-    };
+    let target_hiddens = target.speculative_target_hiddens(hidden_rows)?;
 
     let seq_ids = active_indices
         .iter()

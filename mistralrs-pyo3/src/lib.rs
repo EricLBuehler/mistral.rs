@@ -948,6 +948,10 @@ impl Runner {
         mcp_client_config = None,
         code_execution_config = None,
         shell_config = None,
+        *,
+        dflash_model = None,
+        dflash_file = None,
+        dflash_n_predict = None,
     ))]
     fn new(
         which: Which,
@@ -977,7 +981,28 @@ impl Runner {
         mcp_client_config: Option<McpClientConfigPy>,
         code_execution_config: Option<CodeExecutionConfig>,
         shell_config: Option<ShellConfig>,
+        dflash_model: Option<String>,
+        dflash_file: Option<String>,
+        dflash_n_predict: Option<usize>,
     ) -> PyApiResult<Self> {
+        if dflash_model.is_some() && (mtp_model.is_some() || mtp_n_predict.is_some()) {
+            return Err(PyApiErr::from(
+                "MTP and DFlash options cannot be used together",
+            ));
+        }
+        if dflash_model.is_none() && (dflash_file.is_some() || dflash_n_predict.is_some()) {
+            return Err(PyApiErr::from(
+                "dflash_file and dflash_n_predict require dflash_model",
+            ));
+        }
+        if dflash_n_predict
+            .is_some_and(|n| !(1..=mistralrs_core::DFLASH_MAX_N_PREDICT).contains(&n))
+        {
+            return Err(PyApiErr::from(format!(
+                "dflash_n_predict must be between 1 and {}",
+                mistralrs_core::DFLASH_MAX_N_PREDICT
+            )));
+        }
         let dynamic_lora = which_uses_dynamic_lora(&which);
         if anymoe_config.is_some() && dynamic_lora {
             return Err(PyApiErr::from(
@@ -1268,6 +1293,14 @@ impl Runner {
                     mtp_model,
                     mtp_n_predict,
                 )))
+                .map_err(|e| PyApiErr::from(&e))?;
+        }
+        if let Some(dflash_model) = dflash_model {
+            pipeline
+                .blocking_lock()
+                .attach_speculative(SpeculativeConfig::DFlash(
+                    mistralrs_core::DFlashConfig::new(dflash_model, dflash_file, dflash_n_predict),
+                ))
                 .map_err(|e| PyApiErr::from(&e))?;
         }
 
@@ -3234,6 +3267,24 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::WebSearchUserLocation>()?;
     m.add_class::<mistralrs_core::ApproximateUserLocation>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod runner_signature_tests {
+    use super::Runner;
+    use pyo3::impl_::pyclass::{PyClassImplCollector, PyClassNewTextSignature};
+
+    #[test]
+    fn dflash_options_do_not_change_the_existing_positional_prefix() {
+        let signature = PyClassImplCollector::<Runner>::new()
+            .new_text_signature()
+            .unwrap();
+
+        assert!(signature.contains("mtp_n_predict=None, chat_template=None"));
+        assert!(
+            signature.ends_with("*, dflash_model=None, dflash_file=None, dflash_n_predict=None)")
+        );
+    }
 }
 
 #[cfg(test)]

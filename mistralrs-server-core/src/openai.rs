@@ -293,6 +293,8 @@ pub struct ToolCall {
 ///     role: "user".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 ///
 /// // System message
@@ -301,6 +303,8 @@ pub struct ToolCall {
 ///     role: "system".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -315,6 +319,9 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
+    /// Reasoning emitted with an assistant message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -1172,7 +1179,7 @@ pub struct ChatCompletionRequest {
     /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
+    /// Reasoning effort level for models and templates that support it.
     /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,

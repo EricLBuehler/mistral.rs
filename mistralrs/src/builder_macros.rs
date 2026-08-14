@@ -199,6 +199,23 @@ macro_rules! common_builder_methods {
             self
         }
 
+        /// Attach a DFlash assistant for Muse speculative decoding.
+        pub fn with_dflash_config(mut self, dflash_config: DFlashConfig) -> Self {
+            self.dflash_config = Some(dflash_config);
+            self
+        }
+
+        /// Attach a DFlash assistant by model id or path.
+        pub fn with_dflash_model(
+            mut self,
+            model: impl Into<String>,
+            filename: Option<String>,
+            n_predict: Option<usize>,
+        ) -> Self {
+            self.dflash_config = Some(DFlashConfig::new(model, filename, n_predict));
+            self
+        }
+
         /// Set the maximum number of sequences which can be run at once.
         pub fn with_max_num_seqs(mut self, max_num_seqs: usize) -> Self {
             self.max_num_seqs = max_num_seqs;

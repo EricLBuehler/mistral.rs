@@ -1499,6 +1499,8 @@ fn gguf_imatrix_names(key: &str) -> Vec<String> {
         vec!["ffn_gate_exps", "ffn_up_exps"]
     } else if key.ends_with(".block_sparse_moe.output_linear") {
         vec!["ffn_down_exps"]
+    } else if key.ends_with(".self_attn.gate_proj") {
+        vec!["attn_gate"]
     } else if key.ends_with(".gate_proj") {
         if is_shared {
             vec!["ffn_gate_shexp"]
@@ -1877,6 +1879,10 @@ mod tests {
         );
         for (key, expected) in [
             ("model.layers.2.self_attn.qkv_proj", "blk.2.attn_qkv.weight"),
+            (
+                "model.language_model.layers.2.self_attn.gate_proj",
+                "blk.2.attn_gate.weight",
+            ),
             ("layers.2.attention.wq", "blk.2.attn_q.weight"),
             ("layers.2.attention.wk", "blk.2.attn_k.weight"),
             ("layers.2.attention.wv", "blk.2.attn_v.weight"),

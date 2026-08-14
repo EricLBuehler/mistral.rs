@@ -17,7 +17,7 @@ pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use mistralrs_core::TokenSource;
+use mistralrs_core::{TokenSource, DFLASH_MAX_N_PREDICT};
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -598,14 +598,29 @@ pub struct RuntimeOptions {
     pub matformer_slice_name: Option<String>,
 
     /// MTP assistant model id or path.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dflash_model")]
     #[serde(default)]
     pub mtp_model: Option<String>,
 
     /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dflash_model")]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
+
+    /// DFlash assistant model id or path for Muse.
+    #[arg(long, conflicts_with_all = ["mtp_model", "mtp_n_predict"])]
+    #[serde(default)]
+    pub dflash_model: Option<String>,
+
+    /// DFlash GGUF filename within the assistant model repository.
+    #[arg(long, requires = "dflash_model")]
+    #[serde(default)]
+    pub dflash_file: Option<String>,
+
+    /// Number of DFlash draft tokens to propose per target step (1 to 15).
+    #[arg(long, requires = "dflash_model", value_parser = parse_dflash_n_predict)]
+    #[serde(default)]
+    pub dflash_n_predict: Option<usize>,
 
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
@@ -778,12 +793,24 @@ pub struct BenchRuntimeOptions {
     pub matformer_slice_name: Option<String>,
 
     /// MTP assistant model id or path.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dflash_model")]
     pub mtp_model: Option<String>,
 
     /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "dflash_model")]
     pub mtp_n_predict: Option<usize>,
+
+    /// DFlash assistant model id or path for Muse.
+    #[arg(long, conflicts_with_all = ["mtp_model", "mtp_n_predict"])]
+    pub dflash_model: Option<String>,
+
+    /// DFlash GGUF filename within the assistant model repository.
+    #[arg(long, requires = "dflash_model")]
+    pub dflash_file: Option<String>,
+
+    /// Number of DFlash draft tokens to propose per target step (1 to 15).
+    #[arg(long, requires = "dflash_model", value_parser = parse_dflash_n_predict)]
+    pub dflash_n_predict: Option<usize>,
 }
 
 impl BenchRuntimeOptions {
@@ -801,6 +828,26 @@ impl BenchRuntimeOptions {
                 model,
                 n_predict: self.mtp_n_predict,
             })
+    }
+
+    pub fn dflash_config(&self) -> Option<mistralrs_core::DFlashConfig> {
+        self.dflash_model.clone().map(|model| {
+            mistralrs_core::DFlashConfig::new(
+                model,
+                self.dflash_file.clone(),
+                self.dflash_n_predict,
+            )
+        })
+    }
+
+    pub fn validate_speculative_options(&self) -> anyhow::Result<()> {
+        validate_speculative_options(
+            self.mtp_model.as_deref(),
+            self.mtp_n_predict,
+            self.dflash_model.as_deref(),
+            self.dflash_file.as_deref(),
+            self.dflash_n_predict,
+        )
     }
 }
 
@@ -852,6 +899,45 @@ impl RuntimeOptions {
                 n_predict: self.mtp_n_predict,
             })
     }
+
+    pub fn dflash_config(&self) -> Option<mistralrs_core::DFlashConfig> {
+        self.dflash_model.clone().map(|model| {
+            mistralrs_core::DFlashConfig::new(
+                model,
+                self.dflash_file.clone(),
+                self.dflash_n_predict,
+            )
+        })
+    }
+
+    pub fn validate_speculative_options(&self) -> anyhow::Result<()> {
+        validate_speculative_options(
+            self.mtp_model.as_deref(),
+            self.mtp_n_predict,
+            self.dflash_model.as_deref(),
+            self.dflash_file.as_deref(),
+            self.dflash_n_predict,
+        )
+    }
+}
+
+fn validate_speculative_options(
+    mtp_model: Option<&str>,
+    mtp_n_predict: Option<usize>,
+    dflash_model: Option<&str>,
+    dflash_file: Option<&str>,
+    dflash_n_predict: Option<usize>,
+) -> anyhow::Result<()> {
+    if dflash_model.is_some() && (mtp_model.is_some() || mtp_n_predict.is_some()) {
+        anyhow::bail!("MTP and DFlash options cannot be used together");
+    }
+    if dflash_model.is_none() && (dflash_file.is_some() || dflash_n_predict.is_some()) {
+        anyhow::bail!("dflash_file and dflash_n_predict require dflash_model");
+    }
+    if dflash_n_predict.is_some_and(|n| !(1..=DFLASH_MAX_N_PREDICT).contains(&n)) {
+        anyhow::bail!("dflash_n_predict must be between 1 and {DFLASH_MAX_N_PREDICT}");
+    }
+    Ok(())
 }
 
 impl From<TuneProfileArg> for mistralrs_core::TuneProfile {
@@ -917,6 +1003,9 @@ impl Default for RuntimeOptions {
             matformer_slice_name: None,
             mtp_model: None,
             mtp_n_predict: None,
+            dflash_model: None,
+            dflash_file: None,
+            dflash_n_predict: None,
             mcp_config: None,
             agent: false,
             enable_search: false,
@@ -946,6 +1035,18 @@ impl Default for RuntimeOptions {
 
 fn parse_token_source(s: &str) -> Result<TokenSource, String> {
     s.parse()
+}
+
+fn parse_dflash_n_predict(s: &str) -> Result<usize, String> {
+    let value = s
+        .parse::<usize>()
+        .map_err(|_| format!("invalid DFlash proposal count `{s}`"))?;
+    if !(1..=DFLASH_MAX_N_PREDICT).contains(&value) {
+        return Err(format!(
+            "DFlash proposal count must be between 1 and {DFLASH_MAX_N_PREDICT}"
+        ));
+    }
+    Ok(value)
 }
 
 fn default_token_source() -> TokenSource {
@@ -1002,6 +1103,100 @@ mod tests {
             Ok(_) => panic!("expected model resolution to fail"),
             Err(error) => error,
         }
+    }
+
+    #[test]
+    fn dflash_cli_options_build_a_distinct_config() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "meta-models/Muse-Glimmer-30B-GGUF",
+            "-f",
+            "Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf",
+            "--mmproj",
+            "mmproj-Muse-Glimmer-30B-Q4_K_M.gguf",
+            "--tok-model-id",
+            "meta-models/Muse-Glimmer-30B",
+            "--paged-attn",
+            "on",
+            "--dflash-model",
+            "meta-models/Muse-Glimmer-30B-GGUF",
+            "--dflash-file",
+            "dflash-Muse-Glimmer-30B-Q4_K_M.gguf",
+            "--dflash-n-predict",
+            "12",
+        ])
+        .unwrap();
+        let Command::Run { runtime, .. } = cli.command else {
+            panic!("expected run command");
+        };
+        let config = runtime.dflash_config().unwrap();
+
+        assert_eq!(config.model, "meta-models/Muse-Glimmer-30B-GGUF");
+        assert_eq!(
+            config.filename.as_deref(),
+            Some("dflash-Muse-Glimmer-30B-Q4_K_M.gguf")
+        );
+        assert_eq!(config.n_predict, Some(12));
+    }
+
+    #[test]
+    fn dflash_cli_rejects_mtp_and_invalid_suboptions() {
+        assert!(Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "target",
+            "--mtp-model",
+            "mtp",
+            "--dflash-model",
+            "dflash",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "target",
+            "--dflash-file",
+            "assistant.gguf",
+        ])
+        .is_err());
+        assert!(Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "target",
+            "--dflash-model",
+            "dflash",
+            "--dflash-n-predict",
+            "16",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn dflash_toml_options_use_the_same_validation() {
+        let mixed = RuntimeOptions {
+            mtp_model: Some("mtp".to_string()),
+            dflash_model: Some("dflash".to_string()),
+            ..RuntimeOptions::default()
+        };
+        assert!(mixed.validate_speculative_options().is_err());
+
+        let missing_model = RuntimeOptions {
+            dflash_file: Some("assistant.gguf".to_string()),
+            ..RuntimeOptions::default()
+        };
+        assert!(missing_model.validate_speculative_options().is_err());
+
+        let out_of_range = RuntimeOptions {
+            dflash_model: Some("dflash".to_string()),
+            dflash_n_predict: Some(DFLASH_MAX_N_PREDICT + 1),
+            ..RuntimeOptions::default()
+        };
+        assert!(out_of_range.validate_speculative_options().is_err());
     }
 
     #[test]

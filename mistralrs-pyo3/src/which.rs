@@ -131,6 +131,7 @@ pub enum MultimodalArchitecture {
     Qwen3_5Moe,
     Voxtral,
     Gemma4,
+    MuseGlimmer,
     DiffusionGemma,
 }
 
@@ -158,6 +159,7 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::Qwen3_5Moe => MultimodalLoaderType::Qwen3_5Moe,
             MultimodalArchitecture::Voxtral => MultimodalLoaderType::Voxtral,
             MultimodalArchitecture::Gemma4 => MultimodalLoaderType::Gemma4,
+            MultimodalArchitecture::MuseGlimmer => MultimodalLoaderType::MuseGlimmer,
             MultimodalArchitecture::DiffusionGemma => MultimodalLoaderType::DiffusionGemma,
         }
     }

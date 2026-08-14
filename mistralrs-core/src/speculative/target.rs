@@ -4,6 +4,7 @@ use super::{
     logging::log_attach, SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
     SpeculativeProposeBatchCtx,
 };
+use crate::sequence::Sequence;
 
 pub trait SpeculativeTargetMixin {
     fn attach_speculative(
@@ -41,5 +42,22 @@ pub trait SpeculativeTargetMixin {
     /// Return `Err` only when hidden state was expected but unavailable or invalid.
     fn speculative_target_hiddens(&self, _rows: &[(usize, usize)]) -> Result<Option<Tensor>> {
         Ok(None)
+    }
+
+    fn speculative_bind_target_capture(
+        &self,
+        _sequences: &[&Sequence],
+        _is_prompt: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn speculative_commit_target_capture(
+        &self,
+        _sequences: &[&Sequence],
+        _rows: &[Option<usize>],
+        _expected_lens: &[usize],
+    ) -> Result<()> {
+        Ok(())
     }
 }

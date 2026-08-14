@@ -683,6 +683,7 @@ impl PagedAttentionScheduler {
         seq_guard.set_state(SequenceState::Waiting);
         seq_guard.set_prefix_cache_len(0);
         seq_guard.clear_staged_speculative_tokens();
+        seq_guard.clear_speculative_aux_state();
         let seq_id = *seq_guard.id();
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();
@@ -963,6 +964,30 @@ mod tests {
 
         assert_eq!(output.scheduled.len(), 1);
         assert_eq!(validator.cached_tokens, vec![0]);
+    }
+
+    #[test]
+    fn preemption_clears_speculative_aux_state() {
+        let mut scheduler = test_scheduler();
+        let seq = test_sequence(0, 4);
+        {
+            let seq = get_mut_arcmutex!(seq);
+            seq.with_speculative_aux_state(
+                || 0usize,
+                |state| {
+                    *state = 7;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        }
+
+        scheduler._preempt(seq.clone());
+
+        let state = get_mut_arcmutex!(seq)
+            .with_speculative_aux_state(|| 0usize, |state| Ok(*state))
+            .unwrap();
+        assert_eq!(state, 0);
     }
 
     #[test]

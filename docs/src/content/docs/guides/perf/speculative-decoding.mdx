@@ -1,17 +1,19 @@
 ---
-title: Speculative decoding (MTP)
-description: Use MTP assistant models to draft multiple tokens per target verification pass.
+title: Speculative decoding
+description: Use MTP or DFlash assistants to draft multiple tokens per target verification pass.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Speculative decoding lets a smaller assistant propose future tokens while the target model verifies them in parallel. mistral.rs exposes this through the MTP (Multi-Token Prediction) API: attach an assistant checkpoint and the engine drafts several tokens per target step.
-
-Output stays exact: every accepted token is verified by the target model before it is emitted.
+Speculative decoding lets an assistant propose future tokens while the target model verifies them in parallel. Every accepted token is verified by the target before it is emitted. Actual throughput depends on acceptance rate, hardware, batch size, and the relative cost of the assistant and target passes.
 
 :::caution
 The target must run with [paged attention](/mistral.rs/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
 :::
+
+## MTP
+
+Gemma 4 assistant checkpoints use the MTP (Multi-Token Prediction) proposer.
 
 <Tabs>
 <TabItem label="CLI">
@@ -22,7 +24,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-n-predict 6
 ```
 
-`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve`. See [run](/mistral.rs/reference/cli/run/) and [serve](/mistral.rs/reference/cli/serve/) flag references.
+`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve` and `mistralrs bench`.
 
 </TabItem>
 <TabItem label="Python">
@@ -38,51 +40,108 @@ runner = Runner(
 )
 ```
 
-Gemma 4 loads via `Which.MultimodalPlain`; it is currently the only model family with MTP assistant checkpoints.
-
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
+let paged_attn = mistralrs::PagedAttentionMetaBuilder::default().build()?;
 let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
+    .with_paged_attn(paged_attn)
     .with_mtp_model("google/gemma-4-E4B-it-assistant", Some(6))
     .build()
     .await?;
 ```
 
-For full control, `with_mtp_config(MtpConfig { model, n_predict })` is equivalent. The MTP builder methods exist on the text, multimodal, and auto-detecting model builders.
+For full control, use `with_mtp_config(MtpConfig { model, n_predict })`.
 
 </TabItem>
 </Tabs>
 
-`--mtp-n-predict` controls how many assistant tokens are proposed per step. If it is omitted, mistral.rs reads `num_assistant_tokens` from the assistant's `generation_config.json` and falls back to 6.
+If `--mtp-n-predict` is omitted, mistral.rs reads `num_assistant_tokens` from the assistant's `generation_config.json` and falls back to 6.
 
-## Supported models
+See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for an upstream checkpoint. The target and assistant must agree on required dimensions such as vocabulary and target hidden size; incompatible pairs fail during loading.
 
-| Mode | Target models | Assistant model | Status |
-|---|---|---|---|
-| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with paged attention |
+## DFlash
 
-Legacy target/draft speculative decoding has been removed. New speculative decoding features use the MTP proposer/target path.
+DFlash is supported for Muse Glimmer targets. It uses one anchor token and up to 15 draft positions from the assistant's block size of 16. The default and maximum proposal count are therefore 15.
 
-## Gemma 4
+The assistant may be either the BF16 checkpoint or the official prequantized GGUF sidecar:
 
-Gemma 4 assistant checkpoints are MTP drafters for Gemma 4 target models. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint. A downloaded checkout works too:
+<Tabs>
+<TabItem label="GGUF sidecar">
 
 ```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 \
-  --mtp-model ./gemma-4-E4B-it-assistant \
-  --mtp-n-predict 6
+mistralrs run -m meta-models/Muse-Glimmer-30B-GGUF \
+  -f Muse-Glimmer-30B-KQuant-17GB-Q4_K_M.gguf \
+  --mmproj mmproj-Muse-Glimmer-30B-Q4_K_M.gguf \
+  --tok-model-id meta-models/Muse-Glimmer-30B \
+  --paged-attn on \
+  --dflash-model meta-models/Muse-Glimmer-30B-GGUF \
+  --dflash-file dflash-Muse-Glimmer-30B-Q4_K_M.gguf \
+  --dflash-n-predict 15
 ```
 
-Non-paged KV-cache MTP is intentionally disabled for now, which is why paged attention is required (see the note at the top).
+`--dflash-file` selects a GGUF within the repository named by `--dflash-model`. It is optional when the assistant repository contains a BF16 safetensors checkpoint.
 
-The target and assistant configs must match where the implementation requires it, including vocabulary size and target hidden size. Mismatches fail at load, before generation starts.
+</TabItem>
+<TabItem label="BF16 assistant">
 
-## Notes
+```bash
+mistralrs run -m meta-models/Muse-Glimmer-30B \
+  --paged-attn on \
+  --dflash-model meta-models/Muse-Glimmer-30B-assistant
+```
 
-MTP remains exact: accepted output is verified by the target model before it is emitted. Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
+</TabItem>
+<TabItem label="Python">
 
-MTP supports batched generation and constrained decoding.
+```python
+from mistralrs import Runner, Which
 
-MTP is configured at launch time only (CLI flags, `Runner(...)`, or the model builder). There is no per-request HTTP field to toggle it; load the server with the assistant attached and every request uses it.
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="meta-models/Muse-Glimmer-30B"),
+    paged_attn=True,
+    dflash_model="meta-models/Muse-Glimmer-30B-assistant",
+    dflash_n_predict=15,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let paged_attn = mistralrs::PagedAttentionMetaBuilder::default().build()?;
+let model = mistralrs::ModelBuilder::new("meta-models/Muse-Glimmer-30B")
+    .with_paged_attn(paged_attn)
+    .with_dflash_model(
+        "meta-models/Muse-Glimmer-30B-assistant",
+        None,
+        Some(15),
+    )
+    .build()
+    .await?;
+```
+
+Use `with_dflash_config(DFlashConfig { model, filename, n_predict })` to select a GGUF assistant file.
+
+</TabItem>
+</Tabs>
+
+DFlash v1 has these assistant-side limits:
+
+- The assistant runs on one device; assistant tensor parallelism is not supported.
+- The assistant cannot be converted with ISQ or loaded from UQFF. Use its BF16 weights or a prequantized GGUF sidecar.
+- Target prefix caching is disabled while DFlash is attached because a cached target prefix does not contain the assistant's state.
+
+These limits apply to the assistant sidecar. Muse multimodal input and tool-calling flows still use the target model, and speculative output remains target-verified.
+
+Dynamic LoRA cannot be enabled together with a speculative assistant.
+
+## Supported combinations
+
+| Mode | Target models | Assistant | Proposal count |
+|---|---|---|---|
+| MTP | Gemma 4 | Gemma 4 assistant checkpoint | Assistant config, or 6 by fallback |
+| DFlash | Muse Glimmer | Muse Glimmer DFlash BF16 checkpoint or GGUF sidecar | 15 by default, 15 maximum |
+
+MTP and DFlash flags are mutually exclusive. Both modes are configured at launch time through CLI flags, `Runner(...)`, or a Rust model builder; there is no per-request HTTP field. They support the normal batched and constrained-generation paths, subject to each model family's existing input support.

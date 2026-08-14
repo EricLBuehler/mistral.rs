@@ -116,6 +116,20 @@ Gemma repos are gated: accept the license on the Hugging Face model page, then a
 
 Gemma 4 accepts image, audio, and video parts mixed in one message, and enforces its tool-call format through constrained decoding by default; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
 
+## Muse Glimmer
+
+Muse Glimmer loads through normal model auto-detection:
+
+```bash
+mistralrs run -m meta-models/Muse-Glimmer-30B
+```
+
+The native safetensors checkpoint accepts text, images, and video; it does not accept audio. Video is represented as timestamped frame groups, and the model card notes that the model was trained primarily for image rather than video understanding.
+
+The model's ATEM chat template is detected automatically. Tool calling supports automatic, required, named, and parallel calls through the same HTTP, Python, Rust, and agent APIs as other tool-capable models. `reasoning_effort` selects the template's `low`, `medium`, or `high` reasoning strength.
+
+ISQ, UQFF, paged attention, prefix caching, tensor parallelism, and text-backbone LoRA use the standard multimodal model paths. For GGUF-specific requirements and its image-only projector limitation, see [GGUF compatibility](/mistral.rs/reference/gguf-support/).
+
 ## MatFormer
 
 MatFormer-trained models encode multiple model sizes in one checkpoint; the desired slice is selected at load time with two values:

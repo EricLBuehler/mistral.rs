@@ -317,6 +317,11 @@ impl MultimodalLoaderType {
                     ex!("google/gemma-4-31B-it", "31B dense"),
                 ],
             },
+            Self::MuseGlimmer => ArchMetadata {
+                families: &["Muse Glimmer"],
+                modalities: &[Text, Vision, Video],
+                examples: &[ex!("meta-models/Muse-Glimmer-30B")],
+            },
             Self::DiffusionGemma => ArchMetadata {
                 families: &["DiffusionGemma"],
                 modalities: &[Text, Vision],
@@ -432,6 +437,7 @@ impl MultimodalLoaderType {
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
             Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
+            Self::MuseGlimmer => "MuseGlimmerForConditionalGeneration",
             Self::DiffusionGemma => "DiffusionGemmaForBlockDiffusion",
         }
     }
@@ -480,7 +486,8 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding](/mistral.rs/guides/perf/speculative-decoding/) |
+| DFlash | `MuseGlimmerForConditionalGeneration` | Muse Glimmer BF16 or GGUF DFlash assistant, PagedAttention required | [Speculative decoding](/mistral.rs/guides/perf/speculative-decoding/#dflash) |
 "#;
 
 fn md_cell(s: &str) -> String {
