@@ -39,8 +39,8 @@ mod vision;
 pub(crate) use config::Config;
 pub(crate) use inputs_processor::{
     expand_media_placeholders, media_data_cached_offset, packed_layout, prompt_mrope,
-    select_media_batch, select_media_view, shift_media_spans, split_media_pixels,
-    validated_mm_features, video_hashes, PromptMropeConfig, Qwen2VLProcessor,
+    replace_first_occurrence, select_media_batch, select_media_view, shift_media_spans,
+    split_media_pixels, validated_mm_features, video_hashes, PromptMropeConfig, Qwen2VLProcessor,
 };
 
 pub struct Qwen2VLModel {

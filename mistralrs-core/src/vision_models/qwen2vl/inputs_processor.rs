@@ -78,7 +78,7 @@ impl Processor for Qwen2VLProcessor {
     }
 }
 
-fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
+pub(crate) fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
     if let Some(pos) = text.find(to_replace) {
         let mut result = text.to_string();
         result.replace_range(pos..pos + to_replace.len(), replacement);

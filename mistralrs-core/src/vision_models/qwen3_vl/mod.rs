@@ -96,7 +96,10 @@ pub(crate) fn get_rope_index(
                 if row.len() != 3 {
                     candle_core::bail!("video_grid_thw entries must have length 3");
                 }
-                data.push([row[0], row[1], row[2]]);
+                // Timestamps split each video into per-frame vision spans, so the grid splits too.
+                for _ in 0..row[0] {
+                    data.push([1, row[1], row[2]]);
+                }
             }
             Some(data)
         } else {
@@ -1051,7 +1054,8 @@ mod tests {
 
     #[test]
     fn video_mrope_consumes_the_full_temporal_grid() -> Result<()> {
-        let input_ids = Tensor::new(&[[10u32, 12, 12, 12, 12, 11, 7]], &Device::Cpu)?;
+        // One [2,4,2] grid row feeds two per-frame vision spans in the timestamped prompt format.
+        let input_ids = Tensor::new(&[[10u32, 12, 12, 11, 10, 12, 12, 11, 7]], &Device::Cpu)?;
         let video_grid = Tensor::new(&[[2u32, 4, 2]], &Device::Cpu)?;
         let (positions, delta) = get_rope_index(
             &input_ids,
@@ -1065,11 +1069,11 @@ mod tests {
             11,
         )?;
 
-        assert_eq!(positions.dims(), &[3, 1, 7]);
+        assert_eq!(positions.dims(), &[3, 1, 9]);
         assert_eq!(delta.dims(), &[1, 1]);
         assert_eq!(
             positions.i((0, 0))?.to_vec1::<i64>()?,
-            vec![0, 1, 1, 2, 2, 3, 4]
+            vec![0, 1, 1, 3, 4, 5, 5, 7, 8]
         );
         Ok(())
     }

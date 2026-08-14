@@ -425,7 +425,7 @@ impl Loader for MultimodalLoader {
             };
 
             // Some models only ship nested preprocessor settings in processor_config.json.
-            let preprocessor_config: PreProcessorConfig = match self.prepared_source.as_ref() {
+            let mut preprocessor_config: PreProcessorConfig = match self.prepared_source.as_ref() {
                 Some(source) => source
                     .preprocessor_config
                     .as_deref()
@@ -459,6 +459,11 @@ impl Loader for MultimodalLoader {
                     ),
                 },
             };
+            if let Some(video_config) = paths.get_video_preprocessor_config() {
+                preprocessor_config.video = Some(Box::new(serde_json::from_str(
+                    &fs::read_to_string(video_config).unwrap(),
+                )?));
+            }
             let processor_config: Option<ProcessorConfig> = processor_config_json
                 .as_deref()
                 .map(|json| serde_json::from_str(json).unwrap());

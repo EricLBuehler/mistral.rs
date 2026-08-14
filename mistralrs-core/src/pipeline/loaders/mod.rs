@@ -140,6 +140,11 @@ pub trait ModelPaths: AsAny + Debug + Send + Sync {
     /// Get the preprocessor config (for the multimodal models). This is used to pre process images.
     fn get_preprocessor_config(&self) -> &Option<PathBuf>;
 
+    /// Get the video preprocessor config, for multimodal models that ship separate video settings.
+    fn get_video_preprocessor_config(&self) -> Option<&PathBuf> {
+        None
+    }
+
     /// Get the processor config (for the multimodal models). This is primarily used for the chat template.
     fn get_processor_config(&self) -> &Option<PathBuf>;
 
@@ -163,6 +168,7 @@ pub struct LocalModelPaths<P: Debug> {
     pub adapter_paths: AdapterPaths,
     pub gen_conf: Option<P>,
     pub preprocessor_config: Option<P>,
+    pub video_preprocessor_config: Option<P>,
     pub processor_config: Option<P>,
     pub chat_template_json_filename: Option<P>,
 }
@@ -188,6 +194,7 @@ impl<P: Debug> LocalModelPaths<P> {
             adapter_paths,
             gen_conf,
             preprocessor_config,
+            video_preprocessor_config: None,
             processor_config,
             chat_template_json_filename,
         }
@@ -212,6 +219,9 @@ impl ModelPaths for LocalModelPaths<PathBuf> {
     }
     fn get_preprocessor_config(&self) -> &Option<PathBuf> {
         &self.preprocessor_config
+    }
+    fn get_video_preprocessor_config(&self) -> Option<&PathBuf> {
+        self.video_preprocessor_config.as_ref()
     }
     fn get_processor_config(&self) -> &Option<PathBuf> {
         &self.processor_config
