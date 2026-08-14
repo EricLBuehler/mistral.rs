@@ -71,10 +71,10 @@ fn parse_adapter_selection(adapter: Option<Py<PyAny>>) -> PyResult<Option<Adapte
     })
 }
 
-pub(crate) fn parse_reasoning_effort(effort: Option<&str>) -> PyResult<Option<ReasoningEffort>> {
-    effort.map(str::parse).transpose().map_err(
-        |error: mistralrs_core::ReasoningEffortParseError| PyValueError::new_err(error.to_string()),
-    )
+fn parse_reasoning_effort(
+    effort: Option<&str>,
+) -> Result<Option<ReasoningEffort>, mistralrs_core::ReasoningEffortParseError> {
+    effort.map(str::parse).transpose()
 }
 
 #[pyclass]
@@ -494,7 +494,8 @@ impl ChatCompletionRequest {
         let code_execution_permission = parse_permission(code_execution_permission)?;
         let agent_permission = parse_agent_permission(agent_permission)?
             .or_else(|| code_execution_permission.map(Into::into));
-        let reasoning_effort = parse_reasoning_effort(reasoning_effort.as_deref())?;
+        let reasoning_effort = parse_reasoning_effort(reasoning_effort.as_deref())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
         mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
