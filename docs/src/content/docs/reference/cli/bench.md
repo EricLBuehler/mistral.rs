@@ -60,9 +60,6 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
 | `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
 | `--mtp-n-predict <MTP_N_PREDICT>` |  | Number of MTP draft tokens to propose per target step |
-| `--dflash-model <DFLASH_MODEL>` |  | DFlash assistant model id or path for Muse |
-| `--dflash-file <DFLASH_FILE>` |  | DFlash GGUF filename within the assistant model repository |
-| `--dflash-n-predict <DFLASH_N_PREDICT>` |  | Number of DFlash draft tokens to propose per target step (1 to 15) |
 | `--adapter <ADAPTER>` |  | LoRA adapter alias to benchmark. Omit to benchmark the base model |
 | `--prompt-len <PROMPT_LEN>` | `512` | Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps |
 | `--gen-len <GEN_LEN>` | `128` | Output tokens per decode request. Values below 2 skip decode metrics |

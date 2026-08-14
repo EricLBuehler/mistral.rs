@@ -64,9 +64,6 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
 | `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
 | `--mtp-n-predict <MTP_N_PREDICT>` |  | Number of MTP draft tokens to propose per target step |
-| `--dflash-model <DFLASH_MODEL>` |  | DFlash assistant model id or path for Muse |
-| `--dflash-file <DFLASH_FILE>` |  | DFlash GGUF filename within the assistant model repository |
-| `--dflash-n-predict <DFLASH_N_PREDICT>` |  | Number of DFlash draft tokens to propose per target step (1 to 15) |
 | `--mcp-config <MCP_CONFIG>` |  | Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset |
 | `--agent` | `false` | Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic tool loop with a per-session temp workdir. Equivalent to passing `--enable-search --enable-code-execution --enable-shell` together |
 | `--enable-search` | `false` | Enable web search (requires embedding model) |
@@ -87,7 +84,8 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--sb-max-cpu-secs <CPU_SECS>` |  | Per-session CPU time cap in seconds (default: 600). Raised to at least enabled code/shell timeouts |
 | `--sb-max-procs <PROCS>` |  | Per-session process/thread cap (default: 64) |
 | `--sandbox-network <NETWORK>` |  | Network access permitted to the sandboxed session. Possible values: `none`, `loopback`, `full`. |
-| `--thinking <THINKING>` |  | Control thinking mode for models that support it. Use --thinking or --thinking true to force on, --thinking false to force off. Omit to defer to the chat template default. Possible values: `true`, `false`. |
+| `--thinking <THINKING>` |  | Control thinking mode for models that support it. Use --thinking or --thinking true to force on, --thinking false to force off. If both reasoning controls are omitted, effort is unspecified and thinking is enabled. Possible values: `true`, `false`. |
+| `--reasoning-effort <REASONING_EFFORT>` |  | Set reasoning effort without changing the model's sampling parameters. Values are off, low, medium, high, or xhigh. "none" is an alias for off |
 | `-i, --input <INPUT>` |  | One-shot text prompt. When provided, sends a single request and exits instead of entering interactive mode. Combine with --image, --video, or --audio for multimodal requests |
 | `--image <IMAGE>` |  | Image URL(s) or file path(s) to include in the request (requires -i). Can be specified multiple times: --image img1.jpg --image img2.png |
 | `--video <VIDEO>` |  | Video URL(s) or file path(s) to include in the request (requires -i). Can be specified multiple times: --video vid1.mp4 --video vid2.webm |

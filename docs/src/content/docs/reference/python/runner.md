@@ -37,10 +37,6 @@ __init__(
     mcp_client_config: McpClientConfigPy | None = None,
     code_execution_config: CodeExecutionConfig | None = None,
     shell_config: ShellConfig | None = None,
-    *,
-    dflash_model: str | None = None,
-    dflash_file: str | None = None,
-    dflash_n_predict: int | None = None,
 ) -> None
 ```
 
@@ -54,9 +50,6 @@ Load a model.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
 - `mtp_model` attaches an MTP assistant from a model id or path.
 - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
-- `dflash_model` attaches a DFlash assistant to a Muse target from a model id or path.
-- `dflash_file` selects a DFlash GGUF file within the assistant model repository.
-- `dflash_n_predict` controls the number of DFlash tokens proposed per step, from 1 to 15. The default is 15.
 - `chat_template` specifies an optional JINJA chat template as a JSON file.
     This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
     It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
@@ -271,7 +264,7 @@ Tokenize some text, returning raw tokens.
 | --- | --- | --- | --- |
 | `text` | `str` | required | The text to tokenize. |
 | `add_special_tokens` | `bool` | required | Whether to add special tokens. |
-| `enable_thinking` | `bool \| None` | required | Enables thinking for models that support this configuration. |
+| `enable_thinking` | `bool \| None` | required | Compatibility argument; raw text tokenization does not render a chat template. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
 ### `Runner.detokenize_text`

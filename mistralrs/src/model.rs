@@ -28,6 +28,27 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
     }
 }
 
+fn validate_reasoning_controls(message: &RequestMessage) -> crate::error::Result<()> {
+    let controls = match message {
+        RequestMessage::Chat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        }
+        | RequestMessage::MultimodalChat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        } => Some((*enable_thinking, *reasoning_effort)),
+        _ => None,
+    };
+    if let Some((enable_thinking, reasoning_effort)) = controls {
+        resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
+    }
+    Ok(())
+}
+
 /// The object used to interact with the model. This can be used with many varieties of models, \
 /// and as such may be created with one of:
 /// - [`ModelBuilder`] (auto-detecting)
@@ -266,8 +287,10 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
             response: tx,
             return_logprobs: request.return_logprobs(),
@@ -331,8 +354,10 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
             response: tx,
             return_logprobs: request.return_logprobs(),
@@ -414,8 +439,10 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
             response: tx,
             return_logprobs: request.return_logprobs(),
@@ -937,6 +964,7 @@ impl Model {
 
     /// Tokenize some text or messages.
     /// - `tools` is only used if messages are provided.
+    /// - `enable_thinking` is only used if messages are provided.
     pub async fn tokenize(
         &self,
         text: Either<TextMessages, String>,
@@ -945,7 +973,7 @@ impl Model {
         add_generation_prompt: bool,
         enable_thinking: Option<bool>,
     ) -> crate::error::Result<Vec<u32>> {
-        self.tokenize_with_model(
+        self.tokenize_with_reasoning_effort(
             text,
             tools,
             add_special_tokens,
@@ -956,9 +984,34 @@ impl Model {
         .await
     }
 
+    /// Tokenize some text or messages with an optional reasoning effort.
+    /// - `tools` is only used if messages are provided.
+    /// - Reasoning controls are only used if messages are provided.
+    pub async fn tokenize_with_reasoning_effort(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> crate::error::Result<Vec<u32>> {
+        self.tokenize_with_reasoning_effort_and_model(
+            text,
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            enable_thinking,
+            reasoning_effort,
+            None,
+        )
+        .await
+    }
+
     /// Tokenize some text or messages using a specific model.
     /// If `model_id` is `None`, the request is sent to the default model.
     /// - `tools` is only used if messages are provided.
+    /// - `enable_thinking` is only used if messages are provided.
     pub async fn tokenize_with_model(
         &self,
         text: Either<TextMessages, String>,
@@ -968,6 +1021,35 @@ impl Model {
         enable_thinking: Option<bool>,
         model_id: Option<&str>,
     ) -> crate::error::Result<Vec<u32>> {
+        self.tokenize_with_reasoning_effort_and_model(
+            text,
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            enable_thinking,
+            None,
+            model_id,
+        )
+        .await
+    }
+
+    /// Tokenize some text or messages with an optional reasoning effort using a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    /// - `tools` is only used if messages are provided.
+    /// - Reasoning controls are only used if messages are provided.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn tokenize_with_reasoning_effort_and_model(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Vec<u32>> {
+        resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {
             text: text.map_left(Into::into),
@@ -976,7 +1058,7 @@ impl Model {
             add_generation_prompt,
             response: tx,
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         });
         self.runner.get_sender(model_id)?.send(request).await?;
 

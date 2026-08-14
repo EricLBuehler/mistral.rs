@@ -13,7 +13,7 @@ The UI provides:
 
 - A chat panel with markdown rendering, code block syntax highlighting, and streamed output.
 - A settings drawer with sampling controls (temperature, top-p, top-k, max tokens) and a system prompt field.
-- Inline rendering of thinking tokens when the model emits them.
+- Inline rendering of thinking tokens when the model emits them, with Default, Off, Low, Medium, High, and XHigh reasoning controls.
 - Tool-call visualization when `--enable-search`, `--enable-code-execution`, or `--enable-shell` is also set.
 - Tool approval cards when approval mode is `ask`.
 - Multimodal attachments when the loaded model supports images, audio, or video.

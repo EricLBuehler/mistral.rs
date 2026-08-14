@@ -29,7 +29,8 @@ quant = "4"
 |---|---|---|---|
 | `command` | string | both | `"serve"` or `"run"`. |
 | `default_model_id` | string | serve | Model id treated as the default. Must match one of the `[[models]]` entries. |
-| `thinking` | bool | run | Force thinking mode on or off for models that support it (alias: `enable_thinking`). Omit to defer to the chat template default. Maps to `--thinking` on `mistralrs run`. |
+| `thinking` | bool | run | Legacy thinking toggle (alias: `enable_thinking`). If both reasoning controls are omitted, thinking defaults on. Maps to `--thinking` on `mistralrs run`. |
+| `reasoning_effort` | string | run | `off`, `low`, `medium`, `high`, or `xhigh`; `none` aliases `off`. Omit to leave effort unspecified. Maps to `--reasoning-effort`. |
 
 ## `[global]` section
 
@@ -54,9 +55,6 @@ quant = "4"
 | `matformer_slice_name` | `--matformer-slice-name` | not set | MatFormer slice to load. Requires `matformer_config_path`. |
 | `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
-| `dflash_model` | `--dflash-model` | not set | [DFlash](/mistral.rs/guides/perf/speculative-decoding/#dflash) assistant model id or path for Muse. Conflicts with MTP options. |
-| `dflash_file` | `--dflash-file` | not set | GGUF filename within the DFlash assistant repository. Requires `dflash_model`. |
-| `dflash_n_predict` | `--dflash-n-predict` | not set (15 proposals) | DFlash draft tokens proposed per target step, from 1 to 15. Requires `dflash_model`. |
 | `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |
