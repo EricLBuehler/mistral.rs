@@ -1077,6 +1077,7 @@ pub enum ModelCategory {
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
+        video_sampling: crate::VideoFrameSampling,
     },
     Diffusion,
     Audio,

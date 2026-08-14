@@ -344,8 +344,11 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         adapter: _,
     } = ctx;
     let config = mistralrs.config(None).unwrap();
-    let prefixer = match &config.category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+    let (prefixer, video_sampling) = match &config.category {
+        ModelCategory::Multimodal {
+            prefixer,
+            video_sampling,
+        } => (prefixer, *video_sampling),
         _ => {
             error!("--image/--video/--audio require a multimodal model, but the loaded model is not multimodal.");
             return;
@@ -394,7 +397,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
     // Load videos
     let mut video_indexes = Vec::new();
     for url in &input.videos {
-        match parse_video_url(url, None).await {
+        match parse_video_url(url, Some(video_sampling)).await {
             Ok(video) => {
                 info!("Loaded video: {url}");
                 video_indexes.push(videos.len());
@@ -1511,8 +1514,11 @@ async fn multimodal_interactive_mode(
     let mut videos = Vec::new();
 
     let config = mistralrs.config(None).unwrap();
-    let prefixer = match &config.category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+    let (prefixer, video_sampling) = match &config.category {
+        ModelCategory::Multimodal {
+            prefixer,
+            video_sampling,
+        } => (prefixer, *video_sampling),
         _ => {
             panic!("`add_image_message` expects a multimodal model.")
         }
@@ -1631,7 +1637,7 @@ async fn multimodal_interactive_mode(
                     // Load videos
                     let mut video_indexes = Vec::new();
                     for url in &urls_video {
-                        match parse_video_url(url, None).await {
+                        match parse_video_url(url, Some(video_sampling)).await {
                             Ok(video) => {
                                 info!("Added video at `{url}`");
                                 video_indexes.push(videos.len());

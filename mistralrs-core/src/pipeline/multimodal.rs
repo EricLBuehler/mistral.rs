@@ -103,6 +103,7 @@ pub struct MultimodalPipeline {
     processor: Arc<dyn Processor + Send + Sync>,
     preprocessor_config: Arc<PreProcessorConfig>,
     prefixer: Arc<dyn MultimodalPromptPrefixer>,
+    video_sampling: crate::VideoFrameSampling,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
@@ -1280,6 +1281,7 @@ impl Loader for MultimodalLoader {
             }),
             processor,
             prefixer: self.inner.prefixer(&config),
+            video_sampling: self.inner.video_frame_sampling(&config),
             preprocessor_config: Arc::new(preprocessor_config),
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
@@ -1949,6 +1951,7 @@ impl Pipeline for MultimodalPipeline {
         } else {
             ModelCategory::Multimodal {
                 prefixer: self.prefixer.clone(),
+                video_sampling: self.video_sampling,
             }
         }
     }

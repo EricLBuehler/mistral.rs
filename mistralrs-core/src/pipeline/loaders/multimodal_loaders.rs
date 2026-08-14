@@ -85,6 +85,13 @@ use crate::vision_models::voxtral::config::VoxtralConfig;
 use crate::vision_models::voxtral::{VoxtralModel, VoxtralProcessor};
 use crate::vision_models::{minicpmo, phi4};
 
+// HF Qwen3VLVideoProcessor sampling defaults, shared by the Qwen3-VL/3.5 family.
+const QWEN3_VIDEO_SAMPLING: crate::VideoFrameSampling = crate::VideoFrameSampling::Fps {
+    fps: 2.0,
+    min_frames: 4,
+    max_frames: 768,
+};
+
 pub trait MultimodalModel:
     IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin + BlockDiffusionMixin
 {
@@ -190,6 +197,10 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
     }
     fn modalities(&self, config: &str) -> Result<Modalities>;
     fn prefixer(&self, config: &str) -> Arc<dyn MultimodalPromptPrefixer>;
+    /// How to sample frames when decoding video inputs for this model.
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        crate::VideoFrameSampling::default()
+    }
     /// Return a default chat template (Jinja string) for models that don't ship a
     /// `tokenizer_config.json` or `chat_template.jinja`. Returns `None` by default.
     /// The `config` parameter is the raw model config JSON, used by `AutoMultimodalLoader`
@@ -513,6 +524,12 @@ impl MultimodalModelLoader for AutoMultimodalLoader {
         Self::get_loader(config)
             .expect("AutoMultimodalLoader")
             .prefixer(config)
+    }
+
+    fn video_frame_sampling(&self, config: &str) -> crate::VideoFrameSampling {
+        Self::get_loader(config)
+            .expect("AutoMultimodalLoader")
+            .video_frame_sampling(config)
     }
 
     fn default_chat_template(&self, config: &str) -> Option<String> {
@@ -6065,6 +6082,9 @@ impl MultimodalModelLoader for Qwen3VLLoader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3VLPrefixer)
     }
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
+    }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
             input: vec![
@@ -6423,6 +6443,9 @@ impl MultimodalModelLoader for Qwen3VLMoELoader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3VLMoEPrefixer)
+    }
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
@@ -6842,6 +6865,9 @@ impl MultimodalModelLoader for Qwen3_5Loader {
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3_5Prefixer)
     }
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
+    }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
             input: vec![
@@ -7232,6 +7258,9 @@ impl MultimodalModelLoader for Qwen3_5MoeLoader {
     }
     fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
         Arc::new(Qwen3_5MoePrefixer)
+    }
+    fn video_frame_sampling(&self, _config: &str) -> crate::VideoFrameSampling {
+        QWEN3_VIDEO_SAMPLING
     }
     fn modalities(&self, _config: &str) -> Result<Modalities> {
         Ok(Modalities {
