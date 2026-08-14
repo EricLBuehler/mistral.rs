@@ -101,6 +101,7 @@ pub struct CompletionRequest {
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) truncate_sequence: bool,
+    pub(crate) ignore_eos: bool,
 }
 
 #[pymethods]
@@ -132,6 +133,7 @@ impl CompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         truncate_sequence=false,
+        ignore_eos=false,
         *,
         adapter=None,
     ))]
@@ -161,6 +163,7 @@ impl CompletionRequest {
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
         truncate_sequence: Option<bool>,
+        ignore_eos: bool,
         adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
@@ -190,6 +193,7 @@ impl CompletionRequest {
             dry_base,
             dry_sequence_breakers,
             truncate_sequence: truncate_sequence.unwrap_or(false),
+            ignore_eos,
         })
     }
 }
@@ -321,6 +325,7 @@ pub struct ChatCompletionRequest {
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
+    pub(crate) ignore_eos: bool,
     /// "low", "medium", or "high" for models that support extended thinking.
     pub(crate) reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
@@ -386,6 +391,7 @@ impl ChatCompletionRequest {
         session_id=None,
         files=None,
         input_files=None,
+        ignore_eos=false,
         *,
         adapter=None,
     ))]
@@ -429,6 +435,7 @@ impl ChatCompletionRequest {
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
         input_files: Option<Vec<crate::files::InputFile>>,
+        ignore_eos: bool,
         adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
@@ -512,6 +519,7 @@ impl ChatCompletionRequest {
             web_search_options,
             enable_thinking,
             truncate_sequence: truncate_sequence.unwrap_or(false),
+            ignore_eos,
             reasoning_effort,
             max_tool_rounds,
             tool_dispatch_url,
@@ -571,12 +579,14 @@ mod tests {
             .new_text_signature()
             .unwrap();
         assert!(completion.starts_with("(prompt, model, best_of=1"));
+        assert!(completion.contains("ignore_eos=False"));
         assert!(completion.ends_with("*, adapter=None)"));
 
         let chat = PyClassImplCollector::<ChatCompletionRequest>::new()
             .new_text_signature()
             .unwrap();
         assert!(chat.starts_with("(messages, model, logprobs=False"));
+        assert!(chat.contains("ignore_eos=False"));
         assert!(chat.ends_with("*, adapter=None)"));
     }
 }

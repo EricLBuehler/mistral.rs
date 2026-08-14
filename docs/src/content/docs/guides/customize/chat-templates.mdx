@@ -5,7 +5,9 @@ description: How mistral.rs resolves a model's chat template, and how to overrid
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-A chat template formats messages into the string the model receives. The wrong format produces output that is coherent but degraded. mistral.rs resolves the template from the model files automatically for almost every supported model; when that fails, override it with a template file:
+A chat template formats messages into the string the model receives. An incorrect template can
+degrade output or expose special tokens. mistral.rs normally resolves the template from the model
+files; when it cannot, provide a template file explicitly:
 
 ```bash
 mistralrs run -m <model> --chat-template my-template.jinja
@@ -13,7 +15,9 @@ mistralrs run -m <model> --chat-template my-template.jinja
 
 ## How the template is resolved
 
-Highest priority first: a multimodal `processor_config.json` template wins over everything; then `--jinja-explicit`; then `--chat-template`; then the model repo's own template; then GGUF metadata as a last resort.
+Template precedence, from highest to lowest, is `--jinja-explicit`, a multimodal
+`processor_config.json` template, `--chat-template`, the model repository's template, and GGUF
+metadata.
 
 The base source (when no override flag is set) is picked in this order:
 
@@ -25,7 +29,8 @@ Overrides apply on top of that base (the precedence summary above lists them hig
 
 - `--chat-template <file>` replaces the base source. The file must end in `.json` or `.jinja`.
 - `--jinja-explicit <file.jinja>` overrides `--chat-template`. The value must be a path to a `.jinja` file.
-- For multimodal models, a `chat_template` in `processor_config.json` takes precedence over everything above.
+- For multimodal models, a `chat_template` in `processor_config.json` takes precedence unless
+  `--jinja-explicit` is set.
 
 GGUF models are a special case: the template embedded in GGUF metadata is used only when none of the sources above produced one.
 

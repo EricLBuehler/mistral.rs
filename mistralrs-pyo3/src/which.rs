@@ -394,6 +394,22 @@ pub enum Which {
         topology = None,
         dtype = ModelDType::Auto,
         auto_map_params = None,
+        *,
+        tokenizer_json = None,
+        mmproj_filename = None,
+        organization = None,
+        write_uqff = None,
+        imatrix = None,
+        calibration_file = None,
+        max_edge = None,
+        multimodal_auto_map_params = None,
+        adapters = None,
+        max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
+        max_rank = DEFAULT_LORA_MAX_RANK,
+        max_bytes = DEFAULT_LORA_MAX_BYTES,
+        hf_cache_path = None,
+        matformer_config_path = None,
+        matformer_slice_name = None,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGUF {
@@ -403,6 +419,21 @@ pub enum Which {
         topology: Option<String>,
         dtype: ModelDType,
         auto_map_params: Option<TextAutoMapParams>,
+        tokenizer_json: Option<String>,
+        mmproj_filename: Option<Either<String, Vec<String>>>,
+        organization: Option<IsqOrganization>,
+        write_uqff: Option<PathBuf>,
+        imatrix: Option<PathBuf>,
+        calibration_file: Option<PathBuf>,
+        max_edge: Option<u32>,
+        multimodal_auto_map_params: Option<MultimodalAutoMapParams>,
+        adapters: Option<Vec<LoraAdapter>>,
+        max_adapters: usize,
+        max_rank: usize,
+        max_bytes: u64,
+        hf_cache_path: Option<PathBuf>,
+        matformer_config_path: Option<PathBuf>,
+        matformer_slice_name: Option<String>,
     },
 
     #[pyo3(constructor = (
@@ -581,4 +612,23 @@ pub enum Which {
         dac_model_id: Option<String>,
         dtype: ModelDType,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Which_GGUF;
+    use pyo3::impl_::pyclass::{PyClassImplCollector, PyClassNewTextSignature};
+
+    #[test]
+    fn gguf_constructor_preserves_legacy_positional_prefix() {
+        let signature = PyClassImplCollector::<Which_GGUF>::new()
+            .new_text_signature()
+            .unwrap();
+
+        assert!(signature.starts_with(
+            "(quantized_model_id, quantized_filename, tok_model_id=None, topology=None, dtype=..., auto_map_params=None, *"
+        ));
+        assert!(signature.contains("tokenizer_json=None"));
+        assert!(signature.contains("mmproj_filename=None"));
+    }
 }

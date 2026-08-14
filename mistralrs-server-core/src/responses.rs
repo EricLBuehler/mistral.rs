@@ -510,6 +510,10 @@ pub struct OpenResponsesCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
 
+    /// Continue generation past EOS until another stop condition is met
+    #[serde(default)]
+    pub ignore_eos: bool,
+
     /// Presence penalty (-2.0 to 2.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
@@ -1720,6 +1724,7 @@ async fn parse_openresponses_request(
         frequency_penalty: oairequest.frequency_penalty,
         repetition_penalty: oairequest.repetition_penalty,
         stop_seqs: oairequest.stop_seqs,
+        ignore_eos: oairequest.ignore_eos,
         temperature: oairequest.temperature,
         top_p: oairequest.top_p,
         stream: oairequest.stream,
@@ -2196,6 +2201,18 @@ fn handle_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ignore_eos_defaults_false_and_accepts_true() {
+        let default: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello"})).unwrap();
+        let enabled: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "ignore_eos": true})).unwrap();
+
+        assert!(!default.ignore_eos);
+        assert!(enabled.ignore_eos);
+    }
 
     #[test]
     fn message_output_item_reuses_id_across_stream_lifecycle() {

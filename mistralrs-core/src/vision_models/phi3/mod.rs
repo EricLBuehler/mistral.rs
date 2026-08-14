@@ -97,6 +97,7 @@ impl From<Config> for PhiRopeConfig {
     fn from(val: Config) -> Self {
         PhiRopeConfig {
             rope_scaling: val.rope_scaling,
+            scaling_attn_factor: None,
             max_position_embeddings: val.max_position_embeddings,
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,

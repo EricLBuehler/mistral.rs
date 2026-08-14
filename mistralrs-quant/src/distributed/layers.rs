@@ -29,27 +29,61 @@ fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     }
 }
 
-fn load_uqff_linear(
-    config: &Option<QuantizedConfig>,
-    vb: &ShardedVarBuilder,
-) -> Result<Option<Arc<dyn QuantMethod>>> {
-    load_uqff_linear_shard(config, Shard::default(), vb)
+fn load_weight_source_linear(vb: &ShardedVarBuilder) -> Result<Option<Arc<dyn QuantMethod>>> {
+    load_weight_source_linear_shard(Shard::default(), vb)
 }
 
-fn load_uqff_linear_shard(
-    config: &Option<QuantizedConfig>,
+fn load_weight_source_linear_shard(
     shard: Shard,
     vb: &ShardedVarBuilder,
 ) -> Result<Option<Arc<dyn QuantMethod>>> {
-    if config.is_some() {
-        return Ok(None);
-    }
-
-    let Some(reader) = vb.uqff_reader() else {
+    let Some(source) = vb.weight_source() else {
         return Ok(None);
     };
 
-    reader.load_linear(&vb.prefix(), vb.device(), shard)
+    source.load_linear(&vb.prefix(), &crate::weight_source_load_device(vb), shard)
+}
+
+fn load_weight_source_dense(
+    vb: &ShardedVarBuilder,
+    bias: bool,
+) -> Result<Option<(Tensor, Option<Tensor>)>> {
+    let Some(layer) = load_weight_source_linear(vb)? else {
+        return Ok(None);
+    };
+    let weight = layer.dequantize_w()?.to_dtype(vb.dtype())?.contiguous()?;
+    let bias = if bias {
+        let source = vb.weight_source().expect("weight source present");
+        let name = crate::safetensors::full_tensor_name(vb, "bias");
+        source
+            .load_optional_tensor(&name, &crate::weight_source_load_device(vb))?
+            .map(|bias| bias.to_dtype(vb.dtype()))
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(Some((weight, bias)))
+}
+
+fn matformer_narrow(
+    tensor: Tensor,
+    dim: usize,
+    original: usize,
+    selected: usize,
+    context: &str,
+) -> Result<Tensor> {
+    if selected > original {
+        candle_core::bail!(
+            "{context} selected dimension {selected} exceeds original dimension {original}"
+        );
+    }
+    match tensor.dim(dim)? {
+        size if size == original => tensor.narrow(dim, 0, selected)?.contiguous(),
+        size if size == selected => Ok(tensor),
+        size => candle_core::bail!(
+            "{context} source dimension {dim} has size {size}, expected {original} or {selected}"
+        ),
+    }
 }
 
 /// This layer has a weight that is parallelized along the input dimension,
@@ -74,32 +108,59 @@ impl RowParallelLayer {
         let rank = comm.rank();
         let world_size = comm.world_size();
         let shard = shard(1, rank, world_size);
+        Self::new_with_lora_spec(
+            LoraLinearSpec::row(in_dim, out_dim, shard),
+            config,
+            bias,
+            comm,
+            vb,
+        )
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_with_lora_spec(
+        lora_spec: LoraLinearSpec,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        let rank = comm.rank();
+        let world_size = comm.world_size();
+        let shard = shard(1, rank, world_size);
+        if lora_spec.row_input_shard() != Some(shard) {
+            candle_core::bail!(
+                "row-parallel layer LoRA spec must use input shard {shard:?}, got {:?}",
+                lora_spec.parallelism()
+            );
+        }
+        let in_dim = lora_spec.in_features();
+        let out_dim = lora_spec.out_features();
 
         let base_vb = vb.clone();
-        if let Some(weight) = load_uqff_linear_shard(config, shard, &base_vb)? {
-            let weight = maybe_wrap_dynamic_lora(
-                &base_vb,
-                weight,
-                LoraLinearSpec::row(in_dim, out_dim, shard),
-            )?;
-            if world_size == 1 {
+        if let Some(weight) = load_weight_source_linear_shard(shard, &base_vb)? {
+            let weight = maybe_wrap_dynamic_lora(&base_vb, weight, lora_spec)?;
+            let layer = if world_size == 1 {
                 // Bias is embedded in the layer when the input dim is not actually sharded.
-                return Ok(weight);
-            }
-            // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
-            let bias = if bias {
-                base_vb
-                    .uqff_reader()
-                    .expect("reader present")
-                    .load_optional_tensor(&format!("{}.bias", base_vb.prefix()), base_vb.device())?
+                weight
             } else {
-                None
+                // Row-sharded deserializes skip the bias; it must be applied once, post-reduce.
+                let bias = if bias {
+                    let load_device = crate::weight_source_load_device(&base_vb);
+                    base_vb
+                        .weight_source()
+                        .expect("weight source present")
+                        .load_optional_tensor(&format!("{}.bias", base_vb.prefix()), &load_device)?
+                } else {
+                    None
+                };
+                Arc::new(Self {
+                    weight,
+                    bias,
+                    all_reduce: distributed::SumAllReduce::new(comm),
+                })
             };
-            return Ok(Arc::new(Self {
-                weight,
-                bias,
-                all_reduce: distributed::SumAllReduce::new(comm),
-            }));
+            return apply_immediate_isq_sharded(layer, base_vb, Some(shard));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -171,11 +232,7 @@ impl RowParallelLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
-        let weight = maybe_wrap_dynamic_lora(
-            &base_vb,
-            weight,
-            LoraLinearSpec::row(in_dim, out_dim, shard),
-        )?;
+        let weight = maybe_wrap_dynamic_lora(&base_vb, weight, lora_spec)?;
 
         // Handle the case where the layer is dummy (no tensors) during UQFF loading. Deserialize will handle it.
         let bias = if bias && vb.contains_tensor("bias") {
@@ -209,6 +266,37 @@ impl RowParallelLayer {
         let shard = shard(1, rank, world_size);
 
         let base_vb = vb.clone();
+        if let Some((weight, bias)) = load_weight_source_dense(&base_vb, bias)? {
+            if weight.rank() != 2 || weight.dim(0)? != out_dim {
+                candle_core::bail!(
+                    "row-parallel MatFormer source at `{}` has shape {:?}, expected [{out_dim}, {orig_intermediate_size}] or [{out_dim}, {in_dim}]",
+                    base_vb.prefix(),
+                    weight.dims()
+                );
+            }
+            let weight = matformer_narrow(
+                weight,
+                1,
+                orig_intermediate_size,
+                in_dim,
+                "row-parallel MatFormer",
+            )?;
+            let weight = shard.apply_to(&weight)?.contiguous()?;
+            let weight = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?) as Arc<dyn QuantMethod>;
+            let weight = maybe_wrap_dynamic_lora(
+                &base_vb,
+                weight,
+                LoraLinearSpec::row(in_dim, out_dim, shard),
+            )?;
+            let layer = Arc::new(Self {
+                weight,
+                bias,
+                all_reduce: distributed::SumAllReduce::new(comm),
+            });
+            return apply_immediate_isq_sharded(layer, base_vb, None);
+        }
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
@@ -420,6 +508,9 @@ impl QuantizedSerde for RowParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
+    fn uqff_type(&self) -> Option<crate::IsqType> {
+        self.weight.uqff_type()
+    }
     fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
         let mut tensors = self.weight.serialize_uqff(prefix, ty)?;
         if let Some(bias) = &self.bias {
@@ -466,13 +557,14 @@ impl ColumnParallelLayer {
         site_key: LoraSiteKey,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
-        if let Some(layer) = load_uqff_linear_shard(config, shard, &base_vb)? {
-            return maybe_wrap_dynamic_lora_with_key(
+        if let Some(layer) = load_weight_source_linear_shard(shard, &base_vb)? {
+            let layer = maybe_wrap_dynamic_lora_with_key(
                 &base_vb,
                 layer,
                 site_key,
                 LoraLinearSpec::column(in_dim, out_dim, shard),
-            );
+            )?;
+            return apply_immediate_isq_sharded(layer, base_vb, Some(shard));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -595,6 +687,46 @@ impl ColumnParallelLayer {
         let shard = shard(0, rank, world_size);
 
         let base_vb = vb.clone();
+        if let Some((weight, bias)) = load_weight_source_dense(&base_vb, bias)? {
+            if weight.rank() != 2 || weight.dim(1)? != in_dim {
+                candle_core::bail!(
+                    "column-parallel MatFormer source at `{}` has shape {:?}, expected [{orig_intermediate_size}, {in_dim}] or [{out_dim}, {in_dim}]",
+                    base_vb.prefix(),
+                    weight.dims()
+                );
+            }
+            let weight = matformer_narrow(
+                weight,
+                0,
+                orig_intermediate_size,
+                out_dim,
+                "column-parallel MatFormer",
+            )?;
+            let weight = shard.apply_to(&weight)?.contiguous()?;
+            let bias = bias
+                .map(|bias| {
+                    matformer_narrow(
+                        bias,
+                        0,
+                        orig_intermediate_size,
+                        out_dim,
+                        "column-parallel MatFormer bias",
+                    )
+                })
+                .transpose()?
+                .map(|bias| shard.apply_to(&bias).and_then(|bias| bias.contiguous()))
+                .transpose()?;
+            let weight = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, None),
+            ))?) as Arc<dyn QuantMethod>;
+            let weight = maybe_wrap_dynamic_lora(
+                &base_vb,
+                weight,
+                LoraLinearSpec::column(in_dim, out_dim, shard),
+            )?;
+            let layer = Arc::new(Self { weight, bias });
+            return apply_immediate_isq_sharded(layer, base_vb, None);
+        }
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
@@ -684,6 +816,14 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         let mut xs = self.weight.forward_raw(a)?;
+        if let Some(bias) = &self.bias {
+            xs = xs.broadcast_add(bias)?;
+        }
+        Ok(xs)
+    }
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let mut xs = self.weight.gather_forward_raw(a, indices)?;
         if let Some(bias) = &self.bias {
             xs = xs.broadcast_add(bias)?;
         }
@@ -804,6 +944,9 @@ impl QuantizedSerde for ColumnParallelLayer {
     fn name(&self) -> &'static str {
         self.weight.name()
     }
+    fn uqff_type(&self) -> Option<crate::IsqType> {
+        self.weight.uqff_type()
+    }
     fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
         let mut tensors = self.weight.serialize_uqff(prefix, ty)?;
         if let Some(bias) = &self.bias {
@@ -823,8 +966,9 @@ impl ReplicatedLayer {
     pub fn from_linear(lin: Linear, vb: ShardedVarBuilder) -> Result<Arc<dyn QuantMethod>> {
         let (out_dim, in_dim) = lin.weight().dims2()?;
         let spec = LoraLinearSpec::replicated(in_dim, out_dim);
-        if let Some(layer) = load_uqff_linear(&None, &vb)? {
-            return maybe_wrap_dynamic_lora(&vb, layer, spec);
+        if let Some(layer) = load_weight_source_linear(&vb)? {
+            let layer = maybe_wrap_dynamic_lora(&vb, layer, spec)?;
+            return apply_immediate_isq_sharded(layer, vb, Some(Shard::default()));
         }
 
         let dev = lin.weight().device().clone();
@@ -853,13 +997,33 @@ impl ReplicatedLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        let base_vb = vb.clone();
-        if let Some(layer) = load_uqff_linear(config, &base_vb)? {
-            return maybe_wrap_dynamic_lora(
-                &base_vb,
-                layer,
-                LoraLinearSpec::replicated(in_dim, out_dim),
+        Self::new_with_lora_spec(
+            LoraLinearSpec::replicated(in_dim, out_dim),
+            config,
+            bias,
+            vb,
+        )
+    }
+
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new_with_lora_spec(
+        lora_spec: LoraLinearSpec,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Arc<dyn QuantMethod>> {
+        if !lora_spec.is_replicated() {
+            candle_core::bail!(
+                "replicated layer LoRA spec must use replicated parallelism, got {:?}",
+                lora_spec.parallelism()
             );
+        }
+        let in_dim = lora_spec.in_features();
+        let out_dim = lora_spec.out_features();
+        let base_vb = vb.clone();
+        if let Some(layer) = load_weight_source_linear(&base_vb)? {
+            let layer = maybe_wrap_dynamic_lora(&base_vb, layer, lora_spec)?;
+            return apply_immediate_isq_sharded(layer, base_vb, Some(Shard::default()));
         }
 
         let vb = if should_apply_immediate_isq(&vb) {
@@ -921,8 +1085,7 @@ impl ReplicatedLayer {
                 Arc::new(layer) as Arc<dyn QuantMethod>
             }
         };
-        let layer =
-            maybe_wrap_dynamic_lora(&base_vb, layer, LoraLinearSpec::replicated(in_dim, out_dim))?;
+        let layer = maybe_wrap_dynamic_lora(&base_vb, layer, lora_spec)?;
 
         let this_unquant = Arc::new(Self(layer));
         let this: Arc<dyn QuantMethod> =
@@ -941,6 +1104,66 @@ impl ReplicatedLayer {
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
         let base_vb = vb.clone();
+        if let Some((mut weight, mut bias_tensor)) = load_weight_source_dense(&base_vb, bias)? {
+            if weight.rank() != 2 || weight.dim(1)? != in_dim {
+                candle_core::bail!(
+                    "replicated MatFormer source at `{}` has shape {:?}, expected [{out_dim}, {in_dim}]",
+                    base_vb.prefix(),
+                    weight.dims()
+                );
+            }
+            if let Some(kept_layers_indices) = kept_layers_indices {
+                if !out_dim.is_multiple_of(orig_num_hidden_layers) {
+                    candle_core::bail!(
+                        "replicated MatFormer output dimension {out_dim} is not divisible by {orig_num_hidden_layers} layers"
+                    );
+                }
+                let per_layer = out_dim / orig_num_hidden_layers;
+                let selected_out = kept_layers_indices.elem_count() * per_layer;
+                weight = match weight.dim(0)? {
+                    size if size == out_dim => weight
+                        .reshape((orig_num_hidden_layers, per_layer, in_dim))?
+                        .index_select(&kept_layers_indices.to_device(weight.device())?, 0)?
+                        .reshape((selected_out, in_dim))?
+                        .contiguous()?,
+                    size if size == selected_out => weight,
+                    size => candle_core::bail!(
+                        "replicated MatFormer source output has size {size}, expected {out_dim} or {selected_out}"
+                    ),
+                };
+                bias_tensor = bias_tensor
+                    .map(|bias| -> Result<Tensor> {
+                        match bias.dim(0)? {
+                            size if size == out_dim => bias
+                                .reshape((orig_num_hidden_layers, per_layer))?
+                                .index_select(&kept_layers_indices.to_device(bias.device())?, 0)?
+                                .reshape(selected_out)?
+                                .contiguous(),
+                            size if size == selected_out => Ok(bias),
+                            size => candle_core::bail!(
+                                "replicated MatFormer bias has size {size}, expected {out_dim} or {selected_out}"
+                            ),
+                        }
+                    })
+                    .transpose()?;
+            } else if weight.dim(0)? != out_dim {
+                candle_core::bail!(
+                    "replicated MatFormer source output has size {}, expected {out_dim}",
+                    weight.dim(0)?
+                );
+            }
+            let runtime_out = weight.dim(0)?;
+            let layer = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(weight, bias_tensor),
+            ))?) as Arc<dyn QuantMethod>;
+            let layer = maybe_wrap_dynamic_lora(
+                &base_vb,
+                layer,
+                LoraLinearSpec::replicated(in_dim, runtime_out),
+            )?;
+            let layer = Arc::new(Self(layer));
+            return apply_immediate_isq_sharded(layer, base_vb, None);
+        }
         let vb = if should_apply_immediate_isq(&vb) {
             vb.set_device(Device::Cpu)
         } else {
@@ -1146,6 +1369,9 @@ impl QuantizedSerde for ReplicatedLayer {
     }
     fn name(&self) -> &'static str {
         self.0.name()
+    }
+    fn uqff_type(&self) -> Option<crate::IsqType> {
+        self.0.uqff_type()
     }
     fn serialize_uqff(&self, prefix: &str, ty: crate::IsqType) -> Result<Vec<crate::UqffTensor>> {
         self.0.serialize_uqff(prefix, ty)
@@ -1547,13 +1773,111 @@ pub fn compute_n_kv_groups(
 mod tests {
     use std::collections::HashMap;
 
+    use candle_core::{DType, Device, Tensor};
     use regex::Regex;
 
-    use super::{validate_tp_head_layout, ReplicatedLayer};
+    use super::{validate_tp_head_layout, ColumnParallelLayer, ReplicatedLayer, RowParallelLayer};
     use crate::{
-        create_isq_executor, set_immediate_isq_config, ImmediateIsqConfig, ImmediateIsqOverride,
-        IsqCaptureMode, IsqExecutorConfig, IsqType, ShardedSafeTensors,
+        create_isq_executor, set_immediate_isq_config, Comm, Id, ImmediateIsqConfig,
+        ImmediateIsqOverride, IsqCaptureMode, IsqExecutorConfig, IsqType, LoraLayerRegistry,
+        LoraLinearSpec, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedWeightSource,
+        Shard, ShardedSafeTensors, UnquantLinear,
     };
+
+    struct DenseWeightSource;
+
+    impl QuantizedWeightSource for DenseWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            name == "model.embed_tokens.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<std::sync::Arc<dyn QuantMethod>>> {
+            if key != "model.embed_tokens" {
+                return Ok(None);
+            }
+            let weight = Tensor::zeros((64, 32), DType::F32, device)?;
+            Ok(Some(std::sync::Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, None)),
+            )?)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    struct MatformerWeightSource;
+
+    impl QuantizedWeightSource for MatformerWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            matches!(name, "row.weight" | "column.weight" | "replicated.weight")
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<std::sync::Arc<dyn QuantMethod>>> {
+            let shape = match key {
+                "row" => (5, 8),
+                "column" => (8, 4),
+                "replicated" => (6, 4),
+                _ => return Ok(None),
+            };
+            let weight = Tensor::zeros(shape, DType::F32, device)?;
+            Ok(Some(std::sync::Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, None)),
+            )?)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            name: &str,
+            device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            let size = match name {
+                "row.bias" => 5,
+                "column.bias" => 8,
+                "replicated.bias" => 6,
+                _ => return Ok(None),
+            };
+            Tensor::zeros(size, DType::F32, device).map(Some)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
 
     fn install_immediate(ty: IsqType, overrides: Vec<ImmediateIsqOverride>) {
         let ty = Some(ty);
@@ -1635,6 +1959,192 @@ mod tests {
             }],
         );
         assert_eq!(tracked_from_linear().ty, Some(IsqType::Q4_0));
+    }
+
+    #[test]
+    fn replicated_weight_source_is_tracked_for_immediate_isq() {
+        install_immediate(IsqType::Q8_0, Vec::new());
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_weight_source(std::sync::Arc::new(DenseWeightSource))
+                .pp("model")
+                .pp("embed_tokens");
+        let tracker = vb.tracker().clone();
+        let layer = ReplicatedLayer::new(32, 64, &None, false, vb).unwrap();
+        crate::clear_immediate_isq();
+
+        layer
+            .forward_raw(&Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap())
+            .unwrap();
+        assert_eq!(tracker.get().len(), 1);
+        assert_eq!(tracker.get()[0].key, "model.embed_tokens");
+    }
+
+    #[test]
+    fn weight_source_precedes_checkpoint_quantization_for_parallel_linears() {
+        let config = Some(QuantizedConfig::GptqAwq {
+            bits: 4,
+            group_size: 128,
+            checkpoint_format: None,
+            is_awq: true,
+        });
+        let comm = std::sync::Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1).unwrap());
+        let vb = || {
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_weight_source(std::sync::Arc::new(DenseWeightSource))
+                .pp("model")
+                .pp("embed_tokens")
+        };
+
+        let layers = [
+            ReplicatedLayer::new(32, 64, &config, false, vb()).unwrap(),
+            ColumnParallelLayer::new(32, 64, &config, false, &comm, vb()).unwrap(),
+            RowParallelLayer::new(32, 64, &config, false, &comm, vb()).unwrap(),
+        ];
+        for layer in layers {
+            assert_eq!(layer.name(), "unquant-linear");
+            assert_eq!(
+                layer
+                    .forward_raw(&Tensor::zeros((1, 32), DType::F32, &Device::Cpu).unwrap())
+                    .unwrap()
+                    .dims(),
+                &[1, 64]
+            );
+        }
+    }
+
+    #[test]
+    fn matformer_factories_transform_weight_source_layers() -> candle_core::Result<()> {
+        let ty = Some(IsqType::Q8_0);
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(ty));
+        set_immediate_isq_config(
+            ImmediateIsqConfig::new(
+                ty,
+                vec![Regex::new(r"^(row|column|replicated)\.weight$").unwrap()],
+                IsqCaptureMode::CaptureMatches,
+            ),
+            executor,
+        );
+        let config = Some(QuantizedConfig::GptqAwq {
+            bits: 4,
+            group_size: 128,
+            checkpoint_format: None,
+            is_awq: true,
+        });
+        let comm = std::sync::Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1)?);
+        let vb = |prefix| {
+            let vb =
+                ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                    .with_weight_source(std::sync::Arc::new(MatformerWeightSource))
+                    .pp(prefix);
+            let tracker = vb.tracker().clone();
+            (vb, tracker)
+        };
+
+        let (row_vb, row_tracker) = vb("row");
+        let row = RowParallelLayer::new_matformer(4, 5, 8, &config, true, &comm, row_vb)?;
+        let (column_vb, column_tracker) = vb("column");
+        let column = ColumnParallelLayer::new_matformer(4, 4, 8, &config, true, &comm, column_vb)?;
+        let kept = Tensor::new(&[0u32, 2], &Device::Cpu)?;
+        let (replicated_vb, replicated_tracker) = vb("replicated");
+        let replicated = ReplicatedLayer::new_layers_matformer_indices(
+            4,
+            6,
+            Some(&kept),
+            3,
+            &config,
+            true,
+            replicated_vb,
+        )?;
+        crate::clear_immediate_isq();
+
+        for tracker in [row_tracker, column_tracker, replicated_tracker] {
+            let tracked = tracker.get();
+            assert_eq!(tracked.len(), 1);
+            assert!(tracked[0].shard.is_none());
+        }
+
+        for (layer, input, output) in [(row, 4, 5), (column, 4, 4), (replicated, 4, 4)] {
+            assert_eq!(
+                layer
+                    .forward_raw(&Tensor::zeros((1, input), DType::F32, &Device::Cpu)?)?
+                    .dims(),
+                &[1, output]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn spec_aware_layers_register_exact_feature_maps() -> candle_core::Result<()> {
+        let replicated_registry = std::sync::Arc::new(LoraLayerRegistry::new());
+        let replicated_vb = ShardedSafeTensors::wrap(
+            HashMap::from([(
+                "replicated.weight".to_string(),
+                Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?,
+            )]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .with_lora_registry(replicated_registry.clone())
+        .pp("replicated");
+        let replicated_spec =
+            LoraLinearSpec::replicated(4, 3).with_output_runtime_to_canonical(vec![2, 0, 1])?;
+        ReplicatedLayer::new_with_lora_spec(replicated_spec.clone(), &None, false, replicated_vb)?;
+        assert_eq!(replicated_registry.sites()[0].spec(), &replicated_spec);
+
+        let comm = std::sync::Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1)?);
+        let row_registry = std::sync::Arc::new(LoraLayerRegistry::new());
+        let row_vb = ShardedSafeTensors::wrap(
+            HashMap::from([(
+                "row.weight".to_string(),
+                Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?,
+            )]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .with_lora_registry(row_registry.clone())
+        .pp("row");
+        let row_spec = LoraLinearSpec::row(
+            4,
+            3,
+            Shard::Simple {
+                dim: 1,
+                rank: 0,
+                world_size: 1,
+            },
+        )
+        .with_input_runtime_to_canonical(vec![0, 2, 1, 3])?;
+        RowParallelLayer::new_with_lora_spec(row_spec.clone(), &None, false, &comm, row_vb)?;
+        assert_eq!(row_registry.sites()[0].spec(), &row_spec);
+        Ok(())
+    }
+
+    #[test]
+    fn spec_aware_layers_reject_wrong_parallelism() -> candle_core::Result<()> {
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu);
+        let row_spec = LoraLinearSpec::row(
+            4,
+            3,
+            Shard::Simple {
+                dim: 1,
+                rank: 0,
+                world_size: 1,
+            },
+        );
+        assert!(ReplicatedLayer::new_with_lora_spec(row_spec, &None, false, vb.clone()).is_err());
+
+        let comm = std::sync::Arc::new(Comm::from_device(Id::new(), &Device::Cpu, 0, 1)?);
+        assert!(RowParallelLayer::new_with_lora_spec(
+            LoraLinearSpec::replicated(4, 3),
+            &None,
+            false,
+            &comm,
+            vb,
+        )
+        .is_err());
+        Ok(())
     }
 
     #[test]

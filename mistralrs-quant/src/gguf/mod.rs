@@ -1,3 +1,4 @@
+pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
@@ -9,12 +10,17 @@ pub mod fast_mmvq;
 mod ffi;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+mod weight_source;
+
+pub use weight_source::{
+    GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
+};
 
 use candle_core::{
-    quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QTensor},
-    DType, Device, Result, Tensor,
+    quantized::{ggml_file::qtensor_from_ggml, GgmlDType, QMatMul, QStorage, QTensor},
+    DType, Device, Result, Shape, Tensor,
 };
-use candle_nn::Module;
+use candle_nn::{Linear, Module};
 use safetensors::tensor::Dtype;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 use std::sync::OnceLock;
@@ -137,6 +143,14 @@ impl GgufMatMul {
         }
     }
 
+    fn qtensor_to_device(q: &Arc<QTensor>, device: &Device) -> Result<Arc<QTensor>> {
+        if q.device().same_device(device) {
+            return Ok(q.clone());
+        }
+        let storage = QStorage::from_data(q.data()?, device, q.dtype())?;
+        Ok(Arc::new(QTensor::new(storage, q.shape())?))
+    }
+
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] =
             &["weight", "weight.format", "weight.dtype", "weight.shape"];
@@ -164,13 +178,6 @@ impl GgufMatMul {
 
     pub fn isq_type_from_uqff_dtype(dtype: u32) -> Result<IsqType> {
         IsqType::try_from(ggml_dtype_from_uqff_code(dtype)?)
-    }
-
-    pub(crate) fn is_float_uqff_dtype(dtype: u32) -> Result<bool> {
-        Ok(matches!(
-            ggml_dtype_from_uqff_code(dtype)?,
-            GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16
-        ))
     }
 
     pub(crate) fn block_size_from_uqff_dtype(dtype: u32) -> Result<usize> {
@@ -506,8 +513,17 @@ impl QuantMethod for GgufMatMul {
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
-        if let Some(ref b) = self.b {
-            res.broadcast_add(b)
+        if let Some(b) = &self.b {
+            if b.rank() == 2 {
+                let mut shape = indices.dims().to_vec();
+                shape.push(b.dim(1)?);
+                let bias = b
+                    .index_select(&indices.flatten_all()?, 0)?
+                    .reshape(Shape::from(shape))?;
+                res.broadcast_add(&bias)
+            } else {
+                res.broadcast_add(b)
+            }
         } else {
             Ok(res)
         }
@@ -619,6 +635,12 @@ impl QuantMethod for GgufMatMul {
                 (t.dtype(), t.device().clone(), t.dims().to_vec())
             }
         };
+        if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
+            candle_core::bail!(
+                "Cannot quantize stacked GGUF expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                request.ty.expect("rank-3 rejection requires an ISQ target")
+            );
+        }
         Ok(crate::plan_weight_isq(dtype, device, shape, request, true))
     }
 
@@ -631,36 +653,49 @@ impl QuantMethod for GgufMatMul {
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         if let Some(dtype) = dtype {
-            // F8Q8 is not a GgmlDType, so intercept before try_into()
-            if dtype == IsqType::F8Q8 {
-                let t = match &self.w {
-                    QMatMul::QTensor(q) => q.dequantize(&q.device())?,
-                    QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
-                };
-                let t = t.to_device(&device)?;
-                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                return Ok(Arc::new(crate::F8Q8Linear::from_weight(
-                    &t,
-                    self.b.clone(),
-                )?));
+            if imatrix_weight.is_none() {
+                if let QMatMul::QTensor(q) = &self.w {
+                    if IsqType::try_from(q.dtype()).ok() == Some(dtype) {
+                        let w = QMatMul::QTensor(Self::qtensor_to_device(q, &device)?);
+                        let b = self
+                            .b
+                            .as_ref()
+                            .map(|bias| bias.to_device(&device))
+                            .transpose()?;
+                        return Ok(Arc::new(GgufMatMul::from_parts(w, b, self.stats.clone())));
+                    }
+                }
             }
+
             let t = match &self.w {
                 QMatMul::QTensor(q) => q.dequantize(&q.device())?,
                 QMatMul::TensorF16(t) | QMatMul::Tensor(t) => t.clone(),
             };
+            if t.rank() == 3 {
+                return crate::utils::isq::quantize_expert_stack_with_bias(
+                    t,
+                    self.b.clone(),
+                    dtype,
+                    imatrix_weight,
+                    &device,
+                    n_quantized,
+                    guard,
+                );
+            }
+
+            if GgmlDType::try_from(dtype).is_err() {
+                let unquant = Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(t, self.b.clone()),
+                ))?) as Arc<dyn QuantMethod>;
+                return unquant.apply_isq(Some(dtype), device, n_quantized, imatrix_weight, guard);
+            }
+
+            let bias = self
+                .b
+                .as_ref()
+                .map(|bias| bias.to_device(&device))
+                .transpose()?;
             let res = if let Some(imatrix_weight) = imatrix_weight {
-                // routed imatrix vectors are per-expert; stacks quantize slab-by-slab
-                if t.rank() == 3 {
-                    n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let w = Self::quantize_expert_stack(
-                        &t,
-                        dtype,
-                        Some(&imatrix_weight),
-                        &device,
-                        guard,
-                    )?;
-                    return Ok(Arc::new(Self::from_qtensor(w, self.b.clone())));
-                }
                 let dtype = dtype.try_into()?;
                 generate_isq_imatrix!(t, imatrix_weight, device, dtype, n_quantized, guard)
             } else {
@@ -669,14 +704,11 @@ impl QuantMethod for GgufMatMul {
             };
             Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                 q_weight: res,
-                b: self.b.clone(),
+                b: bias,
             })?))
         } else {
             let w = match &self.w {
-                QMatMul::QTensor(q) => QMatMul::QTensor(Arc::new(QTensor::quantize(
-                    &q.dequantize(&device)?,
-                    q.dtype(),
-                )?)),
+                QMatMul::QTensor(q) => QMatMul::QTensor(Self::qtensor_to_device(q, &device)?),
                 QMatMul::Tensor(t) => QMatMul::Tensor(t.to_device(&device)?),
                 QMatMul::TensorF16(t) => QMatMul::TensorF16(t.to_device(&device)?),
             };
@@ -727,6 +759,12 @@ impl QuantizedSerde for GgufMatMul {
     }
     fn name(&self) -> &'static str {
         "gguf"
+    }
+    fn uqff_type(&self) -> Option<IsqType> {
+        match &self.w {
+            QMatMul::QTensor(qw) => IsqType::try_from(qw.dtype()).ok(),
+            QMatMul::Tensor(_) | QMatMul::TensorF16(_) => None,
+        }
     }
     fn serialize_uqff(&self, prefix: &str, _ty: IsqType) -> Result<Vec<UqffTensor>> {
         // float fallbacks densify at construction; requantize losslessly so they serialize like the rest
@@ -817,6 +855,303 @@ mod tests {
         for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
             assert_embedding_matches_dequantized_gather(&Device::Cpu, dtype)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn capture_on_same_device_preserves_packed_weight() -> Result<()> {
+        let weight = Tensor::ones((2, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let before = layer.get_qtensor().unwrap();
+        let captured = layer.apply_isq(
+            None,
+            Device::Cpu,
+            &AtomicUsize::new(0),
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let after = captured.get_qtensor().unwrap();
+
+        assert!(Arc::ptr_eq(&before, &after));
+        Ok(())
+    }
+
+    #[test]
+    fn same_target_preserves_rank_two_packed_weight_and_bias() -> Result<()> {
+        let weight = Tensor::ones((4, 256), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::from_vec(vec![1f32, 2., 3., 4.], 4, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q4K)?,
+            Some(bias),
+        ));
+        let before = layer.get_qtensor().unwrap();
+        let before_data = before.data()?.into_owned();
+        let n_quantized = AtomicUsize::new(0);
+        let preserved = layer.apply_isq(
+            Some(IsqType::Q4K),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let after = preserved.get_qtensor().unwrap();
+
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.data()?.into_owned(), before_data);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let input = Tensor::zeros((1, 256), DType::F32, &Device::Cpu)?;
+        assert_eq!(
+            preserved.forward(&input)?.to_vec2::<f32>()?,
+            vec![vec![1., 2., 3., 4.]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn same_target_preserves_rank_three_packed_weight_and_bias() -> Result<()> {
+        let weight = Tensor::ones((2, 4, 256), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::from_vec(vec![1f32, 2., 3., 4., 5., 6., 7., 8.], (2, 4), &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q4K)?,
+            Some(bias),
+        ));
+        let before = layer.get_qtensor().unwrap();
+        let before_data = before.data()?.into_owned();
+        let n_quantized = AtomicUsize::new(0);
+        let preserved = layer.apply_isq(
+            Some(IsqType::Q4K),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let after = preserved.get_qtensor().unwrap();
+
+        assert!(Arc::ptr_eq(&before, &after));
+        assert_eq!(after.data()?.into_owned(), before_data);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
+        let input = Tensor::zeros((1, 1, 256), DType::F32, &Device::Cpu)?;
+        let indices = Tensor::from_vec(vec![1u32, 0], (1, 2), &Device::Cpu)?;
+        assert_eq!(
+            preserved
+                .gather_forward(&input, &indices)?
+                .to_vec3::<f32>()?,
+            vec![vec![vec![5., 6., 7., 8.], vec![1., 2., 3., 4.]]]
+        );
+        Ok(())
+    }
+
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    fn assert_cross_device_capture_preserves_packed_weight(device: Device) -> Result<()> {
+        let weight = Tensor::ones((4, 256), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q4K)?,
+            None,
+        ));
+        let before = layer.get_qtensor().unwrap();
+        let before_data = before.data()?.into_owned();
+        let n_quantized = AtomicUsize::new(0);
+        let captured = layer.apply_isq(
+            None,
+            device.clone(),
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let after = captured.get_qtensor().unwrap();
+
+        assert!(after.device().same_device(&device));
+        assert_eq!(after.dtype(), before.dtype());
+        assert_eq!(after.shape(), before.shape());
+        assert_eq!(after.data()?.into_owned(), before_data);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 0);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn capture_to_cuda_preserves_packed_weight() -> Result<()> {
+        assert_cross_device_capture_preserves_packed_weight(Device::new_cuda(0)?)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn capture_to_metal_preserves_packed_weight() -> Result<()> {
+        assert_cross_device_capture_preserves_packed_weight(Device::new_metal(0)?)
+    }
+
+    #[test]
+    fn packed_gguf_requantizes_to_non_ggml_isq() -> Result<()> {
+        let weight = Tensor::ones((4, 64), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::zeros(4, DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            Some(bias),
+        ));
+        let n_quantized = AtomicUsize::new(0);
+        let quantized = layer.apply_isq(
+            Some(IsqType::AFQ4),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+
+        assert_eq!(quantized.name(), "afq-layer");
+        assert!(quantized.has_bias());
+        assert_eq!(quantized.dequantize_w()?.dims(), &[4, 64]);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn packed_expert_stack_requantizes_to_non_ggml_isq() -> Result<()> {
+        let weight = Tensor::ones((2, 4, 64), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::zeros((2, 4), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            Some(bias),
+        ));
+        let n_quantized = AtomicUsize::new(0);
+        let quantized = layer.apply_isq(
+            Some(IsqType::AFQ4),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+
+        assert_eq!(quantized.name(), "afq-layer");
+        assert!(quantized.has_bias());
+        assert_eq!(quantized.dequantize_w()?.dims(), &[2, 4, 64]);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn packed_expert_stack_requantizes_to_ggml_once() -> Result<()> {
+        let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let n_quantized = AtomicUsize::new(0);
+        let quantized = layer.apply_isq(
+            Some(IsqType::Q4_0),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+
+        assert_eq!(quantized.name(), "gguf");
+        assert_eq!(quantized.dequantize_w()?.dims(), &[2, 4, 32]);
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn packed_expert_stack_rejects_targets_without_gather() -> Result<()> {
+        for ty in [IsqType::F8Q8, IsqType::HQQ4, IsqType::MXFP4] {
+            let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
+            let layer = Arc::new(GgufMatMul::from_qtensor(
+                QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+                None,
+            ));
+            let request = crate::IsqRequest {
+                ty: Some(ty),
+                device: Device::Cpu,
+                has_imatrix: false,
+                capture: crate::IsqCaptureMode::Immediate,
+                consumer: crate::IsqConsumer::UqffWrite,
+                module_key: "experts".to_string(),
+            };
+            let plan_error = layer.plan_isq(&request).unwrap_err();
+            assert!(
+                plan_error
+                    .to_string()
+                    .contains("does not support stacked expert gather"),
+                "{ty}: {plan_error}"
+            );
+            let error = layer
+                .apply_isq(
+                    Some(ty),
+                    Device::Cpu,
+                    &AtomicUsize::new(0),
+                    None,
+                    QuantizeOntoGuard::new(),
+                )
+                .unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("does not support stacked expert gather"),
+                "{ty}: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_shards_stacked_expert_bias_with_output_dimension() -> Result<()> {
+        let weight = Tensor::zeros((2, 4, 64), DType::F32, &Device::Cpu)?;
+        let bias = Tensor::from_vec(
+            (0..8).map(|value| value as f32).collect::<Vec<_>>(),
+            (2, 4),
+            &Device::Cpu,
+        )?;
+        let layer = GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            Some(bias.clone()),
+        );
+        let mut tensors = crate::uqff_version_tensors();
+        tensors.extend(layer.serialize_uqff("experts.gate", IsqType::Q8_0)?);
+        let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let file = dir.path().join("experts.uqff");
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &file,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = UqffReader::open(&[file])?;
+
+        let output_shard = reader
+            .load_linear(
+                "experts.gate",
+                &Device::Cpu,
+                Shard::Simple {
+                    dim: 1,
+                    rank: 1,
+                    world_size: 2,
+                },
+            )?
+            .expect("output shard");
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &Device::Cpu)?;
+        let input = Tensor::zeros((1, 1, 64), DType::F32, &Device::Cpu)?;
+        let actual = output_shard.gather_forward(&input, &indices)?;
+        let expected = bias
+            .narrow(1, 2, 2)?
+            .contiguous()?
+            .index_select(&indices.flatten_all()?, 0)?
+            .reshape((1, 2, 2))?;
+        assert_eq!(actual.to_vec3::<f32>()?, expected.to_vec3::<f32>()?);
+
+        let input_shard = reader
+            .load_linear(
+                "experts.gate",
+                &Device::Cpu,
+                Shard::Simple {
+                    dim: 2,
+                    rank: 0,
+                    world_size: 2,
+                },
+            )?
+            .expect("input shard");
+        assert!(!input_shard.has_bias());
         Ok(())
     }
 

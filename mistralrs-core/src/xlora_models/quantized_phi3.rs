@@ -32,7 +32,6 @@ use super::Cache;
 use super::NonGranularState;
 use super::ScalingsMaker;
 use super::XLoraConfig;
-use crate::models::quantized_phi3::PropsGGUF;
 use crate::utils::gguf_metadata::ContentMetadata;
 use crate::utils::model_config as ModelConfig;
 
@@ -43,6 +42,46 @@ const SUPPORTED_LAYERS: [&str; 5] = [
     "mlp.down_proj",
     "lm_head",
 ];
+
+struct PropsGGUF {
+    head_count: usize,
+    head_count_kv: usize,
+    block_count: usize,
+    embedding_length: usize,
+    i_size: usize,
+    rope_dim: usize,
+    rms_eps: f64,
+    context_window: usize,
+}
+
+impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
+    type Error = anyhow::Error;
+
+    fn try_from(c: ContentMetadata) -> std::result::Result<Self, Self::Error> {
+        c.verify_arch("phi3")?;
+        c.has_required_keys(&[
+            "attention.head_count",
+            "attention.head_count_kv",
+            "block_count",
+            "embedding_length",
+            "feed_forward_length",
+            "rope.dimension_count",
+            "attention.layer_norm_rms_epsilon",
+            "context_length",
+        ])?;
+
+        Ok(Self {
+            head_count: c.get_value::<u32>("attention.head_count")? as usize,
+            head_count_kv: c.get_value::<u32>("attention.head_count_kv")? as usize,
+            block_count: c.get_value::<u32>("block_count")? as usize,
+            embedding_length: c.get_value::<u32>("embedding_length")? as usize,
+            i_size: c.get_value::<u32>("feed_forward_length")? as usize,
+            rope_dim: c.get_value::<u32>("rope.dimension_count")? as usize,
+            rms_eps: c.get_value::<f32>("attention.layer_norm_rms_epsilon")? as f64,
+            context_window: c.get_value::<u32>("context_length")? as usize,
+        })
+    }
+}
 
 #[derive(Debug)]
 struct Mlp {

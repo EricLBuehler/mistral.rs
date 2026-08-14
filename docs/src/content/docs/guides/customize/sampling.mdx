@@ -56,6 +56,15 @@ DRY penalizes continuing token sequences that would reproduce spans from the pre
 - `dry_allowed_length`: match length tolerated before the penalty applies. Default `2`.
 - `dry_sequence_breakers`: strings that reset matching. Default `["\n", ":", "\"", "*"]`.
 
+## Stopping
+
+Generation stops at the model's EOS tokens, a request-supplied `stop` string or token, or the token
+limit (`max_tokens`), whichever comes first.
+
+Set `ignore_eos: true` to continue after the model emits EOS. Explicit stops and the token limit
+still apply, so set `max_tokens` or `stop` to bound the response. This option can be used with base
+(non-instruct) models that emit EOS early or when measuring decode throughput.
+
 ## Setting parameters
 
 <Tabs>
@@ -69,7 +78,7 @@ Interactive mode (`mistralrs run`) exposes slash commands that persist for the r
 /topp 0.9           set top-p, in (0.0, 1.0]
 ```
 
-Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` when present, else temperature 0.1, top-k 32, top-p 0.1, min-p 0.05.
+Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` when present, else temperature 0.8, top-k 40, top-p 0.95, min-p 0.05.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -86,7 +95,8 @@ All parameters are top-level JSON fields on `/v1/chat/completions` and `/v1/comp
   "min_p": 0.05,
   "presence_penalty": 0.5,
   "repetition_penalty": 1.1,
-  "dry_multiplier": 0.8
+  "dry_multiplier": 0.8,
+  "ignore_eos": false
 }
 ```
 
@@ -105,6 +115,7 @@ request = ChatCompletionRequest(
     min_p=0.05,
     presence_penalty=0.5,
     repetition_penalty=1.1,
+    ignore_eos=False,
 )
 ```
 
@@ -119,7 +130,8 @@ let request = RequestBuilder::new()
     .set_sampler_temperature(0.7)
     .set_sampler_topk(40)
     .set_sampler_topp(0.9)
-    .set_sampler_presence_penalty(0.5);
+    .set_sampler_presence_penalty(0.5)
+    .set_sampler_ignore_eos(false);
 ```
 
 </TabItem>

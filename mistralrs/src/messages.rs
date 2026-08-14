@@ -1075,6 +1075,12 @@ impl RequestBuilder {
         self
     }
 
+    /// Keep generating past the model's EOS tokens; explicit stops and the token limit still apply.
+    pub fn set_sampler_ignore_eos(mut self, ignore_eos: bool) -> Self {
+        self.sampling_params.ignore_eos = ignore_eos;
+        self
+    }
+
     /// Apply a bias to specific token IDs during sampling.
     pub fn set_sampler_logits_bias(mut self, logits_bias: HashMap<u32, f32>) -> Self {
         self.sampling_params.logits_bias = Some(logits_bias);

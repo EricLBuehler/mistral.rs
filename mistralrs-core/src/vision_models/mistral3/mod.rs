@@ -181,14 +181,16 @@ impl Mistral3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let non_text_vb = vb.clone().without_lora_registry();
         let vision_model = Mistral3VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_tower"),
+            non_text_vb.pp("vision_tower"),
             &normal_loading_metadata,
         )?;
         let mmproj = Mistral3MultiModalProjector::new(
             cfg,
-            vb.pp("multi_modal_projector")
+            non_text_vb
+                .pp("multi_modal_projector")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Mistral::new(

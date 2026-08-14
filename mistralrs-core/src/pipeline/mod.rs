@@ -44,7 +44,8 @@ pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
 pub use isq::{
     expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    resolve_uqff_report_output, resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
@@ -62,8 +63,8 @@ pub use loaders::{
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
     Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
     Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
-    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, SmolLm3Loader,
-    Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader,
+    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -91,6 +92,42 @@ pub(crate) fn get_device_layers_for_loader(
         paged_attn_config,
     )
 }
+
+fn finish_dynamic_lora_runtime(
+    paths: &dyn ModelPaths,
+    layers: Arc<mistralrs_quant::LoraLayerRegistry>,
+    runtime_config: crate::LoraRuntimeConfig,
+    live_updates: bool,
+) -> Result<Arc<crate::DynamicLoraRuntime>> {
+    let AdapterPaths::Lora(adapter_paths) = paths.get_adapter_paths() else {
+        unreachable!("LoRA loaders require resolved LoRA adapter paths")
+    };
+
+    layers.finalize()?;
+    let runtime = Arc::new(crate::DynamicLoraRuntime::new(
+        layers,
+        runtime_config,
+        live_updates,
+    )?);
+    for adapter in adapter_paths {
+        let info = runtime.load_from_safetensors(
+            adapter.alias.clone(),
+            adapter.source.clone(),
+            adapter.revision.clone(),
+            &adapter.config_path,
+            &adapter.weights_path,
+        )?;
+        tracing::info!(
+            alias = %info.alias,
+            generation = %info.generation,
+            rank = info.rank,
+            bytes = info.bytes,
+            "LoRA adapter preloaded"
+        );
+    }
+    Ok(runtime)
+}
+
 use mistralrs_quant::IsqType;
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};

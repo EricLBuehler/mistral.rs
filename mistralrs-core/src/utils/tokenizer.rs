@@ -27,10 +27,10 @@ struct AddedToken {
 
 fn repair_tokenizer_json(raw: Vec<u8>) -> Result<Vec<u8>> {
     let mut tokenizer: Value = serde_json::from_slice(&raw)?;
+    let Some(vocab) = tokenizer["model"]["vocab"].as_object() else {
+        return Ok(raw);
+    };
     let added_tokens: Vec<AddedToken> = serde_json::from_value(tokenizer["added_tokens"].clone())?;
-    let vocab = tokenizer["model"]["vocab"]
-        .as_object()
-        .ok_or_else(|| anyhow!("tokenizer model vocab is not an object"))?;
     let missing_tokens = added_tokens
         .into_iter()
         .filter(|token| !vocab.contains_key(&token.content))
@@ -258,5 +258,38 @@ mod tests {
         assert_eq!(vocab.len(), 3);
         assert_eq!(vocab["<present>"], 1);
         assert_eq!(vocab["<missing>"], 2);
+    }
+
+    #[test]
+    fn tokenizer_repair_preserves_unigram_array_vocab() {
+        let raw = serde_json::to_vec_pretty(&json!({
+            "version": "1.0",
+            "truncation": null,
+            "padding": null,
+            "added_tokens": [{
+                "id": 1,
+                "content": "<special>",
+                "single_word": false,
+                "lstrip": false,
+                "rstrip": false,
+                "normalized": false,
+                "special": true
+            }],
+            "normalizer": null,
+            "pre_tokenizer": null,
+            "post_processor": null,
+            "decoder": null,
+            "model": {
+                "type": "Unigram",
+                "unk_id": 0,
+                "vocab": [["<unk>", 0.0], ["<special>", -1.0]],
+                "byte_fallback": false
+            }
+        }))
+        .unwrap();
+
+        let repaired = repair_tokenizer_json(raw.clone()).unwrap();
+        assert_eq!(repaired, raw);
+        assert!(tokenizers::Tokenizer::from_bytes(&repaired).is_ok());
     }
 }

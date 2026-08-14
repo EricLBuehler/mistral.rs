@@ -1,4 +1,7 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
+use candle_core::quantized::gguf_file::Value;
 use tracing::info;
 
 use crate::utils::gguf_metadata::ContentMetadata;
@@ -27,9 +30,15 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUFTemplate {
 pub fn get_gguf_chat_template<R: std::io::Seek + std::io::Read>(
     content: &Content<'_, R>,
 ) -> Result<Option<String>> {
+    get_gguf_chat_template_from_metadata(content.get_metadata())
+}
+
+pub(crate) fn get_gguf_chat_template_from_metadata(
+    metadata: &HashMap<String, Value>,
+) -> Result<Option<String>> {
     let metadata = ContentMetadata {
         path_prefix: "tokenizer",
-        metadata: content.get_metadata(),
+        metadata,
     };
     let props = PropsGGUFTemplate::try_from(metadata)?;
     if let Some(ref chat_template) = props.chat_template {

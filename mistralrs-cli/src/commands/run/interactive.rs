@@ -29,6 +29,10 @@ use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
 const DENOISING_BAR_WIDTH: usize = 28;
+const INTERACTIVE_FALLBACK_TEMPERATURE: f64 = 0.8;
+const INTERACTIVE_FALLBACK_TOP_K: usize = 40;
+const INTERACTIVE_FALLBACK_TOP_P: f64 = 0.95;
+const INTERACTIVE_FALLBACK_MIN_P: f64 = 0.05;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -694,16 +698,17 @@ const VIDEO_REGEX: &str =
 
 fn interactive_fallback_sample_parameters() -> SamplingParams {
     SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
+        temperature: Some(INTERACTIVE_FALLBACK_TEMPERATURE),
+        top_k: Some(INTERACTIVE_FALLBACK_TOP_K),
+        top_p: Some(INTERACTIVE_FALLBACK_TOP_P),
+        min_p: Some(INTERACTIVE_FALLBACK_MIN_P),
         top_n_logprobs: 0,
         frequency_penalty: None,
         presence_penalty: None,
         repetition_penalty: None,
         max_len: None,
         stop_toks: None,
+        ignore_eos: false,
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
@@ -2067,6 +2072,15 @@ async fn speech_interactive_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interactive_fallback_uses_broad_sampling_defaults() {
+        let params = interactive_fallback_sample_parameters();
+        assert_eq!(params.temperature, Some(INTERACTIVE_FALLBACK_TEMPERATURE));
+        assert_eq!(params.top_k, Some(INTERACTIVE_FALLBACK_TOP_K));
+        assert_eq!(params.top_p, Some(INTERACTIVE_FALLBACK_TOP_P));
+        assert_eq!(params.min_p, Some(INTERACTIVE_FALLBACK_MIN_P));
+    }
 
     #[test]
     fn parse_files_and_message_trims_trailing_punctuation() {

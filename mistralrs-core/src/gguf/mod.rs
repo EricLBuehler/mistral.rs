@@ -1,12 +1,30 @@
+pub(crate) mod base_model;
 mod chat_template;
 mod content;
+pub(crate) mod gemma3_bindings;
+pub(crate) mod gemma3_config;
+pub(crate) mod gemma3n_bindings;
 mod gguf_tokenizer;
+pub(crate) mod idefics3_bindings;
+mod lfm2_vl_bindings;
+pub(crate) mod llama4_bindings;
+mod mistral3_bindings;
+mod multimodal_binding_utils;
+pub(crate) mod multimodal_bindings;
+pub(crate) mod multimodal_vision_registry;
+pub(crate) mod normal_bindings;
+pub(crate) mod normal_config;
+pub(crate) mod normal_registry;
+pub(crate) mod qwen_multimodal_bindings;
 use strum::EnumString;
 
 use anyhow::{Context, Result};
-pub(crate) use chat_template::get_gguf_chat_template;
+pub(crate) use chat_template::{get_gguf_chat_template, get_gguf_chat_template_from_metadata};
 pub(crate) use content::Content;
-pub(crate) use gguf_tokenizer::{convert_gguf_to_hf_tokenizer, GgufTokenizerConversion};
+pub(crate) use gguf_tokenizer::{
+    convert_gguf_metadata_to_hf_tokenizer, validate_external_gguf_tokenizer,
+    GgufTokenizerConversion,
+};
 use std::str::FromStr;
 
 pub const GGUF_MULTI_FILE_DELIMITER: &str = ";";

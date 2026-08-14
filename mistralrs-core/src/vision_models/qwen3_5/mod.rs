@@ -9,7 +9,7 @@ use std::{
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
-use text::Qwen3_5TextModel;
+pub(crate) use text::Qwen3_5TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -33,7 +33,7 @@ pub(crate) mod packed_gdn;
 pub(crate) mod packed_visual;
 mod text;
 
-pub(crate) use config::Config;
+pub(crate) use config::{Config, TextConfig};
 use packed_visual::{PackedVisualEncoder, PackedVisualInput};
 // Re-export the processor from qwen3_vl since the input processing is identical
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen3_5Processor;
@@ -62,7 +62,8 @@ impl Qwen3_5Model {
             vb.pp("vision_tower")
         } else {
             vb.pp("model").pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),

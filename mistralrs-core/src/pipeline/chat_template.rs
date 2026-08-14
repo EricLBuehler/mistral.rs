@@ -27,7 +27,7 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
 const DEFAULT_ENABLE_THINKING: bool = true;
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct AddedTokensDecoder {
     __type: Option<String>,
     pub content: String,
@@ -42,18 +42,18 @@ fn raise_exception(msg: String) -> Result<String, minijinja::Error> {
     Err(minijinja::Error::new(ErrorKind::InvalidOperation, msg))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct BeginEndUnkPadTok(
     #[serde(with = "either::serde_untagged")] pub Either<String, AddedTokensDecoder>,
 );
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ChatTemplateValue(
     #[serde(with = "either::serde_untagged")] pub Either<String, Vec<HashMap<String, String>>>,
 );
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 /// Template for chat models including bos/eos/unk as well as the chat template.
 pub struct ChatTemplate {
     add_bos_token: Option<bool>,
@@ -270,6 +270,36 @@ pub struct GenerationConfig {
 }
 
 impl GenerationConfig {
+    pub(crate) fn validate_token_ids(&self, vocab_size: usize) -> Result<()> {
+        for (field, value) in [
+            ("bos_token_id", self.bos_token_id.as_ref()),
+            ("eos_token_id", self.eos_token_id.as_ref()),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            let ids = match value {
+                Either::Left(id) => std::slice::from_ref(id),
+                Either::Right(ids) => ids.as_slice(),
+            };
+            for id in ids {
+                anyhow::ensure!(
+                    usize::try_from(*id).is_ok_and(|id| id < vocab_size),
+                    "generation config `{field}` contains token ID {id}, but the tokenizer vocabulary has {vocab_size} entries"
+                );
+            }
+        }
+        if let Some(ids) = self.suppress_tokens.as_ref() {
+            for id in ids {
+                anyhow::ensure!(
+                    usize::try_from(*id).is_ok_and(|id| id < vocab_size),
+                    "generation config `suppress_tokens` contains token ID {id}, but the tokenizer vocabulary has {vocab_size} entries"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn generation_defaults(&self) -> Option<ModelGenerationDefaults> {
         let defaults = ModelGenerationDefaults {
             do_sample: self.do_sample,
@@ -734,6 +764,23 @@ mod tests {
             ("role".to_string(), Either::Left("user".to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
         ])
+    }
+
+    #[test]
+    fn generation_config_token_ids_must_fit_the_tokenizer_vocabulary() {
+        let valid: GenerationConfig = serde_json::from_value(serde_json::json!({
+            "bos_token_id": 0,
+            "eos_token_id": [1, 2],
+            "suppress_tokens": [3]
+        }))
+        .unwrap();
+        assert!(valid.validate_token_ids(4).is_ok());
+
+        let invalid: GenerationConfig = serde_json::from_value(serde_json::json!({
+            "eos_token_id": [1, 4]
+        }))
+        .unwrap();
+        assert!(invalid.validate_token_ids(4).is_err());
     }
 
     #[test]

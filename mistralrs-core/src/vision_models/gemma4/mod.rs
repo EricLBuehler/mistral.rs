@@ -228,6 +228,7 @@ impl Gemma4Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb = vb.pp("model");
+        let non_text_vb = vb.clone().without_lora_registry();
 
         let vision_dtype = if vb.dtype() == DType::F16 {
             DType::F32
@@ -245,11 +246,11 @@ impl Gemma4Model {
                         text_hidden,
                         normal_loading_metadata
                             .mapper
-                            .set_nm_device(vb.pp("vision_embedder"), false)
+                            .set_nm_device(non_text_vb.pp("vision_embedder"), false)
                             .set_dtype(vision_dtype),
                         normal_loading_metadata
                             .mapper
-                            .set_nm_device(vb.pp("embed_vision"), false)
+                            .set_nm_device(non_text_vb.pp("embed_vision"), false)
                             .set_dtype(vision_dtype),
                     )?,
                 ))
@@ -258,7 +259,7 @@ impl Gemma4Model {
                     vision_cfg,
                     normal_loading_metadata
                         .mapper
-                        .set_nm_device(vb.pp("vision_tower"), false)
+                        .set_nm_device(non_text_vb.pp("vision_tower"), false)
                         .set_dtype(vision_dtype),
                 )?;
                 let embedder = multimodal_embedding::Gemma4MultimodalEmbedder::new(
@@ -267,7 +268,7 @@ impl Gemma4Model {
                     vision_cfg.rms_norm_eps,
                     normal_loading_metadata
                         .mapper
-                        .set_nm_device(vb.pp("embed_vision"), false)
+                        .set_nm_device(non_text_vb.pp("embed_vision"), false)
                         .set_dtype(vision_dtype),
                 )?;
                 Some(Gemma4VisionPath::Tower { tower, embedder })
@@ -284,7 +285,7 @@ impl Gemma4Model {
                     audio_cfg.rms_norm_eps,
                     normal_loading_metadata
                         .mapper
-                        .set_nm_device(vb.pp("embed_audio"), false)
+                        .set_nm_device(non_text_vb.pp("embed_audio"), false)
                         .set_dtype(audio_dtype),
                 )?;
                 Some(Gemma4AudioPath::Unified { embedder })
@@ -293,7 +294,7 @@ impl Gemma4Model {
                     audio_cfg,
                     normal_loading_metadata
                         .mapper
-                        .set_nm_device(vb.pp("audio_tower"), false)
+                        .set_nm_device(non_text_vb.pp("audio_tower"), false)
                         .set_dtype(audio_dtype),
                 )?;
                 let audio_hidden = audio_cfg.output_proj_dims.unwrap_or(audio_cfg.hidden_size);
@@ -303,7 +304,7 @@ impl Gemma4Model {
                     audio_cfg.rms_norm_eps,
                     normal_loading_metadata
                         .mapper
-                        .set_nm_device(vb.pp("embed_audio"), false)
+                        .set_nm_device(non_text_vb.pp("embed_audio"), false)
                         .set_dtype(audio_dtype),
                 )?;
                 Some(Gemma4AudioPath::Conformer {

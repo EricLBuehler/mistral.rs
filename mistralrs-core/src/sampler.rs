@@ -69,6 +69,8 @@ pub struct SamplingParams {
     pub presence_penalty: Option<f32>,
     pub repetition_penalty: Option<f32>,
     pub stop_toks: Option<StopTokens>,
+    #[serde(default)]
+    pub ignore_eos: bool,
     pub max_len: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
@@ -93,6 +95,7 @@ impl SamplingParams {
             presence_penalty: None,
             repetition_penalty: None,
             stop_toks: None,
+            ignore_eos: false,
             max_len: None,
             logits_bias: None,
             n_choices: 1,
@@ -115,6 +118,7 @@ impl SamplingParams {
             presence_penalty: None,
             repetition_penalty: None,
             stop_toks: None,
+            ignore_eos: false,
             max_len: None,
             logits_bias: None,
             n_choices: 1,
@@ -1971,6 +1975,21 @@ mod tests {
         assert_eq!(params.top_k, Some(1));
         assert_eq!(params.top_p, None);
         assert_eq!(params.min_p, None);
+    }
+
+    #[test]
+    fn sampling_params_ignore_eos_is_backward_compatible() {
+        let mut serialized = serde_json::to_value(SamplingParams::neutral()).unwrap();
+        serialized.as_object_mut().unwrap().remove("ignore_eos");
+
+        let params: SamplingParams = serde_json::from_value(serialized).unwrap();
+        assert!(!params.ignore_eos);
+
+        let mut params = SamplingParams::neutral();
+        params.ignore_eos = true;
+        let params: SamplingParams =
+            serde_json::from_value(serde_json::to_value(params).unwrap()).unwrap();
+        assert!(params.ignore_eos);
     }
 
     #[test]

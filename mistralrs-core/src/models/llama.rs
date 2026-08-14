@@ -385,13 +385,27 @@ impl Llama {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
+            let location = device.location();
+            if ropes.contains_key(&location) {
+                continue;
+            }
+            let freq_factors = if vb_m.contains_tensor("rope_freqs.weight") {
+                Some(
+                    vb_m.clone()
+                        .set_device(device.clone())
+                        .get_unchecked_dtype("rope_freqs.weight", DType::F32)?,
+                )
+            } else {
+                None
+            };
             ropes.insert(
-                device.location(),
-                Arc::new(Llama3RotaryEmbedding::new_llama3(
+                location,
+                Arc::new(Llama3RotaryEmbedding::new_llama3_with_factors(
                     vb_m.dtype(),
                     cfg,
                     device,
                     is_gptx,
+                    freq_factors.as_ref(),
                 )?),
             );
         }

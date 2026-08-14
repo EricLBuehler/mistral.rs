@@ -31,11 +31,7 @@ pub async fn finish_verified_step<P: Pipeline>(
     anchor_to_emit: Option<Logprobs>,
 ) -> Result<VerificationOutcome> {
     let general_metadata = pipeline.get_metadata();
-    let eos_tok = if disable_eos_stop {
-        None
-    } else {
-        Some(&general_metadata.eos_tok[..])
-    };
+    let eos_tok = seq.effective_eos_tokens(&general_metadata.eos_tok, disable_eos_stop);
     let return_logprobs = seq.return_logprobs();
 
     if let Some(anchor) = anchor_to_emit {

@@ -21,8 +21,8 @@ use crate::{
     attention::{flash_backend_supports, AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker, Mlp, RmsNorm,
-        RotaryEmbedding, Sdpa,
+        contains_tensor_or_weight_source, embedding, embedding_with_legacy_tied_uqff, Activation,
+        CausalMasker, Mlp, RmsNorm, RotaryEmbedding, Sdpa,
     },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{
@@ -39,6 +39,14 @@ use crate::{
 };
 
 use super::config::{Gemma4BidirectionalAttention, Gemma4TextConfig};
+
+fn gemma4_moe_weight_prefix(vb: &ShardedVarBuilder) -> &'static str {
+    if contains_tensor_or_weight_source(&vb.pp("moe"), "gate_up_proj") {
+        "moe"
+    } else {
+        "experts"
+    }
+}
 
 macro_rules! is_sliding {
     ($layer_idx:expr, $cfg:expr) => {
@@ -197,6 +205,7 @@ struct Gemma4Router {
     norm: RmsNorm,
     scale: Tensor,
     proj: candle_nn::Linear,
+    proj_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     top_k: usize,
 }
 
@@ -209,8 +218,13 @@ impl Gemma4Router {
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
         let scale = vb.get(hidden_size, "scale")?;
-        let proj_w = vb.pp("proj").get((num_experts, hidden_size), "weight")?;
+        let proj_vb = vb.pp("proj");
+        let proj_w = proj_vb.get((num_experts, hidden_size), "weight")?;
         let proj = candle_nn::Linear::new(proj_w.to_dtype(vb.dtype())?, None);
+        let proj_lora = mistralrs_quant::register_dynamic_lora_site(
+            &proj_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(hidden_size, num_experts),
+        )?;
         // Pre-combine: weight = scale * hidden_size^(-0.5)
         let root_size = (hidden_size as f64).powf(-0.5);
         let combined_weight = (&scale * root_size)?;
@@ -219,6 +233,7 @@ impl Gemma4Router {
             norm,
             scale,
             proj,
+            proj_lora,
             top_k,
         })
     }
@@ -226,9 +241,12 @@ impl Gemma4Router {
     fn forward(&self, xs: &Tensor, per_expert_scale: &Tensor) -> Result<(Tensor, Tensor)> {
         let normed = xs.apply(&self.norm)?;
 
-        let logits = normed
-            .to_dtype(self.proj.weight().dtype())?
-            .apply(&self.proj)?;
+        let router_input = normed.to_dtype(self.proj.weight().dtype())?;
+        let logits = router_input.apply(&self.proj)?;
+        let logits = match &self.proj_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &router_input, logits)?,
+            None => logits,
+        };
 
         let topk = crate::ops::moe_router_topk(
             &logits,
@@ -984,11 +1002,7 @@ impl DecoderLayer {
                 .unwrap_or(cfg.intermediate_size);
 
             // Support both old ("moe") and new ("experts") weight paths
-            let moe_prefix = if vb.pp("moe").contains_tensor("gate_up_proj") {
-                "moe"
-            } else {
-                "experts"
-            };
+            let moe_prefix = gemma4_moe_weight_prefix(&vb);
             let moe_vb = mapper.set_device(layer_idx, vb.pp(moe_prefix), false);
             let moe_cfg = MoEExpertsConfig {
                 num_experts,
@@ -1949,6 +1963,7 @@ impl TextModel {
         if requires_full_prefill_queries
             || has_bidirectional
             || metadata.is_some_and(|metadata| metadata.has_noncausal_mm_context)
+            || mistralrs_quant::has_active_lora_execution()
         {
             return Ok(None);
         }
@@ -2621,11 +2636,96 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{Device, Tensor};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::Arc,
+    };
 
     use super::{
-        is_paged_decode_forward, select_paged_mm_prefix_path, sliding_decode_kv_window, TextModel,
+        gemma4_moe_weight_prefix, is_paged_decode_forward, select_paged_mm_prefix_path,
+        sliding_decode_kv_window, Gemma4Router, TextModel,
     };
+    use candle_core::{DType, Device, Tensor};
+    use mistralrs_quant::{
+        QuantMethod, QuantizedWeightSource, Shard, ShardedSafeTensors, ShardedVarBuilder,
+    };
+
+    struct MoePrefixWeightSource(HashSet<String>);
+
+    impl QuantizedWeightSource for MoePrefixWeightSource {
+        fn contains(&self, name: &str) -> bool {
+            self.0.contains(name)
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            unreachable!()
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            unreachable!()
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    fn gemma4_layer_vb(
+        residual_moe: bool,
+        source_moe: bool,
+    ) -> candle_core::Result<ShardedVarBuilder> {
+        let prefix = "model.layers.0";
+        let tensors = if residual_moe {
+            HashMap::from([(
+                format!("{prefix}.moe.gate_up_proj"),
+                Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?,
+            )])
+        } else {
+            HashMap::new()
+        };
+        let source = if source_moe {
+            HashSet::from([format!("{prefix}.moe.gate_up_proj")])
+        } else {
+            HashSet::new()
+        };
+        Ok(ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu)
+            .with_weight_source(Arc::new(MoePrefixWeightSource(source)))
+            .pp(prefix))
+    }
+
+    #[test]
+    fn gemma4_moe_prefix_reads_residual_and_weight_source_tensors() -> candle_core::Result<()> {
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(true, false)?),
+            "moe"
+        );
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(false, true)?),
+            "moe"
+        );
+        assert_eq!(
+            gemma4_moe_weight_prefix(&gemma4_layer_vb(false, false)?),
+            "experts"
+        );
+        Ok(())
+    }
 
     #[test]
     fn paged_decode_phase_does_not_depend_on_query_width() {
@@ -2655,6 +2755,49 @@ mod tests {
         assert!(select_paged_mm_prefix_path(true, true, true, true, true, false).is_err());
         assert!(select_paged_mm_prefix_path(true, true, true, true, true, true).unwrap());
         assert!(!select_paged_mm_prefix_path(false, true, true, true, true, false).unwrap());
+    }
+
+    #[test]
+    fn gemma4_router_registers_its_projection_for_dynamic_lora() -> candle_core::Result<()> {
+        let prefix = "model.language_model.layers.0.router";
+        let registry = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap_with_dummy_regexes(
+            HashMap::from([
+                (
+                    format!("{prefix}.scale"),
+                    Tensor::ones(4, DType::F32, &Device::Cpu)?,
+                ),
+                (
+                    format!("{prefix}.proj.weight"),
+                    Tensor::zeros((3, 4), DType::F32, &Device::Cpu)?,
+                ),
+            ]),
+            DType::F32,
+            Device::Cpu,
+            None,
+        )
+        .with_lora_registry(registry.clone());
+
+        let _router = Gemma4Router::new(
+            4,
+            3,
+            2,
+            1e-6,
+            vb.pp("model")
+                .pp("language_model")
+                .pp("layers")
+                .pp(0)
+                .pp("router"),
+        )?;
+        let sites = registry.sites();
+        assert_eq!(sites.len(), 1);
+        assert_eq!(
+            sites[0].key().path(),
+            "model.language_model.layers.0.router.proj"
+        );
+        assert_eq!(sites[0].spec().in_features(), 4);
+        assert_eq!(sites[0].spec().out_features(), 3);
+        Ok(())
     }
 
     #[test]

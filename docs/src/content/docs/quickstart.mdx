@@ -160,6 +160,21 @@ Commands available at the prompt:
 
 With multimodal models, include image, audio, or video paths or URLs directly in the prompt. For one-shot use, pass `-i "your prompt"` (optionally with `--image`, `--video`, or `--audio`) to send a single request and exit. The full flag set is in the [CLI reference](/mistral.rs/reference/cli/run/).
 
+### Run GGUF models
+
+Load an exact local file for chat, or select a published quantization from a Hugging Face repository:
+
+```bash
+mistralrs run -f /path/to/model.gguf
+mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
+```
+
+The `.gguf` filename selects the format. mistral.rs uses embedded tokenizer and chat-template
+metadata when present, and discovers configuration and multimodal projector files when the
+repository identifies them unambiguously. See [Run GGUF models](/mistral.rs/guides/models/run-gguf/)
+for loading and serving workflows, or [GGUF support](/mistral.rs/reference/gguf-support/) for the
+compatibility matrix.
+
 ## Serve an API
 
 ```bash
@@ -293,11 +308,12 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`with_auto_isq(IsqBits::Four)` is the in-process equivalent of `--quant 4`. See the [Rust SDK guide](/mistral.rs/guides/rust/getting-started/) for streaming, multimodal input, and sampling options.
+`with_auto_isq(IsqBits::Four)` is the in-process equivalent of `--isq 4`. See the [Rust SDK guide](/mistral.rs/guides/rust/getting-started/) for streaming, multimodal input, and sampling options.
 
 ## Next steps
 
-- [Run any model](/mistral.rs/guides/models/run-any-model/): Hugging Face ids, local files, GGUF, and quantization flags.
+- [Run models](/mistral.rs/guides/models/run-any-model/): Hugging Face IDs, local model directories, pipeline detection, and quantization flags.
+- [Run GGUF models](/mistral.rs/guides/models/run-gguf/): local files, Hub artifacts, multimodal input, LoRA, and overrides.
 - [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/): the canonical serving guide.
 - [Quantization](/mistral.rs/guides/quantization/quantize-a-model/): fit larger models on the same hardware.
 - [Agents & tools](/mistral.rs/guides/agents/): tool calling, web search, code execution, shell, OpenAI-compatible Skills, and MCP (Model Context Protocol).

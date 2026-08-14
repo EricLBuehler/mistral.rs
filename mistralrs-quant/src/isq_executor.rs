@@ -19,6 +19,7 @@ const SIZE_IN_GIB: usize = 1024 * 1024 * 1024;
 const LARGE_JOB_THRESHOLD_BYTES: usize = SIZE_IN_GIB;
 const HOST_BUDGET_NUMERATOR: usize = 9;
 const HOST_BUDGET_DENOMINATOR: usize = 10;
+const FP8_PERSISTENT_SCALE_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IsqConsumer {
@@ -564,7 +565,8 @@ pub fn estimate_output_bytes(shape: &[usize], source_dtype: DType, ty: IsqType) 
     let source_bytes = tensor_bytes(shape, source_dtype);
     match ty {
         IsqType::F8Q8 => elem_count(shape).div_ceil(32).saturating_mul(33),
-        IsqType::F8E4M3 => elem_count(shape),
+        IsqType::F8E4M3 => elem_count(shape)
+            .saturating_add(FP8_PERSISTENT_SCALE_COUNT.saturating_mul(DType::F32.size_in_bytes())),
         _ => source_bytes
             .checked_div(ty.pack_factor(source_dtype).max(1))
             .unwrap_or(source_bytes)
@@ -691,6 +693,14 @@ mod tests {
     }
 
     #[test]
+    fn fp8_estimate_includes_persistent_scales() {
+        assert_eq!(
+            estimate_output_bytes(&[4, 8], DType::BF16, IsqType::F8E4M3),
+            44
+        );
+    }
+
+    #[test]
     fn executor_waits_for_budget_release() {
         let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
         let started = Arc::new(AtomicUsize::new(0));
@@ -782,6 +792,34 @@ mod tests {
         drop(second);
         drop(first);
         assert_eq!(rx3.recv().unwrap().unwrap().value, 3);
+    }
+
+    #[test]
+    fn dropping_receivers_allows_executor_shutdown() {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
+            let started = Arc::new(AtomicUsize::new(0));
+            let first_started = started.clone();
+            let rx1 = executor.submit(plan(60), IsqConsumer::ImmediateLoad, move || {
+                first_started.fetch_add(1, Ordering::SeqCst);
+                Ok(1usize)
+            });
+            let second_started = started.clone();
+            let rx2 = executor.submit(plan(60), IsqConsumer::ImmediateLoad, move || {
+                second_started.fetch_add(1, Ordering::SeqCst);
+                Ok(2usize)
+            });
+
+            while started.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+            drop((rx1, rx2));
+            drop(executor);
+            done_tx.send(()).unwrap();
+        });
+
+        done_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     }
 
     #[test]

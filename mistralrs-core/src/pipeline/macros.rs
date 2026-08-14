@@ -332,40 +332,49 @@ macro_rules! get_uqff_paths {
 
         let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
         let input_count = input_files.len();
-
-        // Resolve numeric/ISQ-name shorthands (e.g., "8" -> "q8_0-0.uqff")
-        let resolved_files: Vec<String> = input_files
+        let uqff_report = if available_files
             .iter()
-            .map(|file_str| {
-                if let Some(resolved) =
-                    $crate::pipeline::isq::resolve_uqff_shorthand(file_str, &available_files)
-                {
-                    tracing::debug!("Resolved UQFF shorthand `{}` to `{}`", file_str, resolved,);
-                    resolved
-                } else if file_str.parse::<u32>().is_ok() {
-                    let available_uqff: Vec<_> = available_files
-                        .iter()
-                        .filter(|f| f.ends_with(".uqff"))
-                        .collect();
-                    tracing::warn!(
-                        "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
-                        file_str,
-                        available_uqff,
-                    );
-                    file_str.clone()
-                } else {
-                    file_str.clone()
-                }
-            })
-            .collect();
+            .any(|file| file == mistralrs_quant::UQFF_REPORT_JSON)
+        {
+            let report_path = $crate::api_get_file!(
+                api,
+                mistralrs_quant::UQFF_REPORT_JSON,
+                Path::new(&$this.model_id),
+                &revision
+            );
+            Some(
+                $crate::pipeline::isq::read_uqff_report_file(&report_path)
+                    .map_err(candle_core::Error::msg)?,
+            )
+        } else {
+            None
+        };
 
         let mut expanded_files: Vec<String> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        for file_str in &resolved_files {
-            let expanded = $crate::pipeline::isq::expand_uqff_shards(file_str, &available_files);
-            for f in expanded {
-                if seen.insert(f.clone()) {
-                    expanded_files.push(f);
+        for input in &input_files {
+            let resolved = $crate::pipeline::isq::resolve_uqff_input_files(
+                input,
+                &available_files,
+                uqff_report.as_ref(),
+            )
+            .map_err(candle_core::Error::msg)?;
+            if resolved.len() != 1 || resolved.first() != Some(input) {
+                tracing::debug!("Resolved UQFF input `{}` to {:?}", input, resolved);
+            } else if input.parse::<u32>().is_ok() {
+                let available_uqff: Vec<_> = available_files
+                    .iter()
+                    .filter(|file| file.ends_with(".uqff"))
+                    .collect();
+                tracing::warn!(
+                    "No UQFF file found for shorthand `{}`. Available UQFF files: {:?}",
+                    input,
+                    available_uqff,
+                );
+            }
+            for file in resolved {
+                if seen.insert(file.clone()) {
+                    expanded_files.push(file);
                 }
             }
         }
@@ -401,7 +410,8 @@ macro_rules! get_paths_gguf {
         $this:expr,
         $quantized_model_id:expr,
         $quantized_filenames:expr,
-        $silent:expr
+        $silent:expr,
+        $resolve_adapters:expr
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
@@ -464,17 +474,21 @@ macro_rules! get_paths_gguf {
         )?;
 
         tracing::debug!("GGUF file(s) {:?}", filenames);
-        let adapter_paths = $crate::pipeline::get_adapter_paths(
-            this_model_id.clone(),
-            $crate::pipeline::AdapterPathOptions {
-                xlora_model_id: $this.xlora_model_id.as_ref(),
-                lora_adapters: None,
-                xlora_order: $this.xlora_order.as_ref(),
-                xlora_preload: $crate::pipeline::XLoraPreload::Load,
-            },
-            &$token_source,
-            revision.clone(),
-        )?;
+        let adapter_paths = if $resolve_adapters {
+            $crate::pipeline::get_adapter_paths(
+                this_model_id.clone(),
+                $crate::pipeline::AdapterPathOptions {
+                    xlora_model_id: $this.xlora_model_id.as_ref(),
+                    lora_adapters: $this.dynamic_lora_adapters(),
+                    xlora_order: $this.xlora_order.as_ref(),
+                    xlora_preload: $crate::pipeline::XLoraPreload::Load,
+                },
+                &$token_source,
+                revision.clone(),
+            )?
+        } else {
+            $crate::pipeline::AdapterPaths::None
+        };
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
             tracing::trace!("Loading `generation_config.json` at `{}`", this_model_id);
@@ -513,9 +527,18 @@ macro_rules! get_paths_gguf {
             None
         };
 
-        let tokenizer_filename = if $this.model_id.is_some() && dir_list.contains(&"tokenizer.json".to_string()) {
+        let tokenizer_filename = if dir_list.contains(&"tokenizer.json".to_string()) {
             tracing::trace!("Loading `tokenizer.json` at `{}`", this_model_id);
             $crate::api_get_file!(api, "tokenizer.json", model_id, &revision)
+        } else {
+            PathBuf::from_str("")?
+        };
+        let config_filename = if dir_list.contains(&"config.json".to_string()) {
+            tracing::trace!("Loading `config.json` at `{}`", this_model_id);
+            $crate::api_get_file!(api, "config.json", model_id, &revision)
+        } else if dir_list.contains(&"params.json".to_string()) {
+            tracing::trace!("Loading `params.json` at `{}`", this_model_id);
+            $crate::api_get_file!(api, "params.json", model_id, &revision)
         } else {
             PathBuf::from_str("")?
         };
@@ -534,7 +557,7 @@ macro_rules! get_paths_gguf {
 
         Ok(Box::new($path_name {
             tokenizer_filename,
-            config_filename: PathBuf::from_str("")?,
+            config_filename,
             filenames,
             adapter_paths,
             template_filename: chat_template,
@@ -608,6 +631,7 @@ macro_rules! normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -641,6 +665,7 @@ macro_rules! normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -711,6 +736,7 @@ macro_rules! multimodal_normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -733,6 +759,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
         $multi_progress:expr,
         $matformer_config:expr,
         $uqff_reader:expr,
+        $rope_pairing:expr,
     ) => {{
         let vb = if let Some(reader) = $uqff_reader.clone() {
             $vb.with_uqff_reader(reader)
@@ -750,6 +777,7 @@ macro_rules! multimodal_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: $rope_pairing,
             },
             $attention_mechanism,
         )?;
@@ -814,6 +842,7 @@ macro_rules! embedding_normal_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: None,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -852,6 +881,7 @@ macro_rules! embedding_normal_model_loader_sharded {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: None,
+                rope_pairing: None,
             },
             $attention_mechanism,
         )?;
@@ -934,6 +964,7 @@ macro_rules! xlora_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+                rope_pairing: None,
             },
             &None,
         )?;
@@ -999,7 +1030,7 @@ macro_rules! lora_model_loader {
         } else {
             vb
         };
-        let lora_layers = std::sync::Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+        let lora_layers = $crate::pipeline::normal::new_dynamic_lora_registry(&$config)?;
         let vb = vb.with_lora_registry(lora_layers.clone());
 
         let tracker = vb.tracker().clone();
@@ -1013,6 +1044,7 @@ macro_rules! lora_model_loader {
                 real_device: $real_device,
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
+            rope_pairing: None,
             },
             $attention_mechanism,
         )?;

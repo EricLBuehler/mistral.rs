@@ -23,7 +23,7 @@ pub enum ExpertProj {
 }
 
 impl ExpertProj {
-    /// Inverse of `UqffExpertKeys::new`: canonical tracked key -> (experts prefix, projection).
+    /// Inverse of `QuantizedExpertKeys::new`: canonical tracked key -> (experts prefix, projection).
     pub(crate) fn split_canonical_key(key: &str) -> Option<(&str, Self)> {
         if let Some(prefix) = key.strip_suffix(".gate_proj") {
             Some((prefix, Self::Gate))

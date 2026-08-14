@@ -163,14 +163,14 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with HuggingFace Hub
+    /// Authenticate with Hugging Face Hub
     Login {
         /// Provide token directly (non-interactive)
         #[arg(long)]
         token: Option<String>,
     },
 
-    /// Manage the HuggingFace model cache
+    /// Manage the Hugging Face model cache
     Cache {
         #[command(subcommand)]
         cmd: CacheCommand,
@@ -330,7 +330,7 @@ pub enum UqffCommand {
 /// These mirror the Auto variant's options and are used to construct ModelType::Auto.
 #[derive(clap::Args, Clone, Default)]
 pub struct DefaultModelOptions {
-    /// HuggingFace model ID or local path to model directory
+    /// Hugging Face model ID or local model directory; optional when `-f` names local files
     #[arg(short = 'm', long)]
     pub model_id: Option<String>,
 
@@ -367,11 +367,13 @@ pub struct DefaultModelOptions {
 
 impl DefaultModelOptions {
     /// Convert default options into a ModelType::Auto variant.
-    /// Returns an error if model_id is not provided.
-    pub fn into_model_type(self) -> anyhow::Result<ModelType> {
-        let model_id = self
-            .model_id
-            .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
+    /// Returns an error if neither model_id nor a local quantized file is provided.
+    pub fn into_model_type(mut self) -> anyhow::Result<ModelType> {
+        self.format.normalize()?;
+        let model_id = match self.model_id {
+            Some(model_id) => model_id,
+            None => self.format.derive_local_model_root()?,
+        };
         Ok(ModelType::Auto {
             model: ModelSourceOptions {
                 model_id,
@@ -395,9 +397,23 @@ pub fn resolve_model_type(
     model_type: Option<ModelType>,
     default_model: DefaultModelOptions,
 ) -> anyhow::Result<ModelType> {
+    let mut model_type = match model_type {
+        Some(model_type) => model_type,
+        None => default_model.into_model_type()?,
+    };
+    if let Some(format) = model_format_mut(&mut model_type) {
+        format.normalize()?;
+    }
+    Ok(model_type)
+}
+
+fn model_format_mut(model_type: &mut ModelType) -> Option<&mut FormatOptions> {
     match model_type {
-        Some(mt) => Ok(mt),
-        None => default_model.into_model_type(),
+        ModelType::Auto { format, .. }
+        | ModelType::Text { format, .. }
+        | ModelType::Multimodal { format, .. }
+        | ModelType::Embedding { format, .. } => Some(format),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
 
@@ -465,8 +481,8 @@ pub enum ModelType {
         #[command(flatten)]
         format: FormatOptions,
 
-        #[arg(skip)]
-        adapter: AdapterOptions,
+        #[command(flatten)]
+        adapter: MultimodalAdapterOptions,
 
         #[command(flatten)]
         quantization: QuantizationOptions,
@@ -531,7 +547,7 @@ pub struct GlobalOptions {
     #[serde(default)]
     pub log: Option<PathBuf>,
 
-    /// Token source for HuggingFace authentication.
+    /// Token source for Hugging Face authentication.
     /// Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
     #[serde(default = "default_token_source")]
@@ -946,7 +962,303 @@ fn default_prefix_cache_n() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::Path};
+
     use super::*;
+
+    fn resolve_default_command(command: &str, args: &[&str]) -> anyhow::Result<ModelType> {
+        let cli = Cli::try_parse_from(
+            ["mistralrs", command]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )?;
+        let (model_type, default_model) = match cli.command {
+            Command::Run {
+                model_type,
+                default_model,
+                ..
+            }
+            | Command::Serve {
+                model_type,
+                default_model,
+                ..
+            }
+            | Command::Bench {
+                model_type,
+                default_model,
+                ..
+            } => (model_type, default_model),
+            _ => unreachable!(),
+        };
+        resolve_model_type(model_type, default_model)
+    }
+
+    fn resolve_run(args: &[&str]) -> anyhow::Result<ModelType> {
+        resolve_default_command("run", args)
+    }
+
+    fn resolve_run_error(args: &[&str]) -> anyhow::Error {
+        match resolve_run(args) {
+            Ok(_) => panic!("expected model resolution to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn quantized_file_infers_gguf_and_local_root() {
+        let filename = format!("mistralrs-{}.GGUF", uuid::Uuid::new_v4());
+        fs::write(&filename, []).unwrap();
+        let resolved = resolve_run(&["-f", &filename]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, ".");
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert_eq!(format.quantized_file.as_deref(), Some(filename.as_str()));
+        assert!(format.direct_file_only);
+        fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_is_shared_by_run_serve_and_bench() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        fs::write(&model_path, []).unwrap();
+        let model_path = model_path.to_string_lossy();
+        for command in ["run", "serve", "bench"] {
+            let resolved = resolve_default_command(command, &["-f", &model_path]).unwrap();
+            let ModelType::Auto { model, format, .. } = resolved else {
+                panic!("expected auto model");
+            };
+            assert_eq!(Path::new(&model.model_id), root.join("weights"));
+            assert_eq!(format.format, Some(ModelFormat::Gguf));
+            assert_eq!(format.quantized_file.as_deref(), Some("model.gguf"));
+            assert!(format.direct_file_only);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_rebases_an_explicit_projector() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        let projector_path = root.join("weights/mmproj-BF16.gguf");
+        fs::write(&model_path, []).unwrap();
+        fs::write(&projector_path, []).unwrap();
+        let model_path = model_path.to_string_lossy();
+        for command in ["run", "serve", "bench"] {
+            let resolved = resolve_default_command(
+                command,
+                &["-f", &model_path, "--mmproj", "mmproj-BF16.gguf"],
+            )
+            .unwrap();
+            let ModelType::Auto { model, format, .. } = resolved else {
+                panic!("expected auto model");
+            };
+            assert_eq!(Path::new(&model.model_id), root.join("weights"));
+            assert_eq!(format.quantized_file.as_deref(), Some("model.gguf"));
+            assert_eq!(format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_text_gguf_accepts_dynamic_lora_options() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, []).unwrap();
+
+        let resolved = resolve_run(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--lora",
+            "code=org/code-lora",
+            "--lora-max-rank",
+            "64",
+        ])
+        .unwrap();
+        let ModelType::Auto {
+            format, adapter, ..
+        } = resolved
+        else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert!(format.mmproj.is_none());
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+        assert_eq!(adapter.lora_max_rank, 64);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_preserves_a_cross_directory_projector() {
+        let root = PathBuf::from(format!(".mistralrs-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        fs::create_dir_all(root.join("projectors")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        let projector_path = root.join("projectors/mmproj-BF16.gguf");
+        fs::write(&model_path, []).unwrap();
+        fs::write(&projector_path, []).unwrap();
+
+        let resolved = resolve_run(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--mmproj",
+            &projector_path.to_string_lossy(),
+        ])
+        .unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        let expected_projector = std::env::current_dir().unwrap().join(&projector_path);
+        assert_eq!(
+            format.mmproj.as_deref(),
+            Some(expected_projector.to_string_lossy().as_ref())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quantized_shards_derive_common_parent() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("model-00001.gguf");
+        let second = root.join("model-00002.GGUF");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let files = format!("{}; {}", first.display(), second.display());
+        let resolved = resolve_run(&["-f", &files]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(Path::new(&model.model_id), root);
+        assert_eq!(
+            format.quantized_file.as_deref(),
+            Some("model-00001.gguf;model-00002.GGUF")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quantized_shards_without_model_require_common_parent() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("one")).unwrap();
+        fs::create_dir_all(root.join("two")).unwrap();
+        let first = root.join("one/model-1.gguf");
+        let second = root.join("two/model-2.gguf");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let files = format!("{};{}", first.display(), second.display());
+        let error = resolve_run_error(&["-f", &files]);
+        assert!(error.to_string().contains("one parent directory"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_rejects_a_missing_local_file() {
+        let missing =
+            std::env::temp_dir().join(format!("mistralrs-{}/model.gguf", uuid::Uuid::new_v4()));
+        let error = resolve_run_error(&["-f", &missing.to_string_lossy()]);
+        assert!(error
+            .to_string()
+            .contains("does not exist or is not a file"));
+    }
+
+    #[test]
+    fn remote_quantized_file_infers_ggml() {
+        let resolved = resolve_run(&["-m", "org/model", "-f", "model.GGML"]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, "org/model");
+        assert_eq!(format.format, Some(ModelFormat::Ggml));
+    }
+
+    #[test]
+    fn mmproj_implies_gguf_for_unknown_main_suffix() {
+        let resolved = resolve_run(&[
+            "-m",
+            "org/model",
+            "-f",
+            "model.bin",
+            "--mmproj",
+            "mmproj.gguf",
+        ])
+        .unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+    }
+
+    #[test]
+    fn mmproj_rejects_an_explicit_non_gguf_format() {
+        let error = resolve_run_error(&[
+            "-m",
+            "org/model",
+            "--format",
+            "ggml",
+            "-f",
+            "model.ggml",
+            "--mmproj",
+            "mmproj.gguf",
+        ]);
+        assert!(error.to_string().contains("requires GGUF"));
+    }
+
+    #[test]
+    fn format_inference_rejects_mixed_or_unknown_files() {
+        let mixed = resolve_run_error(&["-m", "org/model", "-f", "a.gguf;b.ggml"]);
+        assert!(mixed.to_string().contains("mixed GGUF and GGML"));
+
+        let unknown = resolve_run_error(&["-m", "org/model", "-f", "model.bin"]);
+        assert!(unknown.to_string().contains("Cannot infer model format"));
+    }
+
+    #[test]
+    fn explicit_format_rejects_contradictory_suffix() {
+        let error = resolve_run_error(&["-m", "org/model", "--format", "gguf", "-f", "model.ggml"]);
+        assert!(error.to_string().contains("conflicts"));
+    }
+
+    #[test]
+    fn explicit_ggml_preserves_legacy_bin_filenames() {
+        let resolved =
+            resolve_run(&["-m", "org/model", "--format", "ggml", "-f", "model.bin"]).unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Ggml));
+        assert_eq!(format.quantized_file.as_deref(), Some("model.bin"));
+    }
+
+    #[test]
+    fn explicit_model_type_also_infers_format() {
+        let resolved = resolve_run(&["auto", "-m", "org/model", "-f", "model.gguf"]).unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+    }
+
+    #[test]
+    fn model_id_is_still_required_without_a_quantized_file() {
+        let error = resolve_run_error(&[]);
+        assert!(error.to_string().contains("--model-id"));
+
+        let resolved = resolve_run(&["-m", "org/plain"]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, "org/plain");
+        assert_eq!(format.format, None);
+    }
 
     #[test]
     fn run_parses_explicit_lora_preloads_and_request_selection() {
@@ -1044,8 +1356,8 @@ mod tests {
     }
 
     #[test]
-    fn explicit_multimodal_does_not_advertise_lora_options() {
-        let result = Cli::try_parse_from([
+    fn explicit_multimodal_accepts_dynamic_lora_options() {
+        let cli = Cli::try_parse_from([
             "mistralrs",
             "serve",
             "multimodal",
@@ -1053,11 +1365,31 @@ mod tests {
             "org/vision-model",
             "--lora",
             "code=org/code-lora",
-        ]);
-        let error = match result {
-            Ok(_) => panic!("expected explicit multimodal LoRA options to be rejected"),
-            Err(error) => error,
+        ])
+        .unwrap();
+
+        let Command::Serve {
+            model_type: Some(ModelType::Multimodal { adapter, .. }),
+            ..
+        } = cli.command
+        else {
+            panic!("expected explicit multimodal model");
         };
-        assert!(error.to_string().contains("unexpected argument '--lora'"));
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+    }
+
+    #[test]
+    fn explicit_multimodal_help_lists_only_dynamic_adapter_options() {
+        let help = match Cli::try_parse_from(["mistralrs", "serve", "multimodal", "--help"]) {
+            Ok(_) => panic!("expected help output"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(help.contains("--lora"));
+        assert!(help.contains("--enable-lora"));
+        assert!(!help.contains("--legacy-lora"));
+        assert!(!help.contains("--xlora"));
     }
 }

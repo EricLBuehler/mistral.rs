@@ -3987,6 +3987,7 @@ dependencies = [
 name = "mistralrs-quant"
 version = "0.9.0"
 dependencies = [
+ "bytemuck",
  "byteorder",
  "candle-core",
  "candle-metal-kernels",

@@ -5,34 +5,21 @@ description: Preload, route, and hot-swap multiple LoRA adapters on one base mod
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without modifying its weights. mistral.rs can keep multiple LoRA adapters loaded, select one independently for every request, and replace an adapter alias without interrupting in-flight requests. Dynamic LoRA supports text models. The CLI and server additionally support language-model adapters for Qwen3.5/3.6 MoE; vision-tower adapters are not supported.
+LoRA (Low-Rank Adaptation) adds fine-tuned weights around a base model without modifying its weights. mistral.rs can keep multiple LoRA adapters loaded, select one independently for every request, and replace an adapter alias without interrupting in-flight requests. Dynamic LoRA supports compatible language-model adapters for text and multimodal models, including GGUF. Vision, audio, and projector adapters are not supported.
 
 X-LoRA is a separate adapter mode that mixes several adapters per token rather than selecting one adapter for a request.
-
-Raw GGUF/GGML LoRA remains supported through legacy mode, which requires `--legacy-lora` and `--legacy-lora-order`. X-LoRA remains supported through `--xlora` with `--xlora-order`. Neither mode supports dynamic per-request selection.
 
 :::caution[Current source API]
 This page documents the breaking dynamic LoRA API on the current source tree, which is newer than the published v0.9.0 CLI and Python packages and the crates.io Rust release. Until the next release, use a [current source build](/mistral.rs/developer/from-source/). If you are upgrading from mistral.rs 0.9.0 or older, see [the migration table](#migrating-from-mistralrs-090-and-older).
 :::
 
-| Mode | Configuration | Per-request behavior | Hot-swap |
+| Mode | Base model support | Request behavior | Live updates |
 |---|---|---|---|
-| Dynamic LoRA | `--lora`, `Which.Lora`, `LoraModelBuilder` | Zero or one selected adapter | Yes |
-| Legacy raw GGUF/GGML LoRA | `--legacy-lora` with `--legacy-lora-order`, `Which.LoraGGUF`, `Which.LoraGGML` | One static adapter configuration | No |
-| X-LoRA | `--xlora` with `--xlora-order`, `Which.XLora` | Learned per-token mixture | No |
+| Dynamic LoRA | Compatible text and multimodal language models, including GGUF | Select zero or one adapter per request | Yes |
+| Legacy LoRA | GGML and Phi3 GGUF | One static adapter configuration | No |
+| X-LoRA | Compatible plain and GGML text models, plus Phi3 GGUF | Learned per-token mixture | No |
 
-## Legacy raw LoRA
-
-Use the ordering JSON published with the raw adapter when one is available. For a single adapter without a supplied file, the minimum shape is:
-
-```json
-{
-  "base_model_id": "org/base-model",
-  "order": ["adapter"]
-}
-```
-
-`base_model_id` must match the selected base model. Each `order` name must match the name used in that adapter's config and safetensors filenames. Preserve a publisher-provided `layers` mapping when present.
+For GGUF file and projector selection, see [Run GGUF models](/mistral.rs/guides/models/run-gguf/). The [GGUF support reference](/mistral.rs/reference/gguf-support/) summarizes adapter and multimodal boundaries.
 
 ## Enable and preload LoRA
 
@@ -46,6 +33,18 @@ mistralrs serve -m <base-model> \
 
 The vLLM-compatible alias also accepts several modules after one option: `--lora-modules code=<code-lora-repo> math=./math-adapter`.
 
+Dynamic LoRA is also available for supported GGUF language models:
+
+```bash
+mistralrs serve \
+  -m Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --quant 4 \
+  --lora philosophy=closestfriend/brie-qwen2.5-0.5b
+```
+
+The alias, request-routing, and lifecycle APIs below also apply to GGUF. Model files and companion
+projectors follow the [GGUF selection rules](/mistral.rs/guides/models/run-gguf/).
+
 Aliases are trimmed, case-sensitive, nonempty UTF-8 strings of at most 256 bytes.
 
 Preloading enables the dynamic LoRA runtime automatically. To start without an adapter and load one later, use `--enable-lora`:
@@ -53,6 +52,8 @@ Preloading enables the dynamic LoRA runtime automatically. To start without an a
 ```bash
 mistralrs serve -m <base-model> --enable-lora
 ```
+
+For multimodal models, the adapter applies only to the language model. Vision, audio, and projector adapters are not supported.
 
 Remote adapters resolve from their own Hugging Face revision. `--lora ALIAS=SOURCE` uses `main`, regardless of the base model revision. Use `--lora-modules '{"name":"code","path":"org/adapter","revision":"<commit>"}'`, `LoraAdapter(alias=..., source=..., revision="...")` in Python, `LoraAdapterSpec::new(...).with_revision("...")` in Rust, or structured TOML to pin another branch, tag, pull request ref, or commit. A local adapter directory does not use the revision. The JSON form accepts vLLM's `base_model_name` as lineage metadata; it does not override or constrain `-m`, and model cards report the model actually selected by `-m`.
 
@@ -70,7 +71,9 @@ The runtime has three configurable admission limits:
 
 An adapter that exceeds a limit is rejected. `--lora-max-bytes` applies only to adapters, not total model memory. Replacing an alias does not interrupt requests already using its previous generation, so leave enough capacity for both versions during a replacement.
 
-Python exposes the same limits as `Which.Lora(max_adapters=..., max_rank=..., max_bytes=...)`. Rust uses `LoraModelBuilder::with_runtime_config(LoraRuntimeConfig { ... })`.
+Python exposes these limits on `Which.Lora` and `Which.GGUF`. Rust uses
+`LoraModelBuilder::with_runtime_config(...)` or
+`GgufModelBuilder::with_lora_runtime_config(...)`.
 
 <Tabs>
 <TabItem label="CLI">
@@ -134,16 +137,56 @@ let response = model
 </TabItem>
 </Tabs>
 
+Python and Rust require an exact GGUF filename. The
+[GGUF guide](/mistral.rs/guides/models/run-gguf/) covers automatic CLI selection.
+
+<Tabs>
+<TabItem label="Python">
+
+```python
+from mistralrs import LoraAdapter, Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="<gguf-repo>",
+        quantized_filename="<model.gguf>",
+        adapters=[LoraAdapter(alias="code", source="<code-lora-repo>")],
+    )
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::GgufModelBuilder;
+
+let model = GgufModelBuilder::new("<gguf-repo>", vec!["<model.gguf>"])
+    .with_lora_adapter("code", "<code-lora-repo>")
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>
+
+These builders also support multimodal GGUF. Configure the model and companion assets as described
+in the GGUF guide; adapters apply only to the language-model component.
+
+Use `adapters=[]` in Python or `.with_lora()` in Rust to enable a runtime without preloaded
+adapters. In Python, setting any LoRA limit to a non-default value also enables that runtime.
+
 ## Routed MoE adapters
 
-Dynamic LoRA supports compatible adapters for the routed experts of selected text MoE models. They use the same aliases, per-request selection, preload limits, and hot-load API as dense LoRA.
+Routed-expert adapters use the aliases, per-request selection, preload limits, and lifecycle API
+described above.
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-30B-A3B \
   --lora domain=<moe-lora-repo>
 ```
 
-Routed expert LoRA is wired for these text model families:
+Routed-expert LoRA is available for the language-model component of these families:
 
 - DeepSeek V2, DeepSeek V3, and DeepSeek R1
 - GLM-4.7 and GLM-4.7-Flash
@@ -154,11 +197,13 @@ Routed expert LoRA is wired for these text model families:
 - Phi-3.5-MoE
 - Qwen3 MoE
 - Qwen3-Next and Qwen3-Coder-Next
-- Qwen3.5 and Qwen3.6 MoE through the CLI and server, language model only
+- Qwen3-VL MoE, language model only
+- Qwen3.5 and Qwen3.6 MoE, language model only
+- Llama 4 and Gemma 4, language model only
 
-This list is narrower than general MoE model support. Granite MoE and multimodal MoE pipelines other than Qwen3.5/3.6 MoE are not supported. AnyMoE cannot be combined with dynamic per-request LoRA. Tensor parallelism supports preloaded adapters.
+This list is narrower than general MoE model support. Granite MoE is not supported. AnyMoE cannot be combined with dynamic per-request LoRA. Tensor parallelism supports preloaded adapters.
 
-Qwen3.5/3.6 text, image, and video requests may select a language-model adapter. Vision-tower adapters are not supported.
+Multimodal text, image, audio, and video requests may select a compatible language-model adapter. Non-language adapters are not supported.
 
 For example, this starts Qwen3.6 MoE with a public compatible adapter:
 
@@ -167,7 +212,8 @@ mistralrs serve -m Qwen/Qwen3.6-35B-A3B \
   --lora domain=jeeejeee/qwen36-35ba3b-moe-all-linear-poken-lora
 ```
 
-Use the default `auto` model selection for Qwen3.5/3.6 MoE LoRA. Image options such as `--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is enabled; the explicit `multimodal` model type does not accept adapters. This support is currently available through the CLI and server only, not Rust `LoraModelBuilder` or Python `Which.Lora`.
+Use the default `auto` model selection for safetensors multimodal LoRA. Image options such as
+`--max-edge`, `--max-num-images`, and `--max-image-length` remain active when LoRA is enabled.
 
 ## Select an adapter per request
 
@@ -335,15 +381,15 @@ Runtime-loaded aliases do not survive a server restart or model reload; put requ
 
 | Area | Support |
 |---|---|
-| Model category | Text models. The CLI and server also support language-model adapters for Qwen3.5/3.6 MoE. Rust `LoraModelBuilder` and Python `Which.Lora` do not support these models. Vision-tower adapters are unsupported. |
-| Request APIs | Chat Completions, Completions, and Responses. Qwen3.5/3.6 MoE image and video requests may select a text-submodel adapter. Not Embeddings, Anthropic Messages, other multimodal families, diffusion, or speech requests. |
+| Model category | Compatible text and multimodal language models, including supported GGUF models. Vision, audio, and projector adapters are unsupported. |
+| Request APIs | Chat Completions, Completions, and Responses, including multimodal requests supported by the selected model. Adapter selection is not supported for Embeddings, Anthropic Messages, diffusion, or dedicated speech requests. |
 | Adapter files | PEFT `adapter_config.json` and one `adapter_model.safetensors` file. Pickle `.bin`, sharded adapter files, adapter tokenizers, and added vocabulary are not supported. |
 | Adapter formats | Standard LoRA and RS-LoRA, including compatible routed expert adapters. PEFT `rank_pattern`, `alpha_pattern`, `target_modules`, `target_parameters`, and `exclude_modules` are supported where applicable. |
-| Base weights | Plain and supported prequantized safetensors, in-situ quantization, and UQFF. |
+| Base weights | Plain and supported prequantized safetensors, in-situ quantization, UQFF, and supported GGUF. |
 | CUDA | Ordinary and routed expert LoRA are supported. |
 | Metal and CPU | Ordinary and routed expert LoRA are supported. |
-| Tensor parallelism | Preloading is supported; live load and unload are not. |
-| Raw GGUF/GGML | Uses the legacy `--legacy-lora` path; per-request selection and hot-loading are unavailable. |
+| Tensor parallelism | Preloading is supported; live load, replace, and unload are not. |
+| GGUF and GGML | GGUF supports dynamic LoRA for compatible language-model adapters. GGML uses legacy mode. See [GGUF support](/mistral.rs/reference/gguf-support/) for legacy and multimodal boundaries. |
 | Speculative decoding | Dynamic LoRA attachment is not supported. |
 | Unsupported adapter variants | DoRA, aLoRA, QALoRA, BD-LoRA, Arrow, MonteCLoRA, adapter bias, `modules_to_save`, layer replication, non-expert `target_parameters`, weight tying, trainable-token indices, Megatron configuration, and adapters that modify embeddings or the output head. |
 | Base-transforming initializers | Configurations retaining `pissa`, `pissa_niter_*`, `olora`, `corda`, `loftq`, or `lora_ga` in `init_lora_weights` are rejected. Convert the result to an ordinary LoRA adapter for the original base before loading it. |
@@ -372,9 +418,9 @@ Dynamic LoRA replaces the ordinary-LoRA API from mistral.rs 0.9.0 and older. The
 | mistral.rs 0.9.0 and older | Current API |
 |---|---|
 | Plain/safetensors `--lora "repo-a;repo-b"` | Repeat `--lora alias=repo` and select one alias with `--adapter`, the request `adapter` field, or an adapter model ID. |
-| Raw GGUF/GGML `--lora <source>` | Use `--legacy-lora <source> --legacy-lora-order <ordering-file.json>`. The [ordering JSON](#legacy-raw-lora) is now required. Dynamic per-request selection is not available for raw adapters. |
+| Raw GGUF/GGML `--lora <source>` | For GGUF, use `--lora alias=source` and select the alias dynamically. For GGML or a compatible static GGUF configuration, use `--legacy-lora <source> --legacy-lora-order <ordering-file.json>`; the [ordering JSON](#legacy-raw-lora) is required. |
 | Plain/safetensors TOML `lora = "repo"` | Use the structured `adapter.lora` list shown in the [TOML reference](/mistral.rs/reference/cli-toml-config/). |
-| Raw GGUF/GGML TOML LoRA fields | Use `legacy_lora` with `legacy_lora_order` under `[models.adapter]`. |
+| Raw GGUF/GGML TOML LoRA fields | For GGUF, use the structured dynamic `lora` entries under `[models.adapter]`. Use `legacy_lora` with `legacy_lora_order` for GGML or a compatible static GGUF configuration. |
 | Python `Which.Lora(adapter_model_ids, model_id=...)` | `Which.Lora(model_id, adapters=[LoraAdapter(alias=..., source=...)])`. |
 | Rust `LoraModelBuilder::from_text_model_builder(builder, adapter_ids)` | Start with `LoraModelBuilder::from_text_model_builder(builder)`, then call `with_adapter` or `with_adapter_revision`. |
 | Rust `RequestBuilder::set_adapters(names)` | Use `set_adapter(alias)` for one dynamic adapter. |
@@ -401,7 +447,7 @@ The lifecycle endpoint names and core `lora_name`/`lora_path` fields match vLLM,
 | `--fully-sharded-loras` | No equivalent. |
 | `--api-key` protection for mutation routes | No direct equivalent; use an authenticated reverse proxy. |
 | Adapter tokenizer or extra vocabulary | Unsupported; requests use the base tokenizer and vocabulary |
-| Multimodal LoRA | Through the CLI and server, Qwen3.5/3.6 MoE supports language-model LoRA on text, image, and video requests. The Rust `LoraModelBuilder` and Python `Which.Lora` do not support these models. Vision-tower LoRA and all other multimodal families are unsupported. |
+| Multimodal LoRA | Compatible language-model adapters work across the CLI, server, Python, and Rust. Vision, audio, and projector adapters are unsupported. |
 | Live updates with tensor parallelism | Preload adapters instead; runtime load and unload are unavailable |
 
 The explicit `adapter` request field is optional when an alias is used as `model`. Use it for exact-generation selection or to keep base-model and adapter routing separate.
@@ -433,6 +479,23 @@ Common HTTP lifecycle errors use a stable `error.code`:
 | `adapter_storage_unavailable`, `lora_storage_unavailable`, or `lora_device_load_failed` | Recover storage or device capacity before retrying. |
 
 Python uses `invalid_lora_generation` when `expected_generation` is not a value returned by load, list, or inference. Pass generation values exactly as returned.
+
+## Legacy raw LoRA
+
+GGUF supports dynamic LoRA for compatible language-model adapters. Legacy mode remains available
+for GGML and the static GGUF configurations listed in the
+[GGUF support reference](/mistral.rs/reference/gguf-support/).
+
+Use the ordering JSON published with the raw adapter when one is available. For a single adapter without a supplied file, the minimum shape is:
+
+```json
+{
+  "base_model_id": "org/base-model",
+  "order": ["adapter"]
+}
+```
+
+`base_model_id` must match the selected base model. Each `order` name must match the name used in that adapter's config and safetensors filenames. Preserve a publisher-provided `layers` mapping when present.
 
 ## X-LoRA
 

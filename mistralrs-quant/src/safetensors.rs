@@ -272,7 +272,20 @@ impl MmapedSafetensors {
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
     pub unsafe fn multi<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
-        let mut routing = HashMap::new();
+        Self::multi_impl(paths, false)
+    }
+
+    /// Creates a wrapper around multiple memory mapped files and rejects duplicate tensor names.
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`].
+    pub unsafe fn multi_unique<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
+        Self::multi_impl(paths, true)
+    }
+
+    unsafe fn multi_impl<P: AsRef<Path>>(paths: &[P], reject_duplicates: bool) -> Result<Self> {
+        let mut routing: HashMap<String, usize> = HashMap::new();
         let mut safetensors = vec![];
         for (index, p) in paths.iter().enumerate() {
             let p = p.as_ref();
@@ -289,6 +302,15 @@ impl MmapedSafetensors {
                 },
             )?;
             for k in data.get().0.names() {
+                if let Some(previous_index) = routing.get(k).copied().filter(|_| reject_duplicates)
+                {
+                    let previous = paths[previous_index].as_ref();
+                    candle_core::bail!(
+                        "Duplicate tensor key `{k}` found in `{}` and `{}`.",
+                        previous.display(),
+                        p.display()
+                    );
+                }
                 routing.insert(k.to_string(), index);
             }
             safetensors.push(data)
@@ -309,6 +331,13 @@ impl MmapedSafetensors {
             tensors.push(safetensors.get().0.tensors())
         }
         tensors.into_iter().flatten().collect()
+    }
+
+    pub(crate) fn tensors_by_file(&self) -> Vec<Vec<(String, st::TensorView<'_>)>> {
+        self.safetensors
+            .iter()
+            .map(|safetensors| safetensors.get().0.tensors())
+            .collect()
     }
 
     pub fn get(&self, name: &str) -> Result<st::TensorView<'_>> {

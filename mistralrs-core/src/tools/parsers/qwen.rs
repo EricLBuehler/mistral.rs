@@ -270,11 +270,40 @@ fn lark_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_qwen_tool_calls, QwenParser};
-    use crate::tools::parsers::ToolFormatParser;
+    use crate::tools::parsers::{specialize_required_tool_call_grammar, ToolFormatParser};
     use mistralrs_mcp::{Function, ToolType};
     use serde_json::json;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct GreedyTokenizerEnv {
+        trie: toktrie::TokTrie,
+    }
+
+    impl toktrie::TokenizerEnv for GreedyTokenizerEnv {
+        fn tok_trie(&self) -> &toktrie::TokTrie {
+            &self.trie
+        }
+
+        fn tokenize_bytes(&self, bytes: &[u8]) -> Vec<toktrie::TokenId> {
+            self.trie.greedy_tokenize(bytes)
+        }
+
+        fn tokenize_is_canonical(&self) -> bool {
+            false
+        }
+    }
+
+    fn wrapper_token_trie() -> toktrie::TokTrie {
+        let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
+        let eos = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        tokens.push(b"\xff<eos>".to_vec());
+        tokens.push(b"\xff<tool_call>".to_vec());
+        tokens.push(b"\xff</tool_call>".to_vec());
+        let vocab_size = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        toktrie::TokTrie::from(&toktrie::TokRxInfo::new(vocab_size, eos), &tokens)
+    }
 
     #[test]
     fn parses_qwen_json_tool_call() {
@@ -376,5 +405,40 @@ print(1 < 2)
         let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
         assert!(lark.contains("\"<parameter=code>\" \"\\n\"? xml_param_value \"</parameter>\""));
         assert!(!lark.contains("\"\\n</parameter>\""));
+    }
+
+    #[test]
+    fn required_grammar_uses_tokenizer_special_wrappers() {
+        let tool = crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        };
+        let mut grammar = QwenParser.required_tool_call_grammar(&[tool]);
+        let trie = wrapper_token_trie();
+        let start_token = trie.get_special_token("<tool_call>").unwrap();
+        let env: toktrie::TokEnv = Arc::new(GreedyTokenizerEnv { trie });
+        let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
+        let parser = factory.create_parser(grammar.clone()).unwrap();
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+
+        assert!(!matcher.compute_mask().unwrap().is_allowed(start_token));
+
+        specialize_required_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
+
+        let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains("start: <tool_call> (json_call | xml_call)"));
+        assert!(lark.contains("json_call: @json_body </tool_call>"));
+
+        let parser = factory.create_parser(grammar).unwrap();
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+        let mask = matcher.compute_mask().unwrap();
+
+        assert!(mask.is_allowed(start_token));
+        matcher.consume_token(start_token).unwrap();
     }
 }

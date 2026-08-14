@@ -45,9 +45,15 @@ fn offline_repo(model_id: &Path, revision: &str) -> Repo {
     )
 }
 
+fn resolve_hf_cache(cache: Option<Cache>) -> Cache {
+    cache
+        .or_else(|| crate::GLOBAL_HF_CACHE.get().cloned())
+        .or_else(|| hf_hub_cache_dir().map(Cache::new))
+        .unwrap_or_else(Cache::from_env)
+}
+
 pub(crate) fn offline_cache_repo(model_id: &Path, revision: &str) -> hf_hub::CacheRepo {
-    let cache = hf_hub_cache_dir().map(Cache::new).unwrap_or_default();
-    cache.repo(offline_repo(model_id, revision))
+    resolve_hf_cache(None).repo(offline_repo(model_id, revision))
 }
 
 pub(crate) fn offline_missing_file_error(
@@ -86,9 +92,8 @@ fn offline_snapshot_files(model_id: &Path, revision: &str) -> Vec<String> {
         Ok(())
     }
 
-    let Some(cache_dir) = hf_hub_cache_dir() else {
-        return Vec::new();
-    };
+    let cache = resolve_hf_cache(None);
+    let cache_dir = cache.path();
     let repo = offline_repo(model_id, revision);
     let folder = repo.folder_name();
     let ref_path = cache_dir.join(&folder).join("refs").join(revision);
@@ -218,11 +223,7 @@ pub(crate) fn files_cached_locally(model_id: &str, revision: &str, files: &[&str
     if model_path.exists() {
         return files.iter().all(|file| model_path.join(file).exists());
     }
-    let cache = crate::GLOBAL_HF_CACHE
-        .get()
-        .cloned()
-        .or_else(|| hf_hub_cache_dir().map(Cache::new))
-        .unwrap_or_else(Cache::from_env);
+    let cache = resolve_hf_cache(None);
     let repo = cache.repo(offline_repo(model_path, revision));
     files.iter().all(|file| repo.get(file).is_some())
 }
@@ -240,17 +241,11 @@ pub(crate) fn build_api_with_cache(
     cache: Option<Cache>,
 ) -> Result<Api> {
     let token = get_token(token_source)?;
-    let cache = cache
-        .or_else(|| crate::GLOBAL_HF_CACHE.get().cloned())
-        .or_else(|| hf_hub_cache_dir().map(Cache::new))
-        .unwrap_or_else(Cache::from_env);
-    let mut api = ApiBuilder::from_cache(cache)
+    ApiBuilder::from_cache(resolve_hf_cache(cache))
         .with_progress(progress)
-        .with_token(token);
-    if let Some(cache_dir) = hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    api.build().map_err(Into::into)
+        .with_token(token)
+        .build()
+        .map_err(Into::into)
 }
 
 pub(crate) fn build_async_api(
@@ -266,17 +261,11 @@ pub(crate) fn build_async_api_with_cache(
     cache: Option<Cache>,
 ) -> Result<AsyncApi> {
     let token = get_token(token_source)?;
-    let cache = cache
-        .or_else(|| crate::GLOBAL_HF_CACHE.get().cloned())
-        .or_else(|| hf_hub_cache_dir().map(Cache::new))
-        .unwrap_or_else(Cache::from_env);
-    let mut api = AsyncApiBuilder::from_cache(cache)
+    AsyncApiBuilder::from_cache(resolve_hf_cache(cache))
         .with_progress(progress)
-        .with_token(token);
-    if let Some(cache_dir) = hf_hub_cache_dir() {
-        api = api.with_cache_dir(cache_dir);
-    }
-    api.build().map_err(Into::into)
+        .with_token(token)
+        .build()
+        .map_err(Into::into)
 }
 
 pub async fn list_model_files(
@@ -821,7 +810,29 @@ pub fn probe_hf_repo_files(
             RepoType::Model,
             revision.to_string(),
         ));
-    repo.info()
-        .ok()
-        .map(|info| info.siblings.into_iter().map(|s| s.rfilename).collect())
+    match repo.info() {
+        Ok(info) => Some(
+            info.siblings
+                .into_iter()
+                .map(|sibling| sibling.rfilename)
+                .collect(),
+        ),
+        Err(_) => {
+            let files = offline_snapshot_files(Path::new(model_id), revision);
+            (!files.is_empty()).then_some(files)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_hf_cache;
+    use hf_hub::Cache;
+
+    #[test]
+    fn explicit_cache_path_is_preserved() {
+        let path = std::env::temp_dir().join("mistralrs-explicit-hf-cache");
+        let cache = resolve_hf_cache(Some(Cache::new(path.clone())));
+        assert_eq!(cache.path(), &path);
+    }
 }

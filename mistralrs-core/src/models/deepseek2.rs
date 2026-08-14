@@ -22,7 +22,7 @@ use crate::{
     layers_masker::masked_fill,
     mla::{
         mla_cache_forward, mla_decode_forward, should_use_mla_cache, should_use_mla_decode,
-        MlaWeights,
+        MlaKvBProjection, MlaWeights,
     },
     moe::{MoEExperts, MoEExpertsConfig},
     ops::{SplitOp, TopKLastDimOp, TopKOutput},
@@ -143,7 +143,7 @@ struct Attention {
     q: QProj,
     kv_a_proj_with_mqa: Arc<dyn QuantMethod>,
     kv_a_layernorm: RmsNorm,
-    kv_b_proj: Arc<dyn QuantMethod>,
+    kv_b_proj: MlaKvBProjection,
     o_proj: Arc<dyn QuantMethod>,
     rotary_emb: Arc<DeepSeekV2RotaryEmbedding>,
     cfg: DeepSeekV2Config,
@@ -213,14 +213,40 @@ impl Attention {
             cfg.rms_norm_eps,
             mapper.set_device(layer_idx, vb.pp("kv_a_layernorm"), false),
         )?;
-        let kv_b_proj = ColumnParallelLayer::new(
-            cfg.kv_lora_rank,
-            cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
-            &cfg.quantization_config,
-            false,
-            comm,
-            mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
-        )?;
+        let k_b_vb = vb.pp("k_b_proj");
+        let v_b_vb = vb.pp("v_b_proj");
+        let kv_b_proj = match (
+            crate::layers::contains_tensor_or_weight_source(&k_b_vb, "weight"),
+            crate::layers::contains_tensor_or_weight_source(&v_b_vb, "weight"),
+        ) {
+            (true, true) => MlaKvBProjection::split(
+                ColumnParallelLayer::new(
+                    cfg.qk_nope_head_dim,
+                    cfg.num_attention_heads * cfg.kv_lora_rank,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    mapper.set_device(layer_idx, k_b_vb, loading_isq),
+                )?,
+                ColumnParallelLayer::new(
+                    cfg.kv_lora_rank,
+                    cfg.num_attention_heads * cfg.v_head_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    mapper.set_device(layer_idx, v_b_vb, loading_isq),
+                )?,
+            ),
+            (false, false) => MlaKvBProjection::fused(ColumnParallelLayer::new(
+                cfg.kv_lora_rank,
+                cfg.num_attention_heads * (q_head_dim - cfg.qk_rope_head_dim + cfg.v_head_dim),
+                &cfg.quantization_config,
+                false,
+                comm,
+                mapper.set_device(layer_idx, vb.pp("kv_b_proj"), loading_isq),
+            )?),
+            _ => candle_core::bail!("DeepSeek layer {layer_idx} has incomplete split MLA weights"),
+        };
 
         let o_proj = RowParallelLayer::new(
             cfg.num_attention_heads * cfg.v_head_dim,
@@ -304,7 +330,7 @@ impl Attention {
             self.paged_attn.is_some(),
             q_nope.device(),
             &metadata,
-            self.kv_b_proj.as_ref(),
+            &self.kv_b_proj,
         );
 
         let mut attn_out = if use_mla_decode {
@@ -315,7 +341,7 @@ impl Attention {
                 &k_pe,
                 &metadata,
                 &self.mla_weights,
-                self.kv_b_proj.as_ref(),
+                &self.kv_b_proj,
                 &self.sdpa_params,
                 self.num_attention_heads,
                 self.cfg.kv_lora_rank,
@@ -326,20 +352,23 @@ impl Attention {
                 seq_len,
             )?
         } else {
-            let mut kv = self.kv_b_proj.forward(&ckv)?;
-            kv = kv
-                .reshape((
-                    bs,
-                    seq_len,
+            let use_absorbed = self.kv_b_proj.is_split()
+                && (self.paged_attn.is_none() || q_nope.device().is_cuda());
+            let (k_nope, mut v, q_nope, value_head_dim) = if use_absorbed {
+                let q_nope = self.kv_b_proj.project_query(&q_nope)?;
+                let latent = ckv
+                    .unsqueeze(1)?
+                    .repeat((1, self.num_attention_heads, 1, 1))?;
+                (latent.clone(), latent, q_nope, self.cfg.kv_lora_rank)
+            } else {
+                let (k_nope, v) = self.kv_b_proj.expanded_kv(
+                    &ckv,
                     self.num_attention_heads,
-                    self.cfg.qk_nope_head_dim + self.cfg.v_head_dim,
-                ))?
-                .transpose(1, 2)?;
-
-            let kv_split =
-                kv.split(&[self.cfg.qk_nope_head_dim, self.cfg.v_head_dim], D::Minus1)?;
-            let k_nope = kv_split[0].clone();
-            let mut v = kv_split[1].clone();
+                    self.cfg.qk_nope_head_dim,
+                    self.cfg.v_head_dim,
+                )?;
+                (k_nope, v, q_nope, self.cfg.v_head_dim)
+            };
 
             let q = Tensor::cat(&[&q_nope, &q_pe], D::Minus1)?.contiguous()?;
             let mut k = Tensor::cat(
@@ -348,11 +377,8 @@ impl Attention {
             )?
             .contiguous()?;
 
-            let use_mla_cache = should_use_mla_cache(
-                self.paged_attn.is_some(),
-                q.device(),
-                self.kv_b_proj.as_ref(),
-            );
+            let use_mla_cache =
+                should_use_mla_cache(self.paged_attn.is_some(), q.device(), &self.kv_b_proj);
 
             if use_mla_cache {
                 mla_cache_forward(
@@ -365,18 +391,22 @@ impl Attention {
                     ctx.seqlen_offsets(),
                     &metadata,
                     ctx.flash_params(),
-                    self.kv_b_proj.as_ref(),
+                    &self.kv_b_proj,
                     &self.sdpa_params,
                     self.num_attention_heads,
                     self.cfg.kv_lora_rank,
                     self.cfg.qk_rope_head_dim,
-                    self.cfg.qk_nope_head_dim,
-                    self.cfg.v_head_dim,
+                    if use_absorbed {
+                        self.cfg.kv_lora_rank
+                    } else {
+                        self.cfg.qk_nope_head_dim
+                    },
+                    value_head_dim,
                     bs,
                     seq_len,
                 )?
             } else {
-                match &self.paged_attn {
+                let output = match &self.paged_attn {
                     Some(paged_attn) => match metadata {
                         Some(((key_cache, value_cache), input_metadata)) => {
                             let v = v
@@ -440,6 +470,11 @@ impl Attention {
                             &self.sdpa_params,
                         )?
                     }
+                };
+                if use_absorbed {
+                    self.kv_b_proj.project_value(&output)?
+                } else {
+                    output
                 }
             }
         };
@@ -1025,10 +1060,12 @@ impl IsqModel for DeepSeekV2 {
                 .pp("self_attn")
                 .pp("kv_a_proj_with_mqa")
                 .add(&layer.attn.kv_a_proj_with_mqa);
-            uvb_l
-                .pp("self_attn")
-                .pp("kv_b_proj")
-                .add(&layer.attn.kv_b_proj);
+            if let Some(projection) = layer.attn.kv_b_proj.fused_layer() {
+                uvb_l.pp("self_attn").pp("kv_b_proj").add(projection);
+            } else if let Some((key, value)) = layer.attn.kv_b_proj.split_projections() {
+                uvb_l.pp("self_attn").pp("k_b_proj").add(key);
+                uvb_l.pp("self_attn").pp("v_b_proj").add(value);
+            }
             uvb_l.pp("self_attn").pp("o_proj").add(&layer.attn.o_proj);
         }
 

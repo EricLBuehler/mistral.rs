@@ -137,11 +137,6 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_batch_size,
             ..
         }
-        | ModelSelected::GGUF {
-            max_seq_len,
-            max_batch_size,
-            ..
-        }
         | ModelSelected::XLoraGGUF {
             max_seq_len,
             max_batch_size,
@@ -165,6 +160,31 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_seq_len: *max_seq_len,
             max_batch_size: *max_batch_size,
         }),
+        ModelSelected::GGUF {
+            mmproj_filename,
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => {
+            if mmproj_filename.is_some() {
+                let max_image_length =
+                    max_image_length.unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH);
+                Ok(AutoDeviceMapParams::Multimodal {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                    max_image_shape: (max_image_length, max_image_length),
+                    max_num_images: max_num_images
+                        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES),
+                })
+            } else {
+                Ok(AutoDeviceMapParams::Text {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                })
+            }
+        }
         ModelSelected::Lora {
             arch,
             max_seq_len,
@@ -576,23 +596,63 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            tokenizer_json,
+            mmproj_filename,
+            lora_adapters,
+            lora_runtime_config,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
+            max_edge,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
             ..
-        } => GGUFLoaderBuilder::new(
-            args.chat_template,
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
-            GGUFSpecificConfig {
-                topology: Topology::from_option_path(topology)?,
-            },
-            args.no_kv_cache,
-            args.jinja_explicit,
-        )
-        .build(),
+        } => {
+            if lora_runtime_config.is_none() && !lora_adapters.is_empty() {
+                anyhow::bail!("GGUF LoRA adapters require a dynamic LoRA runtime configuration");
+            }
+            let mut builder = GGUFLoaderBuilder::new(
+                args.chat_template,
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename
+                    .split(GGUF_MULTI_FILE_DELIMITER)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>(),
+                GGUFSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    organization: organization.unwrap_or_default(),
+                    write_uqff,
+                    imatrix,
+                    calibration_file,
+                    max_edge,
+                    max_model_len: args.max_model_len,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
+                },
+                args.no_kv_cache,
+                args.jinja_explicit,
+            );
+            if let Some(mmproj_filename) = mmproj_filename {
+                builder = builder.with_mmproj_files(
+                    mmproj_filename
+                        .split(GGUF_MULTI_FILE_DELIMITER)
+                        .map(ToOwned::to_owned)
+                        .collect(),
+                );
+            }
+            if let Some(tokenizer_json) = tokenizer_json {
+                builder = builder.with_tokenizer_json(tokenizer_json);
+            }
+            if let Some(runtime_config) = lora_runtime_config {
+                builder = builder.with_dynamic_lora(lora_adapters, runtime_config);
+            }
+            builder.build()
+        }
         ModelSelected::XLoraGGUF {
             tok_model_id,
             quantized_model_id,
@@ -612,6 +672,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             args.no_kv_cache,
             args.jinja_explicit,
@@ -644,6 +705,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             args.no_kv_cache,
             args.jinja_explicit,

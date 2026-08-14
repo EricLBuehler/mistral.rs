@@ -163,18 +163,18 @@ pub use pipeline::hf::{
 };
 pub use pipeline::{
     chat_template::ChatTemplate, expand_isq_value, expand_uqff_shards, parse_isq_value,
-    parse_uqff_shard, resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
-    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
-    DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
-    EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
-    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
-    GemmaLoader, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader, LlamaLoader,
-    Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind, ModelPaths,
-    MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType, MultimodalPromptPrefixer,
-    MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder, NormalLoaderType,
-    NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter,
-    SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality, TokenSource,
-    UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    parse_uqff_shard, resolve_uqff_report_output, resolve_uqff_shorthand, AdapterPaths,
+    AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder,
+    DiffusionGenerationParams, DiffusionLoader, DiffusionLoaderBuilder, DiffusionLoaderType,
+    EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingLoaderType, EmbeddingModelPaths,
+    EmbeddingSpecificConfig, GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader,
+    GGUFLoaderBuilder, GGUFSpecificConfig, GemmaLoader, Idefics2Loader, IsqOrganization,
+    LLaVALoader, LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader,
+    MixtralLoader, Modalities, ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder,
+    MultimodalLoaderType, MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader,
+    NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader,
+    Phi3VLoader, Qwen2Loader, ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader,
+    SupportedModality, TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
     ApproximateUserLocation, CalibrationAction, CalibrationRequest, Constraint,
@@ -218,6 +218,11 @@ pub use llguidance;
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
 pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
+
+/// Set the process-wide Hugging Face cache path before model discovery.
+pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
+    GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
+}
 
 /// Configuration for creating an engine instance
 #[derive(Clone)]
@@ -2545,15 +2550,17 @@ impl MistralRs {
             .map_err(|_| MistralRsError::EnginePoisoned)?;
 
         let engine_instance = engines
-            .remove(&resolved_model_id)
+            .get(&resolved_model_id)
             .ok_or_else(|| MistralRsError::ModelNotFound(resolved_model_id.clone()))?;
 
-        // Check if we have loader config for reloading
         let loader_config = engine_instance
             .reboot_state
             .loader_config
             .clone()
             .ok_or_else(|| MistralRsError::NoLoaderConfig(resolved_model_id.clone()))?;
+        let engine_instance = engines
+            .remove(&resolved_model_id)
+            .expect("engine was present while holding the write lock");
 
         // Create the unloaded state
         let unloaded_state = UnloadedModelState {
@@ -2676,13 +2683,14 @@ impl MistralRs {
             .with_chat_template(loader_config.chat_template.clone())
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .with_max_model_len(loader_config.max_model_len)
+            .with_no_kv_cache(unloaded_state.engine_config.no_kv_cache)
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 
         // Load the model
         let pipeline = loader
             .load_model_from_hf(
-                None,
+                loader_config.hf_revision.clone(),
                 loader_config.token_source.clone(),
                 &loader_config.dtype,
                 &loader_config.device,

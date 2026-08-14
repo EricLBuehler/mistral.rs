@@ -346,6 +346,74 @@ impl ExpertSourceLayout {
             }
         }
     }
+
+    fn read_bias(
+        &self,
+        source: &mistralrs_quant::safetensors::MmapedSafetensors,
+        shapes: &std::collections::HashMap<String, Vec<usize>>,
+        prefix: &str,
+        proj: ExpertProj,
+    ) -> Result<Option<Tensor>> {
+        match self {
+            Self::PerExpert { names, count } => {
+                let name = proj.name_in(names);
+                let bias_names = (0..*count)
+                    .map(|i| format!("{prefix}.{i}.{name}.bias"))
+                    .collect::<Vec<_>>();
+                let present = bias_names
+                    .iter()
+                    .filter(|name| shapes.contains_key(*name))
+                    .count();
+                if present == 0 {
+                    return Ok(None);
+                }
+                if present != *count {
+                    candle_core::bail!(
+                        "Expert projection `{prefix}.{name}` has bias for {present} of {count} experts."
+                    );
+                }
+                let slabs = bias_names
+                    .iter()
+                    .map(|name| source.load(name, &candle_core::Device::Cpu, None))
+                    .collect::<Result<Vec<_>>>()?;
+                Tensor::stack(&slabs, 0).map(Some)
+            }
+            Self::Fused { inter, .. } => {
+                let projection = match proj {
+                    ExpertProj::Down => "down_proj",
+                    _ => "gate_up_proj",
+                };
+                let candidates = [
+                    format!("{prefix}.{projection}_bias"),
+                    format!("{prefix}.{projection}.bias"),
+                ];
+                let present = candidates
+                    .iter()
+                    .filter(|name| shapes.contains_key(*name))
+                    .collect::<Vec<_>>();
+                if present.len() > 1 {
+                    candle_core::bail!(
+                        "Expert projection `{prefix}.{projection}` has multiple bias tensors."
+                    );
+                }
+                let Some(name) = present.first() else {
+                    return Ok(None);
+                };
+                let bias = source.load(name, &candle_core::Device::Cpu, None)?;
+                match proj {
+                    ExpertProj::Gate => bias.narrow(1, 0, *inter)?.contiguous().map(Some),
+                    ExpertProj::Up => bias.narrow(1, *inter, *inter)?.contiguous().map(Some),
+                    ExpertProj::Down => Ok(Some(bias)),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RebuiltExpertProjection {
+    pub(crate) weight: Tensor,
+    pub(crate) bias: Option<Tensor>,
 }
 
 /// Whether `key` is a canonical expert key whose stack the source checkpoint can rebuild.
@@ -359,18 +427,30 @@ pub(crate) fn expert_stack_available(
 }
 
 /// Rebuild the canonical `[E, out, in]` stack for a tracked expert key from source weights.
-pub(crate) fn rebuild_expert_stack(
+pub(crate) fn rebuild_expert_projection(
     source: &mistralrs_quant::safetensors::MmapedSafetensors,
     shapes: &std::collections::HashMap<String, Vec<usize>>,
     key: &str,
-) -> Result<Option<Tensor>> {
+) -> Result<Option<RebuiltExpertProjection>> {
     let Some((prefix, proj)) = ExpertProj::split_canonical_key(key) else {
         return Ok(None);
     };
     let Some(layout) = ExpertSourceLayout::detect_in_map(shapes, prefix, proj) else {
         return Ok(None);
     };
-    layout.read_stack(source, prefix, proj).map(Some)
+    let weight = layout.read_stack(source, prefix, proj)?;
+    let bias = layout.read_bias(source, shapes, prefix, proj)?;
+    if let Some(bias) = &bias {
+        let (experts, output, _) = weight.dims3()?;
+        if bias.dims() != [experts, output] {
+            candle_core::bail!(
+                "Expert projection `{key}` bias shape {:?} does not match weight shape {:?}; expected [{experts}, {output}].",
+                bias.dims(),
+                weight.dims()
+            );
+        }
+    }
+    Ok(Some(RebuiltExpertProjection { weight, bias }))
 }
 
 #[cfg(test)]
@@ -478,6 +558,109 @@ mod tests {
             assert_close(&up, &gate_up.narrow(1, INTER, INTER)?.contiguous()?);
             assert_close(&dn, &down);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn rebuilt_per_expert_projection_preserves_bias() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let weights = (0..E)
+            .map(|_| Tensor::randn(0f32, 1f32, (INTER, HIDDEN), &Device::Cpu))
+            .collect::<Result<Vec<_>>>()?;
+        let biases = (0..E)
+            .map(|_| Tensor::randn(0f32, 1f32, INTER, &Device::Cpu))
+            .collect::<Result<Vec<_>>>()?;
+        let mut tensors = Vec::new();
+        for (expert, (weight, bias)) in weights.iter().zip(&biases).enumerate() {
+            tensors.push((
+                format!("model.layers.0.mlp.experts.{expert}.w1.weight"),
+                weight.clone(),
+            ));
+            tensors.push((
+                format!("model.layers.0.mlp.experts.{expert}.w1.bias"),
+                bias.clone(),
+            ));
+        }
+        write_st(&file, tensors);
+        let (source, shapes) = open_source(&file);
+
+        let rebuilt =
+            rebuild_expert_projection(&source, &shapes, "model.layers.0.mlp.experts.gate_proj")?
+                .expect("expert projection");
+        assert_close(&rebuilt.weight, &Tensor::stack(&weights, 0)?);
+        assert_close(
+            rebuilt.bias.as_ref().expect("expert bias"),
+            &Tensor::stack(&biases, 0)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rebuilt_fused_projection_splits_bias_with_weight() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let gate_up = Tensor::randn(0f32, 1f32, (E, 2 * INTER, HIDDEN), &Device::Cpu)?;
+        let down = Tensor::randn(0f32, 1f32, (E, HIDDEN, INTER), &Device::Cpu)?;
+        let gate_up_bias = Tensor::randn(0f32, 1f32, (E, 2 * INTER), &Device::Cpu)?;
+        let down_bias = Tensor::randn(0f32, 1f32, (E, HIDDEN), &Device::Cpu)?;
+        write_st(
+            &file,
+            vec![
+                ("experts.gate_up_proj".to_string(), gate_up.clone()),
+                ("experts.down_proj".to_string(), down.clone()),
+                (
+                    "experts.gate_up_proj_bias".to_string(),
+                    gate_up_bias.clone(),
+                ),
+                ("experts.down_proj.bias".to_string(), down_bias.clone()),
+            ],
+        );
+        let (source, shapes) = open_source(&file);
+
+        for (key, weight, bias) in [
+            (
+                "experts.gate_proj",
+                gate_up.narrow(1, 0, INTER)?.contiguous()?,
+                gate_up_bias.narrow(1, 0, INTER)?.contiguous()?,
+            ),
+            (
+                "experts.up_proj",
+                gate_up.narrow(1, INTER, INTER)?.contiguous()?,
+                gate_up_bias.narrow(1, INTER, INTER)?.contiguous()?,
+            ),
+            ("experts.down_proj", down, down_bias),
+        ] {
+            let rebuilt =
+                rebuild_expert_projection(&source, &shapes, key)?.expect("expert projection");
+            assert_close(&rebuilt.weight, &weight);
+            assert_close(rebuilt.bias.as_ref().expect("expert bias"), &bias);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn partial_per_expert_bias_is_rejected() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("model.safetensors");
+        let mut tensors = Vec::new();
+        for expert in 0..E {
+            tensors.push((
+                format!("experts.{expert}.w1.weight"),
+                Tensor::zeros((INTER, HIDDEN), candle_core::DType::F32, &Device::Cpu)?,
+            ));
+        }
+        tensors.push((
+            "experts.0.w1.bias".to_string(),
+            Tensor::zeros(INTER, candle_core::DType::F32, &Device::Cpu)?,
+        ));
+        write_st(&file, tensors);
+        let (source, shapes) = open_source(&file);
+
+        let error = rebuild_expert_projection(&source, &shapes, "experts.gate_proj")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("bias for 1 of 4 experts"), "{error}");
         Ok(())
     }
 

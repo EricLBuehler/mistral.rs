@@ -373,6 +373,54 @@ fn wrap_tool_callbacks(obj: PyObject) -> anyhow::Result<ToolCallbacks> {
     })
 }
 
+fn gguf_dynamic_lora_enabled(
+    adapters: Option<&[LoraAdapter]>,
+    runtime_config: LoraRuntimeConfig,
+) -> bool {
+    adapters.is_some() || runtime_config != LoraRuntimeConfig::default()
+}
+
+fn which_uses_dynamic_lora(which: &Which) -> bool {
+    match which {
+        Which::Lora { .. } => true,
+        Which::GGUF {
+            adapters,
+            max_adapters,
+            max_rank,
+            max_bytes,
+            ..
+        } => gguf_dynamic_lora_enabled(
+            adapters.as_deref(),
+            LoraRuntimeConfig {
+                max_adapters: *max_adapters,
+                max_rank: *max_rank,
+                max_bytes: *max_bytes,
+            },
+        ),
+        _ => false,
+    }
+}
+
+fn validate_gguf_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
+    let Which::GGUF {
+        mmproj_filename,
+        auto_map_params,
+        multimodal_auto_map_params,
+        ..
+    } = which
+    else {
+        return Ok(());
+    };
+
+    if auto_map_params.is_some() && multimodal_auto_map_params.is_some() {
+        return Err("GGUF accepts only one of auto_map_params and multimodal_auto_map_params");
+    }
+    if mmproj_filename.is_none() && multimodal_auto_map_params.is_some() {
+        return Err("multimodal_auto_map_params requires mmproj_filename");
+    }
+    Ok(())
+}
+
 fn parse_which(
     which: Which,
     no_kv_cache: bool,
@@ -554,21 +602,76 @@ fn parse_which(
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            tokenizer_json,
+            mmproj_filename,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
+            max_edge,
             dtype: _,
             auto_map_params: _,
-        } => GGUFLoaderBuilder::new(
-            chat_template,
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename.map_left(|f| vec![f]).into_inner(),
-            GGUFSpecificConfig {
-                topology: Topology::from_option_path(topology)?,
-            },
-            no_kv_cache,
-            jinja_explicit,
-        )
-        .build(),
+            multimodal_auto_map_params: _,
+            adapters,
+            max_adapters,
+            max_rank,
+            max_bytes,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
+        } => {
+            let runtime_config = LoraRuntimeConfig {
+                max_adapters,
+                max_rank,
+                max_bytes,
+            };
+            let dynamic_lora = gguf_dynamic_lora_enabled(adapters.as_deref(), runtime_config);
+            let mut builder = GGUFLoaderBuilder::new(
+                chat_template,
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename.map_left(|f| vec![f]).into_inner(),
+                GGUFSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    organization: organization.map(Into::into).unwrap_or_default(),
+                    write_uqff: write_uqff.map(UqffWriteConfig::from_output),
+                    imatrix,
+                    calibration_file,
+                    max_edge,
+                    max_model_len: None,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
+                },
+                no_kv_cache,
+                jinja_explicit,
+            );
+            if let Some(mmproj_filename) = mmproj_filename {
+                builder = builder
+                    .with_mmproj_files(mmproj_filename.map_left(|file| vec![file]).into_inner());
+            }
+            if let Some(tokenizer_json) = tokenizer_json {
+                builder = builder.with_tokenizer_json(tokenizer_json);
+            }
+            if dynamic_lora {
+                builder = builder.with_dynamic_lora(
+                    adapters
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|adapter| {
+                            let mut spec = LoraAdapterSpec::new(adapter.alias, adapter.source);
+                            if let Some(revision) = adapter.revision {
+                                spec = spec.with_revision(revision);
+                            }
+                            spec
+                        })
+                        .collect(),
+                    runtime_config,
+                );
+            }
+            builder.build()
+        }
         Which::XLoraGGUF {
             tok_model_id,
             quantized_model_id,
@@ -586,6 +689,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             no_kv_cache,
             jinja_explicit,
@@ -616,6 +720,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             no_kv_cache,
             jinja_explicit,
@@ -873,11 +978,13 @@ impl Runner {
         code_execution_config: Option<CodeExecutionConfig>,
         shell_config: Option<ShellConfig>,
     ) -> PyApiResult<Self> {
-        if anymoe_config.is_some() && matches!(&which, Which::Lora { .. }) {
+        let dynamic_lora = which_uses_dynamic_lora(&which);
+        if anymoe_config.is_some() && dynamic_lora {
             return Err(PyApiErr::from(
                 "dynamic LoRA cannot be combined with AnyMoE in one Python Runner",
             ));
         }
+        validate_gguf_runner_options(&which).map_err(PyApiErr::from)?;
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
             | Which::Lora { .. }
@@ -924,9 +1031,6 @@ impl Runner {
             | Which::Lora {
                 auto_map_params, ..
             }
-            | Which::GGUF {
-                auto_map_params, ..
-            }
             | Which::LoraGGUF {
                 auto_map_params, ..
             }
@@ -951,6 +1055,45 @@ impl Runner {
                     max_batch_size: p.max_batch_size,
                 })
                 .unwrap_or(AutoDeviceMapParams::default_text()),
+            Which::GGUF {
+                mmproj_filename,
+                auto_map_params,
+                multimodal_auto_map_params,
+                ..
+            } => {
+                if mmproj_filename.is_some() {
+                    multimodal_auto_map_params
+                        .clone()
+                        .map(|p| AutoDeviceMapParams::Multimodal {
+                            max_seq_len: p.max_seq_len,
+                            max_batch_size: p.max_batch_size,
+                            max_image_shape: (p.max_image_length, p.max_image_length),
+                            max_num_images: p.max_num_images,
+                        })
+                        .or_else(|| {
+                            auto_map_params
+                                .clone()
+                                .map(|p| AutoDeviceMapParams::Multimodal {
+                                    max_seq_len: p.max_seq_len,
+                                    max_batch_size: p.max_batch_size,
+                                    max_image_shape: (
+                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                                    ),
+                                    max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
+                                })
+                        })
+                        .unwrap_or(AutoDeviceMapParams::default_multimodal())
+                } else {
+                    auto_map_params
+                        .clone()
+                        .map(|p| AutoDeviceMapParams::Text {
+                            max_seq_len: p.max_seq_len,
+                            max_batch_size: p.max_batch_size,
+                        })
+                        .unwrap_or(AutoDeviceMapParams::default_text())
+                }
+            }
             Which::MultimodalPlain {
                 auto_map_params, ..
             } => auto_map_params
@@ -1532,6 +1675,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -1758,6 +1902,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -1955,8 +2100,7 @@ impl Runner {
         })
     }
 
-    /// Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML
-    /// then nothing will happen.
+    /// Re-ISQ a model that was loaded with `in_situ_quant`.
     #[pyo3(signature = (dtype, model_id = None))]
     fn send_re_isq(
         &self,
@@ -2482,6 +2626,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -2603,6 +2748,7 @@ impl Runner {
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
                     stop_toks,
+                    ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
                     n_choices: request.n_choices,
                     min_p: request.min_p,
@@ -3094,6 +3240,32 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 mod lora_adapter_error_tests {
     use super::*;
 
+    fn gguf_which(adapters: Option<Vec<LoraAdapter>>, max_rank: usize) -> Which {
+        Which::GGUF {
+            quantized_model_id: "repo".to_string(),
+            quantized_filename: Either::Left("model.gguf".to_string()),
+            tok_model_id: None,
+            tokenizer_json: None,
+            mmproj_filename: None,
+            topology: None,
+            organization: None,
+            write_uqff: None,
+            imatrix: None,
+            calibration_file: None,
+            max_edge: None,
+            dtype: mistralrs_core::ModelDType::Auto,
+            auto_map_params: None,
+            multimodal_auto_map_params: None,
+            adapters,
+            max_adapters: mistralrs_core::DEFAULT_LORA_MAX_ADAPTERS,
+            max_rank,
+            max_bytes: mistralrs_core::DEFAULT_LORA_MAX_BYTES,
+            hf_cache_path: None,
+            matformer_config_path: None,
+            matformer_slice_name: None,
+        }
+    }
+
     #[test]
     fn lifecycle_errors_have_stable_machine_readable_codes() {
         assert_eq!(
@@ -3124,5 +3296,38 @@ mod lora_adapter_error_tests {
             })),
             "adapter_file_not_found"
         );
+    }
+
+    #[test]
+    fn gguf_dynamic_lora_detection_includes_empty_runtimes_and_custom_limits() {
+        assert!(!which_uses_dynamic_lora(&gguf_which(
+            None,
+            mistralrs_core::DEFAULT_LORA_MAX_RANK,
+        )));
+        assert!(which_uses_dynamic_lora(&gguf_which(
+            Some(Vec::new()),
+            mistralrs_core::DEFAULT_LORA_MAX_RANK,
+        )));
+        assert!(which_uses_dynamic_lora(&gguf_which(
+            None,
+            mistralrs_core::DEFAULT_LORA_MAX_RANK / 2,
+        )));
+    }
+
+    #[test]
+    fn gguf_dynamic_lora_accepts_multimodal_device_mapping() {
+        let mut which = gguf_which(Some(Vec::new()), mistralrs_core::DEFAULT_LORA_MAX_RANK);
+        let Which::GGUF {
+            mmproj_filename,
+            multimodal_auto_map_params,
+            ..
+        } = &mut which
+        else {
+            unreachable!()
+        };
+        *mmproj_filename = Some(Either::Left("mmproj.gguf".to_string()));
+        *multimodal_auto_map_params = Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024));
+
+        validate_gguf_runner_options(&which).unwrap();
     }
 }

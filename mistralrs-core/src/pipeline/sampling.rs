@@ -73,13 +73,14 @@ fn activate_required_tool_call_grammar(
     let grm = seq.tool_call_state.as_mut().and_then(|state| {
         state.maybe_force_required_grammar(remaining, max_generation_len, force_now)
     });
-    let Some(grm) = grm else {
+    let Some(mut grm) = grm else {
         return;
     };
     let Some(factory) = factory else {
         tracing::warn!("Cannot force required tool call: llguidance is unavailable");
         return;
     };
+    crate::tools::specialize_required_tool_call_grammar(&mut grm, factory.tok_env().tok_trie());
     match crate::pipeline::llg::constraint_from_llg_grammar(factory, grm) {
         Ok(matcher) => {
             seq.recognizer = SequenceRecognizer::Llguidance(Box::new(matcher));
@@ -191,7 +192,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             if is_done.is_some() && seq.has_reasoning_state() {
                 seq.finalize_reasoning();
             }
-            let delta_result = seq.get_delta();
+            let delta_result = if is_done.is_some() {
+                Ok(Some(seq.get_final_delta()))
+            } else {
+                seq.get_delta()
+            };
             if let Some(delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let has_external_reasoning_parser = seq.reasoning_mode().is_some();
@@ -509,11 +514,7 @@ pub(crate) async fn finalize_block_gen(
     {
         seq.add_pending_denoise_time(denoise_time);
         let metadata = this.get_metadata();
-        let eos_tok = if disable_eos_stop {
-            None
-        } else {
-            Some(&metadata.eos_tok[..])
-        };
+        let eos_tok = seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop);
 
         for token in block {
             if !seq.is_running() {
@@ -547,11 +548,7 @@ pub async fn sample_and_add_toks(
     let metadata = this.get_metadata();
     let llg_factory = metadata.llg_factory.clone();
     let max_model_len = metadata.max_seq_len;
-    let eos_toks = if disable_eos_stop {
-        None
-    } else {
-        Some(metadata.eos_tok.clone())
-    };
+    let eos_toks = metadata.eos_tok.clone();
 
     let sampled_vec = match try_sample_batch_cuda(&logits_seq, seqs, &rng)? {
         Some(sampled) => sampled,
@@ -560,11 +557,12 @@ pub async fn sample_and_add_toks(
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
                 .map(|(logits_per_seq, seq)| {
                     let return_logprobs = seq.return_logprobs();
+                    let eos_tok = seq.effective_eos_tokens(&eos_toks, disable_eos_stop);
                     sample_sequence(
                         logits_per_seq,
                         seq,
                         return_logprobs,
-                        eos_toks.as_deref(),
+                        eos_tok,
                         llg_factory.clone(),
                         max_model_len,
                         rng.clone(),
@@ -582,11 +580,7 @@ pub async fn sample_and_add_toks(
         let next_token = crate::handle_seq_error_stateaware_ok!(sampled, seq);
 
         let metadata = this.get_metadata();
-        let eos_tok = if disable_eos_stop {
-            None
-        } else {
-            Some(&metadata.eos_tok[..])
-        };
+        let eos_tok = seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop);
 
         finish_or_add_toks_to_seq(this, prefix_cacher, seq, next_token, eos_tok, true).await?;
     }

@@ -17,7 +17,7 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
-For the offline workflow (pre-downloading models, local paths), see [run any model](/mistral.rs/guides/models/run-any-model/).
+For the offline workflow (pre-downloading models, local paths), see [run models](/mistral.rs/guides/models/run-any-model/).
 
 ## Logging
 

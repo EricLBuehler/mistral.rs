@@ -135,9 +135,9 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 
 | Section | Purpose |
 |---|---|
-| `[models.format]` | Weight format selection (e.g. GGUF file/repo). |
+| `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
 | `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
-| `[models.quantization]` | Quantization: `quant` (front-door, same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`. |
+| `[models.quantization]` | Quantization and artifact selection: `quant` (same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
 | `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
@@ -162,6 +162,27 @@ lora_max_bytes = 8589934592
 ```
 
 `revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit loaded adapters.
+
+The CLI and server use the same dynamic adapter configuration for supported GGUF models:
+
+```toml
+command = "serve"
+
+[[models]]
+model_id = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+
+[models.quantization]
+quant = "4"
+
+[models.adapter]
+lora = [
+  { alias = "philosophy", source = "closestfriend/brie-qwen2.5-0.5b" },
+]
+```
+
+Multimodal GGUF supports dynamic language-model LoRA. Vision, audio, and projector adapters are not
+supported. Legacy LoRA and X-LoRA remain unavailable with multimodal GGUF. GGML uses `legacy_lora`
+together with `legacy_lora_order`; legacy static GGUF mode remains available for Phi3.
 
 ## Multi-model example
 
@@ -190,6 +211,30 @@ model_id = "google/gemma-4-E4B-it"
 quant = "4"
 ```
 
+When a multimodal GGUF repository contains an unambiguous compatible set, the model ID and
+quantization level also select its projector and supporting assets:
+
+```toml
+[[models]]
+model_id = "unsloth/gemma-4-E4B-it-GGUF"
+
+[models.quantization]
+quant = "4"
+```
+
+Use the format overrides only when you want an exact artifact or asset source. The filename suffix
+still selects GGUF automatically:
+
+```toml
+[[models]]
+model_id = "unsloth/gemma-4-E4B-it-GGUF"
+
+[models.format]
+quantized_file = "gemma-4-E4B-it-Q4_K_M.gguf"
+mmproj = "mmproj-BF16.gguf"
+tok_model_id = "google/gemma-4-E4B-it"
+```
+
 ## Validation
 
 Invalid configs abort startup with a message identifying the problem:
@@ -204,9 +249,14 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `quant` (CLI `--quant`, TOML key `quant`) is the front door: it tries a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) first and falls back to [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` rejects `quant = "auto"` (`--quant auto`) because `tune` is the recommender.
+- `quant` (CLI `--quant`, TOML key `quant`) selects a matching GGUF or [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) artifact when available. Source checkpoints without a matching UQFF use [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` evaluates explicit levels and rejects `quant = "auto"` (`--quant auto`).
 - `--calibration-file` conflicts with `--imatrix`.
-- Dynamic LoRA (`enable_lora` or `lora`), legacy raw GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. `tgt_non_granular_index` requires `xlora`.
+- Multimodal GGUF repositories select a projector when one compatible candidate can be identified.
+  Use `mmproj` (`--mmproj`) to choose explicitly and `tok_model_id` (`--tok-model-id`) to override
+  the configuration, tokenizer, and processor source. Dynamic language-model LoRA keeps the
+  selected projector. Vision, audio, and projector adapters are unsupported. Legacy LoRA and
+  X-LoRA cannot be combined with a multimodal projector.
+- Dynamic LoRA (`enable_lora` or `lora`), legacy GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. Supported GGUF uses dynamic LoRA; GGML uses legacy mode, and legacy static GGUF mode remains available for Phi3. `tgt_non_granular_index` requires `xlora`.
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
 - `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.

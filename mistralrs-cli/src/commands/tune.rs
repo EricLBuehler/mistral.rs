@@ -174,15 +174,22 @@ pub async fn run_tune(
 }
 
 fn validate_adapter_options(model_type: &ModelType) -> Result<()> {
-    let adapter = match model_type {
-        ModelType::Auto { adapter, .. }
-        | ModelType::Text { adapter, .. }
-        | ModelType::Multimodal { adapter, .. } => adapter,
-        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
-            return Ok(())
+    match model_type {
+        ModelType::Auto { adapter, .. } | ModelType::Text { adapter, .. } => {
+            reject_configured_adapters(adapter)
         }
-    };
-    reject_configured_adapters(adapter)
+        ModelType::Multimodal { adapter, .. } => {
+            if adapter.dynamic_lora_enabled() {
+                anyhow::bail!(
+                    "tune does not account for adapter memory or emit adapter configuration; rerun without LoRA or X-LoRA options"
+                );
+            }
+            Ok(())
+        }
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
+            Ok(())
+        }
+    }
 }
 
 fn reject_configured_adapters(adapter: &AdapterOptions) -> Result<()> {

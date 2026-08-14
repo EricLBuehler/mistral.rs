@@ -26,6 +26,7 @@ indexmap.workspace = true
 rayon.workspace = true
 libc.workspace = true
 byteorder.workspace = true
+bytemuck.workspace = true
 float8.workspace = true
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }

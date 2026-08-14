@@ -1182,6 +1182,10 @@ impl QuantMethod for HqqLayer {
         (self.scales.dtype(), self.scales.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         Ok(crate::plan_weight_isq(
             self.scales.dtype(),
@@ -1200,21 +1204,39 @@ impl QuantMethod for HqqLayer {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
+        if dtype.is_none() || dtype == self.uqff_type() && imatrix_weight.is_none() {
+            if self.w_q.device().same_device(&device) {
+                return Ok(self);
+            }
+            return Ok(Arc::new(Self::from_parts(
+                self.w_q.to_device(&device)?,
+                self.scales.to_device(&device)?,
+                self.zeros.to_device(&device)?,
+                self.bias
+                    .as_ref()
+                    .map(|bias| bias.to_device(&device))
+                    .transpose()?,
+                self.w_shape.clone(),
+                self.cfg,
+            )));
+        }
+
+        let bits = match dtype {
+            Some(IsqType::HQQ8) => HqqBits::Eight,
+            Some(IsqType::HQQ4) => HqqBits::Four,
+            other => {
+                return Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    candle_nn::Linear::new(self.dequantize()?, self.bias.clone()),
+                ))?)
+                .apply_isq(other, device, n_quantized, imatrix_weight, guard);
+            }
+        };
         let _acquired_quantize_guard = guard.acquire(&device);
         if imatrix_weight.is_some() {
-            // TODO just warn?
             candle_core::bail!("HQQ does not support imatrix.");
         }
 
         n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let bits = match dtype {
-            Some(IsqType::HQQ8) => HqqBits::Eight,
-            Some(IsqType::HQQ4) => HqqBits::Four,
-            // Some(IsqType::HQQ3) => HqqBits::Three,
-            // Some(IsqType::HQQ2) => HqqBits::Two,
-            // Some(IsqType::HQQ1) => HqqBits::One,
-            _ => candle_core::bail!("Expected a HQQ ISQ type."),
-        };
         let cfg = HqqConfig {
             bits,
             group_size: ISQ_HQQ_GROUP_SIZE.try_into()?,
@@ -1243,13 +1265,16 @@ impl QuantizedSerde for HqqLayer {
     fn name(&self) -> &'static str {
         "hqq"
     }
+    fn uqff_type(&self) -> Option<IsqType> {
+        match self.cfg.bits {
+            HqqBits::Eight => Some(IsqType::HQQ8),
+            HqqBits::Four => Some(IsqType::HQQ4),
+            HqqBits::One | HqqBits::Two | HqqBits::Three => None,
+        }
+    }
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
-        let actual_ty = match self.cfg.bits {
-            HqqBits::Eight => IsqType::HQQ8,
-            HqqBits::Four => IsqType::HQQ4,
-            HqqBits::One | HqqBits::Two | HqqBits::Three => {
-                candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF.")
-            }
+        let Some(actual_ty) = self.uqff_type() else {
+            candle_core::bail!("Cannot serialize unsupported HQQ bit width as UQFF.")
         };
         if ty != actual_ty {
             candle_core::bail!("Cannot serialize HQQ layer as {ty}; actual type is {actual_ty}.");
@@ -1314,10 +1339,15 @@ impl QuantizedSerde for HqqLayer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{atomic::AtomicUsize, Arc};
+
     use candle_core::{DType, Device, Result, Tensor};
 
     use super::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
-    use crate::{uqff_version_tensors, IsqType, QuantMethod, QuantizedSerde, Shard, UqffReader};
+    use crate::{
+        uqff_version_tensors, IsqType, QuantMethod, QuantizeOntoGuard, QuantizedSerde, Shard,
+        UqffReader,
+    };
 
     const TEST_VOCAB_SIZE: usize = 96;
     const TEST_EMBEDDING_DIM: usize = 32;
@@ -1385,6 +1415,48 @@ mod tests {
     #[test]
     fn hqq8_embedding_matches_dequantized_gather() -> Result<()> {
         assert_embedding_matches_dequantized_gather(&test_layer(HqqBits::Eight)?)
+    }
+
+    #[test]
+    fn hqq_apply_isq_supports_capture_and_cross_format_requantization() -> Result<()> {
+        let device = test_device()?;
+        let source = Arc::new(
+            test_layer_on_device(HqqBits::Four, &device)?.with_bias(Tensor::ones(
+                TEST_VOCAB_SIZE,
+                DType::F32,
+                &device,
+            )?),
+        ) as Arc<dyn QuantMethod>;
+        let n_quantized = AtomicUsize::new(0);
+        let captured = source.clone().apply_isq(
+            None,
+            device.clone(),
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &captured));
+        assert_eq!(captured.uqff_type(), Some(IsqType::HQQ4));
+        assert!(captured.has_bias());
+
+        let exact = source.clone().apply_isq(
+            Some(IsqType::HQQ4),
+            device.clone(),
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &exact));
+
+        let quantized = source.apply_isq(
+            Some(IsqType::Q4_0),
+            device,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(quantized.uqff_type(), Some(IsqType::Q4_0));
+        Ok(())
     }
 
     #[test]

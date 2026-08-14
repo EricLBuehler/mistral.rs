@@ -459,6 +459,7 @@ impl AnthropicMessagesRequest {
             frequency_penalty: self.frequency_penalty,
             repetition_penalty: self.repetition_penalty,
             stop_seqs: self.stop_sequences.map(StopTokens::Multi),
+            ignore_eos: false,
             temperature: self.temperature,
             top_p: self.top_p,
             stream: self.stream,

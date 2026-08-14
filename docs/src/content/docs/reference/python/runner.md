@@ -188,7 +188,7 @@ Generate audio given a (model specific) prompt. PCM and sampling rate as well as
 send_re_isq(dtype: str, model_id: str | None = None) -> None
 ```
 
-Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
+Re-ISQ a model that was loaded with `in_situ_quant`.
 
 **Parameters**
 

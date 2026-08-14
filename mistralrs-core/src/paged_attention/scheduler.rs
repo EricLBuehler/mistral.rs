@@ -881,6 +881,7 @@ mod tests {
             None,
             None,
             false,
+            false,
             vec![],
         );
         seq.set_state(SequenceState::RunningCompletion);

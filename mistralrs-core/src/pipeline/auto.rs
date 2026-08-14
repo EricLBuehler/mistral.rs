@@ -10,8 +10,8 @@ use super::{
 use crate::utils::progress::ProgressScopeGuard;
 use crate::Ordering;
 use crate::{
-    DeviceMapSetting, IsqType, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig, Pipeline,
-    TryIntoDType,
+    AutoDeviceMapParams, DeviceMapSetting, IsqType, LoraAdapterSpec, LoraRuntimeConfig,
+    PagedAttentionConfig, Pipeline, TryIntoDType,
 };
 use anyhow::Result;
 use candle_core::Device;
@@ -207,10 +207,11 @@ enum Detected {
 }
 
 fn supports_dynamic_lora(detected: &Detected) -> bool {
-    matches!(
-        detected,
-        Detected::Normal(_) | Detected::Multimodal(MultimodalLoaderType::Qwen3_5Moe)
-    )
+    match detected {
+        Detected::Normal(_) => true,
+        Detected::Multimodal(loader) => super::multimodal::supports_dynamic_lora_loader(loader),
+        _ => false,
+    }
 }
 
 impl AutoLoader {
@@ -413,16 +414,13 @@ impl AutoLoader {
         Ok(Detected::Normal(tp))
     }
 
-    fn ensure_loader(&self, artifacts: &ConfigArtifacts) -> Result<()> {
+    fn ensure_loader(&self, detected: Detected) -> Result<()> {
         let mut guard = self.loader.lock().unwrap();
         if guard.is_some() {
             return Ok(());
         }
-        let detected = self.detect(artifacts)?;
         if self.dynamic_lora_enabled && !supports_dynamic_lora(&detected) {
-            anyhow::bail!(
-                "dynamic LoRA is supported for text models and the Qwen3.5/3.6 MoE text submodel; vision-tower adapters and other multimodal architectures are not supported"
-            );
+            anyhow::bail!("dynamic LoRA is not supported for this model architecture");
         }
         match detected {
             Detected::Normal(tp) => {
@@ -473,6 +471,38 @@ impl AutoLoader {
     }
 }
 
+fn device_map_for_detected(mapper: DeviceMapSetting, detected: &Detected) -> DeviceMapSetting {
+    match (mapper, detected) {
+        (
+            DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+                max_seq_len,
+                max_batch_size,
+            }),
+            Detected::Multimodal(_),
+        ) => DeviceMapSetting::Auto(AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape: (
+                AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+            ),
+            max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
+        }),
+        (
+            DeviceMapSetting::Auto(AutoDeviceMapParams::Multimodal {
+                max_seq_len,
+                max_batch_size,
+                ..
+            }),
+            Detected::Normal(_),
+        ) => DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        }),
+        (mapper, _) => mapper,
+    }
+}
+
 impl Loader for AutoLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
@@ -488,7 +518,9 @@ impl Loader for AutoLoader {
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
-        self.ensure_loader(&config)?;
+        let detected = self.detect(&config)?;
+        let mapper = device_map_for_detected(mapper, &detected);
+        self.ensure_loader(detected)?;
         self.loader
             .lock()
             .unwrap()
@@ -509,7 +541,7 @@ impl Loader for AutoLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -518,8 +550,10 @@ impl Loader for AutoLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let config = self.read_config_from_path(paths.as_ref())?;
-        self.ensure_loader(&config)?;
+        let config = self.read_config_from_path(paths)?;
+        let detected = self.detect(&config)?;
+        let mapper = device_map_for_detected(mapper, &detected);
+        self.ensure_loader(detected)?;
         self.loader
             .lock()
             .unwrap()
@@ -586,16 +620,61 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_lora_auto_detection_is_narrowly_gated() {
+    fn dynamic_lora_auto_detection_accepts_supported_multimodal_language_models() {
         assert!(supports_dynamic_lora(&Detected::Normal(
             NormalLoaderType::Qwen3Moe
         )));
-        assert!(supports_dynamic_lora(&Detected::Multimodal(
-            MultimodalLoaderType::Qwen3_5Moe
-        )));
+        for loader in [
+            MultimodalLoaderType::Qwen2VL,
+            MultimodalLoaderType::Qwen2_5VL,
+            MultimodalLoaderType::Qwen3VL,
+            MultimodalLoaderType::Qwen3VLMoE,
+            MultimodalLoaderType::Qwen3_5,
+            MultimodalLoaderType::Qwen3_5Moe,
+            MultimodalLoaderType::Gemma3,
+            MultimodalLoaderType::Gemma3n,
+            MultimodalLoaderType::Idefics3,
+            MultimodalLoaderType::Mistral3,
+            MultimodalLoaderType::Llama4,
+            MultimodalLoaderType::Lfm2Vl,
+            MultimodalLoaderType::Gemma4,
+        ] {
+            assert!(supports_dynamic_lora(&Detected::Multimodal(loader)));
+        }
         assert!(!supports_dynamic_lora(&Detected::Multimodal(
-            MultimodalLoaderType::Qwen3VLMoE
+            MultimodalLoaderType::Phi3V
         )));
         assert!(!supports_dynamic_lora(&Detected::Embedding(None)));
+    }
+
+    #[test]
+    fn multimodal_detection_promotes_text_auto_device_mapping() {
+        let mapper = device_map_for_detected(
+            DeviceMapSetting::Auto(AutoDeviceMapParams::Text {
+                max_seq_len: 8192,
+                max_batch_size: 3,
+            }),
+            &Detected::Multimodal(MultimodalLoaderType::Qwen3_5),
+        );
+
+        let DeviceMapSetting::Auto(AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        }) = mapper
+        else {
+            panic!("expected multimodal device mapping")
+        };
+        assert_eq!(max_seq_len, 8192);
+        assert_eq!(max_batch_size, 3);
+        assert_eq!(
+            max_image_shape,
+            (
+                AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+                AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
+            )
+        );
+        assert_eq!(max_num_images, AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES);
     }
 }

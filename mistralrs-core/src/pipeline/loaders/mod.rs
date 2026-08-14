@@ -16,7 +16,7 @@ use std::{
 use anyhow::Result;
 use as_any::AsAny;
 use candle_core::{DType, Device};
-use mistralrs_quant::{IsqType, QuantizedConfig};
+use mistralrs_quant::{IsqType, QuantizedConfig, QuantizedWeightSource};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
@@ -26,7 +26,7 @@ pub use normal_loaders::{
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
     MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
     Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader,
-    Qwen3NextLoader, SmolLm3Loader, Starcoder2Loader,
+    Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
@@ -54,6 +54,64 @@ use crate::{
 };
 
 use super::{paths::AdapterPaths, Pipeline};
+
+pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
+
+pub(crate) fn qk_rope_layout_from_config(
+    config: &str,
+) -> Result<Option<crate::gguf::normal_registry::RopePairing>> {
+    let config: serde_json::Value = serde_json::from_str(config)?;
+    let Some(layout) = config
+        .get(QK_ROPE_LAYOUT_CONFIG_KEY)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return Ok(None);
+    };
+    match layout {
+        "adjacent" => Ok(Some(
+            crate::gguf::normal_registry::RopePairing::Adjacent,
+        )),
+        "half_split" => Ok(Some(
+            crate::gguf::normal_registry::RopePairing::HalfSplit,
+        )),
+        layout => anyhow::bail!(
+            "model config `{QK_ROPE_LAYOUT_CONFIG_KEY}` must be `adjacent` or `half_split`, got `{layout}`"
+        ),
+    }
+}
+
+pub(crate) fn stamp_qk_rope_layout(
+    config: &str,
+    layout: crate::gguf::normal_registry::RopePairing,
+) -> Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(config)?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    object.insert(
+        QK_ROPE_LAYOUT_CONFIG_KEY.to_string(),
+        serde_json::Value::String(
+            match layout {
+                crate::gguf::normal_registry::RopePairing::Adjacent => "adjacent",
+                crate::gguf::normal_registry::RopePairing::HalfSplit => "half_split",
+            }
+            .to_string(),
+        ),
+    );
+    Ok(serde_json::to_string(&config)?)
+}
+
+pub(crate) fn validate_lora_qk_rope_layout(config: &str, has_adapter: bool) -> Result<()> {
+    if has_adapter
+        && qk_rope_layout_from_config(config)?
+            == Some(crate::gguf::normal_registry::RopePairing::Adjacent)
+    {
+        anyhow::bail!(
+            "LoRA and X-LoRA adapters are not supported when Q/K tensors use adjacent RoPE layout; load the original safetensors model or omit the adapter"
+        );
+    }
+    Ok(())
+}
 
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
@@ -406,7 +464,7 @@ pub struct AutoDeviceMapQuantization<'a> {
 #[derive(Clone, Copy)]
 enum AutoDeviceMapQuantizationSource<'a> {
     Isq(Option<IsqType>),
-    Uqff(&'a mistralrs_quant::UqffReader),
+    WeightSource(&'a dyn QuantizedWeightSource),
 }
 
 impl<'a> AutoDeviceMapQuantization<'a> {
@@ -417,11 +475,25 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         }
     }
 
-    pub fn uqff(reader: &'a mistralrs_quant::UqffReader) -> Self {
+    pub fn weight_source(source: &'a dyn QuantizedWeightSource) -> Self {
         Self {
-            source: AutoDeviceMapQuantizationSource::Uqff(reader),
+            source: AutoDeviceMapQuantizationSource::WeightSource(source),
             topology: None,
         }
+    }
+
+    pub fn weight_source_with_topology(
+        source: &'a dyn QuantizedWeightSource,
+        topology: Option<&'a Topology>,
+    ) -> Self {
+        Self {
+            source: AutoDeviceMapQuantizationSource::WeightSource(source),
+            topology,
+        }
+    }
+
+    pub fn uqff(source: &'a dyn QuantizedWeightSource) -> Self {
+        Self::weight_source(source)
     }
 
     #[cfg(test)]
@@ -443,6 +515,26 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         self.pack_factor_for_candidates(&[name], dtype, fallback, true)
     }
 
+    pub fn conservative_pack_factor(&self, dtype: DType, fallback: usize) -> usize {
+        let topology_pack_factors = self.topology.into_iter().flat_map(|topology| {
+            topology
+                .layers
+                .iter()
+                .filter_map(|entry| entry.as_ref().and_then(|entry| entry.isq))
+                .chain(topology.patterns.iter().filter_map(|(_, entry)| entry.isq))
+        });
+        topology_pack_factors.fold(fallback, |factor, ty| factor.min(ty.pack_factor(dtype)))
+    }
+
+    pub fn conservative_moqe_pack_factor(
+        &self,
+        dtype: DType,
+        source_pack_factor: usize,
+        target: IsqType,
+    ) -> usize {
+        self.conservative_pack_factor(dtype, source_pack_factor.min(target.pack_factor(dtype)))
+    }
+
     fn pack_factor_for_candidates(
         &self,
         names: &[&str],
@@ -450,32 +542,33 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         fallback: usize,
         promote_default: bool,
     ) -> Result<usize> {
+        let topology_ty = names.iter().find_map(|name| {
+            self.topology
+                .and_then(|topology| topology.match_for_name(name))
+                .and_then(|topology| topology.isq)
+        });
         match self.source {
-            AutoDeviceMapQuantizationSource::Uqff(reader) => {
+            AutoDeviceMapQuantizationSource::WeightSource(source) => {
+                if let Some(ty) = topology_ty {
+                    return Ok(ty.pack_factor(dtype));
+                }
                 for name in names {
-                    if let Some(pack_factor) = reader.pack_factor_for(name, dtype)? {
+                    if let Some(pack_factor) = source.pack_factor_for(name, dtype)? {
                         return Ok(pack_factor);
                     }
                 }
                 Ok(1)
             }
             AutoDeviceMapQuantizationSource::Isq(default) => {
-                let ty = names
-                    .iter()
-                    .find_map(|name| {
-                        self.topology
-                            .and_then(|topology| topology.match_for_name(name))
-                            .and_then(|topology| topology.isq)
+                let ty = topology_ty.or_else(|| {
+                    default.map(|ty| {
+                        if promote_default {
+                            ty.promote_for_sensitive_tensor()
+                        } else {
+                            ty
+                        }
                     })
-                    .or_else(|| {
-                        default.map(|ty| {
-                            if promote_default {
-                                ty.promote_for_sensitive_tensor()
-                            } else {
-                                ty
-                            }
-                        })
-                    });
+                });
                 Ok(ty.map(|ty| ty.pack_factor(dtype)).unwrap_or(fallback))
             }
         }
@@ -501,12 +594,8 @@ fn tied_promoted_tensor_pack_factor(
     fallback: usize,
 ) -> Result<usize> {
     quantization.map_or(Ok(fallback), |quantization| match quantization.source {
-        AutoDeviceMapQuantizationSource::Uqff(_) => quantization.pack_factor_for_candidates(
-            &[embedding_name, legacy_head_name],
-            dtype,
-            fallback,
-            true,
-        ),
+        AutoDeviceMapQuantizationSource::WeightSource(_) => quantization
+            .pack_factor_for_candidates(&[embedding_name, legacy_head_name], dtype, fallback, true),
         AutoDeviceMapQuantizationSource::Isq(_) => {
             quantization.promoted_pack_factor_for(embedding_name, dtype, fallback)
         }
@@ -542,7 +631,7 @@ fn language_model_pack_factors_with_aliases(
         if tied
             && matches!(
                 quantization.source,
-                AutoDeviceMapQuantizationSource::Uqff(_)
+                AutoDeviceMapQuantizationSource::WeightSource(_)
             )
         {
             let mut candidates = embedding_names.to_vec();
@@ -591,6 +680,12 @@ pub trait DeviceMappedModelLoader {
     ) -> Result<Vec<usize>>;
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
+    }
+    fn non_mapped_sub_models_for_config(
+        &self,
+        _config: &str,
+    ) -> Result<Option<Vec<NonMappedSubModel>>> {
+        Ok(self.non_mapped_sub_models())
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
@@ -672,7 +767,7 @@ pub trait Loader: Send + Sync {
     )]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -688,6 +783,74 @@ pub trait Loader: Send + Sync {
 #[cfg(test)]
 mod auto_device_map_quantization_tests {
     use super::*;
+
+    #[test]
+    fn qk_rope_layout_marker_round_trips() -> Result<()> {
+        for layout in [
+            crate::gguf::normal_registry::RopePairing::Adjacent,
+            crate::gguf::normal_registry::RopePairing::HalfSplit,
+        ] {
+            let stamped = stamp_qk_rope_layout(r#"{"hidden_size":16}"#, layout)?;
+            assert_eq!(qk_rope_layout_from_config(&stamped)?, Some(layout));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&stamped)?["hidden_size"],
+                16
+            );
+        }
+        assert!(qk_rope_layout_from_config(r#"{"_mistralrs_qk_rope_layout":"invalid"}"#).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn adjacent_qk_rope_layout_rejects_lora_adapters() -> Result<()> {
+        assert!(
+            validate_lora_qk_rope_layout(r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#, true,)
+                .is_err()
+        );
+        assert!(
+            validate_lora_qk_rope_layout(r#"{"_mistralrs_qk_rope_layout":"adjacent"}"#, false,)
+                .is_ok()
+        );
+        assert!(validate_lora_qk_rope_layout(r#"{"hidden_size":16}"#, true).is_ok());
+        Ok(())
+    }
+
+    struct PackFactorWeightSource(usize);
+
+    impl QuantizedWeightSource for PackFactorWeightSource {
+        fn contains(&self, _name: &str) -> bool {
+            true
+        }
+
+        fn load_linear(
+            &self,
+            _key: &str,
+            _device: &Device,
+            _shard: mistralrs_quant::Shard,
+        ) -> candle_core::Result<Option<std::sync::Arc<dyn mistralrs_quant::QuantMethod>>> {
+            unreachable!()
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<candle_core::Tensor>> {
+            unreachable!()
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(self.0)
+        }
+
+        fn pack_factor_for(&self, _key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(self.0))
+        }
+    }
 
     const EMBEDDING: &str = "model.embed_tokens.weight";
     const HEAD: &str = "lm_head.weight";
@@ -752,6 +915,60 @@ mod auto_device_map_quantization_tests {
             IsqType::AFQ8.pack_factor(dtype)
         );
         assert_eq!(quantization.unpromoted_pack_factor_for(HEAD, dtype, 3)?, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn topology_pack_factor_is_conservative_for_mapped_layers() -> Result<()> {
+        let dtype = DType::BF16;
+        let topology = Topology::from_str("'0':\n  isq: Q8_0\n")?;
+        let quantization = AutoDeviceMapQuantization::isq(Some(IsqType::Q2K), Some(&topology));
+        assert_eq!(
+            quantization.conservative_pack_factor(dtype, IsqType::Q2K.pack_factor(dtype)),
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn topology_isq_overlays_prepared_weight_source_sizing() -> Result<()> {
+        let dtype = DType::BF16;
+        let source = PackFactorWeightSource(IsqType::Q2K.pack_factor(dtype));
+        let topology = Topology::from_str("'/^model\\.embed_tokens\\.weight$/':\n  isq: Q8_0\n")?;
+        let quantization =
+            AutoDeviceMapQuantization::weight_source_with_topology(&source, Some(&topology));
+
+        assert_eq!(
+            quantization.promoted_pack_factor_for(
+                EMBEDDING,
+                dtype,
+                IsqType::Q2K.pack_factor(dtype),
+            )?,
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        assert_eq!(
+            quantization.conservative_pack_factor(dtype, source.pack_factor(dtype)?),
+            IsqType::Q8_0.pack_factor(dtype)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn moqe_sizing_keeps_source_precision_for_the_unquantized_trunk() -> Result<()> {
+        let dtype = DType::BF16;
+        let source_factor = IsqType::Q4K.pack_factor(dtype);
+        let source = PackFactorWeightSource(source_factor);
+        let prepared = AutoDeviceMapQuantization::weight_source(&source);
+        assert_eq!(
+            prepared.conservative_moqe_pack_factor(dtype, source_factor, IsqType::Q2K),
+            source_factor.min(IsqType::Q2K.pack_factor(dtype))
+        );
+
+        let checkpoint = AutoDeviceMapQuantization::isq(None, None);
+        assert_eq!(
+            checkpoint.conservative_moqe_pack_factor(dtype, 1, IsqType::Q2K),
+            1
+        );
         Ok(())
     }
 }

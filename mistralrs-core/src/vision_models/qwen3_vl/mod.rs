@@ -505,7 +505,8 @@ impl Qwen3VLModel {
             vb.pp("vision_tower")
         } else {
             vb.pp("model").pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),

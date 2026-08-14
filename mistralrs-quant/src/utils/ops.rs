@@ -742,7 +742,7 @@ impl CustomOp1 for BitWiseUnary {
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        todo!()
+        candle_core::bail!("bitwise unary operations are not supported on CUDA")
     }
 
     #[cfg(feature = "metal")]
@@ -1507,7 +1507,7 @@ impl CustomOp1 for CumSum {
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        todo!()
+        candle_core::bail!("cumulative sum is not supported on CUDA")
     }
 
     #[cfg(feature = "metal")]

@@ -238,7 +238,7 @@ impl Loader for GGMLLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -432,7 +432,7 @@ impl Loader for GGMLLoader {
             }
         );
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,

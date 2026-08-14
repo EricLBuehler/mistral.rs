@@ -31,9 +31,14 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     description="Expose a model through OpenAI-compatible endpoints and the Anthropic Messages API."
   />
   <LinkCard
-    title="Run any model"
+    title="Run models"
     href="/mistral.rs/guides/models/run-any-model/"
-    description="Hugging Face ids, local files, GGUF, and quantization flags."
+    description="Load Hugging Face models and local checkpoints with automatic architecture detection."
+  />
+  <LinkCard
+    title="Run GGUF models"
+    href="/mistral.rs/guides/models/run-gguf/"
+    description="Load a local GGUF file or select an artifact from a Hugging Face repository."
   />
   <LinkCard
     title="Quantize a model"
@@ -82,9 +87,10 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     [Quickstart](/mistral.rs/quickstart/)
   </Card>
   <Card title="Quantization" icon="puzzle">
-    `--quant` picks the best format at a given level, preferring prebuilt
-    [UQFF](/mistral.rs/reference/uqff-format/) and falling back to in-situ
-    quantization.
+    For a GGUF repository, `--quant` selects a matching artifact. For other
+    Hugging Face repositories, it loads a prebuilt
+    [UQFF](/mistral.rs/reference/uqff-format/) when available and otherwise
+    applies in-situ quantization.
     [Quantization guide](/mistral.rs/guides/quantization/quantize-a-model/)
   </Card>
   <Card title="Tuning and diagnostics" icon="seti:config">
@@ -127,6 +133,11 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     title="Supported models"
     href="/mistral.rs/reference/supported-models/"
     description="Model families and capability tables."
+  />
+  <LinkCard
+    title="GGUF compatibility"
+    href="/mistral.rs/reference/gguf-support/"
+    description="Supported model families, file formats, and feature combinations."
   />
   <LinkCard
     title="Troubleshooting"

@@ -171,6 +171,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-Next-80B-A3B-Instruct")],
             },
+            Self::Qwen3_5 => ArchMetadata {
+                families: &["Qwen3.5"],
+                modalities: m,
+                examples: &[],
+            },
             Self::Lfm2 => ArchMetadata {
                 families: &["LFM2", "LFM2.5"],
                 modalities: m,
@@ -301,7 +306,7 @@ impl MultimodalLoaderType {
             Self::Voxtral => ArchMetadata {
                 families: &["Voxtral"],
                 modalities: &[Text, Audio],
-                examples: &[ex!("mistralai/Voxtral-Mini-3B-2507")],
+                examples: &[ex!("mistralai/Voxtral-Mini-4B-Realtime-2602")],
             },
             Self::Gemma4 => ArchMetadata {
                 families: &["Gemma 4"],
@@ -396,6 +401,7 @@ impl NormalLoaderType {
             Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
             Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
             Self::Qwen3Next => "Qwen3NextForCausalLM",
+            Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
         }
@@ -424,7 +430,7 @@ impl MultimodalLoaderType {
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
-            Self::Voxtral => "VoxtralForConditionalGeneration",
+            Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
             Self::DiffusionGemma => "DiffusionGemmaForBlockDiffusion",
         }
@@ -453,14 +459,14 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. Not listed? You can still try it: force a known architecture with `--arch`, load a [GGUF](/mistral.rs/guides/models/run-any-model/) build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156).
+3. If the architecture is not listed, check the [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand the example in any row to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
 
 The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/mistral.rs/guides/models/model-family-notes/).
 
@@ -468,7 +474,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 
 const FOOTER: &str = r#"## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/mistral.rs/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 
@@ -486,6 +492,9 @@ fn families_cell(meta: &ArchMetadata) -> String {
 }
 
 fn examples_cell(meta: &ArchMetadata) -> String {
+    if meta.examples.is_empty() {
+        return "No published example".to_string();
+    }
     let label = |e: &ModelExample| {
         if e.label.is_empty() {
             format!("<code>{}</code>", e.repo)

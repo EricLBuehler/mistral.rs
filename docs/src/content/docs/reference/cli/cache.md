@@ -1,13 +1,13 @@
 ---
 title: "mistralrs cache"
-description: "Manage the HuggingFace model cache"
+description: "Manage the Hugging Face model cache"
 sidebar:
   order: 10
 ---
 
 <!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->
 
-Manage the HuggingFace model cache
+Manage the Hugging Face model cache
 
 ```
 mistralrs cache [OPTIONS] <COMMAND>

@@ -108,6 +108,7 @@ impl Gemma3nModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let vb = vb.pp("model");
+        let non_text_vb = vb.clone().without_lora_registry();
 
         // Initialize vision tower
         let vision_dtype = if vb.dtype() == DType::F16 {
@@ -119,7 +120,7 @@ impl Gemma3nModel {
         let vision_tower = vision::VisionTower::new(
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("vision_tower").pp("timm_model"), false)
+                .set_nm_device(non_text_vb.pp("vision_tower").pp("timm_model"), false)
                 .set_dtype(vision_dtype),
         )?;
 
@@ -129,7 +130,7 @@ impl Gemma3nModel {
             audio_cfg,
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("audio_tower"), false),
+                .set_nm_device(non_text_vb.pp("audio_tower"), false),
         )?;
         let embed_audio = Gemma3nMultimodalEmbedder::new(
             &cfg.text_config,
@@ -138,7 +139,7 @@ impl Gemma3nModel {
             audio_cfg.vocab_offset,
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("embed_audio"), false),
+                .set_nm_device(non_text_vb.pp("embed_audio"), false),
         )?;
 
         // Initialize vision tower and embedder
@@ -150,7 +151,7 @@ impl Gemma3nModel {
             multimodal_cfg.vocab_offset,
             normal_loading_metadata
                 .mapper
-                .set_nm_device(vb.pp("embed_vision"), false),
+                .set_nm_device(non_text_vb.pp("embed_vision"), false),
         )?;
 
         Ok(Self {

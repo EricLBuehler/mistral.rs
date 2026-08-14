@@ -25,14 +25,19 @@ pub use serve::run_server;
 pub use tune::run_tune;
 pub use uqff::run_uqff;
 
-use crate::args::{AdapterOptions, ModelType};
+use crate::args::ModelType;
 use mistralrs_core::MAX_LORA_ALIAS_BYTES;
 
-fn dynamic_adapter_options(model_type: &ModelType) -> Option<&AdapterOptions> {
+fn dynamic_adapter_options(
+    model_type: &ModelType,
+) -> Option<(bool, &[mistralrs_core::LoraAdapterSpec])> {
     match model_type {
-        ModelType::Auto { adapter, .. }
-        | ModelType::Text { adapter, .. }
-        | ModelType::Multimodal { adapter, .. } => Some(adapter),
+        ModelType::Auto { adapter, .. } | ModelType::Text { adapter, .. } => {
+            Some((adapter.dynamic_lora_enabled(), &adapter.lora))
+        }
+        ModelType::Multimodal { adapter, .. } => {
+            Some((adapter.dynamic_lora_enabled(), &adapter.lora))
+        }
         ModelType::Diffusion { .. } | ModelType::Speech { .. } | ModelType::Embedding { .. } => {
             None
         }
@@ -53,21 +58,17 @@ pub(crate) fn normalize_requested_adapter(
         anyhow::bail!("--adapter must not exceed {MAX_LORA_ALIAS_BYTES} bytes");
     }
 
-    let Some(options) = dynamic_adapter_options(model_type) else {
+    let Some((enabled, adapters)) = dynamic_adapter_options(model_type) else {
         anyhow::bail!(
             "--adapter `{alias}` requires a dynamic LoRA runtime and a matching --lora preload"
         );
     };
-    if !options.dynamic_lora_enabled() {
+    if !enabled {
         anyhow::bail!(
             "--adapter `{alias}` requires a dynamic LoRA runtime and a matching --lora preload"
         );
     }
-    if !options
-        .lora
-        .iter()
-        .any(|adapter| adapter.alias.trim() == alias)
-    {
+    if !adapters.iter().any(|adapter| adapter.alias.trim() == alias) {
         anyhow::bail!(
             "LoRA adapter alias `{alias}` is not configured; preload it with --lora {alias}=SOURCE"
         );
@@ -81,8 +82,8 @@ mod tests {
 
     use super::*;
     use crate::args::{
-        CacheOptions, DeviceOptions, FormatOptions, ModelSourceOptions, MultimodalOptions,
-        QuantizationOptions,
+        AdapterOptions, CacheOptions, DeviceOptions, FormatOptions, ModelSourceOptions,
+        MultimodalOptions, QuantizationOptions,
     };
 
     fn auto_model(adapter: AdapterOptions) -> ModelType {

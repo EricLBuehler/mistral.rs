@@ -92,6 +92,12 @@ Usage:
 
 ### `Which.GGUF`
 
+Select a GGUF model.
+
+Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
+With `mmproj_filename`, adapters apply to the language model.
+Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loading.
+
 | Field | Type | Default |
 | --- | --- | --- |
 | `quantized_model_id` | `str` | required |
@@ -100,8 +106,25 @@ Usage:
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
+| `tokenizer_json` | `str \| None` | `None (keyword-only)` |
+| `mmproj_filename` | `str \| list[str] \| None` | `None (keyword-only)` |
+| `organization` | `IsqOrganization \| None` | `None (keyword-only)` |
+| `write_uqff` | `str \| None` | `None (keyword-only)` |
+| `imatrix` | `str \| None` | `None (keyword-only)` |
+| `calibration_file` | `str \| None` | `None (keyword-only)` |
+| `max_edge` | `int \| None` | `None (keyword-only)` |
+| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None (keyword-only)` |
+| `adapters` | `list[LoraAdapter] \| None` | `None (keyword-only)` |
+| `max_adapters` | `int` | `16 (keyword-only)` |
+| `max_rank` | `int` | `256 (keyword-only)` |
+| `max_bytes` | `int` | `8589934592 (keyword-only)` |
+| `hf_cache_path` | `str \| None` | `None (keyword-only)` |
+| `matformer_config_path` | `str \| None` | `None (keyword-only)` |
+| `matformer_slice_name` | `str \| None` | `None (keyword-only)` |
 
 ### `Which.XLoraGGUF`
+
+Select X-LoRA for a Phi3 GGUF configuration.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -116,6 +139,10 @@ Usage:
 | `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGUF`
+
+Select legacy static LoRA for a Phi3 GGUF configuration.
+
+For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 
 | Field | Type | Default |
 | --- | --- | --- |

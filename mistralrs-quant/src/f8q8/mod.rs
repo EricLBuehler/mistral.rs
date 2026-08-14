@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{DType, Device, Result, Shape, Tensor};
+use candle_core::{DType, Device, DeviceLocation, Result, Shape, Tensor};
 use candle_nn::{Linear, Module};
 use float8::F8E4M3;
 use half::f16;
@@ -159,6 +159,20 @@ pub struct F8Q8Linear {
 }
 
 impl F8Q8Linear {
+    fn supports_device_location(location: DeviceLocation) -> bool {
+        matches!(location, DeviceLocation::Cpu)
+    }
+
+    fn ensure_supported_device(device: &Device) -> Result<()> {
+        if !Self::supports_device_location(device.location()) {
+            candle_core::bail!(
+                "F8Q8 is CPU-only; choose `fp8` or another ISQ type for {:?}.",
+                device.location()
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &[
             "weight",
@@ -192,6 +206,9 @@ impl F8Q8Linear {
         dims: Vec<usize>,
         bias: Option<Tensor>,
     ) -> Result<Self> {
+        if let Some(bias) = &bias {
+            Self::ensure_supported_device(bias.device())?;
+        }
         let block_size = std::mem::size_of::<BlockF8Q8>();
         if !raw_data.len().is_multiple_of(block_size) {
             candle_core::bail!(
@@ -218,6 +235,7 @@ impl F8Q8Linear {
     }
 
     fn from_uqff(reader: &UqffReader, key: &str, device: &Device, shard: Shard) -> Result<Self> {
+        Self::ensure_supported_device(device)?;
         let mut weight = reader.load_raw_u8(&format!("{key}.weight"))?;
         let mut shape = reader.load_u32_vec(&format!("{key}.weight.shape"))?;
         let range = crate::uqff::shard_range(shard, &shape)?;
@@ -238,6 +256,10 @@ impl F8Q8Linear {
     }
 
     pub fn from_weight(weight: &Tensor, bias: Option<Tensor>) -> Result<Self> {
+        Self::ensure_supported_device(weight.device())?;
+        if let Some(bias) = &bias {
+            Self::ensure_supported_device(bias.device())?;
+        }
         let shape = weight.shape().clone();
         let weight_f32 = weight.to_dtype(DType::F32)?.flatten_all()?;
         let mut weight_data: Vec<f32> = weight_f32.to_vec1()?;
@@ -319,10 +341,12 @@ impl QuantMethod for F8Q8Linear {
     }
 
     fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        Self::ensure_supported_device(ids.device())?;
         self.dequantize_rows(ids)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
+        Self::ensure_supported_device(a.device())?;
         let dequant_w = self.dequantize(a.dtype())?;
         let lin = Linear::new(dequant_w, self.bias.clone());
         lin.forward(a)
@@ -334,6 +358,10 @@ impl QuantMethod for F8Q8Linear {
 
     fn dtype_and_device(&self) -> (DType, Device) {
         (DType::F32, Device::Cpu)
+    }
+
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
     }
 
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
@@ -357,21 +385,26 @@ impl QuantMethod for F8Q8Linear {
         dtype: Option<IsqType>,
         device: Device,
         n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
+        imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
         match dtype {
-            Some(IsqType::F8Q8) | None => {
-                // Already F8Q8 or no-op, just return self
+            None => {
+                Self::ensure_supported_device(&device)?;
                 Ok(self)
             }
+            Some(IsqType::F8Q8) if imatrix_weight.is_none() => {
+                Self::ensure_supported_device(&device)?;
+                Ok(self)
+            }
+            Some(IsqType::F8Q8) => candle_core::bail!("F8Q8 does not support imatrix."),
             Some(other) => {
                 // Dequantize and re-quantize to requested type
                 let w = self.dequantize(DType::F32)?;
                 let b = self.bias.clone();
                 let unquant =
                     crate::UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(w, b)))?;
-                Arc::new(unquant).apply_isq(Some(other), device, n_quantized, None, guard)
+                Arc::new(unquant).apply_isq(Some(other), device, n_quantized, imatrix_weight, guard)
             }
         }
     }
@@ -384,6 +417,9 @@ impl QuantizedSerde for F8Q8Linear {
 
     fn isq_serde_supported(&self) -> bool {
         true
+    }
+    fn uqff_type(&self) -> Option<IsqType> {
+        Some(IsqType::F8Q8)
     }
 
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
@@ -440,6 +476,56 @@ impl QuantizedSerde for F8Q8Linear {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_isq_preserves_exact_f8q8_and_requantizes_other_targets() -> Result<()> {
+        let source = Arc::new(F8Q8Linear::from_weight(
+            &Tensor::ones((2, 32), DType::F32, &Device::Cpu)?,
+            Some(Tensor::ones(2, DType::F32, &Device::Cpu)?),
+        )?) as Arc<dyn QuantMethod>;
+        let n_quantized = AtomicUsize::new(0);
+        let captured = source.clone().apply_isq(
+            None,
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &captured));
+        assert!(captured.has_bias());
+
+        let exact = source.clone().apply_isq(
+            Some(IsqType::F8Q8),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &exact));
+
+        let error = source
+            .clone()
+            .apply_isq(
+                Some(IsqType::F8Q8),
+                Device::Cpu,
+                &n_quantized,
+                Some(vec![1.0; 32]),
+                QuantizeOntoGuard::new(),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("does not support imatrix"));
+
+        let requantized = source.apply_isq(
+            Some(IsqType::Q4_0),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(requantized.uqff_type(), Some(IsqType::Q4_0));
+        assert!(requantized.has_bias());
+        Ok(())
+    }
 
     #[test]
     fn test_f8q8_roundtrip() {
@@ -506,5 +592,16 @@ mod tests {
     fn test_f8q8_block_size() {
         assert_eq!(std::mem::size_of::<BlockF8Q8>(), 33);
         assert_eq!(std::mem::size_of::<BlockQ8_0>(), 34);
+    }
+
+    #[test]
+    fn f8q8_rejects_accelerator_device_locations() {
+        assert!(F8Q8Linear::supports_device_location(DeviceLocation::Cpu));
+        assert!(!F8Q8Linear::supports_device_location(
+            DeviceLocation::Cuda { gpu_id: 0 }
+        ));
+        assert!(!F8Q8Linear::supports_device_location(
+            DeviceLocation::Metal { gpu_id: 0 }
+        ));
     }
 }

@@ -466,7 +466,7 @@ pub fn get_model_paths(
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
-    paths: &Box<dyn ModelPaths>,
+    paths: &dyn ModelPaths,
     jinja_explicit: Option<&String>,
     chat_template_explicit: Option<&String>,
     chat_template_fallback: Option<&String>,
@@ -610,17 +610,6 @@ pub(crate) fn get_chat_template(
         }
     }
 
-    // JINJA explicit
-    if let Some(jinja_explicit) = jinja_explicit {
-        if !jinja_explicit.ends_with(".jinja") {
-            panic!("jinja_explicit must end with .jinja!");
-        }
-
-        let ct = fs::read_to_string(jinja_explicit).expect("Loading chat template failed.");
-
-        template.chat_template = Some(ChatTemplateValue(Either::Left(ct)));
-    }
-
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
@@ -631,6 +620,15 @@ pub(crate) fn get_chat_template(
                 .chat_template
                 .map(|x| ChatTemplateValue(Either::Left(x)));
         }
+    }
+
+    if let Some(jinja_explicit) = jinja_explicit {
+        if !jinja_explicit.ends_with(".jinja") {
+            panic!("jinja_explicit must end with .jinja!");
+        }
+
+        let ct = fs::read_to_string(jinja_explicit).expect("Loading chat template failed.");
+        template.chat_template = Some(ChatTemplateValue(Either::Left(ct)));
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -689,7 +687,37 @@ pub(crate) fn get_chat_template(
     }
 }
 
+#[cfg(test)]
 mod tests {
+    use crate::pipeline::loaders::LocalModelPaths;
+
+    use super::{get_chat_template, AdapterPaths};
+
+    #[test]
+    fn explicit_jinja_overrides_processor_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let processor_path = dir.path().join("processor_config.json");
+        let jinja_path = dir.path().join("explicit.jinja");
+        std::fs::write(&processor_path, r#"{"chat_template":"processor"}"#).unwrap();
+        std::fs::write(&jinja_path, "explicit").unwrap();
+        let paths = LocalModelPaths {
+            tokenizer_filename: dir.path().join("tokenizer.json"),
+            config_filename: dir.path().join("config.json"),
+            template_filename: None,
+            filenames: Vec::new(),
+            adapter_paths: AdapterPaths::None,
+            gen_conf: None,
+            preprocessor_config: None,
+            processor_config: Some(processor_path),
+            chat_template_json_filename: None,
+        };
+        let jinja_path = jinja_path.to_string_lossy().into_owned();
+
+        let template = get_chat_template(&paths, Some(&jinja_path), None, None, None);
+
+        assert_eq!(template.get_template_contents(), ["explicit"]);
+    }
+
     #[test]
     fn match_safetensors() -> anyhow::Result<()> {
         use regex_automata::meta::Regex;
