@@ -177,11 +177,13 @@ pub use pipeline::{
     SupportedModality, TokenSource, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
 };
 pub use request::{
-    ApproximateUserLocation, CalibrationAction, CalibrationRequest, Constraint,
-    DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
-    NormalRequest, ReasoningEffort, Request, RequestMessage, SearchContextSize,
-    TokenizationRequest, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
-    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
+    resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
+    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
+    MessageContent, NormalRequest, ReasoningControlError, ReasoningEffort,
+    ReasoningEffortParseError, Request, RequestMessage, ResolvedReasoningControls,
+    SearchContextSize, TokenizationRequest, WebSearchContentType, WebSearchFilters,
+    WebSearchImageSettings, WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
+    DEFAULT_ENABLE_THINKING,
 };
 pub use resource_plan::{
     plan_paged_kv, PagedKvModelRequest, PagedKvPlan, PagedKvPolicy, RuntimeResourcePlanOptions,

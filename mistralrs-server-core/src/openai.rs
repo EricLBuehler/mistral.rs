@@ -7,9 +7,9 @@ use either::Either;
 use mistralrs_core::{
     AdapterGenerationId, AdapterSelection as CoreAdapterSelection, AgentPermission,
     AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
-    ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
-    ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
-    WebSearchReturnTokenBudget, WebSearchUserLocation,
+    ImageGenerationResponseFormat, LlguidanceGrammar, ReasoningEffort, SearchContextSize, Tool,
+    ToolChoice, ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -293,6 +293,8 @@ pub struct ToolCall {
 ///     role: "user".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 ///
 /// // System message
@@ -301,6 +303,8 @@ pub struct ToolCall {
 ///     role: "system".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -315,6 +319,9 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
+    /// Reasoning emitted with an assistant message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -1172,8 +1179,10 @@ pub struct ChatCompletionRequest {
     /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
-    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    /// Reasoning effort level for models and templates that support it.
+    /// Valid values are "off", "low", "medium", "high", and "xhigh".
+    /// "none" is accepted as an alias for "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
@@ -1879,15 +1888,14 @@ pub struct ResponsesCreateRequest {
     /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    /// Toggle thinking output for models that support it.
+    /// Legacy schema field. The active Responses endpoint ignores this top-level control.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
 }

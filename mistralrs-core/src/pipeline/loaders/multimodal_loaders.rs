@@ -61,6 +61,9 @@ use crate::vision_models::llava_next::Model as LLaVANext;
 use crate::vision_models::llava_next_inputs_processor::{self, LLaVANextProcessor};
 use crate::vision_models::mistral3::{Mistral3Config, Mistral3Model, Mistral3Processor};
 use crate::vision_models::mllama::{MLlamaConfig, MLlamaModel, MLlamaProcessor};
+use crate::vision_models::muse_glimmer::{
+    Config as MuseGlimmerConfig, MuseGlimmerModel, MuseGlimmerProcessor,
+};
 use crate::vision_models::phi3::{Config as Phi3Config, Model as Phi3, PHI3V_CLIP_CONFIG};
 use crate::vision_models::phi3_inputs_processor::Phi3Processor;
 use crate::vision_models::phi4::{Phi4MMConfig, Phi4MMModel, PHI4_MM_VISION_CFG};
@@ -275,6 +278,8 @@ pub enum MultimodalLoaderType {
     Voxtral,
     #[serde(rename = "gemma4")]
     Gemma4,
+    #[serde(rename = "muse_glimmer")]
+    MuseGlimmer,
     #[serde(rename = "diffusiongemma")]
     DiffusionGemma,
 }
@@ -302,6 +307,7 @@ impl MultimodalLoaderType {
             | "Gemma4ForCausalLM"
             | "Gemma4UnifiedForConditionalGeneration"
             | "Gemma4UnifiedForCausalLM" => Ok(Self::Gemma4),
+            "MuseGlimmerForConditionalGeneration" => Ok(Self::MuseGlimmer),
             "DiffusionGemmaForBlockDiffusion" => Ok(Self::DiffusionGemma),
             "Qwen3VLForConditionalGeneration" => Ok(Self::Qwen3VL),
             "Qwen3VLMoeForConditionalGeneration" => Ok(Self::Qwen3VLMoE),
@@ -335,13 +341,14 @@ impl FromStr for MultimodalLoaderType {
             "llama4" => Ok(Self::Llama4),
             "gemma3n" => Ok(Self::Gemma3n),
             "gemma4" => Ok(Self::Gemma4),
+            "muse_glimmer" | "museglimmer" => Ok(Self::MuseGlimmer),
             "diffusiongemma" => Ok(Self::DiffusionGemma),
             "qwen3vl" => Ok(Self::Qwen3VL),
             "qwen3vlmoe" => Ok(Self::Qwen3VLMoE),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -370,6 +377,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Qwen3_5Moe => "qwen3_5moe",
             MultimodalLoaderType::Voxtral => "voxtral",
             MultimodalLoaderType::Gemma4 => "gemma4",
+            MultimodalLoaderType::MuseGlimmer => "muse_glimmer",
             MultimodalLoaderType::DiffusionGemma => "diffusiongemma",
         };
         write!(f, "{name}")
@@ -430,6 +438,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Qwen3_5Moe => Box::new(Qwen3_5MoeLoader),
             MultimodalLoaderType::Voxtral => Box::new(VoxtralLoader),
             MultimodalLoaderType::Gemma4 => Box::new(Gemma4Loader),
+            MultimodalLoaderType::MuseGlimmer => Box::new(MuseGlimmerLoader),
             MultimodalLoaderType::DiffusionGemma => Box::new(DiffusionGemmaLoader),
         })
     }
@@ -8463,6 +8472,303 @@ impl DeviceMappedModelLoader for Gemma4Loader {
     }
 }
 
+pub struct MuseGlimmerLoader;
+
+pub struct MuseGlimmerPrefixer;
+
+impl MultimodalPromptPrefixer for MuseGlimmerPrefixer {}
+
+fn muse_glimmer_runtime_config(config: &str, max_model_len: Option<usize>) -> Result<Cow<'_, str>> {
+    let Some(max_model_len) = max_model_len else {
+        return Ok(Cow::Borrowed(config));
+    };
+    anyhow::ensure!(max_model_len > 0, "max_model_len must be greater than zero");
+
+    let parsed: MuseGlimmerConfig = serde_json::from_str(config)?;
+    if parsed.text_config.max_position_embeddings <= max_model_len {
+        return Ok(Cow::Borrowed(config));
+    }
+
+    let mut value: serde_json::Value = serde_json::from_str(config)?;
+    value
+        .get_mut("text_config")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| anyhow::anyhow!("Muse-Glimmer config is missing text_config"))?
+        .insert(
+            "max_position_embeddings".to_string(),
+            serde_json::Value::from(max_model_len),
+        );
+    Ok(Cow::Owned(serde_json::to_string(&value)?))
+}
+
+impl MultimodalModelLoader for MuseGlimmerLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn MultimodalModel + Send + Sync>> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        Ok(Box::new(MuseGlimmerModel::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn runtime_config<'a>(
+        &self,
+        config: &'a str,
+        max_model_len: Option<usize>,
+    ) -> Result<Cow<'a, str>> {
+        muse_glimmer_runtime_config(config, max_model_len)
+    }
+
+    fn is_gptx(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        Ok(Box::new(serde_json::from_str::<MuseGlimmerConfig>(config)?))
+    }
+
+    fn get_processor(
+        &self,
+        model_config: &str,
+        _processor_config: Option<ProcessorConfig>,
+        preprocessor_config: PreProcessorConfig,
+        max_edge: Option<u32>,
+    ) -> Arc<dyn Processor + Send + Sync> {
+        let cfg: MuseGlimmerConfig =
+            serde_json::from_str(model_config).expect("Failed to parse Muse-Glimmer config");
+        Arc::new(
+            MuseGlimmerProcessor::new(&preprocessor_config, max_edge, cfg.gguf_collapsed_temporal)
+                .expect("Failed to create Muse-Glimmer processor"),
+        )
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn supports_prefix_cacher(&self, _config: &str) -> bool {
+        true
+    }
+
+    fn modalities(&self, config: &str) -> Result<Modalities> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let mut input = vec![SupportedModality::Text, SupportedModality::Vision];
+        if !cfg.gguf_collapsed_temporal {
+            input.push(SupportedModality::Video);
+        }
+        Ok(Modalities {
+            input,
+            output: vec![SupportedModality::Text],
+        })
+    }
+
+    fn prefixer(&self, _config: &str) -> Arc<dyn MultimodalPromptPrefixer> {
+        Arc::new(MuseGlimmerPrefixer)
+    }
+
+    fn get_device_for_tensor(
+        &self,
+        config: &str,
+        _mapper: &dyn DeviceMapper,
+        loading_isq: bool,
+    ) -> Result<Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync + 'static>> {
+        if loading_isq {
+            return Ok(Arc::new(|_| DeviceForLoadTensor::Base));
+        }
+        let re = Regex::new(r"^model\.language_model\.layers\.(\d+)\.")?;
+        let num_layers = serde_json::from_str::<MuseGlimmerConfig>(config)?
+            .text_config
+            .num_hidden_layers;
+        Ok(Arc::new(move |name: String| {
+            re.captures(&name)
+                .and_then(|captures| captures.get(1))
+                .and_then(|index| index.as_str().parse::<usize>().ok())
+                .filter(|&index| index < num_layers)
+                .map(DeviceForLoadTensor::Idx)
+                .unwrap_or(DeviceForLoadTensor::Base)
+        }))
+    }
+}
+
+impl IsqModelLoader for MuseGlimmerLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.language_model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+            Regex::new(
+                r"^model\.language_model\.layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj|gate_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"^model\.language_model\.layers\.(\d+)\.mlp\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+        ])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for MuseGlimmerLoader {
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let vc = &cfg.vision_config;
+        let visual_tokens = (max_image_shape.0 / vc.patch_size / vc.merge_size)
+            * (max_image_shape.1 / vc.patch_size / vc.merge_size)
+            * max_num_images;
+        let total_seq_len = *max_seq_len + visual_tokens;
+        let query_len = total_seq_len.min(ATTENTION_CHUNK_SIZE);
+        Ok(max_batch_size * cfg.text_config.num_attention_heads * query_len * total_seq_len)
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Multimodal {
+            max_seq_len: _,
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal AutoDeviceMapParams for this model!")
+        };
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let vc = &cfg.vision_config;
+        let raw_patches = (max_image_shape.0 / vc.patch_size) * (max_image_shape.1 / vc.patch_size);
+        let items = max_batch_size * max_num_images;
+        let attention = items * vc.num_attention_heads * raw_patches * raw_patches;
+        let hidden = items * raw_patches * vc.hidden_size.max(vc.intermediate_size);
+        Ok(attention.max(hidden))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let (embed_pack_factor, head_pack_factor) =
+            super::language_model_pack_factors_with_aliases(
+                quantization,
+                &["model.language_model.embed_tokens.weight"],
+                &["lm_head.weight"],
+                tc.tie_word_embeddings,
+                dtype,
+                weight_pack_factor,
+            )?;
+        let text = tc.vocab_size * tc.hidden_size / embed_pack_factor
+            + if tc.tie_word_embeddings {
+                0
+            } else {
+                tc.vocab_size * tc.hidden_size / head_pack_factor
+            }
+            + tc.hidden_size;
+
+        let vc = &cfg.vision_config;
+        let patch = vc.hidden_size * vc.patch_temporal * 3 * vc.patch_size.pow(2);
+        let position = vc.pos_emb_height * vc.pos_emb_width * vc.hidden_size;
+        let tower_norms = 4 * vc.hidden_size;
+        let vision_layer = 4 * vc.hidden_size.pow(2)
+            + 2 * vc.hidden_size * vc.intermediate_size
+            + vc.intermediate_size
+            + 9 * vc.hidden_size;
+        let adapter =
+            cfg.out_hidden_size * cfg.projector_hidden_size + cfg.projector_hidden_size.pow(2);
+        let projection = cfg.projector_hidden_size * tc.hidden_size;
+        let vision = patch
+            + position
+            + tower_norms
+            + vc.num_hidden_layers * vision_layer
+            + adapter
+            + projection;
+        Ok((text + vision) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let tc = &cfg.text_config;
+        let query_size = tc.num_attention_heads * tc.head_dim;
+        let kv_size = tc.num_key_value_heads * tc.head_dim;
+        let projections =
+            (tc.hidden_size * query_size * 3 + tc.hidden_size * kv_size * 2) / weight_pack_factor;
+        let attention_biases = if tc.attention_bias {
+            query_size + kv_size * 2 + tc.hidden_size
+        } else {
+            0
+        };
+        let mlp = 3 * tc.hidden_size * tc.intermediate_size / weight_pack_factor;
+        let norms = 4 * tc.hidden_size;
+        let layer = (projections + attention_biases + mlp + norms) * dtype.size_in_bytes();
+        Ok(vec![layer; tc.num_hidden_layers])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        Ok(serde_json::from_str::<MuseGlimmerConfig>(config)?
+            .text_config
+            .num_hidden_layers)
+    }
+
+    fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
+        Some(vec![NonMappedSubModel::Vision])
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: MuseGlimmerConfig = serde_json::from_str(config)?;
+        let tc = cfg.text_config;
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: tc.max_position_embeddings,
+            num_layers: tc.num_hidden_layers,
+            hidden_size: tc.hidden_size,
+            num_kv_heads: tc.num_key_value_heads,
+            num_attn_heads: tc.num_attention_heads,
+            sliding_window: None,
+            k_head_dim: tc.head_dim,
+            v_head_dim: tc.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
+    }
+}
+
 // ======================== LFM2-VL loader
 
 /// [`MultimodalLoader`] for an LFM2-VL model.
@@ -9468,6 +9774,16 @@ mod tests {
                 ],
             },
             PromotedIsqCase {
+                name: "muse_glimmer",
+                architecture: "MuseGlimmerForConditionalGeneration",
+                loader: Box::new(MuseGlimmerLoader),
+                accepted: vec![
+                    "model.language_model.embed_tokens.weight",
+                    "lm_head.weight",
+                    "lm_head.bias",
+                ],
+            },
+            PromotedIsqCase {
                 name: "diffusiongemma",
                 architecture: "DiffusionGemmaForBlockDiffusion",
                 loader: Box::new(DiffusionGemmaLoader),
@@ -9706,6 +10022,10 @@ mod tests {
         for (loader_name, loader) in [
             ("VLlama4Loader", &VLlama4Loader as &dyn IsqModelLoader),
             ("Gemma4Loader", &Gemma4Loader as &dyn IsqModelLoader),
+            (
+                "MuseGlimmerLoader",
+                &MuseGlimmerLoader as &dyn IsqModelLoader,
+            ),
         ] {
             assert!(
                 loader.isq_layer_regexes_moqe("")?.is_empty(),
@@ -9872,6 +10192,176 @@ mod tests {
             assert!(loader.supports_paged_attention(vision));
             assert!(loader.supports_prefix_cacher(vision));
         }
+    }
+
+    fn muse_glimmer_test_config() -> String {
+        serde_json::json!({
+            "architectures": ["MuseGlimmerForConditionalGeneration"],
+            "text_config": {},
+            "vision_config": {},
+            "image_token_id": 200092,
+            "video_token_id": 200091
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn muse_glimmer_loader_integrates_native_and_gguf_capabilities() -> Result<()> {
+        assert_eq!(
+            MultimodalLoaderType::from_causal_lm_name("MuseGlimmerForConditionalGeneration")
+                .map_err(anyhow::Error::msg)?,
+            MultimodalLoaderType::MuseGlimmer
+        );
+        assert_eq!(
+            "muse_glimmer"
+                .parse::<MultimodalLoaderType>()
+                .map_err(anyhow::Error::msg)?,
+            MultimodalLoaderType::MuseGlimmer
+        );
+        assert_eq!(
+            MultimodalLoaderType::MuseGlimmer.to_string(),
+            "muse_glimmer"
+        );
+
+        let loader = MuseGlimmerLoader;
+        let native = muse_glimmer_test_config();
+        assert_eq!(
+            loader.modalities(&native)?.input,
+            vec![
+                SupportedModality::Text,
+                SupportedModality::Vision,
+                SupportedModality::Video
+            ]
+        );
+        let mut gguf: serde_json::Value = serde_json::from_str(&native)?;
+        gguf.as_object_mut().unwrap().insert(
+            "_mistralrs_muse_glimmer_gguf_collapsed_temporal".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        assert_eq!(
+            loader.modalities(&serde_json::to_string(&gguf)?)?.input,
+            vec![SupportedModality::Text, SupportedModality::Vision]
+        );
+        assert!(loader.supports_paged_attention(&native));
+        assert!(loader.supports_prefix_cacher(&native));
+        Ok(())
+    }
+
+    #[test]
+    fn muse_glimmer_loader_covers_attention_gate_and_text_only_device_mapping() -> Result<()> {
+        let loader = MuseGlimmerLoader;
+        let config = muse_glimmer_test_config();
+        for predicates in [
+            loader.isq_layer_regexes(&config)?,
+            loader.immediate_isq_predicates(&config)?,
+        ] {
+            for name in [
+                "model.language_model.layers.0.self_attn.q_proj.weight",
+                "model.language_model.layers.0.self_attn.gate_proj.weight",
+                "model.language_model.layers.0.mlp.down_proj.weight",
+                "lm_head.weight",
+            ] {
+                assert!(matches_any(&predicates, name), "{name} was not matched");
+            }
+            assert!(!matches_any(
+                &predicates,
+                "model.vision_tower.layers.0.attn.q_proj.weight"
+            ));
+        }
+
+        let mapper = DummyDeviceMapper {
+            nm_device: Device::Cpu,
+        };
+        let device_for = loader.get_device_for_tensor(&config, &mapper, false)?;
+        assert!(matches!(
+            device_for("model.language_model.layers.7.self_attn.q_proj.weight".to_string()),
+            DeviceForLoadTensor::Idx(7)
+        ));
+        assert!(matches!(
+            device_for("model.vision_tower.layers.7.attn.q_proj.weight".to_string()),
+            DeviceForLoadTensor::Base
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn muse_glimmer_runtime_config_caps_context() -> Result<()> {
+        let loader = MuseGlimmerLoader;
+        let config = muse_glimmer_test_config();
+        let capped = loader.runtime_config(&config, Some(8192))?;
+        assert_eq!(
+            serde_json::from_str::<MuseGlimmerConfig>(&capped)?
+                .text_config
+                .max_position_embeddings,
+            8192
+        );
+        assert!(loader.runtime_config(&config, Some(0)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn muse_glimmer_estimator_keeps_vision_weights_dense() -> Result<()> {
+        let config = serde_json::json!({
+            "text_config": {
+                "vocab_size": 32,
+                "hidden_size": 12,
+                "intermediate_size": 24,
+                "num_hidden_layers": 2,
+                "num_attention_heads": 2,
+                "num_key_value_heads": 1,
+                "head_dim": 4,
+                "tie_word_embeddings": false
+            },
+            "vision_config": {
+                "hidden_size": 8,
+                "intermediate_size": 16,
+                "num_attention_heads": 2,
+                "num_hidden_layers": 3,
+                "patch_size": 2,
+                "patch_temporal": 2,
+                "merge_size": 2,
+                "pos_emb_height": 4,
+                "pos_emb_width": 4
+            },
+            "image_token_id": 30,
+            "video_token_id": 31,
+            "out_hidden_size": 32,
+            "projector_hidden_size": 10
+        })
+        .to_string();
+        let loader = MuseGlimmerLoader;
+        let dtype = DType::BF16;
+        let text_elements = 32 * 12 * 2 + 12;
+        let vision_layer = 4 * 8usize.pow(2) + 2 * 8 * 16 + 16 + 9 * 8;
+        let vision_elements = 8 * 2 * 3 * 2usize.pow(2)
+            + 4 * 4 * 8
+            + 4 * 8
+            + 3 * vision_layer
+            + 32 * 10
+            + 10usize.pow(2)
+            + 10 * 12;
+        assert_eq!(
+            loader.non_mapped_size_in_bytes(&config, dtype, 1, None, None)?,
+            (text_elements + vision_elements) * dtype.size_in_bytes()
+        );
+
+        let isq = IsqType::Q4K;
+        let pack_factor = isq.pack_factor(dtype);
+        let promoted_pack_factor = isq.promote_for_sensitive_tensor().pack_factor(dtype);
+        let quantization = AutoDeviceMapQuantization::isq(Some(isq), None);
+        let quantized = loader.non_mapped_size_in_bytes(
+            &config,
+            dtype,
+            pack_factor,
+            Some(&quantization),
+            None,
+        )?;
+        let quantized_text = 32 * 12 * 2 / promoted_pack_factor + 12;
+        assert_eq!(
+            quantized,
+            (quantized_text + vision_elements) * dtype.size_in_bytes()
+        );
+        Ok(())
     }
 
     #[test]

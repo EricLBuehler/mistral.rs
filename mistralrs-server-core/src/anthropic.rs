@@ -23,8 +23,8 @@ use either::Either;
 use mistralrs_core::{
     AgentPermission, AgentToolApprovalHandler, ApproximateUserLocation,
     ChatCompletionChunkResponse, ChatCompletionResponse, CodeExecutionPermission, Function,
-    MistralRs, Request, RequestMessage, Response, TokenizationRequest, Tool, ToolChoice, ToolType,
-    Usage, WebSearchOptions, WebSearchUserLocation,
+    MistralRs, ReasoningEffort, Request, RequestMessage, Response, TokenizationRequest, Tool,
+    ToolChoice, ToolType, Usage, WebSearchOptions, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -115,8 +115,11 @@ pub struct AnthropicMessagesRequest {
     pub container: Option<AnthropicContainer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnthropicThinking>,
+    /// mistral.rs extension for toggling reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_thinking: Option<bool>,
+    /// mistral.rs extension accepting off, low, medium, high, or xhigh. "none" aliases "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[schema(value_type = Option<Object>)]
@@ -392,8 +395,37 @@ struct AnthropicConvertedTools {
     server_tool_names: Vec<String>,
 }
 
+fn resolve_anthropic_thinking(
+    thinking: Option<&AnthropicThinking>,
+    enable_thinking: Option<bool>,
+) -> Result<Option<bool>> {
+    let native = thinking
+        .map(|thinking| match thinking.tp.as_str() {
+            "enabled" | "adaptive" => Ok(true),
+            "disabled" => Ok(false),
+            other => anyhow::bail!("Unsupported Anthropic thinking type `{other}`."),
+        })
+        .transpose()?;
+
+    if let (Some(native), Some(extension)) = (native, enable_thinking) {
+        if native != extension {
+            anyhow::bail!("Anthropic `thinking.type` conflicts with mistral.rs `enable_thinking`.");
+        }
+    }
+
+    Ok(enable_thinking.or(native))
+}
+
 impl AnthropicMessagesRequest {
     fn into_chat_completion_request(self) -> Result<ChatCompletionRequest> {
+        let enable_thinking =
+            resolve_anthropic_thinking(self.thinking.as_ref(), self.enable_thinking)?;
+        let reasoning_effort = self
+            .reasoning_effort
+            .as_deref()
+            .map(str::parse)
+            .transpose()?;
+        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
         let mut converted_tools = convert_tools_and_agentic(
             self.tools,
             self.web_search_options,
@@ -480,11 +512,7 @@ impl AnthropicMessagesRequest {
             dry_base: self.dry_base,
             dry_allowed_length: self.dry_allowed_length,
             dry_sequence_breakers: self.dry_sequence_breakers,
-            enable_thinking: self.enable_thinking.or_else(|| {
-                self.thinking
-                    .as_ref()
-                    .map(|thinking| thinking.tp == "enabled")
-            }),
+            enable_thinking,
             reasoning_effort: self.reasoning_effort,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
@@ -728,6 +756,7 @@ fn append_anthropic_blocks(
             name: None,
             tool_calls,
             tool_call_id: None,
+            reasoning_content: None,
         });
         return Ok(());
     }
@@ -790,6 +819,7 @@ fn flush_user_content(
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     });
     text_parts.clear();
 }
@@ -801,6 +831,7 @@ fn message_with_text(role: impl Into<String>, text: String) -> Message {
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     }
 }
 
@@ -843,6 +874,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         name: None,
         tool_calls: None,
         tool_call_id: Some(tool_call_id),
+        reasoning_content: None,
     })
 }
 
@@ -1864,5 +1896,33 @@ mod tests {
         ));
         assert_eq!(chat.reasoning_effort, Some("high".to_string()));
         assert_eq!(chat.enable_thinking, Some(true));
+    }
+
+    #[test]
+    fn maps_anthropic_adaptive_thinking_to_enabled() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "thinking": {"type": "adaptive"}
+        }))
+        .unwrap();
+
+        let chat = req.into_chat_completion_request().unwrap();
+        assert_eq!(chat.enable_thinking, Some(true));
+    }
+
+    #[test]
+    fn rejects_conflicting_anthropic_thinking_controls() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "thinking": {"type": "disabled"},
+            "enable_thinking": true
+        }))
+        .unwrap();
+
+        assert!(req.into_chat_completion_request().is_err());
     }
 }

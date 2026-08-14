@@ -12,7 +12,7 @@ use crate::args::{
     ModelType, MultimodalAdapterOptions, MultimodalOptions, PagedAttentionOptions,
     QuantizationOptions, RuntimeOptions, SandboxOptions, ServerOptions,
 };
-use mistralrs_core::{ModelDType, NormalLoaderType, TokenSource};
+use mistralrs_core::{ModelDType, NormalLoaderType, ReasoningEffort, TokenSource};
 
 #[derive(Deserialize)]
 #[serde(tag = "command", rename_all = "kebab-case")]
@@ -53,6 +53,8 @@ pub struct RunConfig {
     pub models: Vec<ModelEntry>,
     #[serde(default, alias = "enable_thinking")]
     pub thinking: Option<bool>,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default)]
     pub adapter: Option<String>,
 }

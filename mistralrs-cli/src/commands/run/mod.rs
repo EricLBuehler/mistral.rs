@@ -6,6 +6,7 @@ use interactive::OneshotInput;
 pub(crate) use interactive::{interactive_mode, InteractiveConfig};
 
 use anyhow::Result;
+use mistralrs_core::{resolve_reasoning_controls, ReasoningEffort};
 use tracing::info;
 
 use mistralrs_core::initialize_logging;
@@ -30,6 +31,7 @@ pub async fn run_interactive(
     sandbox: SandboxOptions,
     global: GlobalOptions,
     thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     input: Option<String>,
     images: Vec<String>,
     videos: Vec<String>,
@@ -37,6 +39,7 @@ pub async fn run_interactive(
     request_adapter: Option<String>,
 ) -> Result<()> {
     initialize_logging();
+    resolve_reasoning_controls(thinking, reasoning_effort)?;
 
     let request_adapter = normalize_requested_adapter(&model_type, request_adapter.as_deref())?;
 
@@ -149,6 +152,7 @@ pub async fn run_interactive(
                 do_shell,
                 agent_permission: runtime.code_exec_permission.into(),
                 enable_thinking: thinking,
+                reasoning_effort,
                 adapter: request_adapter,
             },
         )
@@ -172,6 +176,7 @@ pub async fn run_interactive(
                 do_shell,
                 agent_permission: runtime.code_exec_permission.into(),
                 enable_thinking: thinking,
+                reasoning_effort,
                 adapter: request_adapter,
             },
         )

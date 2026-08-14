@@ -638,6 +638,7 @@ mod tests {
             MultimodalLoaderType::Llama4,
             MultimodalLoaderType::Lfm2Vl,
             MultimodalLoaderType::Gemma4,
+            MultimodalLoaderType::MuseGlimmer,
         ] {
             assert!(supports_dynamic_lora(&Detected::Multimodal(loader)));
         }

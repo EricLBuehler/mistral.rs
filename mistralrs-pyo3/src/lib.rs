@@ -42,10 +42,10 @@ use mistralrs_core::{
     LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
     LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
     MistralRsError, MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, ReasoningEffort,
-    Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
-    SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
-    TokenizationRequest, Tool, Topology, UqffWriteConfig,
+    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
+    SpeculativeConfig, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
+    UqffWriteConfig,
 };
 use mistralrs_core::{
     CalledFunction, SearchCallback, SearchFunctionParameters, SearchResult, ToolCallback,
@@ -70,18 +70,6 @@ use which::{
     Architecture, DiffusionArchitecture, LoraAdapter, MultimodalArchitecture, SpeechLoaderType,
     Which,
 };
-
-/// Parse reasoning effort string to ReasoningEffort enum
-fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
-}
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
@@ -1613,13 +1601,13 @@ impl Runner {
                             audios,
                             videos,
                             enable_thinking: request.enable_thinking,
-                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            reasoning_effort: request.reasoning_effort,
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
-                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            reasoning_effort: request.reasoning_effort,
                         }
                     }
                 }
@@ -1635,7 +1623,7 @@ impl Runner {
                     RequestMessage::Chat {
                         messages,
                         enable_thinking: request.enable_thinking,
-                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        reasoning_effort: request.reasoning_effort,
                     }
                 }
             };
@@ -2564,13 +2552,13 @@ impl Runner {
                             audios,
                             videos,
                             enable_thinking: request.enable_thinking,
-                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            reasoning_effort: request.reasoning_effort,
                         }
                     } else {
                         RequestMessage::Chat {
                             messages: messages_vec,
                             enable_thinking: request.enable_thinking,
-                            reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                            reasoning_effort: request.reasoning_effort,
                         }
                     }
                 }
@@ -2586,7 +2574,7 @@ impl Runner {
                     RequestMessage::Chat {
                         messages,
                         enable_thinking: request.enable_thinking,
-                        reasoning_effort: parse_reasoning_effort(&request.reasoning_effort),
+                        reasoning_effort: request.reasoning_effort,
                     }
                 }
             };

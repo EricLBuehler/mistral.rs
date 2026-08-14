@@ -6,8 +6,8 @@ use indexmap::IndexMap;
 use mistralrs_core::{
     speech_utils, AdapterSelection, AgentPermission, AgentToolKind, Constraint,
     DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat, MessageContent,
-    MistralRs, ModelCategory, NormalRequest, Request, RequestMessage, Response, ResponseOk,
-    SamplingParams, Usage, WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
+    MistralRs, ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
+    ResponseOk, SamplingParams, Usage, WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
@@ -205,6 +205,7 @@ pub struct InteractiveConfig {
     pub do_shell: bool,
     pub agent_permission: AgentPermission,
     pub enable_thinking: Option<bool>,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub adapter: Option<String>,
 }
 
@@ -215,6 +216,7 @@ struct OneshotCtx {
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     adapter: Option<String>,
 }
 
@@ -229,6 +231,7 @@ pub async fn oneshot_mode(
         do_shell,
         agent_permission,
         enable_thinking,
+        reasoning_effort,
         adapter,
     } = config;
     let agent_approval_callback = cli_agent_approval_callback(agent_permission);
@@ -241,6 +244,7 @@ pub async fn oneshot_mode(
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
         adapter,
     };
 
@@ -259,6 +263,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
         adapter,
     } = ctx;
     let sender = mistralrs.get_sender(None).unwrap();
@@ -272,7 +277,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
     let request_messages = RequestMessage::Chat {
         messages,
         enable_thinking,
-        reasoning_effort: None,
+        reasoning_effort,
     };
 
     let (tx, mut rx) = channel(10_000);
@@ -335,6 +340,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
         adapter: _,
     } = ctx;
     let config = mistralrs.config(None).unwrap();
@@ -449,7 +455,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         videos,
         messages,
         enable_thinking,
-        reasoning_effort: None,
+        reasoning_effort,
     };
 
     let (tx, mut rx) = channel(10_000);
@@ -550,24 +556,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
             text_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            let InteractiveConfig {
-                do_search,
-                do_code_exec,
-                do_shell,
-                agent_permission,
-                enable_thinking,
-                adapter: _,
-            } = config;
-            multimodal_interactive_mode(
-                mistralrs,
-                do_search,
-                do_code_exec,
-                do_shell,
-                agent_permission,
-                agent_approval_callback.clone(),
-                enable_thinking,
-            )
-            .await
+            multimodal_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
         }
         Ok(ModelCategory::Diffusion) => {
             let InteractiveConfig {
@@ -576,6 +565,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
                 do_shell,
                 agent_permission,
                 enable_thinking: _,
+                reasoning_effort: _,
                 adapter: _,
             } = config;
             diffusion_interactive_mode(
@@ -595,6 +585,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
                 do_shell,
                 agent_permission,
                 enable_thinking,
+                reasoning_effort: _,
                 adapter: _,
             } = config;
             audio_interactive_mode(
@@ -615,6 +606,7 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
                 do_shell,
                 agent_permission,
                 enable_thinking: _,
+                reasoning_effort: _,
                 adapter: _,
             } = config;
             speech_interactive_mode(
@@ -872,6 +864,7 @@ async fn text_interactive_mode(
         do_shell,
         agent_permission,
         enable_thinking,
+        reasoning_effort,
         mut adapter,
     } = config;
     let sender = mistralrs.get_sender(None).unwrap();
@@ -961,7 +954,7 @@ async fn text_interactive_mode(
         let request_messages = RequestMessage::Chat {
             messages: messages.clone(),
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         };
 
         let (tx, mut rx) = channel(10_000);
@@ -1492,13 +1485,18 @@ async fn stream_assistant_response(
 
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
+    config: InteractiveConfig,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        reasoning_effort,
+        adapter: _,
+    } = config;
     let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
@@ -1711,7 +1709,7 @@ async fn multimodal_interactive_mode(
             videos: videos.clone(),
             messages: messages.clone(),
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         };
 
         let (tx, mut rx) = channel(10_000);

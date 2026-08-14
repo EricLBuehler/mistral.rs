@@ -264,7 +264,7 @@ Tokenize some text, returning raw tokens.
 | --- | --- | --- | --- |
 | `text` | `str` | required | The text to tokenize. |
 | `add_special_tokens` | `bool` | required | Whether to add special tokens. |
-| `enable_thinking` | `bool \| None` | required | Enables thinking for models that support this configuration. |
+| `enable_thinking` | `bool \| None` | required | Compatibility argument; raw text tokenization does not render a chat template. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
 ### `Runner.detokenize_text`

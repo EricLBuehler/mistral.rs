@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from os import PathLike
-from typing import Any, Iterator, Mapping, Optional, Callable
+from typing import Any, Callable, Iterator, Literal, Mapping, Optional
 
 class CalibrationStatus:
     collecting: bool
@@ -144,6 +144,11 @@ class ChatCompletionRequest:
 
     See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
     for the shared CLI, HTTP, Python, and Rust behavior.
+
+    `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
+    aliases `off`. Values are trimmed and case-insensitive. If both reasoning controls
+    are omitted, thinking is enabled with no selected effort. Contradictory
+    `enable_thinking` and `reasoning_effort` values raise `ValueError`.
     """
 
     messages: (
@@ -175,7 +180,9 @@ class ChatCompletionRequest:
     web_search_options: WebSearchOptions | None = None
     enable_thinking: bool | None = None
     truncate_sequence: bool = False
-    reasoning_effort: str | None = None
+    reasoning_effort: (
+        Literal["off", "none", "low", "medium", "high", "xhigh"] | None
+    ) = None
     max_tool_rounds: int | None = None
     tool_dispatch_url: str | None = None
     enable_code_execution: bool = False
@@ -290,6 +297,7 @@ class MultimodalArchitecture(Enum):
     Qwen3_5Moe = "Qwen3_5Moe"
     Voxtral = "Voxtral"
     Gemma4 = "Gemma4"
+    MuseGlimmer = "MuseGlimmer"
     DiffusionGemma = "DiffusionGemma"
 
 @dataclass
@@ -565,7 +573,9 @@ class Which(Enum):
         imatrix: str | None = field(default=None, kw_only=True)
         calibration_file: str | None = field(default=None, kw_only=True)
         max_edge: int | None = field(default=None, kw_only=True)
-        multimodal_auto_map_params: MultimodalAutoMapParams | None = field(default=None, kw_only=True)
+        multimodal_auto_map_params: MultimodalAutoMapParams | None = field(
+            default=None, kw_only=True
+        )
         adapters: list[LoraAdapter] | None = field(default=None, kw_only=True)
         max_adapters: int = field(default=16, kw_only=True)
         max_rank: int = field(default=256, kw_only=True)
@@ -909,7 +919,7 @@ class Runner:
         Args:
             text: The text to tokenize.
             add_special_tokens: Whether to add special tokens.
-            enable_thinking: Enables thinking for models that support this configuration.
+            enable_thinking: Compatibility argument; raw text tokenization does not render a chat template.
             model_id: Optional model ID to use for tokenization. If None, uses the default model.
         """
 

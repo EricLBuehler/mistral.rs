@@ -125,7 +125,8 @@ Variables available at render time:
 - `add_generation_prompt`: true when building a prompt for generation.
 - `bos_token`, `eos_token`, `unk_token`: model special tokens.
 - `date_string`: the current UTC date as a preformatted string (`DD, Month, YYYY`, e.g. `13, June, 2026`).
-- `enable_thinking`, `reasoning_effort`: reasoning controls for models that use them.
+- `enable_thinking`: resolved thinking toggle; defaults to true when the request specifies neither control.
+- `reasoning_effort`, `reasoning_strength`: the same explicit `off`, `low`, `medium`, `high`, or `xhigh` value. Both are undefined when effort is omitted.
 - `tools` and `builtin_tools`: present only when the request carries tool schemas.
 
 The functions `raise_exception(msg)` and `strftime_now(fmt)` and the `tojson` filter are available, matching Hugging Face's template environment. For model-specific tokens and role markers, the model's Hugging Face page is authoritative.

@@ -18,13 +18,13 @@ const SUPPORTED_ALTERNATE_EOS: &[&str] = &[
     "<|end_of_text|>", // Hermes
     "<|end|>",         // Phi-3, Phi-3.5, Harmony
     "<|eot_id|>",      // Llama 3
-    "<|message|>",     // Harmony
-    "<|start|>",       // Harmony
-    "<|channel|>",     // Harmony
 ];
 
-/// Repository default for templates that support an explicit thinking toggle.
-const DEFAULT_ENABLE_THINKING: bool = true;
+const HARMONY_ALTERNATE_EOS: &[&str] = &[
+    "<|message|>", // Harmony
+    "<|start|>",   // Harmony
+    "<|channel|>", // Harmony
+];
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
@@ -173,6 +173,17 @@ pub fn calculate_eos_tokens(
             && templates.iter().any(|t| t.contains(*alternate))
         {
             eos_tok_ids.push(alternate.to_string())
+        }
+    }
+    if chat_template.is_harmony_format() {
+        for alternate in HARMONY_ALTERNATE_EOS {
+            if tokenizer.get_vocab(true).contains_key(*alternate)
+                && templates
+                    .iter()
+                    .any(|template| template.contains(*alternate))
+            {
+                eos_tok_ids.push(alternate.to_string());
+            }
         }
     }
 
@@ -371,7 +382,7 @@ fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
     Ok(date_string)
 }
 
-use crate::request::ReasoningEffort;
+use crate::request::{resolve_reasoning_controls, ReasoningEffort};
 
 /// Check if a chat template uses Gemma 4 tool call tokens.
 fn is_gemma4_tool_template(template: &str) -> bool {
@@ -382,8 +393,21 @@ fn is_liquid_tool_template(template: &str) -> bool {
     template.contains("<|tool_call_start|>") && template.contains("<|tool_call_end|>")
 }
 
+fn is_atem_tool_template(template: &str) -> bool {
+    template.contains("<atem:function_calls>") && template.contains("<atem:invoke")
+}
+
+fn normalize_minijinja_compatibility(template: &str) -> String {
+    template.replace(
+        "namespace(name=tcid if tcid else '')",
+        "namespace(name=(tcid if tcid else ''))",
+    )
+}
+
 fn template_tool_call_format(template: &str) -> Option<ToolCallFormat> {
-    if crate::reasoning_parsers::harmony::is_harmony_template(template) {
+    if is_atem_tool_template(template) {
+        Some(ToolCallFormat::Atem)
+    } else if crate::reasoning_parsers::harmony::is_harmony_template(template) {
         Some(ToolCallFormat::Harmony)
     } else if is_gemma4_tool_template(template) {
         Some(ToolCallFormat::Gemma4)
@@ -633,8 +657,11 @@ pub fn apply_chat_template_to(
 
     let is_gemma4_template = is_gemma4_tool_template(&resolved_template);
     let is_liquid_template = is_liquid_tool_template(&resolved_template);
+    let is_atem_template = is_atem_tool_template(&resolved_template);
 
-    if is_gemma4_template {
+    if is_atem_template {
+        parse_tool_call_arguments(&mut messages);
+    } else if is_gemma4_template {
         parse_tool_call_arguments(&mut messages);
         preprocess_gemma4_tool_messages(&mut messages);
     } else if is_liquid_template {
@@ -652,7 +679,8 @@ pub fn apply_chat_template_to(
     }
 
     // Use the already-resolved template string
-    let mut template = resolved_template.replace("[::-1]", "|reverse");
+    let mut template = normalize_minijinja_compatibility(&resolved_template);
+    template = template.replace("[::-1]", "|reverse");
     // Convert Python‑style descending ranges `range(..., -1, -1)` to a forward
     // range followed by Jinja’s `|reverse` filter so it works even when
     // negative‑step ranges aren’t supported.
@@ -680,8 +708,11 @@ pub fn apply_chat_template_to(
     let date = chrono::Utc::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
-    // Convert reasoning effort to string for template
-    let reasoning_effort_str = reasoning_effort.map(|r| r.as_str()).unwrap_or("medium");
+    let reasoning_controls = resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
+    let reasoning_effort_value = reasoning_controls
+        .reasoning_effort
+        .map(|effort| Value::from(effort.as_str()))
+        .unwrap_or(Value::UNDEFINED);
 
     // Detect builtin tools from the tools list
     // Known builtin tools for GPT-OSS/Harmony format: "browser", "python"
@@ -716,8 +747,9 @@ pub fn apply_chat_template_to(
             eos_token => eos_tok,
             unk_token => unk_tok,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
-            reasoning_effort => reasoning_effort_str,
+            enable_thinking => reasoning_controls.enable_thinking,
+            reasoning_effort => &reasoning_effort_value,
+            reasoning_strength => &reasoning_effort_value,
         })?
     } else {
         tmpl.render(context! {
@@ -730,8 +762,9 @@ pub fn apply_chat_template_to(
             tools => tools,
             builtin_tools => builtin_tools,
             date_string => date_string,
-            enable_thinking => enable_thinking.unwrap_or(DEFAULT_ENABLE_THINKING),
-            reasoning_effort => reasoning_effort_str,
+            enable_thinking => reasoning_controls.enable_thinking,
+            reasoning_effort => &reasoning_effort_value,
+            reasoning_strength => &reasoning_effort_value,
         })?
     };
 
@@ -754,10 +787,12 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        apply_chat_template_to, preprocess_gemma4_tool_messages, template_tool_call_format,
-        ChatTemplateValue, GenerationConfig, DEFAULT_ENABLE_THINKING,
+        apply_chat_template_to, calculate_eos_tokens, preprocess_gemma4_tool_messages,
+        template_tool_call_format, ChatTemplate, ChatTemplateValue, GenerationConfig,
+        ReasoningEffort,
     };
-    use crate::{tools::ToolCallFormat, MessageContent};
+    use crate::{tools::ToolCallFormat, MessageContent, DEFAULT_ENABLE_THINKING};
+    use tokenizers::Tokenizer;
 
     fn user_text_message(text: &str) -> IndexMap<String, MessageContent> {
         IndexMap::from([
@@ -806,11 +841,114 @@ mod tests {
                 "<|start|>assistant<|channel|>commentary<|message|>",
                 ToolCallFormat::Harmony,
             ),
+            (
+                "<|start|>assistant to=tool<|message|><atem:function_calls><atem:invoke",
+                ToolCallFormat::Atem,
+            ),
         ];
 
         for (template, expected) in cases {
             assert_eq!(template_tool_call_format(template), Some(expected));
         }
+    }
+
+    #[test]
+    fn muse_channel_tokens_are_not_alternate_eos() {
+        use ahash::AHashMap;
+        use tokenizers::models::wordlevel::WordLevel;
+
+        let vocab = [
+            ("<unk>".to_string(), 0),
+            ("<|eot|>".to_string(), 1),
+            ("<|start|>".to_string(), 2),
+            ("<|message|>".to_string(), 3),
+        ]
+        .into_iter()
+        .collect::<AHashMap<_, _>>();
+        let tokenizer = Tokenizer::new(
+            WordLevel::builder()
+                .vocab(vocab)
+                .unk_token("<unk>".to_string())
+                .build()
+                .unwrap(),
+        );
+        let template: ChatTemplate = serde_json::from_value(serde_json::json!({
+            "eos_token": "<|eot|>",
+            "chat_template": "<|start|>assistant to=user<|message|>"
+        }))
+        .unwrap();
+
+        assert_eq!(calculate_eos_tokens(&template, None, &tokenizer), vec![1]);
+    }
+
+    #[test]
+    fn atem_template_receives_xhigh_reasoning_strength_and_mapping_arguments() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ reasoning_strength }}:{{ messages[0]['tool_calls'][0]['function']['arguments']['city'] }}<atem:function_calls><atem:invoke"
+                .to_string(),
+        ));
+        let messages = vec![assistant_message_with_tool_calls()];
+
+        let rendered = apply_chat_template_to(
+            messages,
+            false,
+            None,
+            Some(ReasoningEffort::XHigh),
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(rendered.starts_with("xhigh:Boston"));
+    }
+
+    #[test]
+    fn atem_template_uses_its_default_reasoning_strength() {
+        let template = ChatTemplateValue(Either::Left(
+            "{% set value = reasoning_strength if reasoning_strength is defined and reasoning_strength else 'high' %}{{ value }}<atem:function_calls><atem:invoke"
+                .to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(rendered.starts_with("high"));
+    }
+
+    #[test]
+    fn atem_template_accepts_inline_conditionals_in_namespace_arguments() {
+        let template = ChatTemplateValue(Either::Left(
+            "{% set tcid = '' %}{% set rns = namespace(name=tcid if tcid else '') %}{{ rns.name }}<atem:function_calls><atem:invoke"
+                .to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "<atem:function_calls><atem:invoke");
     }
 
     #[test]
@@ -848,6 +986,65 @@ mod tests {
         const { assert!(DEFAULT_ENABLE_THINKING) };
         assert_eq!(rendered, "<|think|><bos>hello");
         assert_eq!(rendered, enabled);
+    }
+
+    #[test]
+    fn unspecified_effort_is_undefined_in_templates() {
+        let template = ChatTemplateValue(Either::Left(
+            "{% if reasoning_effort is defined %}effort{% else %}no-effort{% endif %}:{% if reasoning_strength is defined %}strength{% else %}no-strength{% endif %}:{% if enable_thinking %}enabled{% else %}disabled{% endif %}"
+                .to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "no-effort:no-strength:enabled");
+    }
+
+    #[test]
+    fn explicit_effort_sets_both_template_names_and_toggle() {
+        let template = ChatTemplateValue(Either::Left(
+            "{{ reasoning_effort }}:{{ reasoning_strength }}:{% if enable_thinking %}enabled{% else %}disabled{% endif %}"
+                .to_string(),
+        ));
+
+        let xhigh = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            Some(ReasoningEffort::XHigh),
+            &template,
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+        let off = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            Some(ReasoningEffort::Off),
+            &template,
+            None,
+            None,
+            None,
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(xhigh, "xhigh:xhigh:enabled");
+        assert_eq!(off, "off:off:disabled");
     }
 
     #[test]

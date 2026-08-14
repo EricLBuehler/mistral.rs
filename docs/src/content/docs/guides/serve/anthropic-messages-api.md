@@ -118,8 +118,8 @@ Request fields:
 | `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
 | `tool_choice` | `auto`, `none`, and specific client `tool` choices are supported. `any` is accepted as `auto`. Anthropic server-tool choices are accepted as `auto`. |
 | `container.skills` | Supports uploaded custom Skills with `{"type":"custom","skill_id":"...","version":"latest"}`. Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf` are not bundled. |
-| `thinking` | `{"type":"enabled"}` maps to mistral.rs thinking mode (reasoning content emitted by the model) when the loaded chat template supports it. |
-| `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. |
+| `thinking` | `enabled` and `adaptive` map to thinking on; `disabled` maps to thinking off. The loaded chat template determines the effect. |
+| `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. Effort accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none` aliases `off`. If all controls are omitted, thinking defaults on with no selected effort. Contradictory native and extension controls return a validation error. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
 | `presence_penalty`, `frequency_penalty`, `repetition_penalty` | Supported as mistral.rs extensions. |
 | `response_format`, `grammar` | Supported as mistral.rs extensions. Do not set both in one request. |

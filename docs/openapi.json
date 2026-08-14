@@ -1895,7 +1895,8 @@
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "mistral.rs extension for toggling reasoning."
           },
           "files": {
             "type": [
@@ -1983,9 +1984,14 @@
             "format": "float"
           },
           "reasoning_effort": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReasoningEffort",
+                "description": "mistral.rs extension accepting off, low, medium, high, or xhigh. \"none\" aliases \"off\"."
+              }
             ]
           },
           "repetition_penalty": {
@@ -2916,12 +2922,15 @@
             "example": null
           },
           "reasoning_effort": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Reasoning effort level for Harmony-format models (GPT-OSS).\nControls the depth of reasoning/analysis: \"low\", \"medium\", or \"high\".",
-            "example": null
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReasoningEffort",
+                "description": "Reasoning effort level for models and templates that support it.\nValid values are \"off\", \"low\", \"medium\", \"high\", and \"xhigh\".\n\"none\" is accepted as an alias for \"off\"."
+              }
+            ]
           },
           "repetition_penalty": {
             "type": [
@@ -4431,7 +4440,7 @@
       },
       "Message": {
         "type": "object",
-        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n};\n```",
+        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
         "required": [
           "role"
         ],
@@ -4453,6 +4462,13 @@
               "null"
             ],
             "description": "Optional participant name for this message"
+          },
+          "reasoning_content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reasoning emitted with an assistant message."
           },
           "role": {
             "type": "string",
@@ -6397,7 +6413,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningEffort",
-                "description": "Effort level for reasoning (low, medium, high)"
+                "description": "Effort level for reasoning (off, low, medium, high, xhigh). \"none\" aliases \"off\"."
               }
             ]
           },
@@ -6408,7 +6424,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningSummary",
-                "description": "Whether to generate a summary of reasoning"
+                "description": "Accepted for compatibility; currently does not change the response."
               }
             ]
           }
@@ -6416,12 +6432,14 @@
       },
       "ReasoningEffort": {
         "type": "string",
-        "description": "Reasoning effort level for models that support extended thinking",
+        "description": "Reasoning effort. `none` is accepted as an alias for `off`.",
         "enum": [
+          "off",
           "none",
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh"
         ]
       },
       "ReasoningSummary": {
@@ -6979,7 +6997,7 @@
               "boolean",
               "null"
             ],
-            "description": "Toggle thinking output for models that support it.",
+            "description": "Legacy schema field. The active Responses endpoint ignores this top-level control.",
             "example": null
           },
           "frequency_penalty": {
@@ -7131,7 +7149,7 @@
               "string",
               "null"
             ],
-            "description": "Reasoning effort level for models that support extended thinking.\nValid values: \"low\", \"medium\", \"high\"",
+            "description": "Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.",
             "example": null
           },
           "reasoning_enabled": {

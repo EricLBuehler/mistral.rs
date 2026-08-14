@@ -317,6 +317,11 @@ impl MultimodalLoaderType {
                     ex!("google/gemma-4-31B-it", "31B dense"),
                 ],
             },
+            Self::MuseGlimmer => ArchMetadata {
+                families: &["Muse Glimmer"],
+                modalities: &[Text, Vision, Video],
+                examples: &[ex!("meta-models/Muse-Glimmer-30B")],
+            },
             Self::DiffusionGemma => ArchMetadata {
                 families: &["DiffusionGemma"],
                 modalities: &[Text, Vision],
@@ -432,6 +437,7 @@ impl MultimodalLoaderType {
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
             Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
+            Self::MuseGlimmer => "MuseGlimmerForConditionalGeneration",
             Self::DiffusionGemma => "DiffusionGemmaForBlockDiffusion",
         }
     }

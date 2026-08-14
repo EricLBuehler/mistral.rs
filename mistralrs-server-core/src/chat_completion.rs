@@ -20,10 +20,11 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
-    AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
-    Request, RequestMessage, Response, SamplingParams,
+    resolve_reasoning_controls, AgentPermission, AgentToolApprovalHandler,
+    AgentToolApprovalNotifier, AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MessageContent, MistralRs,
+    ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
+    SamplingParams,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -43,7 +44,8 @@ use crate::{
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
         ChatCompletionChunkResponseBody, ChatCompletionRequest, ChatCompletionResponseBody,
-        Grammar, JsonSchemaResponseFormat, MessageInnerContent, OpenAiToolSurface, ResponseFormat,
+        Grammar, JsonSchemaResponseFormat, Message, MessageInnerContent, OpenAiToolSurface,
+        ResponseFormat,
     },
     skills::SkillStore,
     streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
@@ -527,16 +529,22 @@ impl IntoResponse for ChatCompletionResponder {
     }
 }
 
-/// Parse reasoning_effort string to ReasoningEffort enum
-fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+fn parse_reasoning_controls(
+    enable_thinking: Option<bool>,
+    effort: Option<&str>,
+) -> Result<(Option<bool>, Option<ReasoningEffort>)> {
+    let effort = effort.map(str::parse).transpose()?;
+    resolve_reasoning_controls(enable_thinking, effort)?;
+    Ok((enable_thinking, effort))
+}
+
+fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, message: &Message) {
+    if let Some(reasoning_content) = &message.reasoning_content {
+        output.insert(
+            "reasoning_content".to_string(),
+            Either::Left(reasoning_content.clone()),
+        );
+    }
 }
 
 pub struct ChatCompletionParseContext {
@@ -573,8 +581,10 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
-    // Parse reasoning effort for Harmony-format models
-    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+    let (enable_thinking, reasoning_effort) = parse_reasoning_controls(
+        oairequest.enable_thinking,
+        oairequest.reasoning_effort.as_deref(),
+    )?;
 
     let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
@@ -632,6 +642,7 @@ pub async fn parse_request(
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role.clone()));
                         message_map.insert("content".to_string(), Either::Left(content.clone()));
+                        insert_reasoning_content(&mut message_map, &message);
 
                         // Add tool_calls for assistant messages that have them
                         if let Some(ref tool_calls) = message.tool_calls {
@@ -699,8 +710,10 @@ pub async fn parse_request(
                                 String,
                                 Either<String, Vec<IndexMap<String, Value>>>,
                             > = IndexMap::new();
-                            message_map.insert("role".to_string(), Either::Left(message.role));
+                            message_map
+                                .insert("role".to_string(), Either::Left(message.role.clone()));
                             message_map.insert("content".to_string(), Either::Left(content));
+                            insert_reasoning_content(&mut message_map, &message);
                             messages.push(message_map);
                             continue;
                         }
@@ -961,13 +974,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     videos,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             }
@@ -981,7 +994,7 @@ pub async fn parse_request(
             messages.push(message_map);
             RequestMessage::Chat {
                 messages,
-                enable_thinking: oairequest.enable_thinking,
+                enable_thinking,
                 reasoning_effort,
             }
         }
@@ -1315,5 +1328,53 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_controls_normalize_http_values() {
+        assert_eq!(parse_reasoning_controls(None, None).unwrap(), (None, None));
+        assert_eq!(
+            parse_reasoning_controls(None, Some(" NONE ")).unwrap(),
+            (None, Some(ReasoningEffort::Off))
+        );
+        assert_eq!(
+            parse_reasoning_controls(None, Some("XHIGH")).unwrap(),
+            (None, Some(ReasoningEffort::XHigh))
+        );
+    }
+
+    #[test]
+    fn reasoning_controls_validate_http_values() {
+        assert!(parse_reasoning_controls(None, Some("extreme")).is_err());
+        assert!(parse_reasoning_controls(Some(true), Some("off")).is_err());
+        assert!(parse_reasoning_controls(Some(false), Some("high")).is_err());
+    }
+
+    #[test]
+    fn assistant_reasoning_content_reaches_the_core_message() {
+        let message: Message = serde_json::from_value(json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{}"}
+            }],
+            "reasoning_content": "Need weather"
+        }))
+        .unwrap();
+        let mut output = IndexMap::new();
+
+        insert_reasoning_content(&mut output, &message);
+
+        assert_eq!(
+            output.get("reasoning_content"),
+            Some(&Either::Left("Need weather".to_string()))
+        );
     }
 }

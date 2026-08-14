@@ -226,6 +226,9 @@ def _format_signature_block(func_name: str, func: ast.FunctionDef) -> str:
         return s
 
     parts = [fmt(a) for a in args]
+    if func.args.kwonlyargs:
+        positional_count = sum(arg.arg != "self" for arg in func.args.args)
+        parts.insert(positional_count, "*")
     single = f"{func_name}({', '.join(parts)})"
     if ret:
         single += f" -> {ret}"

@@ -20,6 +20,7 @@ use crate::gguf::{
     get_gguf_chat_template, get_gguf_chat_template_from_metadata,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
+    muse_glimmer_bindings::normalize_muse_glimmer_config,
     normal_bindings::build_normal_bindings,
     normal_config::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
@@ -78,6 +79,7 @@ const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
     "gemma3n",
     "gemma4",
     "llama4",
+    "muse-glimmer",
     "qwen2vl",
     "qwen3vl",
     "qwen3vlmoe",
@@ -208,7 +210,8 @@ fn prepare_native_multimodal_config(
     config: &str,
 ) -> Result<String> {
     let config = super::isq::sanitize_quantized_weight_source_config(config)?;
-    normalize_qwen_multimodal_config(loader_type, &config)
+    let config = normalize_qwen_multimodal_config(loader_type, &config)?;
+    normalize_muse_glimmer_config(loader_type, &config)
 }
 
 struct NativeNormalLoadArgs<'a> {
@@ -1591,6 +1594,7 @@ mod tests {
         assert!(requires_multimodal_projector("gemma4"));
         assert!(!requires_multimodal_projector("qwen35moe"));
         assert!(!requires_multimodal_projector("mistral3"));
+        assert!(requires_multimodal_projector("muse-glimmer"));
     }
 
     #[test]
@@ -1645,6 +1649,7 @@ mod tests {
             MultimodalLoaderType::Llama4,
             MultimodalLoaderType::Lfm2Vl,
             MultimodalLoaderType::Mistral3,
+            MultimodalLoaderType::MuseGlimmer,
             MultimodalLoaderType::Qwen2VL,
             MultimodalLoaderType::Qwen2_5VL,
             MultimodalLoaderType::Qwen3VL,
@@ -1675,6 +1680,12 @@ mod tests {
                 MultimodalLoaderType::Qwen3_5 | MultimodalLoaderType::Qwen3_5Moe
             ) {
                 assert_eq!(config["text_config"][GDN_V_HEAD_LAYOUT_CONFIG_KEY], "tiled");
+            }
+            if matches!(loader_type, MultimodalLoaderType::MuseGlimmer) {
+                assert_eq!(
+                    config["_mistralrs_muse_glimmer_gguf_collapsed_temporal"],
+                    true
+                );
             }
         }
     }

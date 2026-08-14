@@ -38,21 +38,19 @@ Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v
 
 `seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
 
-### mistralrs extensions
+### Additional request controls
 
-Accepted alongside OpenAI fields. OpenAI ignores them:
+Accepted alongside the base Chat Completions fields. Several are mistral.rs extensions:
 
 - `top_k`: hard candidate cap.
 - `min_p`: min-p sampling threshold.
 - `repetition_penalty`: simpler alternative to frequency/presence.
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
-- `enable_thinking`: tri-state for supporting models.
-  - `true`: forces thinking on.
-  - `false`: forces thinking off.
-  - omitted or `null`: uses the chat template's default (currently thinking on).
+- `reasoning_effort`: `off`, `low`, `medium`, `high`, or `xhigh`. `none` is accepted as an alias for `off`. Values are trimmed and case-insensitive.
+- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking and leaves the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
 
-  The Python SDK's `ChatCompletionRequest` defaults `enable_thinking` to `None`, matching the omitted-field behavior above.
+The selected effort is passed to the chat template as both `reasoning_effort` and the compatibility name `reasoning_strength`. The template determines how each tier affects the model; it may treat positive tiers alike or ignore controls it does not use. The Python SDK uses the same values and defaults.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
 - `files`: required output files for server-side code execution.
@@ -124,7 +122,7 @@ Uploaded skill versions remain available from the server's skills directory (`--
 
 `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
 
-Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
+Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use `reasoning.effort` with `off`, `low`, `medium`, `high`, or `xhigh`; `none` is accepted as an alias for `off`. Omission enables thinking without choosing an effort. `reasoning.summary` is accepted for compatibility but currently does not change the response. Use `truncation` for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
 ### Background runs
 

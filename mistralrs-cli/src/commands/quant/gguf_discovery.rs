@@ -695,14 +695,20 @@ fn is_auxiliary_gguf(path: &str) -> bool {
     let name = lower.rsplit('/').next().unwrap_or(&lower);
     name.starts_with("mtp-")
         || name.starts_with("mtp_")
+        || name.starts_with("dflash-")
+        || name.starts_with("dflash_")
         || name.starts_with("lora-")
         || name.starts_with("lora_")
         || name.starts_with("imatrix-")
         || name.starts_with("imatrix_")
         || name == "imatrix.gguf"
-        || lower
-            .split('/')
-            .any(|component| component == "mtp" || component == "lora" || component == "imatrix")
+        || has_filename_token(path, "dflash")
+        || lower.split('/').any(|component| {
+            component == "mtp"
+                || component == "dflash"
+                || component == "lora"
+                || component == "imatrix"
+        })
 }
 
 fn is_variant_artifact(group: &GgufGroup) -> bool {

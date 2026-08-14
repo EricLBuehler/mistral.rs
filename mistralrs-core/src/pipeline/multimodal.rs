@@ -12,8 +12,8 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, Phi3VLoader,
-    Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader,
+    Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -247,6 +247,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Qwen3_5Moe) => Box::new(Qwen3_5MoeLoader),
             Some(MultimodalLoaderType::Voxtral) => Box::new(VoxtralLoader),
             Some(MultimodalLoaderType::Gemma4) => Box::new(Gemma4Loader),
+            Some(MultimodalLoaderType::MuseGlimmer) => Box::new(MuseGlimmerLoader),
             Some(MultimodalLoaderType::DiffusionGemma) => Box::new(DiffusionGemmaLoader),
             None => Box::new(AutoMultimodalLoader),
         };
@@ -318,6 +319,7 @@ pub(super) fn supports_dynamic_lora_loader(loader: &MultimodalLoaderType) -> boo
             | MultimodalLoaderType::Llama4
             | MultimodalLoaderType::Lfm2Vl
             | MultimodalLoaderType::Gemma4
+            | MultimodalLoaderType::MuseGlimmer
     )
 }
 

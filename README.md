@@ -25,6 +25,7 @@
 
 ## Latest
 
+- **Muse Glimmer 30B**: native text, image, and video inference with ATEM tool calling, reasoning controls, LoRA, ISQ/UQFF, and companion-projector GGUF loading. [Model notes](https://ericlbuehler.github.io/mistral.rs/guides/models/model-family-notes/#muse-glimmer)
 - **GGUF loading**: load a local file with `-f`, or select a published artifact with `--quant`. Tokenizer, configuration, and multimodal projector files are discovered when the available metadata identifies them unambiguously. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/models/run-gguf/)
 - **OpenAI-compatible Skills**: upload `/v1/skills` bundles and reference them from Responses requests for reusable procedures, helper scripts, and local data. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/skills/)
 - **OpenAI-compatible file inputs**: upload `/v1/files`, attach Responses `input_file` or Chat `file` parts, and mount request files into shell/code sessions. [Guide](https://ericlbuehler.github.io/mistral.rs/guides/agents/file-inputs/)

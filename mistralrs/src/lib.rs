@@ -292,7 +292,9 @@ pub use mistralrs_core::{
 };
 
 // ========== Request Types ==========
-pub use mistralrs_core::{Constraint, LlguidanceGrammar, MessageContent, NormalRequest, Request};
+pub use mistralrs_core::{
+    Constraint, LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
+};
 
 // ========== Sampling ==========
 pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};

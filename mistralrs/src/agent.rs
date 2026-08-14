@@ -57,7 +57,8 @@ use std::sync::Arc;
 
 use crate::{
     CalledFunction, ChatCompletionChunkResponse, ChatCompletionResponse, ChunkChoice, Delta, Model,
-    RequestBuilder, Response, TextMessageRole, Tool, ToolCallResponse, ToolCallback, ToolChoice,
+    ReasoningEffort, RequestBuilder, Response, TextMessageRole, Tool, ToolCallResponse,
+    ToolCallback, ToolChoice,
 };
 
 /// Async tool callback type for native async tool support
@@ -472,6 +473,8 @@ pub struct Agent {
     tools: Vec<Tool>,
     callbacks: HashMap<String, ToolCallbackType>,
     config: AgentConfig,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Agent {
@@ -482,6 +485,8 @@ impl Agent {
             tools: Vec::new(),
             callbacks: HashMap::new(),
             config,
+            enable_thinking: None,
+            reasoning_effort: None,
         }
     }
 
@@ -493,6 +498,32 @@ impl Agent {
         self
     }
 
+    /// Enable or disable thinking for models that support it.
+    pub fn with_enable_thinking(mut self, enable_thinking: bool) -> Self {
+        self.enable_thinking = Some(enable_thinking);
+        self
+    }
+
+    /// Set the reasoning effort for models that support it.
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
+        self
+    }
+
+    fn initial_messages(&self) -> RequestBuilder {
+        let mut messages = RequestBuilder::new();
+        if let Some(enable_thinking) = self.enable_thinking {
+            messages = messages.enable_thinking(enable_thinking);
+        }
+        if let Some(reasoning_effort) = self.reasoning_effort {
+            messages = messages.with_reasoning_effort(reasoning_effort);
+        }
+        if let Some(ref system) = self.config.system_prompt {
+            messages = messages.add_message(TextMessageRole::System, system);
+        }
+        messages
+    }
+
     /// Run the agentic loop with the given user message
     ///
     /// This method will:
@@ -501,12 +532,7 @@ impl Agent {
     /// 3. Repeat until the model returns a text response or max iterations is reached
     pub async fn run(&self, user_message: impl ToString) -> anyhow::Result<AgentResponse> {
         let mut steps = Vec::new();
-        let mut messages = RequestBuilder::new();
-
-        // Add system prompt if configured
-        if let Some(ref system) = self.config.system_prompt {
-            messages = messages.add_message(TextMessageRole::System, system);
-        }
+        let mut messages = self.initial_messages();
 
         // Add initial user message
         messages = messages.add_message(TextMessageRole::User, user_message.to_string());
@@ -600,12 +626,7 @@ impl Agent {
     /// Returns a stream of `AgentEvent` that can be used to observe
     /// the agent's progress in real-time.
     pub async fn run_stream(&self, user_message: impl ToString) -> anyhow::Result<AgentStream<'_>> {
-        let mut messages = RequestBuilder::new();
-
-        // Add system prompt if configured
-        if let Some(ref system) = self.config.system_prompt {
-            messages = messages.add_message(TextMessageRole::System, system);
-        }
+        let mut messages = self.initial_messages();
 
         // Add initial user message
         messages = messages.add_message(TextMessageRole::User, user_message.to_string());
@@ -693,6 +714,8 @@ pub struct AgentBuilder {
     tools: Vec<Tool>,
     callbacks: HashMap<String, ToolCallbackType>,
     config: AgentConfig,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl AgentBuilder {
@@ -703,6 +726,8 @@ impl AgentBuilder {
             tools: Vec::new(),
             callbacks: HashMap::new(),
             config: AgentConfig::default(),
+            enable_thinking: None,
+            reasoning_effort: None,
         }
     }
 
@@ -727,6 +752,18 @@ impl AgentBuilder {
     /// Enable or disable parallel tool execution (default: true)
     pub fn with_parallel_tool_execution(mut self, enabled: bool) -> Self {
         self.config.parallel_tool_execution = enabled;
+        self
+    }
+
+    /// Enable or disable thinking for models that support it.
+    pub fn with_enable_thinking(mut self, enable_thinking: bool) -> Self {
+        self.enable_thinking = Some(enable_thinking);
+        self
+    }
+
+    /// Set the reasoning effort for models that support it.
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
         self
     }
 
@@ -766,6 +803,8 @@ impl AgentBuilder {
             tools: self.tools,
             callbacks: self.callbacks,
             config: self.config,
+            enable_thinking: self.enable_thinking,
+            reasoning_effort: self.reasoning_effort,
         }
     }
 }

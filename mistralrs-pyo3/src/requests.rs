@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use either::Either;
-use mistralrs_core::{AdapterGenerationId, AdapterSelection, WebSearchOptions};
+use mistralrs_core::{AdapterGenerationId, AdapterSelection, ReasoningEffort, WebSearchOptions};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     pyclass, pymethods,
@@ -69,6 +69,12 @@ fn parse_adapter_selection(adapter: Option<Py<PyAny>>) -> PyResult<Option<Adapte
             })
             .transpose()
     })
+}
+
+fn parse_reasoning_effort(
+    effort: Option<&str>,
+) -> Result<Option<ReasoningEffort>, mistralrs_core::ReasoningEffortParseError> {
+    effort.map(str::parse).transpose()
 }
 
 #[pyclass]
@@ -326,8 +332,7 @@ pub struct ChatCompletionRequest {
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
     pub(crate) ignore_eos: bool,
-    /// "low", "medium", or "high" for models that support extended thinking.
-    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     pub(crate) max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to for server-side execution.
@@ -489,6 +494,10 @@ impl ChatCompletionRequest {
         let code_execution_permission = parse_permission(code_execution_permission)?;
         let agent_permission = parse_agent_permission(agent_permission)?
             .or_else(|| code_execution_permission.map(Into::into));
+        let reasoning_effort = parse_reasoning_effort(reasoning_effort.as_deref())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         Ok(Self {
             messages,
@@ -586,7 +595,24 @@ mod tests {
             .new_text_signature()
             .unwrap();
         assert!(chat.starts_with("(messages, model, logprobs=False"));
+        assert!(chat.contains("reasoning_effort=None"));
         assert!(chat.contains("ignore_eos=False"));
         assert!(chat.ends_with("*, adapter=None)"));
+    }
+
+    #[test]
+    fn reasoning_effort_accepts_all_supported_spellings() {
+        let cases = [
+            ("off", ReasoningEffort::Off),
+            ("none", ReasoningEffort::Off),
+            ("low", ReasoningEffort::Low),
+            ("medium", ReasoningEffort::Medium),
+            ("high", ReasoningEffort::High),
+            ("xhigh", ReasoningEffort::XHigh),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(parse_reasoning_effort(Some(value)).unwrap(), Some(expected));
+        }
     }
 }
