@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
 use text::Qwen3VLTextModel;
 use vision::Qwen3VLVisionModel;
@@ -16,7 +16,7 @@ use vision::Qwen3VLVisionModel;
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     layers::CausalMasker,
-    layers_masker::{masked_fill, PastKvLenCache},
+    layers_masker::PastKvLenCache,
     paged_attention::{
         block_hash::MultimodalKind,
         encoder_cache::{CacheModality, EncoderCacheManager},
@@ -96,7 +96,10 @@ pub(crate) fn get_rope_index(
                 if row.len() != 3 {
                     candle_core::bail!("video_grid_thw entries must have length 3");
                 }
-                data.push([row[0], row[1], row[2]]);
+                // Timestamps split each video into per-frame vision spans, so the grid splits too.
+                for _ in 0..row[0] {
+                    data.push([1, row[1], row[2]]);
+                }
             }
             Some(data)
         } else {
@@ -322,18 +325,33 @@ pub(crate) fn get_rope_index(
 
         Ok((position_ids, mrope_position_deltas))
     } else if let AttentionMask::Custom(attention_mask) = attention_mask {
-        let position_ids = (attention_mask.to_dtype(DType::F32)?.cumsum(D::Minus1)? - 1f64)?;
-        let position_ids = masked_fill(&position_ids, &attention_mask.eq(0f64)?, 1i64)?;
-        let position_ids = position_ids.unsqueeze(0)?.repeat((3, 1, 1))?;
+        // candle's cumsum materializes an SxS triangular matrix; at long context that overflows
+        // u32 kernel indexing and corrupts device memory, so compute positions host-side.
+        let (batch, seq_len) = attention_mask.dims2()?;
+        let mask = attention_mask.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        let mut flat_positions = vec![0i64; batch * seq_len];
+        let mut mrope_position_deltas = Vec::with_capacity(batch);
+        for (batch_idx, row) in mask.iter().enumerate() {
+            let mut count = 0i64;
+            let mut max_position = 0i64;
+            for (seq_idx, &mask_val) in row.iter().enumerate() {
+                let position = if mask_val != 0.0 {
+                    count += 1;
+                    count - 1
+                } else {
+                    1
+                };
+                max_position = max_position.max(position);
+                flat_positions[batch_idx * seq_len + seq_idx] = position;
+            }
+            mrope_position_deltas.push(max_position + 1 - seq_len as i64);
+        }
+        let device = attention_mask.device();
+        let position_ids =
+            Tensor::from_vec(flat_positions, (1, batch, seq_len), device)?.repeat((3, 1, 1))?;
+        let mrope_position_deltas = Tensor::from_vec(mrope_position_deltas, (batch, 1), device)?;
 
-        let max_position_ids = position_ids.max(0)?.max_keepdim(D::Minus1)?;
-        let mrope_position_deltas =
-            ((max_position_ids + 1.)? - attention_mask.dim(D::Minus1)? as f64)?;
-
-        Ok((
-            position_ids.to_dtype(DType::I64)?,
-            mrope_position_deltas.to_dtype(DType::I64)?,
-        ))
+        Ok((position_ids, mrope_position_deltas))
     } else {
         let position_ids = Tensor::arange(0i64, input_ids.dim(1)? as i64, input_ids.device())?
             .reshape((1, 1, ()))?
@@ -1051,7 +1069,8 @@ mod tests {
 
     #[test]
     fn video_mrope_consumes_the_full_temporal_grid() -> Result<()> {
-        let input_ids = Tensor::new(&[[10u32, 12, 12, 12, 12, 11, 7]], &Device::Cpu)?;
+        // One [2,4,2] grid row feeds two per-frame vision spans in the timestamped prompt format.
+        let input_ids = Tensor::new(&[[10u32, 12, 12, 11, 10, 12, 12, 11, 7]], &Device::Cpu)?;
         let video_grid = Tensor::new(&[[2u32, 4, 2]], &Device::Cpu)?;
         let (positions, delta) = get_rope_index(
             &input_ids,
@@ -1065,11 +1084,11 @@ mod tests {
             11,
         )?;
 
-        assert_eq!(positions.dims(), &[3, 1, 7]);
+        assert_eq!(positions.dims(), &[3, 1, 9]);
         assert_eq!(delta.dims(), &[1, 1]);
         assert_eq!(
             positions.i((0, 0))?.to_vec1::<i64>()?,
-            vec![0, 1, 1, 2, 2, 3, 4]
+            vec![0, 1, 1, 3, 4, 5, 5, 7, 8]
         );
         Ok(())
     }

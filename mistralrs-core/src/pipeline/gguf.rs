@@ -1053,6 +1053,10 @@ impl GGUFLoader {
             Some(filename) => Some(filename.clone()),
             None => get_optional("preprocessor_config.json"),
         };
+        let video_preprocessor_config = paths
+            .get_video_preprocessor_config()
+            .cloned()
+            .or_else(|| get_optional("video_preprocessor_config.json"));
         let processor_config = match paths.get_processor_config() {
             Some(filename) => Some(filename.clone()),
             None => get_optional("processor_config.json"),
@@ -1076,6 +1080,7 @@ impl GGUFLoader {
             adapter_paths: paths.get_adapter_paths().clone(),
             gen_conf,
             preprocessor_config,
+            video_preprocessor_config,
             processor_config,
             chat_template_json_filename: paths.get_chat_template_explicit().clone(),
         }))

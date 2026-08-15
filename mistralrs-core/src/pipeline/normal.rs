@@ -2065,6 +2065,7 @@ mod tests {
             adapter_paths: AdapterPaths::Lora(Vec::new()),
             gen_conf: None,
             preprocessor_config: None,
+            video_preprocessor_config: None,
             processor_config: None,
             chat_template_json_filename: None,
         }

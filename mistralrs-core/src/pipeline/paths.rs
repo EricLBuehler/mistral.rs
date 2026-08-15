@@ -708,6 +708,7 @@ mod tests {
             adapter_paths: AdapterPaths::None,
             gen_conf: None,
             preprocessor_config: None,
+            video_preprocessor_config: None,
             processor_config: Some(processor_path),
             chat_template_json_filename: None,
         };

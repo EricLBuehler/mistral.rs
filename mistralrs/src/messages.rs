@@ -1330,7 +1330,7 @@ fn resolve_pending(
     pending: &mut Vec<PendingMediaPrefix>,
 ) {
     let prefixer = match category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer, .. } => prefixer,
         _ => {
             // Not a multimodal model, nothing to prefix.
             pending.clear();

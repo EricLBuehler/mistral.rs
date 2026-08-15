@@ -107,6 +107,22 @@ macro_rules! get_paths {
         } else {
             None
         };
+        let video_preprocessor_config = if dir_list
+            .contains(&"video_preprocessor_config.json".to_string())
+        {
+            tracing::trace!(
+                "Loading `video_preprocessor_config.json` at `{}`",
+                $this.model_id
+            );
+            Some($crate::api_get_file!(
+                api,
+                "video_preprocessor_config.json",
+                model_id,
+                &revision
+            ))
+        } else {
+            None
+        };
         let processor_config = if dir_list.contains(&"processor_config.json".to_string()) {
             tracing::trace!("Loading `processor_config.json` at `{}`", $this.model_id);
             Some($crate::api_get_file!(
@@ -167,6 +183,7 @@ macro_rules! get_paths {
             template_filename,
             gen_conf,
             preprocessor_config,
+            video_preprocessor_config,
             processor_config,
             chat_template_json_filename,
         }))
@@ -515,6 +532,23 @@ macro_rules! get_paths_gguf {
             None
         };
 
+        let video_preprocessor_config = if dir_list
+            .contains(&"video_preprocessor_config.json".to_string())
+        {
+            tracing::trace!(
+                "Loading `video_preprocessor_config.json` at `{}`",
+                this_model_id
+            );
+            Some($crate::api_get_file!(
+                api,
+                "video_preprocessor_config.json",
+                model_id,
+                &revision
+            ))
+        } else {
+            None
+        };
+
         let processor_config = if dir_list.contains(&"processor_config.json".to_string()) {
             tracing::trace!("Loading `processor_config.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(
@@ -563,6 +597,7 @@ macro_rules! get_paths_gguf {
             template_filename: chat_template,
             gen_conf,
             preprocessor_config,
+            video_preprocessor_config,
             processor_config,
             chat_template_json_filename,
         }))

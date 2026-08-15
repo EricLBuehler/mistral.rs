@@ -862,7 +862,7 @@ pub async fn parse_request(
                             || !audio_urls_iter.is_empty()
                             || !video_urls_iter.is_empty()
                         {
-                            if let Ok(ModelCategory::Multimodal { prefixer }) =
+                            if let Ok(ModelCategory::Multimodal { prefixer, .. }) =
                                 state.get_model_category(None)
                             {
                                 let mut prefixed = text_content;
@@ -961,9 +961,13 @@ pub async fn parse_request(
                 }
 
                 // Parse videos
+                let video_sampling = match state.get_model_category(None) {
+                    Ok(ModelCategory::Multimodal { video_sampling, .. }) => Some(video_sampling),
+                    _ => None,
+                };
                 let mut videos = Vec::new();
                 for url_unparsed in video_urls {
-                    let video = parse_video_url_for_server(&url_unparsed, None)
+                    let video = parse_video_url_for_server(&url_unparsed, video_sampling)
                         .await
                         .context(format!("Failed to parse video resource: {url_unparsed}"))?;
                     videos.push(video);

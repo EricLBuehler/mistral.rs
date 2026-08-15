@@ -19,7 +19,7 @@
 use anyhow::{bail, Context, Result};
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder, DynamicImage};
-use mistralrs_core::{sample_frame_indices, VideoInput};
+use mistralrs_core::{sample_frame_indices, VideoFrameSampling, VideoInput};
 use std::io::Cursor;
 use std::path::Path;
 use tokio::fs;
@@ -49,17 +49,20 @@ See https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/ for det
 ///
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
-pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
-    parse_video_url_with_policy(url_unparsed, num_frames, MediaSourcePolicy::Local).await
+pub async fn parse_video_url(
+    url_unparsed: &str,
+    sampling: Option<VideoFrameSampling>,
+) -> Result<VideoInput> {
+    parse_video_url_with_policy(url_unparsed, sampling, MediaSourcePolicy::Local).await
 }
 
 pub(crate) async fn parse_video_url_for_server(
     url_unparsed: &str,
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
 ) -> Result<VideoInput> {
     parse_video_url_with_policy(
         url_unparsed,
-        num_frames.or(Some(SERVER_VIDEO_FRAME_LIMIT)),
+        Some(sampling.unwrap_or_default()),
         MediaSourcePolicy::ServerRequest,
     )
     .await
@@ -67,15 +70,15 @@ pub(crate) async fn parse_video_url_for_server(
 
 async fn parse_video_url_with_policy(
     url_unparsed: &str,
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
     policy: MediaSourcePolicy,
 ) -> Result<VideoInput> {
     let media = load_media_source(url_unparsed, policy, "video").await?;
 
     if is_gif_source(url_unparsed, &media) {
-        decode_gif_frames(&media.bytes, num_frames)
+        decode_gif_frames(&media.bytes, sampling)
     } else {
-        decode_video_ffmpeg(&media.bytes, num_frames, url_unparsed).await
+        decode_video_ffmpeg(&media.bytes, sampling, url_unparsed).await
     }
 }
 
@@ -91,7 +94,7 @@ fn is_gif_source(source: &str, media: &LoadedMedia) -> bool {
 }
 
 /// Decode a GIF into frames using the `image` crate.
-fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInput> {
+fn decode_gif_frames(bytes: &[u8], sampling: Option<VideoFrameSampling>) -> Result<VideoInput> {
     let decoder = GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
 
     let raw_frames: Vec<_> = decoder.into_frames().collect::<Result<Vec<_>, _>>()?;
@@ -114,8 +117,8 @@ fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInp
         DEFAULT_FPS
     };
 
-    let indices = num_frames
-        .map(|n| sample_frame_indices(total, n))
+    let indices = sampling
+        .map(|sampling| sample_frame_indices(total, sampling.target_frames(total, fps)))
         .unwrap_or_else(|| (0..total).collect());
     let frames: Vec<DynamicImage> = indices
         .iter()
@@ -137,7 +140,7 @@ fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInp
 /// 3. Load frames as images.
 async fn decode_video_ffmpeg(
     bytes: &[u8],
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
     source_hint: &str,
 ) -> Result<VideoInput> {
     // Check ffmpeg availability
@@ -173,7 +176,16 @@ async fn decode_video_ffmpeg(
     let output_pattern = format!("{}/frame_%010d.png", out_dir.display());
 
     let mut requested_indices = None;
-    let effective_total = if let Some(num_frames) = num_frames {
+    let effective_total = if let Some(sampling) = sampling {
+        // Without a probed frame count, fps-based sampling cannot size itself; fall back to a fixed cap.
+        let num_frames = if total_frames > 0 {
+            sampling.target_frames(total_frames, fps)
+        } else {
+            match sampling {
+                VideoFrameSampling::Uniform(count) => count,
+                VideoFrameSampling::Fps { .. } => SERVER_VIDEO_FRAME_LIMIT,
+            }
+        };
         let effective_total = if total_frames > 0 {
             total_frames
         } else {
