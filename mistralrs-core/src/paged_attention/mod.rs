@@ -16,6 +16,7 @@ mod layers;
 pub(crate) mod mm_prefix;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub(crate) mod plan;
+pub(crate) mod profile;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 

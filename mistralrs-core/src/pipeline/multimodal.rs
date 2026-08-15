@@ -34,7 +34,10 @@ struct CudaDecodeGraphForwardInput<'a> {
     flash_meta: &'a FlashParams,
     model_specific_args: &'a dyn Any,
 }
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::profile::{measure_prefill_activation_bytes, PrefillProfileCtx};
+use crate::paged_attention::{
+    calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
+};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
@@ -52,6 +55,7 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
+use crate::pipeline::DEFAULT_PAGED_PREFILL_CHUNK_SIZE;
 use crate::pipeline::{
     get_chat_template, hf::build_api, ChatTemplate, IsqOrganization, LocalModelPaths,
     ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
@@ -1241,6 +1245,13 @@ impl Loader for MultimodalLoader {
                 &device,
                 layer_devices,
             )?;
+            report_prefill_activation_profile(
+                model.as_ref(),
+                &cache_config,
+                &cache_engine,
+                model_metadata.as_ref(),
+                pipeline_mapper.as_ref(),
+            );
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -1523,6 +1534,44 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             recurrent_batch_kind: RecurrentBatchKind::Decode,
             adapter_leases,
         }))
+    }
+}
+
+/// Measure what one full-size prefill actually costs, for comparison against the reserve the auto
+/// device mapper predicted. Reported only; nothing is sized off it yet.
+fn report_prefill_activation_profile(
+    model: &(dyn MultimodalModel + Send + Sync),
+    cache_config: &CacheConfig,
+    cache_engine: &CacheEngine,
+    model_config: &dyn ModelConfigLike,
+    mapper: &(dyn DeviceMapper + Send + Sync),
+) {
+    let device = model.device().clone();
+    if !device.is_cuda() {
+        return;
+    }
+    let kv_cache = cache_engine.get_kv_cache();
+    let ctx = PrefillProfileCtx {
+        device: &device,
+        cache_config,
+        model_config,
+        kv_cache: kv_cache.as_slice(),
+        tokens: DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
+        sliding_window: model.config().sliding_window,
+        mapper: Some(mapper),
+        cache: model.cache(),
+    };
+    let result = measure_prefill_activation_bytes(ctx, |input, fwd| {
+        let args = model.default_model_specific_args(input);
+        model.forward(input, None, args, fwd)
+    });
+    match result {
+        Ok(bytes) => info!(
+            "Prefill activation high-water mark at {} tokens: {} MB.",
+            DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
+            bytes / (1024 * 1024),
+        ),
+        Err(e) => warn!("Could not profile prefill activations: {e}"),
     }
 }
 

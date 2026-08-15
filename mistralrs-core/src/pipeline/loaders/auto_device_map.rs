@@ -259,6 +259,10 @@ pub fn get_device_layers(
                 // ContextSize passes through to calculate_cache_config.
                 other => other,
             };
+            info!(
+                "Reserving {} MB for activations (predicted).",
+                b_to_mb!(non_mapped_max.max(mapped_max))
+            );
             // The budget derived here is the only one that accounts for the activation reserve, so
             // it has to be what the pipelines load with. Recomputing there drops the reserve.
             cfg.mem_gpu = effective_mem_gpu;
