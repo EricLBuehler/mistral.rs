@@ -137,7 +137,7 @@ fn supports_flashinfer_group_size(q_heads: usize, kv_heads: usize) -> bool {
         return false;
     }
     // Must match DISPATCH_GQA_GROUP_SIZE in FlashInfer's utils.cuh.
-    matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 8 | 16)
+    matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 6 | 8 | 16)
 }
 
 impl FlashInferPagedAttentionViews {
