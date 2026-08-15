@@ -120,20 +120,13 @@ const SIZE_IN_MB: usize = 1024 * 1024;
 
 macro_rules! mb_to_blocks {
     ($mb_size:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $mb_size
-            / $dtype_size
-            / $block_size
-            / $config.num_paged_kv_cache_layers()
-            / $config.kv_cache_elements_per_token()
+        $mb_size / $dtype_size / $block_size / $config.total_kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len
-            * $dtype_size
-            * $config.num_paged_kv_cache_layers()
-            * $config.kv_cache_elements_per_token()
+        $context_len * $dtype_size * $config.total_kv_cache_elements_per_token()
     };
 }
 
@@ -221,8 +214,7 @@ pub fn calculate_cache_config(
             let requested_cache_bytes = mem_gpu_mb.saturating_mul(SIZE_IN_MB);
             let minimum_cache_bytes = dtype_size
                 .saturating_mul(block_size)
-                .saturating_mul(config.num_paged_kv_cache_layers())
-                .saturating_mul(config.kv_cache_elements_per_token())
+                .saturating_mul(config.total_kv_cache_elements_per_token())
                 .saturating_add(SIZE_IN_MB - 1)
                 / SIZE_IN_MB
                 * SIZE_IN_MB;
