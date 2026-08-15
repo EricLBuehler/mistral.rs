@@ -69,6 +69,7 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
+| `MISTRALRS_GGUF_AFFINE_BACKEND` | Set to `on` to speed up GGUF matmuls at batch sizes of 8 or more. Off by default because it keeps a second copy of the quantized weights, taking that memory from the KV cache. Worth enabling for production serving with high concurrency. |
 | `CUTILE_TILEIRAS_PATH` | Path to `tileiras` when it is not available on `PATH`. |
 
 ## Multi-GPU and multi-node

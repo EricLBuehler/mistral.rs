@@ -114,36 +114,19 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
     }
 }
 
-#[doc(hidden)]
-pub fn gguf_affine_adjust_cache_bytes(
-    device: &Device,
-    dtype: DType,
-    available_bytes: usize,
-    requested_cache_bytes: usize,
-    minimum_cache_bytes: usize,
-    may_reduce_cache: bool,
-) -> Result<usize> {
+/// Bytes the packed-affine (Marlin layout) GGUF weights will occupy on this device.
+///
+/// Subtract from the KV cache budget so the repack is planned for rather than corrected after.
+/// Returns 0 when the feature is off, which is the default.
+pub fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
     #[cfg(all(feature = "cuda", has_marlin_kernels))]
     {
-        gguf::gguf_affine_adjust_cache_bytes(
-            device,
-            dtype,
-            available_bytes,
-            requested_cache_bytes,
-            minimum_cache_bytes,
-            may_reduce_cache,
-        )
+        gguf::gguf_affine_budget_bytes(device, dtype)
     }
     #[cfg(not(all(feature = "cuda", has_marlin_kernels)))]
     {
-        let _ = (
-            device,
-            dtype,
-            available_bytes,
-            minimum_cache_bytes,
-            may_reduce_cache,
-        );
-        Ok(requested_cache_bytes)
+        let _ = (device, dtype);
+        0
     }
 }
 
