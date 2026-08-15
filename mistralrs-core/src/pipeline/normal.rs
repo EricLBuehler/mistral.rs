@@ -261,6 +261,7 @@ pub struct NormalLoader {
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
     prepared_source: Option<PreparedNormalSource>,
+    mtp: bool,
 }
 
 #[derive(Clone)]
@@ -318,6 +319,7 @@ pub struct NormalLoaderBuilder {
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
     hf_cache_path: Option<PathBuf>,
+    mtp: bool,
 }
 
 #[derive(Clone, Default)]
@@ -355,6 +357,12 @@ impl NormalLoaderBuilder {
             hf_cache_path,
             ..Default::default()
         }
+    }
+
+    /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = mtp;
+        self
     }
 
     fn with_adapter(
@@ -475,6 +483,7 @@ impl NormalLoaderBuilder {
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
             prepared_source,
+            mtp: self.mtp,
         })
     }
 
@@ -564,6 +573,11 @@ impl Loader for NormalLoader {
         let config = match self.prepared_source.as_ref() {
             Some(source) => source.config.clone(),
             None => std::fs::read_to_string(paths.get_config_filename())?,
+        };
+        let config = if self.mtp {
+            super::loaders::inject_mtp_config_flag(&config)?
+        } else {
+            config
         };
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?
@@ -1535,6 +1549,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for NormalPipeline {
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
     ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
         self.model.speculative_propose(ctx)
+    }
+
+    fn speculative_commit(
+        &mut self,
+        rows: &[crate::speculative::SpeculativeCommitRow],
+    ) -> candle_core::Result<()> {
+        self.model.speculative_commit(rows)
     }
 
     fn build_speculative_verify_inputs(

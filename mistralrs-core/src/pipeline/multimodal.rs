@@ -132,6 +132,7 @@ pub struct MultimodalLoader {
     lora_runtime_config: Option<LoraRuntimeConfig>,
     loader_type: Option<MultimodalLoaderType>,
     prepared_source: Option<PreparedMultimodalSource>,
+    mtp: bool,
 }
 
 #[derive(Clone)]
@@ -162,6 +163,7 @@ pub struct MultimodalLoaderBuilder {
     hf_cache_path: Option<PathBuf>,
     lora_adapters: Option<Vec<LoraAdapterSpec>>,
     lora_runtime_config: Option<LoraRuntimeConfig>,
+    mtp: bool,
 }
 
 #[derive(Clone, Default)]
@@ -199,7 +201,14 @@ impl MultimodalLoaderBuilder {
             hf_cache_path,
             lora_adapters: None,
             lora_runtime_config: None,
+            mtp: false,
         }
+    }
+
+    /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = mtp;
+        self
     }
 
     pub fn with_lora(
@@ -268,6 +277,7 @@ impl MultimodalLoaderBuilder {
             lora_runtime_config: self.lora_runtime_config,
             loader_type,
             prepared_source,
+            mtp: self.mtp,
         })
     }
 
@@ -400,6 +410,11 @@ impl Loader for MultimodalLoader {
         };
         let config = if self.config.from_uqff.is_some() {
             super::isq::sanitize_quantized_weight_source_config(&config)?
+        } else {
+            config
+        };
+        let config = if self.mtp {
+            super::loaders::inject_mtp_config_flag(&config)?
         } else {
             config
         };
@@ -1202,6 +1217,10 @@ impl Loader for MultimodalLoader {
             }
         }
         let model_metadata = model.model_config();
+        // Layers past the mapped stack (e.g. an MTP head) live on the non-mapped device.
+        while layer_devices.len() < model_metadata.num_layers() {
+            layer_devices.push(Some(device.clone()));
+        }
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
@@ -1477,6 +1496,13 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
     ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
         self.model.speculative_propose(ctx)
+    }
+
+    fn speculative_commit(
+        &mut self,
+        rows: &[crate::speculative::SpeculativeCommitRow],
+    ) -> candle_core::Result<()> {
+        self.model.speculative_commit(rows)
     }
 
     fn build_speculative_verify_inputs(
@@ -1870,6 +1896,46 @@ impl Pipeline for MultimodalPipeline {
             self.model.log_speculative_attach(&info);
         }
         Ok(())
+    }
+
+    fn speculative_prompt_chunk(
+        &mut self,
+        seqs: &[&mut Sequence],
+        chunk: &crate::pipeline::SpeculativePromptChunk,
+        metadata: &crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> candle_core::Result<()> {
+        if !self.model.has_speculative_proposer() {
+            return Ok(());
+        }
+        let general_metadata = self.get_metadata();
+        let Some(cache_engine) = general_metadata.cache_engine.as_ref() else {
+            return Ok(());
+        };
+        let kv_cache = cache_engine.get_kv_cache().clone();
+        let seq_ids = chunk
+            .rows
+            .iter()
+            .map(|row| *seqs[row.seq_idx].id())
+            .collect::<Vec<_>>();
+        let batch_indices = (0..chunk.rows.len()).collect::<Vec<_>>();
+        let tokens = chunk
+            .rows
+            .iter()
+            .map(|row| row.tokens.as_slice())
+            .collect::<Vec<_>>();
+        let chunk_ranges = chunk.rows.iter().map(|row| row.range).collect::<Vec<_>>();
+        self.model
+            .speculative_prefill(crate::speculative::SpeculativePrefillCtx {
+                seq_ids: &seq_ids,
+                batch_indices: &batch_indices,
+                tokens: &tokens,
+                chunk_ranges: &chunk_ranges,
+                is_final_prompt_chunk: chunk.is_final_prompt_chunk,
+                cache: crate::speculative::SpeculativeKvCache::Paged {
+                    metadata,
+                    kv_cache: &kv_cache,
+                },
+            })
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -11,7 +11,7 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::{Sequence, SequenceState};
 
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
-use super::proposer::{SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
+use super::proposer::{SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
 use super::staging::{staged_batch_state, StagedBatchState};
 use super::verifier::{finish_verified_step, VerificationOutcome};
 
@@ -26,6 +26,8 @@ pub trait SpeculativePipelineExt: Pipeline {
         &mut self,
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>>;
+
+    fn speculative_commit(&mut self, rows: &[SpeculativeCommitRow]) -> Result<()>;
 
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
 }
@@ -245,6 +247,18 @@ where
         outcomes.push(Some(outcome));
     }
     cache.finish_verification_batch(&mut cache_guards, seqs, &cache_outcomes)?;
+    let commit_rows = outcomes
+        .iter()
+        .enumerate()
+        .filter_map(|(batch_idx, outcome)| {
+            outcome.as_ref().map(|outcome| SpeculativeCommitRow {
+                batch_idx,
+                keep_rows: outcome.accepted_drafts + 1,
+                accepted_all: outcome.accepted_drafts == outcome.proposed_drafts,
+            })
+        })
+        .collect::<Vec<_>>();
+    target.speculative_commit(&commit_rows)?;
     for (seq, outcome) in seqs.iter_mut().zip(outcomes.iter()) {
         if let Some(outcome) = outcome {
             seq.set_num_computed_tokens(outcome.keep_len);
@@ -350,6 +364,10 @@ where
             .iter()
             .map(|idx| &*seqs[*idx] as &Sequence)
             .collect::<Vec<_>>();
+        let target_rows = hidden_rows
+            .iter()
+            .map(|(batch_idx, accepted)| (*batch_idx, accepted + 1))
+            .collect::<Vec<_>>();
         target.speculative_propose(SpeculativeProposeBatchCtx {
             sampled_tokens,
             sampled_tokens_emitted: true,
@@ -358,6 +376,7 @@ where
             sequences: &sequences,
             cache: cache.proposer_cache(&sequences)?,
             target_hiddens,
+            target_rows: &target_rows,
             rng: rng.clone(),
         })?
     };

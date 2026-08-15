@@ -603,6 +603,12 @@ pub async fn build_text_pipeline(
         builder.no_kv_cache,
         builder.jinja_explicit.clone(),
     )
+    .with_mtp(
+        builder
+            .mtp_config
+            .as_ref()
+            .is_some_and(MtpConfig::is_builtin),
+    )
     .build(builder.loader_type.clone())?;
 
     let device = resolve_device(builder.force_cpu, None)?;
@@ -725,6 +731,12 @@ pub async fn build_multimodal_pipeline(
         builder.tokenizer_json.clone(),
         Some(builder.model_id.clone()),
         builder.jinja_explicit.clone(),
+    )
+    .with_mtp(
+        builder
+            .mtp_config
+            .as_ref()
+            .is_some_and(MtpConfig::is_builtin),
     )
     .build(builder.loader_type.clone());
 
@@ -1281,7 +1293,14 @@ pub async fn build_auto_pipeline(
     } else {
         auto_builder
     };
-    let loader = auto_builder.build();
+    let loader = auto_builder
+        .with_mtp(
+            builder
+                .mtp_config
+                .as_ref()
+                .is_some_and(MtpConfig::is_builtin),
+        )
+        .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;

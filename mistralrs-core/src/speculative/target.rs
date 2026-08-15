@@ -1,8 +1,8 @@
 use candle_core::{Result, Tensor};
 
 use super::{
-    logging::log_attach, SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
-    SpeculativeProposeBatchCtx,
+    logging::log_attach, SpeculativeAttachInfo, SpeculativeCommitRow, SpeculativeConfig,
+    SpeculativePrefillCtx, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
 };
 
 pub trait SpeculativeTargetMixin {
@@ -41,5 +41,16 @@ pub trait SpeculativeTargetMixin {
     /// Return `Err` only when hidden state was expected but unavailable or invalid.
     fn speculative_target_hiddens(&self, _rows: &[(usize, usize)]) -> Result<Option<Tensor>> {
         Ok(None)
+    }
+
+    /// Called after each prompt chunk so proposers with their own KV cache can process it.
+    fn speculative_prefill(&mut self, _ctx: SpeculativePrefillCtx<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called once verification decided which rows of the last multi-token step survive, so models
+    /// with state that is not a paged KV cache (recurrent layers) can roll rejected rows back.
+    fn speculative_commit(&mut self, _rows: &[SpeculativeCommitRow]) -> Result<()> {
+        Ok(())
     }
 }
