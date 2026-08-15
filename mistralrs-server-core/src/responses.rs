@@ -120,17 +120,7 @@ impl OpenResponsesInput {
 }
 
 const TEXT_PART_JOINER: &str = "\n\n";
-const DEVELOPER_ROLE: &str = "developer";
 const SYSTEM_ROLE: &str = "system";
-
-/// The Responses API spells the system role `developer`; chat templates only know `system`.
-fn normalize_input_role(role: String) -> String {
-    if role == DEVELOPER_ROLE {
-        SYSTEM_ROLE.to_string()
-    } else {
-        role
-    }
-}
 
 /// Convert InputItem types to legacy Message format.
 ///
@@ -266,7 +256,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 
                 messages.push(Message {
                     content,
-                    role: normalize_input_role(msg_param.role),
+                    role: msg_param.role,
                     name: msg_param.name,
                     tool_calls: None,
                     tool_call_id: None,
@@ -1847,34 +1837,18 @@ async fn parse_openresponses_request(
         }
     }
 
-    // Chat templates accept one leading system message, so fold instructions into it when present
     if let Some(instructions) = oairequest.instructions.clone() {
-        match final_messages.first_mut() {
-            Some(first) if first.role == SYSTEM_ROLE => {
-                let existing = first
-                    .content
-                    .as_ref()
-                    .and_then(|content| content.as_text())
-                    .unwrap_or_default();
-                let merged = if existing.is_empty() {
-                    instructions
-                } else {
-                    format!("{instructions}{TEXT_PART_JOINER}{existing}")
-                };
-                first.content = Some(MessageContent::from_text(merged));
-            }
-            _ => final_messages.insert(
-                0,
-                Message {
-                    content: Some(MessageContent::from_text(instructions)),
-                    role: SYSTEM_ROLE.to_string(),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
-                    reasoning_content: None,
-                },
-            ),
-        }
+        final_messages.insert(
+            0,
+            Message {
+                content: Some(MessageContent::from_text(instructions)),
+                role: SYSTEM_ROLE.to_string(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+        );
     }
 
     let reasoning_effort = oairequest
@@ -2475,7 +2449,7 @@ mod tests {
     }
 
     #[test]
-    fn developer_role_and_text_parts_collapse_for_chat_templates() {
+    fn roles_pass_through_and_text_parts_collapse() {
         let items: Vec<InputItem> = serde_json::from_value(json!([
             { "type": "message", "role": "developer", "content": [
                 { "type": "input_text", "text": "a" }, { "type": "input_text", "text": "b" } ] },
@@ -2485,7 +2459,7 @@ mod tests {
         ]))
         .unwrap();
         let messages = convert_input_items_to_messages(items);
-        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[0].role, "developer");
         assert_eq!(
             messages[0].content.as_ref().unwrap().as_text().as_deref(),
             Some("a\n\nb")
