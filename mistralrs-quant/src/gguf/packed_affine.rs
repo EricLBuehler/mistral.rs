@@ -295,9 +295,12 @@ pub(crate) fn budget_bytes(device: &Device, dtype: DType) -> usize {
 fn backend() -> Backend {
     static BACKEND: OnceLock<Backend> = OnceLock::new();
     // Off by default: the repacked copy is a second full set of weights, so it is only worth its
-    // memory on serving workloads that sustain batches above the per-format minimum.
+    // memory on serving workloads that sustain batches above the per-format minimum. Unit tests
+    // exercise the packed kernels directly, so they default the other way.
     *BACKEND.get_or_init(|| match std::env::var(BACKEND_ENV).as_deref() {
         Ok("on") | Ok("auto") => Backend::Auto,
+        Ok("off") => Backend::Off,
+        _ if cfg!(test) => Backend::Auto,
         _ => Backend::Off,
     })
 }
