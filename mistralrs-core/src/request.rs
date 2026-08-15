@@ -84,10 +84,10 @@ impl utoipa::PartialSchema for ReasoningEffort {
             ObjectBuilder::new()
                 .schema_type(SchemaType::Type(Type::String))
                 .description(Some(
-                    "Reasoning effort. `none` is accepted as an alias for `off`.",
+                    "Reasoning effort. `none` aliases `off`; `max` aliases `xhigh`.",
                 ))
                 .enum_values(Some(
-                    ["off", "none", "low", "medium", "high", "xhigh"]
+                    ["off", "none", "low", "medium", "high", "xhigh", "max"]
                         .into_iter()
                         .map(|value| Value::String(value.to_string()))
                         .collect::<Vec<_>>(),
@@ -107,7 +107,9 @@ impl std::fmt::Display for ReasoningEffort {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("invalid reasoning effort `{value}`; expected one of: off, none, low, medium, high, xhigh")]
+#[error(
+    "invalid reasoning effort `{value}`; expected one of: off, none, low, medium, high, xhigh, max"
+)]
 /// Error returned when a reasoning effort string is invalid.
 pub struct ReasoningEffortParseError {
     value: String,
@@ -122,7 +124,7 @@ impl std::str::FromStr for ReasoningEffort {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
-            "xhigh" => Ok(Self::XHigh),
+            "xhigh" | "max" => Ok(Self::XHigh),
             _ => Err(ReasoningEffortParseError {
                 value: value.to_string(),
             }),
@@ -615,6 +617,7 @@ mod tests {
             ("Medium", ReasoningEffort::Medium),
             ("high", ReasoningEffort::High),
             (" XHIGH\n", ReasoningEffort::XHigh),
+            ("max", ReasoningEffort::XHigh),
         ];
 
         for (input, expected) in cases {
@@ -625,7 +628,7 @@ mod tests {
                 .parse::<ReasoningEffort>()
                 .unwrap_err()
                 .to_string(),
-            "invalid reasoning effort `extreme`; expected one of: off, none, low, medium, high, xhigh"
+            "invalid reasoning effort `extreme`; expected one of: off, none, low, medium, high, xhigh, max"
         );
         assert_eq!(
             serde_json::from_str::<ReasoningEffort>(r#"" NoNe ""#).unwrap(),

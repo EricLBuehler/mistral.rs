@@ -4751,6 +4751,48 @@
           "function"
         ]
       },
+      "OpenAiNamespaceEntry": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpenAiResponsesFunctionTool"
+          },
+          {}
+        ]
+      },
+      "OpenAiNamespaceTool": {
+        "type": "object",
+        "description": "A grouping of client-executed tools; the model sees each inner tool as `<namespace>.<name>`.",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiNamespaceEntry"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiNamespaceToolType"
+          }
+        }
+      },
+      "OpenAiNamespaceToolType": {
+        "type": "string",
+        "enum": [
+          "namespace"
+        ]
+      },
       "OpenAiResponsesFunctionTool": {
         "type": "object",
         "required": [
@@ -4926,6 +4968,9 @@
           },
           {
             "$ref": "#/components/schemas/OpenAiShellTool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiNamespaceTool"
           }
         ]
       },
@@ -5725,6 +5770,9 @@
                     "name": {
                       "type": "string"
                     },
+                    "namespace": {
+                      "type": "string"
+                    },
                     "type": {
                       "type": "string",
                       "enum": [
@@ -5751,6 +5799,73 @@
                       "type": "string",
                       "enum": [
                         "function_call_output"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "text",
+                              "type"
+                            ],
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "reasoning_text"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "text",
+                              "type"
+                            ],
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "summary_text"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "reasoning"
                       ]
                     }
                   }
@@ -6048,6 +6163,84 @@
           },
           {
             "type": "object",
+            "description": "Reasoning text delta",
+            "required": [
+              "sequence_number",
+              "item_id",
+              "output_index",
+              "content_index",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "type": "string"
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.reasoning_text.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reasoning text done",
+            "required": [
+              "sequence_number",
+              "item_id",
+              "output_index",
+              "content_index",
+              "text",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.reasoning_text.done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "Response completed event",
             "required": [
               "sequence_number",
@@ -6284,6 +6477,9 @@
               "name": {
                 "type": "string"
               },
+              "namespace": {
+                "type": "string"
+              },
               "status": {
                 "type": "string"
               },
@@ -6354,6 +6550,80 @@
                 "type": "string",
                 "enum": [
                   "shell_call_output"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "summary",
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "text",
+                        "type"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "reasoning_text"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "text",
+                        "type"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "summary_text"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reasoning"
                 ]
               }
             }
@@ -6432,14 +6702,15 @@
       },
       "ReasoningEffort": {
         "type": "string",
-        "description": "Reasoning effort. `none` is accepted as an alias for `off`.",
+        "description": "Reasoning effort. `none` aliases `off`; `max` aliases `xhigh`.",
         "enum": [
           "off",
           "none",
           "low",
           "medium",
           "high",
-          "xhigh"
+          "xhigh",
+          "max"
         ]
       },
       "ReasoningSummary": {

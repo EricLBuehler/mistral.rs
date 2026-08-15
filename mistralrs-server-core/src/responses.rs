@@ -45,8 +45,8 @@ use crate::{
     },
     lora_adapters::resolve_lora_adapter_model,
     openai::{
-        AdapterSelection, ChatCompletionRequest, Message, MessageContent, OpenAiTool,
-        OpenAiToolSurface, ToolCall,
+        AdapterSelection, ChatCompletionRequest, Message, MessageContent, OpenAiNamespaceEntry,
+        OpenAiTool, OpenAiToolSurface, ToolCall,
     },
     responses_types::{
         content::{Annotation, OutputContent},
@@ -116,6 +116,19 @@ impl OpenResponsesInput {
                 Either::Left(messages)
             }
         }
+    }
+}
+
+const TEXT_PART_JOINER: &str = "\n\n";
+const DEVELOPER_ROLE: &str = "developer";
+const SYSTEM_ROLE: &str = "system";
+
+/// The Responses API spells the system role `developer`; chat templates only know `system`.
+fn normalize_input_role(role: String) -> String {
+    if role == DEVELOPER_ROLE {
+        SYSTEM_ROLE.to_string()
+    } else {
+        role
     }
 }
 
@@ -234,19 +247,17 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 
                         if content_parts.is_empty() {
                             None
-                        } else if !has_non_text_content && content_parts.len() == 1 {
-                            // Optimization: if only one text part, use simple text format
-                            // Extract text from the first part
-                            let first = &content_parts[0];
-                            if let Some(text_value) = first.get("text") {
-                                if let Either::Left(text) = &**text_value {
-                                    Some(MessageContent::from_text(text.clone()))
-                                } else {
-                                    Some(MessageContent::from_parts(content_parts))
-                                }
-                            } else {
-                                Some(MessageContent::from_parts(content_parts))
-                            }
+                        } else if !has_non_text_content {
+                            // Text-only parts collapse to plain text so any role can carry them
+                            let text = content_parts
+                                .iter()
+                                .filter_map(|part| match part.get("text").map(|v| &**v) {
+                                    Some(Either::Left(text)) => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join(TEXT_PART_JOINER);
+                            Some(MessageContent::from_text(text))
                         } else {
                             Some(MessageContent::from_parts(content_parts))
                         }
@@ -255,7 +266,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 
                 messages.push(Message {
                     content,
-                    role: msg_param.role,
+                    role: normalize_input_role(msg_param.role),
                     name: msg_param.name,
                     tool_calls: None,
                     tool_call_id: None,
@@ -269,9 +280,14 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
             TaggedInputItem::FunctionCall {
                 call_id,
                 name,
+                namespace,
                 arguments,
             } => {
-                // Convert to assistant message with tool_calls
+                // Rejoin so history matches the flattened name the model emitted
+                let name = match namespace {
+                    Some(ns) => format!("{ns}.{name}"),
+                    None => name,
+                };
                 messages.push(Message {
                     content: None,
                     role: "assistant".to_string(),
@@ -285,6 +301,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     reasoning_content: None,
                 });
             }
+            TaggedInputItem::Reasoning { .. } => {}
             TaggedInputItem::FunctionCallOutput { call_id, output } => {
                 // Convert to tool message
                 messages.push(Message {
@@ -397,6 +414,25 @@ pub struct RequestContext {
     pub store: Option<bool>,
     /// Whether request runs in background
     pub background: Option<bool>,
+}
+
+impl RequestContext {
+    /// Split a flattened `<namespace>.<name>` back into the fields Codex-style clients route on.
+    fn split_tool_name(&self, called: &str) -> (String, Option<String>) {
+        for tool in self.tools.iter().flatten() {
+            let OpenAiTool::Namespace(namespace) = tool else {
+                continue;
+            };
+            for entry in &namespace.tools {
+                if let OpenAiNamespaceEntry::Function(f) = entry {
+                    if namespace.qualified_name(&f.name) == called {
+                        return (f.name.clone(), Some(namespace.name.clone()));
+                    }
+                }
+            }
+        }
+        (called.to_string(), None)
+    }
 }
 
 /// Include options for response content.
@@ -707,6 +743,24 @@ pub enum OpenResponsesStreamEvent {
         call_id: String,
         arguments: String,
     },
+    /// Reasoning text delta
+    #[serde(rename = "response.reasoning_text.delta")]
+    ReasoningTextDelta {
+        sequence_number: u64,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+        delta: String,
+    },
+    /// Reasoning text done
+    #[serde(rename = "response.reasoning_text.done")]
+    ReasoningTextDone {
+        sequence_number: u64,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+        text: String,
+    },
     /// Response completed event
     #[serde(rename = "response.completed")]
     ResponseCompleted {
@@ -886,6 +940,9 @@ pub struct OpenResponsesStreamer {
     content_part_added: bool,
     /// Whether output item has been added
     output_item_added: bool,
+    reasoning_item_id: String,
+    reasoning_item_added: bool,
+    reasoning_item_done: bool,
     /// Store flag
     store: bool,
     /// Conversation history for storage
@@ -898,6 +955,7 @@ pub struct OpenResponsesStreamer {
     request_context: RequestContext,
     message_output_item: MessageOutputItemState,
     shell_output_items: Vec<OutputItem>,
+    function_call_items: Vec<OutputItem>,
     pending_shell_calls: PendingShellCalls,
     files: Vec<mistralrs_core::File>,
 }
@@ -931,6 +989,9 @@ impl OpenResponsesStreamer {
             accumulated_reasoning: String::new(),
             content_part_added: false,
             output_item_added: false,
+            reasoning_item_id: format!("rs_{}", Uuid::new_v4()),
+            reasoning_item_added: false,
+            reasoning_item_done: false,
             store,
             conversation_history,
             on_done: None,
@@ -938,9 +999,44 @@ impl OpenResponsesStreamer {
             request_context,
             message_output_item: MessageOutputItemState::new(),
             shell_output_items: Vec::new(),
+            function_call_items: Vec::new(),
             pending_shell_calls: HashMap::new(),
             files: Vec::new(),
         }
+    }
+
+    fn reasoning_output_index(&self) -> usize {
+        self.shell_output_items.len()
+    }
+
+    fn message_output_index(&self) -> usize {
+        self.shell_output_items.len() + usize::from(self.reasoning_item_added)
+    }
+
+    fn finish_reasoning_item(&mut self, events: &mut Vec<OpenResponsesStreamEvent>) {
+        if !self.reasoning_item_added || self.reasoning_item_done {
+            return;
+        }
+        self.reasoning_item_done = true;
+        let output_index = self.reasoning_output_index();
+        let seq = self.streaming_state.next_sequence_number();
+        events.push(OpenResponsesStreamEvent::ReasoningTextDone {
+            sequence_number: seq,
+            item_id: self.reasoning_item_id.clone(),
+            output_index,
+            content_index: 0,
+            text: self.accumulated_reasoning.clone(),
+        });
+        let seq = self.streaming_state.next_sequence_number();
+        events.push(OpenResponsesStreamEvent::OutputItemDone {
+            sequence_number: seq,
+            output_index,
+            item: OutputItem::reasoning(
+                self.reasoning_item_id.clone(),
+                self.accumulated_reasoning.clone(),
+                ItemStatus::Completed,
+            ),
+        });
     }
 
     /// Build initial response resource
@@ -975,6 +1071,18 @@ impl OpenResponsesStreamer {
     fn build_current_response(&self, status: ResponseStatus) -> ResponseResource {
         let mut resource = self.build_response_resource(status);
         resource.output.extend(self.shell_output_items.clone());
+        if self.reasoning_item_added {
+            resource.output.push(OutputItem::reasoning(
+                self.reasoning_item_id.clone(),
+                self.accumulated_reasoning.clone(),
+                if self.reasoning_item_done {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::InProgress
+                },
+            ));
+        }
+        resource.output.extend(self.function_call_items.clone());
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
@@ -1142,13 +1250,38 @@ impl futures::Stream for OpenResponsesStreamer {
 
                     // Check if all choices are finished
                     let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
-                    let message_output_index = self.shell_output_items.len();
 
                     for choice in &chat_chunk.choices {
-                        // Handle reasoning content
                         if let Some(reasoning) = &choice.delta.reasoning_content {
+                            let output_index = self.reasoning_output_index();
+                            if !self.reasoning_item_added {
+                                self.reasoning_item_added = true;
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: OutputItem::reasoning(
+                                        self.reasoning_item_id.clone(),
+                                        String::new(),
+                                        ItemStatus::InProgress,
+                                    ),
+                                });
+                            }
                             self.accumulated_reasoning.push_str(reasoning);
+                            let seq = self.streaming_state.next_sequence_number();
+                            events_to_emit.push(OpenResponsesStreamEvent::ReasoningTextDelta {
+                                sequence_number: seq,
+                                item_id: self.reasoning_item_id.clone(),
+                                output_index,
+                                content_index: 0,
+                                delta: reasoning.clone(),
+                            });
                         }
+
+                        if choice.delta.content.is_some() || choice.delta.tool_calls.is_some() {
+                            self.finish_reasoning_item(&mut events_to_emit);
+                        }
+                        let message_output_index = self.message_output_index();
 
                         // Handle text content
                         if let Some(content) = &choice.delta.content {
@@ -1190,25 +1323,61 @@ impl futures::Stream for OpenResponsesStreamer {
                             });
                         }
 
-                        // Handle tool calls
+                        // Tool calls arrive fully parsed, so each one is a complete output item
                         if let Some(tool_calls) = &choice.delta.tool_calls {
                             for tool_call in tool_calls {
-                                // Emit function call arguments delta
+                                let output_index =
+                                    message_output_index + 1 + self.function_call_items.len();
+                                let (name, namespace) = self
+                                    .request_context
+                                    .split_tool_name(&tool_call.function.name);
+                                let item = OutputItem::function_call(
+                                    format!("fc_{}", Uuid::new_v4()),
+                                    tool_call.id.clone(),
+                                    name,
+                                    namespace,
+                                    tool_call.function.arguments.clone(),
+                                    ItemStatus::Completed,
+                                );
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: item.clone(),
+                                });
                                 let seq = self.streaming_state.next_sequence_number();
                                 events_to_emit.push(
                                     OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
                                         sequence_number: seq,
-                                        output_index: message_output_index,
+                                        output_index,
                                         call_id: tool_call.id.clone(),
                                         delta: tool_call.function.arguments.clone(),
                                     },
                                 );
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(
+                                    OpenResponsesStreamEvent::FunctionCallArgumentsDone {
+                                        sequence_number: seq,
+                                        output_index,
+                                        call_id: tool_call.id.clone(),
+                                        arguments: tool_call.function.arguments.clone(),
+                                    },
+                                );
+                                let seq = self.streaming_state.next_sequence_number();
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: item.clone(),
+                                });
+                                self.function_call_items.push(item);
                             }
                         }
                     }
 
                     // If all finished, emit completion events
                     if all_finished {
+                        self.finish_reasoning_item(&mut events_to_emit);
+                        let message_output_index = self.message_output_index();
                         // Emit content_part.done
                         if self.content_part_added {
                             let seq = self.streaming_state.next_sequence_number();
@@ -1281,6 +1450,8 @@ impl futures::Stream for OpenResponsesStreamer {
                                 .json_data(first_event),
                         ))
                     } else {
+                        // Chunk consumed without producing an event; re-poll immediately
+                        cx.waker().wake_by_ref();
                         Poll::Pending
                     }
                 }
@@ -1394,6 +1565,8 @@ fn get_event_type(event: &OpenResponsesStreamEvent) -> &'static str {
         OpenResponsesStreamEvent::FunctionCallArgumentsDone { .. } => {
             "response.function_call_arguments.done"
         }
+        OpenResponsesStreamEvent::ReasoningTextDelta { .. } => "response.reasoning_text.delta",
+        OpenResponsesStreamEvent::ReasoningTextDone { .. } => "response.reasoning_text.done",
         OpenResponsesStreamEvent::ResponseCompleted { .. } => "response.completed",
         OpenResponsesStreamEvent::ResponseFailed { .. } => "response.failed",
         OpenResponsesStreamEvent::ResponseIncomplete { .. } => "response.incomplete",
@@ -1507,15 +1680,22 @@ fn chat_response_to_response_resource(
         // Handle reasoning content
         if let Some(reasoning) = &choice.message.reasoning_content {
             reasoning_parts.push(reasoning.clone());
+            output_items.push(OutputItem::reasoning(
+                format!("rs_{}", Uuid::new_v4()),
+                reasoning.clone(),
+                ItemStatus::Completed,
+            ));
         }
 
         // Handle tool calls - convert to function_call output items
         if let Some(tool_calls) = &choice.message.tool_calls {
             for tool_call in tool_calls {
+                let (name, namespace) = request_ctx.split_tool_name(&tool_call.function.name);
                 let item = OutputItem::function_call(
                     format!("fc_{}", Uuid::new_v4()),
                     tool_call.id.clone(),
-                    tool_call.function.name.clone(),
+                    name,
+                    namespace,
                     tool_call.function.arguments.clone(),
                     ItemStatus::Completed,
                 );
@@ -1589,16 +1769,7 @@ async fn parse_openresponses_request(
     IncludeConfig,
     RequestContext,
 )> {
-    // Validate unsupported parameters
-    // parallel_tool_calls: only `true` (default) or `None` is supported
-    if let Some(false) = oairequest.parallel_tool_calls {
-        anyhow::bail!(
-            "parallel_tool_calls=false is not supported. \
-             mistral.rs does not currently support disabling parallel tool calls."
-        );
-    }
-
-    // max_tool_calls: only `None` (unlimited) is supported
+    // parallel_tool_calls=false is accepted best-effort; max_tool_calls has no engine support
     if oairequest.max_tool_calls.is_some() {
         anyhow::bail!(
             "max_tool_calls is not supported. \
@@ -1642,25 +1813,10 @@ async fn parse_openresponses_request(
     // Get messages from input field
     let messages = oairequest.input.into_either();
 
-    // Build system message from instructions if provided
     let mut final_messages = Vec::new();
-    if let Some(instructions) = &oairequest.instructions {
-        final_messages.push(Message {
-            content: Some(MessageContent::from_text(instructions.clone())),
-            role: "system".to_string(),
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-            reasoning_content: None,
-        });
-    }
-
-    // Add previous messages if available
     if let Some(prev_msgs) = previous_messages {
         final_messages.extend(prev_msgs);
     }
-
-    // Add current messages
     match messages {
         Either::Left(msgs) => final_messages.extend(msgs),
         Either::Right(prompt) => {
@@ -1672,6 +1828,36 @@ async fn parse_openresponses_request(
                 tool_call_id: None,
                 reasoning_content: None,
             });
+        }
+    }
+
+    // Chat templates accept one leading system message, so fold instructions into it when present
+    if let Some(instructions) = oairequest.instructions.clone() {
+        match final_messages.first_mut() {
+            Some(first) if first.role == SYSTEM_ROLE => {
+                let existing = first
+                    .content
+                    .as_ref()
+                    .and_then(|content| content.as_text())
+                    .unwrap_or_default();
+                let merged = if existing.is_empty() {
+                    instructions
+                } else {
+                    format!("{instructions}{TEXT_PART_JOINER}{existing}")
+                };
+                first.content = Some(MessageContent::from_text(merged));
+            }
+            _ => final_messages.insert(
+                0,
+                Message {
+                    content: Some(MessageContent::from_text(instructions)),
+                    role: SYSTEM_ROLE.to_string(),
+                    name: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    reasoning_content: None,
+                },
+            ),
         }
     }
 
@@ -2212,6 +2398,81 @@ mod tests {
 
         assert!(!default.ignore_eos);
         assert!(enabled.ignore_eos);
+    }
+
+    #[test]
+    fn namespace_tools_round_trip_through_request_and_output() {
+        let request: OpenResponsesCreateRequest = serde_json::from_value(json!({
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+                { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "ok" }] },
+                { "type": "reasoning", "id": "rs_1", "summary": [],
+                  "content": [{ "type": "reasoning_text", "text": "thinking" }] },
+                { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "close_agent",
+                  "namespace": "multi_agent_v1", "arguments": "{}" },
+                { "type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "done" }
+            ],
+            "tools": [
+                { "type": "function", "name": "exec_command" },
+                { "type": "namespace", "name": "multi_agent_v1", "tools": [
+                    { "type": "function", "name": "close_agent" }
+                ] },
+                { "type": "web_search", "external_web_access": false }
+            ]
+        }))
+        .unwrap();
+
+        let OpenResponsesInput::Items(items) = request.input else {
+            panic!("expected item input");
+        };
+        let messages = convert_input_items_to_messages(items);
+        let call = messages[2].tool_calls.as_ref().unwrap();
+        assert_eq!(call[0].function.name, "multi_agent_v1.close_agent");
+
+        let ctx = RequestContext {
+            tools: request.tools,
+            ..Default::default()
+        };
+        assert_eq!(
+            ctx.split_tool_name("multi_agent_v1.close_agent"),
+            (
+                "close_agent".to_string(),
+                Some("multi_agent_v1".to_string())
+            )
+        );
+        assert_eq!(
+            ctx.split_tool_name("exec_command"),
+            ("exec_command".to_string(), None)
+        );
+
+        let item = OutputItem::function_call(
+            "fc_x".to_string(),
+            "call_x".to_string(),
+            "exec_command".to_string(),
+            None,
+            "{}".to_string(),
+            ItemStatus::Completed,
+        );
+        assert!(!serde_json::to_string(&item).unwrap().contains("namespace"));
+    }
+
+    #[test]
+    fn developer_role_and_text_parts_collapse_for_chat_templates() {
+        let items: Vec<InputItem> = serde_json::from_value(json!([
+            { "type": "message", "role": "developer", "content": [
+                { "type": "input_text", "text": "a" }, { "type": "input_text", "text": "b" } ] },
+            { "type": "message", "role": "user", "content": [
+                { "type": "input_text", "text": "hi" },
+                { "type": "input_image", "image_url": "http://x/y.png" } ] }
+        ]))
+        .unwrap();
+        let messages = convert_input_items_to_messages(items);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(
+            messages[0].content.as_ref().unwrap().as_text().as_deref(),
+            Some("a\n\nb")
+        );
+        assert!(messages[1].content.as_ref().unwrap().as_text().is_none());
     }
 
     #[test]

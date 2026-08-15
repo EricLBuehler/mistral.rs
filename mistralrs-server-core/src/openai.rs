@@ -115,6 +115,14 @@ impl MessageContent {
         MessageContent(Either::Right(parts))
     }
 
+    /// Plain text content, if this is not multimodal parts
+    pub fn as_text(&self) -> Option<String> {
+        match &self.0 {
+            Either::Left(text) => Some(text.clone()),
+            Either::Right(_) => None,
+        }
+    }
+
     /// Create a text content part for multimodal messages
     pub fn text_part(text: String) -> HashMap<String, MessageInnerContent> {
         let mut part = HashMap::new();
@@ -635,6 +643,12 @@ pub enum OpenAiShellToolType {
     Shell,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub enum OpenAiNamespaceToolType {
+    #[serde(rename = "namespace")]
+    Namespace,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum OpenAiTool {
@@ -643,6 +657,32 @@ pub enum OpenAiTool {
     WebSearch(OpenAiWebSearchTool),
     CodeInterpreter(OpenAiCodeInterpreterTool),
     Shell(OpenAiShellTool),
+    Namespace(OpenAiNamespaceTool),
+}
+
+/// A grouping of client-executed tools; the model sees each inner tool as `<namespace>.<name>`.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct OpenAiNamespaceTool {
+    #[serde(rename = "type")]
+    pub tp: OpenAiNamespaceToolType,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<OpenAiNamespaceEntry>,
+}
+
+impl OpenAiNamespaceTool {
+    pub fn qualified_name(&self, tool_name: &str) -> String {
+        format!("{}.{}", self.name, tool_name)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum OpenAiNamespaceEntry {
+    Function(OpenAiResponsesFunctionTool),
+    Unsupported(Value),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -700,9 +740,6 @@ impl OpenAiWebSearchTool {
         }
         if is_preview && self.return_token_budget.is_some() {
             bail!("tools[].type=\"web_search_preview\" return_token_budget is not supported.");
-        }
-        if !is_preview && self.external_web_access == Some(false) {
-            bail!("tools[].type=\"web_search\" external_web_access=false is not supported.");
         }
         if self.image_settings.is_some()
             || self.search_content_types.as_ref().is_some_and(|types| {
@@ -1027,6 +1064,12 @@ fn normalize_openai_tools(
                          use web_search_options with Chat Completions"
                     );
                 }
+                // external_web_access=false means the client disabled search; drop the tool
+                if !matches!(tool.tp, OpenAiWebSearchToolType::WebSearchPreview)
+                    && tool.external_web_access == Some(false)
+                {
+                    continue;
+                }
                 if normalized_web_search_options.is_some() {
                     bail!("Only one web search configuration may be provided.");
                 }
@@ -1042,6 +1085,26 @@ fn normalize_openai_tools(
                 }
                 enable_shell = true;
                 shell_skill_references.extend(tool.into_skill_references()?);
+            }
+            OpenAiTool::Namespace(namespace) => {
+                if matches!(surface, OpenAiToolSurface::ChatCompletions) {
+                    bail!("tools[].type=\"namespace\" is only supported by the Responses API.");
+                }
+                for entry in &namespace.tools {
+                    match entry {
+                        OpenAiNamespaceEntry::Function(tool) => {
+                            let mut tool = tool.clone().into_core_tool();
+                            tool.function.name = namespace.qualified_name(&tool.function.name);
+                            function_tools.push(tool);
+                        }
+                        OpenAiNamespaceEntry::Unsupported(_) => {
+                            tracing::warn!(
+                                "Skipping unsupported non-function tool in namespace `{}`.",
+                                namespace.name
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -2230,6 +2293,35 @@ mod tests {
     }
 
     #[test]
+    fn flattens_namespace_tools() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "function", "name": "exec_command" },
+            {
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "description": "Tools for spawning and managing sub-agents.",
+                "tools": [
+                    { "type": "function", "name": "spawn_agent", "parameters": { "type": "object" } },
+                    { "type": "custom", "name": "grammar_tool", "format": { "type": "grammar", "syntax": "lark", "definition": "start: x" } }
+                ]
+            }
+        ]))
+        .unwrap();
+
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+        let tools = normalized.tools.unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].function.name, "exec_command");
+        assert_eq!(tools[1].function.name, "multi_agent_v1.spawn_agent");
+
+        let chat_tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "namespace", "name": "ns", "tools": [] }
+        ]))
+        .unwrap();
+        assert!(normalize_chat_completion_tools(Some(chat_tools), None).is_err());
+    }
+
+    #[test]
     fn normalizes_code_interpreter_tool() {
         let tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
             "type": "code_interpreter",
@@ -2510,7 +2602,8 @@ mod tests {
         let external_access_tools: Vec<OpenAiTool> =
             serde_json::from_value(json!([{ "type": "web_search", "external_web_access": false }]))
                 .unwrap();
-        assert!(normalize_responses_tools(Some(external_access_tools)).is_err());
+        let normalized = normalize_responses_tools(Some(external_access_tools)).unwrap();
+        assert!(normalized.web_search_options.is_none());
 
         let preview_filters_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
             "type": "web_search_preview",

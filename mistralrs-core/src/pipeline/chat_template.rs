@@ -657,15 +657,12 @@ pub fn apply_chat_template_to(
 
     let is_gemma4_template = is_gemma4_tool_template(&resolved_template);
     let is_liquid_template = is_liquid_tool_template(&resolved_template);
-    let is_atem_template = is_atem_tool_template(&resolved_template);
 
-    if is_atem_template {
-        parse_tool_call_arguments(&mut messages);
-    } else if is_gemma4_template {
-        parse_tool_call_arguments(&mut messages);
+    // HF templates expect tool_calls[].function.arguments as a mapping, not the OpenAI wire string
+    parse_tool_call_arguments(&mut messages);
+    if is_gemma4_template {
         preprocess_gemma4_tool_messages(&mut messages);
     } else if is_liquid_template {
-        parse_tool_call_arguments(&mut messages);
         clear_assistant_tool_call_content(&mut messages);
     }
 
