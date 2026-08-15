@@ -17,12 +17,44 @@ use crate::{get_mut_arcmutex, MemoryUsage};
 /// Request id used for the synthetic sequence; the manager is private to this profile.
 const PROFILE_REQUEST_ID: usize = 0;
 
+/// Context length of the second probe, clamped to what the cache can hold. Large enough that any
+/// per-context growth would clear measurement noise.
+pub(crate) const ACTIVATION_PROBE_CONTEXT: usize = 65536;
+
+/// Activation cost as a base plus a per-context-token slope.
+///
+/// Attention reads the whole KV cache, so a chunk costs more the further into a sequence it runs.
+/// Expressing the growth per context token lets it be budgeted next to the KV cost per token.
+pub(crate) struct ActivationScaling {
+    pub base_bytes: usize,
+    pub bytes_per_context_token: f64,
+}
+
+#[allow(clippy::cast_precision_loss)]
+impl ActivationScaling {
+    pub fn from_probes(base_bytes: usize, far_bytes: usize, far_context: usize) -> Self {
+        let growth = far_bytes.saturating_sub(base_bytes) as f64;
+        Self {
+            base_bytes,
+            bytes_per_context_token: growth / far_context.max(1) as f64,
+        }
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn bytes_at(&self, context: usize) -> usize {
+        self.base_bytes + (self.bytes_per_context_token * context as f64) as usize
+    }
+}
+
 pub(crate) struct PrefillProfileCtx<'a> {
     pub device: &'a Device,
     pub cache_config: &'a CacheConfig,
     pub model_config: &'a dyn ModelConfigLike,
     pub kv_cache: &'a [(Tensor, Tensor)],
     pub tokens: usize,
+    /// Tokens already resident in the KV cache when the chunk runs. Attention reads the whole
+    /// context, so the activation peak depends on this, not just on the chunk size.
+    pub context_offset: usize,
     pub sliding_window: Option<usize>,
     pub mapper: Option<&'a dyn DeviceMapper>,
     pub cache: &'a EitherCache,
@@ -39,11 +71,28 @@ pub(crate) fn measure_prefill_activation_bytes<F>(
 where
     F: FnOnce(&Tensor, &mut ModelForwardContext<'_>) -> candle_core::Result<Tensor>,
 {
+    // Diagnostics must never stop a model from loading, and the input builders assert rather than
+    // return on malformed metadata.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        measure_prefill_activation_bytes_inner(ctx, forward)
+    }))
+    .unwrap_or_else(|_| Err(anyhow::anyhow!("profiling forward pass panicked")))
+}
+
+fn measure_prefill_activation_bytes_inner<F>(
+    ctx: PrefillProfileCtx<'_>,
+    forward: F,
+) -> anyhow::Result<usize>
+where
+    F: FnOnce(&Tensor, &mut ModelForwardContext<'_>) -> candle_core::Result<Tensor>,
+{
     if !ctx.device.is_cuda() {
         anyhow::bail!("prefill profiling requires a CUDA device");
     }
     let block_size = ctx.cache_config.block_size;
     let tokens = ctx.tokens.max(block_size);
+    let context_offset = ctx.context_offset / block_size * block_size;
+    let total_tokens = context_offset + tokens;
 
     let manager = KVCacheManager::new(
         ctx.cache_config.num_gpu_blocks,
@@ -55,14 +104,16 @@ where
     {
         let mut guard = get_mut_arcmutex!(manager);
         guard
-            .allocate_slots(PROFILE_REQUEST_ID, tokens, &[])
-            .ok_or_else(|| anyhow::anyhow!("KV cache too small to profile {tokens} tokens"))?;
+            .allocate_slots(PROFILE_REQUEST_ID, total_tokens, &[])
+            .ok_or_else(|| {
+                anyhow::anyhow!("KV cache too small to profile {total_tokens} tokens")
+            })?;
     }
 
     let mut meta = PagedAttentionMeta {
         sliding_window: ctx.sliding_window,
         block_size,
-        max_paged_context_len: tokens,
+        max_paged_context_len: total_tokens,
         attention_backend: ctx.model_config.attention_backend_kind(),
         has_flashinfer_decode_layers: false,
         prefill_attention_heads: ctx.model_config.num_attn_heads(),
@@ -77,7 +128,10 @@ where
         is_final_prompt_chunk: true,
     };
 
-    let toks = vec![0u32; tokens];
+    let toks = vec![0u32; total_tokens];
+    let prefix_lens = [context_offset];
+    // `chunk_offset_toks` adds to the prefix length rather than replacing it, so the offset is
+    // expressed purely through `prefix_lens`, matching how chunked prefill drives this.
     let inputs = make_prompt_chunk(
         0,
         vec![toks.as_slice()],
@@ -87,7 +141,7 @@ where
         false,
         Some(&mut meta),
         ctx.mapper,
-        None,
+        Some(&prefix_lens),
         ctx.sliding_window,
         false,
     )?;

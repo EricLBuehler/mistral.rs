@@ -21,7 +21,10 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::profile::{measure_prefill_activation_bytes, PrefillProfileCtx};
+use crate::paged_attention::profile::{
+    measure_prefill_activation_bytes, ActivationScaling, PrefillProfileCtx,
+    ACTIVATION_PROBE_CONTEXT,
+};
 use crate::paged_attention::{
     calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
 };
@@ -138,25 +141,45 @@ fn report_prefill_activation_profile(args: PrefillProfileArgs<'_>) {
     if !device.is_cuda() {
         return;
     }
-    let kv_cache = args.cache_engine.get_kv_cache();
-    let ctx = PrefillProfileCtx {
-        device: &device,
-        cache_config: args.cache_config,
-        model_config: args.model_config,
-        kv_cache: kv_cache.as_slice(),
-        tokens: DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-        sliding_window: args.model.config().sliding_window,
-        mapper: Some(args.mapper),
-        cache: args.model.cache(),
+    let capacity_tokens = args.cache_config.num_gpu_blocks * args.cache_config.block_size;
+    // The far probe has to fit alongside its own chunk, so never ask for more than half.
+    let probe_context = ACTIVATION_PROBE_CONTEXT.min(capacity_tokens / 2);
+    let probe = |context_offset: usize| {
+        let kv_cache = args.cache_engine.get_kv_cache();
+        let ctx = PrefillProfileCtx {
+            device: &device,
+            cache_config: args.cache_config,
+            model_config: args.model_config,
+            kv_cache: kv_cache.as_slice(),
+            tokens: DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
+            context_offset,
+            sliding_window: args.model.config().sliding_window,
+            mapper: Some(args.mapper),
+            cache: args.model.cache(),
+        };
+        measure_prefill_activation_bytes(ctx, |input, fwd| args.model.forward(input, fwd))
     };
-    match measure_prefill_activation_bytes(ctx, |input, fwd| args.model.forward(input, fwd)) {
-        Ok(bytes) => info!(
-            "Prefill activation high-water mark at {} tokens: {} MB.",
-            DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-            bytes / (1024 * 1024),
-        ),
-        Err(e) => warn!("Could not profile prefill activations: {e}"),
-    }
+
+    let scaling = match (probe(0), probe(probe_context)) {
+        (Ok(base), Ok(far)) => ActivationScaling::from_probes(base, far, probe_context),
+        (Ok(base), Err(e)) => {
+            warn!("Could not profile activation growth past {probe_context} tokens: {e}");
+            ActivationScaling::from_probes(base, base, probe_context)
+        }
+        (Err(e), _) => {
+            warn!("Could not profile prefill activations: {e}");
+            return;
+        }
+    };
+
+    info!(
+        "Prefill activations: {} MB at {} tokens, growing {:.1} KB per context token. \
+         Filling the cache to {capacity_tokens} tokens would need {} MB.",
+        scaling.base_bytes / (1024 * 1024),
+        DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
+        scaling.bytes_per_context_token / 1024.0,
+        scaling.bytes_at(capacity_tokens) / (1024 * 1024),
+    );
 }
 
 pub(crate) fn build_normal_pipeline(
