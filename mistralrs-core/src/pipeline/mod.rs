@@ -78,7 +78,7 @@ pub(crate) fn get_device_layers_for_loader(
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
-    paged_attn_config: Option<&PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<crate::device_map::DeviceMapMetadata> {
     loaders::auto_device_map::get_device_layers(
         loader,

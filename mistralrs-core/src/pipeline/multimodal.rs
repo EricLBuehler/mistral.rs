@@ -750,7 +750,7 @@ impl Loader for MultimodalLoader {
                 &available_devices,
                 dtype,
                 &params,
-                paged_attn_config.as_ref(),
+                paged_attn_config.as_mut(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

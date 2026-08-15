@@ -722,7 +722,7 @@ pub trait DeviceMappedModelLoader {
         devices: &[Device],
         dtype: DType,
         params: &AutoDeviceMapParams,
-        paged_attn_config: Option<&PagedAttentionConfig>,
+        paged_attn_config: Option<&mut PagedAttentionConfig>,
     ) -> Result<DeviceMapMetadata>
     where
         Self: Sized,

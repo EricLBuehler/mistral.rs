@@ -215,11 +215,11 @@ mod tests {
 
     #[test]
     fn flashinfer_group_size_matches_kernel_instantiations() {
-        for group_size in [1, 2, 3, 4, 8, 16] {
+        for group_size in [1, 2, 3, 4, 6, 8, 16] {
             assert!(supports_flashinfer_group_size(group_size * 2, 2));
         }
 
-        for group_size in [0, 5, 6, 7, 9, 15, 17] {
+        for group_size in [0, 5, 7, 9, 15, 17] {
             assert!(!supports_flashinfer_group_size(group_size * 2, 2));
         }
         assert!(!supports_flashinfer_group_size(14, 0));

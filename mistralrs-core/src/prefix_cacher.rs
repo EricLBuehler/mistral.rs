@@ -365,9 +365,9 @@ impl PrefixCacheManagerV2 {
         {
             self.paged_recurrent_reported = true;
             info!(
-                "Recurrent prefix cache full at {} entries, {:.2} GB. Adjust with `--prefix-cache-n`.",
+                "Recurrent prefix cache full at {} entries, {} MB. Adjust with `--prefix-cache-n`.",
                 self.paged_recurrent_caches.len(),
-                self.paged_recurrent_bytes as f64 / 1024f64.powi(3),
+                self.paged_recurrent_bytes / (1024 * 1024),
             );
         }
     }
