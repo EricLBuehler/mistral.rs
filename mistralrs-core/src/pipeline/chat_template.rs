@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, io};
 
 use anyhow::Result;
 use either::Either;
@@ -332,9 +332,41 @@ impl GenerationConfig {
     }
 }
 
+struct DefaultJsonFormatter;
+
+impl serde_json::ser::Formatter for DefaultJsonFormatter {
+    fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+
+    fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(b", ")
+        }
+    }
+
+    fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+    where
+        W: ?Sized + io::Write,
+    {
+        writer.write_all(b": ")
+    }
+}
+
 fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
-    if let Ok(indent) = kwargs.get::<usize>("indent") {
-        // Cap the indent: it feeds `b" ".repeat(indent)`, so an attacker-controlled template could request a huge allocation or capacity-overflow panic.
+    let serialized = if let Ok(indent) = kwargs.get::<usize>("indent") {
         const MAX_INDENT: usize = 256;
         if indent > MAX_INDENT {
             return Err(Error::new(
@@ -353,31 +385,24 @@ fn tojson(value: Value, kwargs: Kwargs) -> Result<Value, Error> {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })
     } else {
-        serde_json::to_string(&value).map_err(|err| {
+        let mut buf = Vec::new();
+        let mut ser = serde_json::Serializer::with_formatter(&mut buf, DefaultJsonFormatter);
+        value.serialize(&mut ser).map_err(|err| {
+            Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
+        })?;
+        String::from_utf8(buf).map_err(|err| {
             Error::new(ErrorKind::BadSerialization, "cannot serialize to JSON").with_source(err)
         })
     }
     .map_err(|err| {
         Error::new(ErrorKind::InvalidOperation, "cannot serialize to JSON").with_source(err)
-    })
-    .map(|s| {
-        // When this filter is used the return value is safe for both HTML and JSON
-        let mut rv = String::with_capacity(s.len());
-        for c in s.chars() {
-            match c {
-                '<' => rv.push_str("\\u003c"),
-                '>' => rv.push_str("\\u003e"),
-                '&' => rv.push_str("\\u0026"),
-                '\'' => rv.push_str("\\u0027"),
-                _ => rv.push(c),
-            }
-        }
-        Value::from_safe_string(rv)
-    })
+    })?;
+
+    Ok(Value::from_safe_string(serialized))
 }
 
 fn strftime_now(fmt: String) -> Result<String, minijinja::Error> {
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format(&fmt).to_string();
     Ok(date_string)
 }
@@ -705,7 +730,7 @@ pub fn apply_chat_template_to(
     env.add_function("strftime_now", strftime_now);
     let tmpl = env.get_template("chat_template")?;
 
-    let date = chrono::Utc::now();
+    let date = chrono::Local::now();
     let date_string = date.format("%d, %B, %Y").to_string();
 
     let reasoning_controls = resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
@@ -879,6 +904,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(calculate_eos_tokens(&template, None, &tokenizer), vec![1]);
+    }
+
+    #[test]
+    fn tojson_matches_transformers_default_json_formatting() {
+        let template = ChatTemplateValue(Either::Left(
+            r#"{{ {'name': 'get_weather', 'description': "Compare if temp > 10 & humidity < 50 (user's choice)", 'parameters': {'type': 'object'}} | tojson }}"#.to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rendered,
+            r#"{"name": "get_weather", "description": "Compare if temp > 10 & humidity < 50 (user's choice)", "parameters": {"type": "object"}}"#
+        );
     }
 
     #[test]
