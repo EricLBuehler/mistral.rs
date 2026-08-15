@@ -56,7 +56,7 @@ use crate::{
         resource::{ResponseError, ResponseResource, ResponseUsage},
     },
     skills::SkillStore,
-    streaming::{get_keep_alive_interval, DoneState},
+    streaming::{get_keep_alive_interval, observe_response, DoneState, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
     util::sanitize_error_message,
 };
@@ -958,6 +958,7 @@ pub struct OpenResponsesStreamer {
     function_call_items: Vec<OutputItem>,
     pending_shell_calls: PendingShellCalls,
     files: Vec<mistralrs_core::File>,
+    outcome: Option<StreamOutcomeHandle>,
 }
 
 impl OpenResponsesStreamer {
@@ -972,6 +973,7 @@ impl OpenResponsesStreamer {
         store: bool,
         conversation_history: Option<Vec<Message>>,
         request_context: RequestContext,
+        outcome: Option<StreamOutcomeHandle>,
     ) -> Self {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1002,6 +1004,7 @@ impl OpenResponsesStreamer {
             function_call_items: Vec::new(),
             pending_shell_calls: HashMap::new(),
             files: Vec::new(),
+            outcome,
         }
     }
 
@@ -1185,124 +1188,219 @@ impl futures::Stream for OpenResponsesStreamer {
         }
 
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
+            Poll::Ready(Some(resp)) => {
+                observe_response(&self.outcome, &resp);
+                match resp {
+                    Response::ModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
 
-                    let seq = self.streaming_state.next_sequence_number();
-                    let mut response = self.build_current_response(ResponseStatus::Failed);
-                    response.error = Some(ResponseError::new("model_error", msg.to_string()));
-
-                    let event = OpenResponsesStreamEvent::ResponseFailed {
-                        sequence_number: seq,
-                        response,
-                    };
-
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(
-                        Event::default().event("response.failed").json_data(event),
-                    ))
-                }
-                Response::ValidationError(e) => {
-                    let seq = self.streaming_state.next_sequence_number();
-                    let event = OpenResponsesStreamEvent::Error {
-                        sequence_number: seq,
-                        error: ResponseError::new(
-                            "validation_error",
-                            sanitize_error_message(e.as_ref()),
-                        ),
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(Event::default().event("error").json_data(event)))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    let seq = self.streaming_state.next_sequence_number();
-                    let event = OpenResponsesStreamEvent::Error {
-                        sequence_number: seq,
-                        error: ResponseError::new(
-                            "internal_error",
-                            sanitize_error_message(e.as_ref()),
-                        ),
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(Event::default().event("error").json_data(event)))
-                }
-                Response::Chunk(chat_chunk) => {
-                    let mut events_to_emit = Vec::new();
-
-                    // Emit response.in_progress if not sent
-                    if !self.streaming_state.in_progress_sent {
-                        self.streaming_state.in_progress_sent = true;
                         let seq = self.streaming_state.next_sequence_number();
-                        let response = self.build_response_resource(ResponseStatus::InProgress);
-                        events_to_emit.push(OpenResponsesStreamEvent::ResponseInProgress {
+                        let mut response = self.build_current_response(ResponseStatus::Failed);
+                        response.error = Some(ResponseError::new("model_error", msg.to_string()));
+
+                        let event = OpenResponsesStreamEvent::ResponseFailed {
                             sequence_number: seq,
                             response,
-                        });
+                        };
+
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(
+                            Event::default().event("response.failed").json_data(event),
+                        ))
                     }
+                    Response::ValidationError(e) => {
+                        let seq = self.streaming_state.next_sequence_number();
+                        let event = OpenResponsesStreamEvent::Error {
+                            sequence_number: seq,
+                            error: ResponseError::new(
+                                "validation_error",
+                                sanitize_error_message(e.as_ref()),
+                            ),
+                        };
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(Event::default().event("error").json_data(event)))
+                    }
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        let seq = self.streaming_state.next_sequence_number();
+                        let event = OpenResponsesStreamEvent::Error {
+                            sequence_number: seq,
+                            error: ResponseError::new(
+                                "internal_error",
+                                sanitize_error_message(e.as_ref()),
+                            ),
+                        };
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(Event::default().event("error").json_data(event)))
+                    }
+                    Response::Chunk(chat_chunk) => {
+                        let mut events_to_emit = Vec::new();
 
-                    // Check if all choices are finished
-                    let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
-
-                    for choice in &chat_chunk.choices {
-                        if let Some(reasoning) = &choice.delta.reasoning_content {
-                            let output_index = self.reasoning_output_index();
-                            if !self.reasoning_item_added {
-                                self.reasoning_item_added = true;
-                                let seq = self.streaming_state.next_sequence_number();
-                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
-                                    sequence_number: seq,
-                                    output_index,
-                                    item: OutputItem::reasoning(
-                                        self.reasoning_item_id.clone(),
-                                        String::new(),
-                                        ItemStatus::InProgress,
-                                    ),
-                                });
-                            }
-                            self.accumulated_reasoning.push_str(reasoning);
+                        // Emit response.in_progress if not sent
+                        if !self.streaming_state.in_progress_sent {
+                            self.streaming_state.in_progress_sent = true;
                             let seq = self.streaming_state.next_sequence_number();
-                            events_to_emit.push(OpenResponsesStreamEvent::ReasoningTextDelta {
+                            let response = self.build_response_resource(ResponseStatus::InProgress);
+                            events_to_emit.push(OpenResponsesStreamEvent::ResponseInProgress {
                                 sequence_number: seq,
-                                item_id: self.reasoning_item_id.clone(),
-                                output_index,
-                                content_index: 0,
-                                delta: reasoning.clone(),
+                                response,
                             });
                         }
 
-                        if choice.delta.content.is_some() || choice.delta.tool_calls.is_some() {
-                            self.finish_reasoning_item(&mut events_to_emit);
-                        }
-                        let message_output_index = self.message_output_index();
+                        // Check if all choices are finished
+                        let all_finished =
+                            chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
 
-                        // Handle text content
-                        if let Some(content) = &choice.delta.content {
-                            // Emit output_item.added if not done
-                            if !self.output_item_added {
-                                self.output_item_added = true;
+                        for choice in &chat_chunk.choices {
+                            if let Some(reasoning) = &choice.delta.reasoning_content {
+                                let output_index = self.reasoning_output_index();
+                                if !self.reasoning_item_added {
+                                    self.reasoning_item_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index,
+                                            item: OutputItem::reasoning(
+                                                self.reasoning_item_id.clone(),
+                                                String::new(),
+                                                ItemStatus::InProgress,
+                                            ),
+                                        },
+                                    );
+                                }
+                                self.accumulated_reasoning.push_str(reasoning);
                                 let seq = self.streaming_state.next_sequence_number();
-                                let item = self.message_output_item.added_item();
-                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                events_to_emit.push(OpenResponsesStreamEvent::ReasoningTextDelta {
                                     sequence_number: seq,
-                                    output_index: message_output_index,
-                                    item,
+                                    item_id: self.reasoning_item_id.clone(),
+                                    output_index,
+                                    content_index: 0,
+                                    delta: reasoning.clone(),
                                 });
                             }
 
-                            // Emit content_part.added if not done
-                            if !self.content_part_added {
-                                self.content_part_added = true;
+                            if choice.delta.content.is_some() || choice.delta.tool_calls.is_some() {
+                                self.finish_reasoning_item(&mut events_to_emit);
+                            }
+                            let message_output_index = self.message_output_index();
+
+                            // Handle text content
+                            if let Some(content) = &choice.delta.content {
+                                // Emit output_item.added if not done
+                                if !self.output_item_added {
+                                    self.output_item_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    let item = self.message_output_item.added_item();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index: message_output_index,
+                                            item,
+                                        },
+                                    );
+                                }
+
+                                // Emit content_part.added if not done
+                                if !self.content_part_added {
+                                    self.content_part_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    let part = OutputContent::text(String::new());
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::ContentPartAdded {
+                                            sequence_number: seq,
+                                            output_index: message_output_index,
+                                            content_index: 0,
+                                            part,
+                                        },
+                                    );
+                                }
+
+                                // Accumulate text
+                                self.accumulated_text.push_str(content);
+
+                                // Emit text delta
                                 let seq = self.streaming_state.next_sequence_number();
-                                let part = OutputContent::text(String::new());
-                                events_to_emit.push(OpenResponsesStreamEvent::ContentPartAdded {
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputTextDelta {
+                                    sequence_number: seq,
+                                    output_index: message_output_index,
+                                    content_index: 0,
+                                    delta: content.clone(),
+                                });
+                            }
+
+                            // Tool calls arrive fully parsed, so each one is a complete output item
+                            if let Some(tool_calls) = &choice.delta.tool_calls {
+                                for tool_call in tool_calls {
+                                    let output_index =
+                                        message_output_index + 1 + self.function_call_items.len();
+                                    let (name, namespace) = self
+                                        .request_context
+                                        .split_tool_name(&tool_call.function.name);
+                                    let item = OutputItem::function_call(
+                                        format!("fc_{}", Uuid::new_v4()),
+                                        tool_call.id.clone(),
+                                        name,
+                                        namespace,
+                                        tool_call.function.arguments.clone(),
+                                        ItemStatus::Completed,
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index,
+                                            item: item.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
+                                            sequence_number: seq,
+                                            output_index,
+                                            call_id: tool_call.id.clone(),
+                                            delta: tool_call.function.arguments.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::FunctionCallArgumentsDone {
+                                            sequence_number: seq,
+                                            output_index,
+                                            call_id: tool_call.id.clone(),
+                                            arguments: tool_call.function.arguments.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
+                                        sequence_number: seq,
+                                        output_index,
+                                        item: item.clone(),
+                                    });
+                                    self.function_call_items.push(item);
+                                }
+                            }
+                        }
+
+                        // If all finished, emit completion events
+                        if all_finished {
+                            self.finish_reasoning_item(&mut events_to_emit);
+                            let message_output_index = self.message_output_index();
+                            // Emit content_part.done
+                            if self.content_part_added {
+                                let seq = self.streaming_state.next_sequence_number();
+                                let part = output_text_with_file_annotations(
+                                    self.accumulated_text.clone(),
+                                    &self.streaming_state.response_id,
+                                    &self.files,
+                                );
+                                events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
                                     sequence_number: seq,
                                     output_index: message_output_index,
                                     content_index: 0,
@@ -1310,239 +1408,158 @@ impl futures::Stream for OpenResponsesStreamer {
                                 });
                             }
 
-                            // Accumulate text
-                            self.accumulated_text.push_str(content);
-
-                            // Emit text delta
-                            let seq = self.streaming_state.next_sequence_number();
-                            events_to_emit.push(OpenResponsesStreamEvent::OutputTextDelta {
-                                sequence_number: seq,
-                                output_index: message_output_index,
-                                content_index: 0,
-                                delta: content.clone(),
-                            });
-                        }
-
-                        // Tool calls arrive fully parsed, so each one is a complete output item
-                        if let Some(tool_calls) = &choice.delta.tool_calls {
-                            for tool_call in tool_calls {
-                                let output_index =
-                                    message_output_index + 1 + self.function_call_items.len();
-                                let (name, namespace) = self
-                                    .request_context
-                                    .split_tool_name(&tool_call.function.name);
-                                let item = OutputItem::function_call(
-                                    format!("fc_{}", Uuid::new_v4()),
-                                    tool_call.id.clone(),
-                                    name,
-                                    namespace,
-                                    tool_call.function.arguments.clone(),
+                            // Emit output_item.done
+                            if self.output_item_added {
+                                let seq = self.streaming_state.next_sequence_number();
+                                let item = self.message_output_item.item_with_text(
+                                    self.accumulated_text.clone(),
+                                    &self.streaming_state.response_id,
+                                    &self.files,
                                     ItemStatus::Completed,
                                 );
-                                let seq = self.streaming_state.next_sequence_number();
-                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
-                                    sequence_number: seq,
-                                    output_index,
-                                    item: item.clone(),
-                                });
-                                let seq = self.streaming_state.next_sequence_number();
-                                events_to_emit.push(
-                                    OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
-                                        sequence_number: seq,
-                                        output_index,
-                                        call_id: tool_call.id.clone(),
-                                        delta: tool_call.function.arguments.clone(),
-                                    },
-                                );
-                                let seq = self.streaming_state.next_sequence_number();
-                                events_to_emit.push(
-                                    OpenResponsesStreamEvent::FunctionCallArgumentsDone {
-                                        sequence_number: seq,
-                                        output_index,
-                                        call_id: tool_call.id.clone(),
-                                        arguments: tool_call.function.arguments.clone(),
-                                    },
-                                );
-                                let seq = self.streaming_state.next_sequence_number();
                                 events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
                                     sequence_number: seq,
+                                    output_index: message_output_index,
+                                    item,
+                                });
+                            }
+
+                            // Emit response.completed
+                            let seq = self.streaming_state.next_sequence_number();
+                            let mut response =
+                                self.build_current_response(ResponseStatus::Completed);
+                            response.adapter_generation = chat_chunk.adapter_generation.clone();
+                            response.completed_at = Some(
+                                SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs(),
+                            );
+
+                            // Add usage from chunk if available
+                            if let Some(usage) = &chat_chunk.usage {
+                                response.usage = Some(ResponseUsage::new(
+                                    usage.prompt_tokens,
+                                    usage.completion_tokens,
+                                ));
+                            }
+
+                            events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
+                                sequence_number: seq,
+                                response,
+                            });
+
+                            self.done_state = DoneState::SendingDone;
+                        }
+
+                        MistralRs::maybe_log_response(self.state.clone(), &chat_chunk);
+
+                        // Return first event, queue the rest
+                        if !events_to_emit.is_empty() {
+                            let first_event = events_to_emit.remove(0);
+                            self.pending_events.extend(events_to_emit);
+                            self.events.push(first_event.clone());
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event(get_event_type(&first_event))
+                                    .json_data(first_event),
+                            ))
+                        } else {
+                            // Chunk consumed without producing an event; re-poll immediately
+                            cx.waker().wake_by_ref();
+                            Poll::Pending
+                        }
+                    }
+                    Response::Done(chat_resp) => {
+                        // Handle non-streaming completion through chunk path
+                        // This shouldn't normally happen in streaming mode
+                        let seq = self.streaming_state.next_sequence_number();
+                        let response = chat_response_to_response_resource(
+                            &chat_resp,
+                            self.streaming_state.response_id.clone(),
+                            self.streaming_state.model.clone(),
+                            self.metadata.clone(),
+                            &self.request_context,
+                            &self.shell_output_items,
+                            &self.files,
+                        );
+                        let event = OpenResponsesStreamEvent::ResponseCompleted {
+                            sequence_number: seq,
+                            response,
+                        };
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("response.completed")
+                                .json_data(event),
+                        ))
+                    }
+                    Response::AgenticToolCallProgress {
+                        round,
+                        tool_name,
+                        phase,
+                    } => {
+                        let mut pending_shell_calls = std::mem::take(&mut self.pending_shell_calls);
+                        let mut shell_output_items = std::mem::take(&mut self.shell_output_items);
+                        let shell_items = record_shell_progress_items(
+                            &mut pending_shell_calls,
+                            &mut shell_output_items,
+                            round,
+                            &tool_name,
+                            &phase,
+                        );
+                        self.pending_shell_calls = pending_shell_calls;
+                        self.shell_output_items = shell_output_items;
+                        if let Some(items) = shell_items {
+                            let base_index =
+                                self.shell_output_items.len().saturating_sub(items.len());
+                            let mut events = Vec::new();
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let output_index = base_index + idx;
+                                let seq = self.streaming_state.next_sequence_number();
+                                events.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                    sequence_number: seq,
                                     output_index,
                                     item: item.clone(),
                                 });
-                                self.function_call_items.push(item);
+                                let seq = self.streaming_state.next_sequence_number();
+                                events.push(OpenResponsesStreamEvent::OutputItemDone {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item,
+                                });
                             }
+                            let first = events.remove(0);
+                            self.pending_events.extend(events);
+                            self.events.push(first.clone());
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event(get_event_type(&first))
+                                    .json_data(first),
+                            ))
+                        } else {
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event("agentic_tool_call_progress")
+                                    .json_data(crate::chat_completion::serialize_agentic_progress(
+                                        round, &tool_name, &phase,
+                                    )),
+                            ))
                         }
                     }
-
-                    // If all finished, emit completion events
-                    if all_finished {
-                        self.finish_reasoning_item(&mut events_to_emit);
-                        let message_output_index = self.message_output_index();
-                        // Emit content_part.done
-                        if self.content_part_added {
-                            let seq = self.streaming_state.next_sequence_number();
-                            let part = output_text_with_file_annotations(
-                                self.accumulated_text.clone(),
-                                &self.streaming_state.response_id,
-                                &self.files,
-                            );
-                            events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
-                                sequence_number: seq,
-                                output_index: message_output_index,
-                                content_index: 0,
-                                part,
-                            });
-                        }
-
-                        // Emit output_item.done
-                        if self.output_item_added {
-                            let seq = self.streaming_state.next_sequence_number();
-                            let item = self.message_output_item.item_with_text(
-                                self.accumulated_text.clone(),
-                                &self.streaming_state.response_id,
-                                &self.files,
-                                ItemStatus::Completed,
-                            );
-                            events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
-                                sequence_number: seq,
-                                output_index: message_output_index,
-                                item,
-                            });
-                        }
-
-                        // Emit response.completed
-                        let seq = self.streaming_state.next_sequence_number();
-                        let mut response = self.build_current_response(ResponseStatus::Completed);
-                        response.adapter_generation = chat_chunk.adapter_generation.clone();
-                        response.completed_at = Some(
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        );
-
-                        // Add usage from chunk if available
-                        if let Some(usage) = &chat_chunk.usage {
-                            response.usage = Some(ResponseUsage::new(
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                            ));
-                        }
-
-                        events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
-                            sequence_number: seq,
-                            response,
-                        });
-
-                        self.done_state = DoneState::SendingDone;
-                    }
-
-                    MistralRs::maybe_log_response(self.state.clone(), &chat_chunk);
-
-                    // Return first event, queue the rest
-                    if !events_to_emit.is_empty() {
-                        let first_event = events_to_emit.remove(0);
-                        self.pending_events.extend(events_to_emit);
-                        self.events.push(first_event.clone());
+                    Response::File(file) => {
+                        self.files.push(file.clone());
                         Poll::Ready(Some(
-                            Event::default()
-                                .event(get_event_type(&first_event))
-                                .json_data(first_event),
+                            Event::default().event("file_produced").json_data(file),
                         ))
-                    } else {
-                        // Chunk consumed without producing an event; re-poll immediately
+                    }
+                    _ => {
                         cx.waker().wake_by_ref();
                         Poll::Pending
                     }
                 }
-                Response::Done(chat_resp) => {
-                    // Handle non-streaming completion through chunk path
-                    // This shouldn't normally happen in streaming mode
-                    let seq = self.streaming_state.next_sequence_number();
-                    let response = chat_response_to_response_resource(
-                        &chat_resp,
-                        self.streaming_state.response_id.clone(),
-                        self.streaming_state.model.clone(),
-                        self.metadata.clone(),
-                        &self.request_context,
-                        &self.shell_output_items,
-                        &self.files,
-                    );
-                    let event = OpenResponsesStreamEvent::ResponseCompleted {
-                        sequence_number: seq,
-                        response,
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("response.completed")
-                            .json_data(event),
-                    ))
-                }
-                Response::AgenticToolCallProgress {
-                    round,
-                    tool_name,
-                    phase,
-                } => {
-                    let mut pending_shell_calls = std::mem::take(&mut self.pending_shell_calls);
-                    let mut shell_output_items = std::mem::take(&mut self.shell_output_items);
-                    let shell_items = record_shell_progress_items(
-                        &mut pending_shell_calls,
-                        &mut shell_output_items,
-                        round,
-                        &tool_name,
-                        &phase,
-                    );
-                    self.pending_shell_calls = pending_shell_calls;
-                    self.shell_output_items = shell_output_items;
-                    if let Some(items) = shell_items {
-                        let base_index = self.shell_output_items.len().saturating_sub(items.len());
-                        let mut events = Vec::new();
-                        for (idx, item) in items.into_iter().enumerate() {
-                            let output_index = base_index + idx;
-                            let seq = self.streaming_state.next_sequence_number();
-                            events.push(OpenResponsesStreamEvent::OutputItemAdded {
-                                sequence_number: seq,
-                                output_index,
-                                item: item.clone(),
-                            });
-                            let seq = self.streaming_state.next_sequence_number();
-                            events.push(OpenResponsesStreamEvent::OutputItemDone {
-                                sequence_number: seq,
-                                output_index,
-                                item,
-                            });
-                        }
-                        let first = events.remove(0);
-                        self.pending_events.extend(events);
-                        self.events.push(first.clone());
-                        Poll::Ready(Some(
-                            Event::default()
-                                .event(get_event_type(&first))
-                                .json_data(first),
-                        ))
-                    } else {
-                        Poll::Ready(Some(
-                            Event::default()
-                                .event("agentic_tool_call_progress")
-                                .json_data(crate::chat_completion::serialize_agentic_progress(
-                                    round, &tool_name, &phase,
-                                )),
-                        ))
-                    }
-                }
-                Response::File(file) => {
-                    self.files.push(file.clone());
-                    Poll::Ready(Some(
-                        Event::default().event("file_produced").json_data(file),
-                    ))
-                }
-                _ => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-            },
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -1975,6 +1992,7 @@ async fn parse_openresponses_request(
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     Json(mut oairequest): Json<OpenResponsesCreateRequest>,
 ) -> OpenResponsesResponder {
     let (tx, rx) = create_response_channel(None);
@@ -2170,6 +2188,7 @@ pub async fn create_response(
             store,
             conversation_history,
             request_context,
+            stream_outcome.map(|Extension(handle)| handle),
         );
 
         let keep_alive_interval = get_keep_alive_interval();

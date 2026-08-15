@@ -46,7 +46,7 @@ use crate::{
         ResponseFormat, StopTokens, ToolCall,
     },
     skills::SkillStore,
-    streaming::get_keep_alive_interval,
+    streaming::{get_keep_alive_interval, observe_response, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, SharedMistralRsState},
     util::sanitize_error_message,
 };
@@ -1029,10 +1029,15 @@ pub struct AnthropicStreamer {
     text_block_index: Option<usize>,
     next_content_index: usize,
     ping: Interval,
+    outcome: Option<StreamOutcomeHandle>,
 }
 
 impl AnthropicStreamer {
-    fn new(rx: Receiver<Response>, state: SharedMistralRsState) -> Self {
+    fn new(
+        rx: Receiver<Response>,
+        state: SharedMistralRsState,
+        outcome: Option<StreamOutcomeHandle>,
+    ) -> Self {
         let ping_interval = Duration::from_millis(get_keep_alive_interval());
         let mut ping = interval_at(Instant::now() + ping_interval, ping_interval);
         ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -1046,6 +1051,7 @@ impl AnthropicStreamer {
             text_block_index: None,
             next_content_index: 0,
             ping,
+            outcome,
         }
     }
 
@@ -1287,69 +1293,75 @@ impl futures::Stream for AnthropicStreamer {
             }
 
             match self.rx.poll_recv(cx) {
-                Poll::Ready(Some(resp)) => match resp {
-                    Response::Chunk(chunk) => self.handle_chunk(chunk),
-                    Response::ModelError(msg, _) => {
-                        MistralRs::maybe_log_error(
-                            self.state.clone(),
-                            &crate::handler_core::ModelErrorMessage(msg.to_string()),
-                        );
-                        self.handle_error_event("api_error", msg);
+                Poll::Ready(Some(resp)) => {
+                    observe_response(&self.outcome, &resp);
+                    match resp {
+                        Response::Chunk(chunk) => self.handle_chunk(chunk),
+                        Response::ModelError(msg, _) => {
+                            MistralRs::maybe_log_error(
+                                self.state.clone(),
+                                &crate::handler_core::ModelErrorMessage(msg.to_string()),
+                            );
+                            self.handle_error_event("api_error", msg);
+                        }
+                        Response::ValidationError(e) => {
+                            self.handle_error_event(
+                                "invalid_request_error",
+                                sanitize_error_message(e.as_ref()),
+                            );
+                        }
+                        Response::InternalError(e) => {
+                            MistralRs::maybe_log_error(self.state.clone(), &*e);
+                            self.handle_error_event(
+                                "api_error",
+                                sanitize_error_message(e.as_ref()),
+                            );
+                        }
+                        Response::AgenticToolCallProgress {
+                            round,
+                            tool_name,
+                            phase,
+                        } => {
+                            self.enqueue_json(
+                                "agentic_tool_call_progress",
+                                crate::chat_completion::serialize_agentic_progress(
+                                    round, &tool_name, &phase,
+                                ),
+                            );
+                        }
+                        Response::AgenticToolApprovalRequired {
+                            approval_id,
+                            session_id,
+                            round,
+                            tool,
+                            arguments,
+                        } => {
+                            self.enqueue_json(
+                                "agentic_tool_approval_required",
+                                json!({
+                                    "type": "agentic_tool_approval_required",
+                                    "approval_id": approval_id,
+                                    "session_id": session_id,
+                                    "round": round,
+                                    "tool": tool,
+                                    "arguments": arguments,
+                                }),
+                            );
+                        }
+                        Response::File(file) => {
+                            self.enqueue_json("file_produced", json!(file));
+                        }
+                        Response::BlockDenoisingProgress(_) => {}
+                        Response::Done(_)
+                        | Response::CompletionDone(_)
+                        | Response::CompletionModelError(_, _)
+                        | Response::CompletionChunk(_)
+                        | Response::ImageGeneration(_)
+                        | Response::Speech { .. }
+                        | Response::Raw { .. }
+                        | Response::Embeddings { .. } => unreachable!(),
                     }
-                    Response::ValidationError(e) => {
-                        self.handle_error_event(
-                            "invalid_request_error",
-                            sanitize_error_message(e.as_ref()),
-                        );
-                    }
-                    Response::InternalError(e) => {
-                        MistralRs::maybe_log_error(self.state.clone(), &*e);
-                        self.handle_error_event("api_error", sanitize_error_message(e.as_ref()));
-                    }
-                    Response::AgenticToolCallProgress {
-                        round,
-                        tool_name,
-                        phase,
-                    } => {
-                        self.enqueue_json(
-                            "agentic_tool_call_progress",
-                            crate::chat_completion::serialize_agentic_progress(
-                                round, &tool_name, &phase,
-                            ),
-                        );
-                    }
-                    Response::AgenticToolApprovalRequired {
-                        approval_id,
-                        session_id,
-                        round,
-                        tool,
-                        arguments,
-                    } => {
-                        self.enqueue_json(
-                            "agentic_tool_approval_required",
-                            json!({
-                                "type": "agentic_tool_approval_required",
-                                "approval_id": approval_id,
-                                "session_id": session_id,
-                                "round": round,
-                                "tool": tool,
-                                "arguments": arguments,
-                            }),
-                        );
-                    }
-                    Response::File(file) => {
-                        self.enqueue_json("file_produced", json!(file));
-                    }
-                    Response::BlockDenoisingProgress(_) => {}
-                    Response::Done(_)
-                    | Response::CompletionDone(_)
-                    | Response::CompletionModelError(_, _)
-                    | Response::CompletionChunk(_)
-                    | Response::ImageGeneration(_)
-                    | Response::Speech { .. }
-                    | Response::Raw { .. }
-                    | Response::Embeddings { .. } => unreachable!(),
-                },
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => {
                     if Pin::new(&mut self.ping).poll_tick(cx).is_ready() {
@@ -1441,8 +1453,12 @@ fn handle_validation_error(e: anyhow::Error) -> AnthropicMessagesResponder {
     AnthropicMessagesResponder::ValidationError(e.into())
 }
 
-fn create_streamer(rx: Receiver<Response>, state: SharedMistralRsState) -> AnthropicMessagesSse {
-    let streamer = AnthropicStreamer::new(rx, state);
+fn create_streamer(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    outcome: Option<StreamOutcomeHandle>,
+) -> AnthropicMessagesSse {
+    let streamer = AnthropicStreamer::new(rx, state, outcome);
     Sse::new(streamer)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(get_keep_alive_interval())))
 }
@@ -1505,6 +1521,7 @@ pub async fn anthropic_messages(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     Json(request): Json<AnthropicMessagesRequest>,
 ) -> AnthropicMessagesResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -1570,7 +1587,11 @@ pub async fn anthropic_messages(
     }
 
     if is_streaming {
-        AnthropicMessagesResponder::Sse(create_streamer(rx, state))
+        AnthropicMessagesResponder::Sse(create_streamer(
+            rx,
+            state,
+            stream_outcome.map(|Extension(handle)| handle),
+        ))
     } else {
         process_non_streaming_response(&mut rx, state).await
     }
