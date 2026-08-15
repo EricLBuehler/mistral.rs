@@ -8,13 +8,14 @@ use std::{
 use mistralrs_core::{Response, Usage};
 use tokio::sync::mpsc::Receiver;
 
-use crate::types::SharedMistralRsState;
+use crate::{types::SharedMistralRsState, util::sanitize_error_message};
 
 /// What a streaming request produced, filled in by the streamer and read once the SSE body ends.
 #[derive(Debug, Clone, Default)]
 pub struct StreamOutcome {
     pub usage: Option<Usage>,
-    pub errored: bool,
+    /// The error message sent to the client, if the request failed
+    pub error: Option<String>,
 }
 
 /// Shared between the observability middleware and the streamer that serves the request.
@@ -37,10 +38,12 @@ impl StreamOutcomeHandle {
             }
             Response::Done(done) => outcome.usage = Some(done.usage.clone()),
             Response::CompletionDone(done) => outcome.usage = Some(done.usage.clone()),
-            Response::ModelError(..)
-            | Response::CompletionModelError(..)
-            | Response::InternalError(_)
-            | Response::ValidationError(_) => outcome.errored = true,
+            Response::ModelError(msg, _) | Response::CompletionModelError(msg, _) => {
+                outcome.error = Some(msg.clone())
+            }
+            Response::InternalError(e) | Response::ValidationError(e) => {
+                outcome.error = Some(sanitize_error_message(e.as_ref()))
+            }
             _ => {}
         }
     }

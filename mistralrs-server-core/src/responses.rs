@@ -1596,7 +1596,6 @@ pub type OpenResponsesResponder =
     BaseCompletionResponder<ResponseResource, KeepAliveStream<OpenResponsesStreamer>>;
 
 type JsonModelError = BaseJsonModelError<ResponseResource>;
-impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for OpenResponsesResponder {
     fn into_response(self) -> axum::response::Response {

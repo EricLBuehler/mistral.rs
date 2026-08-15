@@ -184,7 +184,6 @@ pub type CompletionResponder =
 
 /// JSON error response structure for model errors.
 type JsonModelError = BaseJsonModelError<CompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for CompletionResponder {
     /// Converts the completion responder into an HTTP response.

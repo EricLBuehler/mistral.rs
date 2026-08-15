@@ -22,6 +22,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use crate::{
+    handler_core::ResponseErrorMessage,
     lora_adapters::{
         is_resolvable_lora_adapter_model, lifecycle_body_too_large_response,
         list_lora_adapter_models,
@@ -39,6 +40,8 @@ const UNKNOWN_MODEL: &str = "unknown";
 const DEFAULT_MODEL: &str = "default";
 const OPTIONS_METHOD: &str = "OPTIONS";
 const SSE_CONTENT_TYPE: &str = "text/event-stream";
+// Error bodies are small; cap what we buffer to recover a message for the access log
+const MAX_LOGGED_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MILLIS_PER_SECOND: f64 = 1_000.0;
 const ACCESS_LOG_MS_ROUNDING: f64 = 1_000.0;
 const HTTP_REQUEST_DURATION_BUCKETS: [f64; 18] = [
@@ -280,8 +283,43 @@ pub async fn observe_http(
         return Response::from_parts(parts, body);
     }
 
-    completion.finish(None);
+    let error = if response.status().is_client_error() || response.status().is_server_error() {
+        match response.extensions().get::<ResponseErrorMessage>() {
+            Some(ResponseErrorMessage(message)) => Some(message.clone()),
+            None => {
+                let (parts, body) = response.into_parts();
+                let (message, body) = match to_bytes(body, MAX_LOGGED_ERROR_BODY_BYTES).await {
+                    Ok(bytes) => (error_message_from_body(&bytes), Body::from(bytes)),
+                    Err(_) => (None, Body::empty()),
+                };
+                response = Response::from_parts(parts, body);
+                message
+            }
+        }
+    } else {
+        None
+    };
+    completion.finish(error.map(RequestError::Message));
     response
+}
+
+/// Axum rejections and our JSON errors carry the message as `{"message": ...}` or raw text.
+fn error_message_from_body(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let message = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("message")
+                .or_else(|| value.get("error").and_then(|e| e.get("message")))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| text.to_string());
+    Some(message)
 }
 
 fn is_sse(response: &Response) -> bool {
@@ -328,6 +366,11 @@ struct StreamStats {
     outcome: StreamOutcome,
 }
 
+enum RequestError {
+    Message(String),
+    Stream(StreamStats),
+}
+
 impl RequestCompletion {
     fn log_stream_accepted(&self) {
         debug!(
@@ -341,7 +384,7 @@ impl RequestCompletion {
         );
     }
 
-    fn finish(self, stream: Option<StreamStats>) {
+    fn finish(self, detail: Option<RequestError>) {
         let latency = self.start.elapsed().as_secs_f64();
         if self.config.metrics && !self.housekeeping {
             let labels = [
@@ -364,7 +407,7 @@ impl RequestCompletion {
                 &self.model,
                 &self.status,
                 latency,
-                stream.as_ref(),
+                detail.as_ref(),
             );
         } else {
             debug!(
@@ -392,12 +435,12 @@ impl ObservedBody {
     fn finish(&mut self, end: StreamEnd) {
         if let Some(completion) = self.completion.take() {
             let outcome = self.outcome.snapshot();
-            let end = if outcome.errored {
+            let end = if outcome.error.is_some() {
                 StreamEnd::Error
             } else {
                 end
             };
-            completion.finish(Some(StreamStats { end, outcome }));
+            completion.finish(Some(RequestError::Stream(StreamStats { end, outcome })));
         }
     }
 }
@@ -685,10 +728,19 @@ fn log_request_done(
     model: &str,
     status: &str,
     latency: f64,
-    stream: Option<&StreamStats>,
+    detail: Option<&RequestError>,
 ) {
     let duration_ms = rounded_duration_ms(latency);
+    let stream = match detail {
+        Some(RequestError::Stream(stats)) => Some(stats),
+        _ => None,
+    };
     let usage = stream.and_then(|stats| stats.outcome.usage.as_ref());
+    let error = match detail {
+        Some(RequestError::Message(message)) => Some(message.as_str()),
+        Some(RequestError::Stream(stats)) => stats.outcome.error.as_deref(),
+        None => None,
+    };
     match format {
         AccessLogFormat::Text => {
             let mut line = format!(
@@ -706,6 +758,9 @@ fn log_request_done(
                     usage.avg_prompt_tok_per_sec,
                     usage.avg_compl_tok_per_sec
                 ));
+            }
+            if let Some(error) = error {
+                line.push_str(&format!(" error={error:?}"));
             }
             info!("{line}");
         }
@@ -727,6 +782,9 @@ fn log_request_done(
                 record["completion_tokens"] = usage.completion_tokens.into();
                 record["prefill_tok_s"] = usage.avg_prompt_tok_per_sec.into();
                 record["decode_tok_s"] = usage.avg_compl_tok_per_sec.into();
+            }
+            if let Some(error) = error {
+                record["error"] = serde_json::Value::String(error.to_string());
             }
             info!("{record}");
         }
