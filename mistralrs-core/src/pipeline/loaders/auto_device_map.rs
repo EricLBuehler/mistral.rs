@@ -305,6 +305,10 @@ pub fn get_device_layers(
             0
         }
     };
+    // Paged layers past the mapped stack (an MTP head) are charged to the non-mapped device.
+    let extra_kv_bytes = (num_layers..model_cfg.num_layers())
+        .map(kv_bytes_for_layer)
+        .sum::<usize>();
 
     // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
@@ -355,7 +359,7 @@ pub fn get_device_layers(
         //   - otherwise, must hold the mapped act
         let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
         let required_whole_capacity = if ordinal == 0 {
-            remaining + non_mapped_max.max(mapped_max) + remaining_kv_bytes
+            remaining + non_mapped_max.max(mapped_max) + remaining_kv_bytes + extra_kv_bytes
         } else {
             remaining + mapped_max + remaining_kv_bytes
         };
@@ -368,7 +372,7 @@ pub fn get_device_layers(
             let mut used_weight_bytes = 0;
             let mut count = 0;
             if ordinal == 0 {
-                used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
+                used = used.max(non_mapped_max) + non_mapped_size_in_bytes + extra_kv_bytes;
                 used_weight_bytes += non_mapped_size_in_bytes;
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {

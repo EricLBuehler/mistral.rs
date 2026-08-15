@@ -7183,11 +7183,12 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: Qwen3_5Config = serde_json::from_str(config)?;
+        let mtp = cfg.mtp;
         let cfg = &cfg.text_config;
 
         let base = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
+            num_layers: cfg.num_hidden_layers + cfg.mtp_layers(mtp),
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,
@@ -7199,28 +7200,13 @@ impl DeviceMappedModelLoader for Qwen3_5Loader {
 
         Ok(Box::new(HybridPagedKvCacheConfig::new(
             base,
-            qwen3_5_paged_layers(cfg),
+            cfg.paged_kv_layers(mtp),
         )))
     }
 
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         Some(vec![NonMappedSubModel::Vision])
     }
-}
-
-/// Only the full-attention layers of a Qwen3.5 hybrid stack hold a paged KV cache.
-pub(crate) fn qwen3_5_paged_layers(
-    cfg: &crate::vision_models::qwen3_5::config::TextConfig,
-) -> Vec<bool> {
-    cfg.layer_types()
-        .into_iter()
-        .map(|ty| {
-            matches!(
-                ty,
-                crate::vision_models::qwen3_5::config::LayerType::FullAttention
-            )
-        })
-        .collect()
 }
 
 // ======================== Qwen3_5Moe Loader

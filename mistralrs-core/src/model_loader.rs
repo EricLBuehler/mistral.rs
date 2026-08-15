@@ -24,6 +24,7 @@ pub struct LoaderBuilder {
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
     max_model_len: Option<usize>,
+    mtp: bool,
 }
 
 impl LoaderBuilder {
@@ -34,7 +35,14 @@ impl LoaderBuilder {
             chat_template: None,
             jinja_explicit: None,
             max_model_len: None,
+            mtp: false,
         }
+    }
+
+    /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = mtp;
+        self
     }
 
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
@@ -315,6 +323,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_mtp(args.mtp)
         .build(arch)?,
         ModelSelected::Run {
             model_id,
@@ -394,7 +403,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             } else {
                 builder
             };
-            builder.build()
+            builder.with_mtp(args.mtp).build()
         }
         ModelSelected::MultimodalPlain {
             model_id,
@@ -439,6 +448,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(model_id),
             args.jinja_explicit,
         )
+        .with_mtp(args.mtp)
         .build(arch),
         ModelSelected::DiffusionPlain {
             model_id,

@@ -1063,7 +1063,11 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
             self.language_model.set_store_spec_hidden(false);
             return Ok(None);
         };
-        let assistant = config.model.clone();
+        let Some(assistant) = config.model.clone() else {
+            candle_core::bail!(
+                "Gemma 4 has no built-in MTP head; pass an assistant model with `--mtp-model`."
+            );
+        };
         let runtime = mtp::Gemma4MtpRuntime::load(
             config,
             &self.cfg.text_config,

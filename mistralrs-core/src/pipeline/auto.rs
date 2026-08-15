@@ -53,6 +53,7 @@ pub struct AutoLoaderBuilder {
     lora_adapters: Option<Vec<LoraAdapterSpec>>,
     lora_runtime_config: Option<LoraRuntimeConfig>,
     hf_cache_path: Option<PathBuf>,
+    mtp: bool,
 }
 
 impl AutoLoaderBuilder {
@@ -82,7 +83,14 @@ impl AutoLoaderBuilder {
             lora_adapters: None,
             lora_runtime_config: None,
             hf_cache_path: None,
+            mtp: false,
         }
+    }
+
+    /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = mtp;
+        self
     }
 
     pub fn with_xlora(
@@ -130,6 +138,7 @@ impl AutoLoaderBuilder {
             lora_adapters,
             lora_runtime_config,
             hf_cache_path,
+            mtp,
         } = self;
 
         let mut normal_builder = NormalLoaderBuilder::new(
@@ -151,6 +160,7 @@ impl AutoLoaderBuilder {
         if let Some(ref path) = hf_cache_path {
             normal_builder = normal_builder.hf_cache_path(path.clone());
         }
+        normal_builder = normal_builder.with_mtp(mtp);
 
         let mut multimodal_builder = MultimodalLoaderBuilder::new(
             multimodal_cfg,
@@ -166,6 +176,7 @@ impl AutoLoaderBuilder {
         if let Some(ref path) = hf_cache_path {
             multimodal_builder = multimodal_builder.hf_cache_path(path.clone());
         }
+        multimodal_builder = multimodal_builder.with_mtp(mtp);
 
         let mut embedding_builder =
             EmbeddingLoaderBuilder::new(embedding_cfg, tokenizer_json, Some(model_id.clone()));

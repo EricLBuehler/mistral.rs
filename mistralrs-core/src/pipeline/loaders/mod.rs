@@ -56,6 +56,17 @@ use crate::{
 use super::{paths::AdapterPaths, Pipeline};
 
 pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
+/// Set on the model config JSON when the checkpoint's built-in MTP head should be loaded.
+pub const MTP_CONFIG_KEY: &str = "_mistralrs_mtp";
+
+pub(crate) fn inject_mtp_config_flag(config: &str) -> anyhow::Result<String> {
+    let mut config: serde_json::Value = serde_json::from_str(config)?;
+    let object = config
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("model config must be a JSON object"))?;
+    object.insert(MTP_CONFIG_KEY.to_string(), serde_json::Value::Bool(true));
+    Ok(config.to_string())
+}
 
 pub(crate) fn qk_rope_layout_from_config(
     config: &str,

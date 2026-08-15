@@ -59,6 +59,11 @@ pub struct TextConfig {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
     pub(crate) gdn_v_head_layout: GdnVHeadLayout,
+    // Multi-token prediction head shipped in the checkpoint (`mtp.*` weights)
+    #[serde(default)]
+    pub mtp_num_hidden_layers: usize,
+    #[serde(default)]
+    pub mtp_use_dedicated_embeddings: bool,
 }
 
 impl TextConfig {
@@ -177,6 +182,30 @@ impl TextConfig {
     pub fn rot_dim(&self) -> usize {
         (self.head_dim as f64 * self.partial_rotary_factor()) as usize
     }
+
+    /// Absolute layer index of the first MTP block; its paged KV cache lives past the main stack.
+    pub fn mtp_layer_idx(&self) -> usize {
+        self.num_hidden_layers
+    }
+
+    pub fn mtp_layers(&self, mtp: bool) -> usize {
+        if mtp {
+            self.mtp_num_hidden_layers
+        } else {
+            0
+        }
+    }
+
+    /// Paged-KV mask over the main stack plus any MTP blocks appended after it.
+    pub fn paged_kv_layers(&self, mtp: bool) -> Vec<bool> {
+        let mut layers = self
+            .layer_types()
+            .into_iter()
+            .map(|ty| ty == LayerType::FullAttention)
+            .collect::<Vec<_>>();
+        layers.extend(std::iter::repeat_n(true, self.mtp_layers(mtp)));
+        layers
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -190,4 +219,37 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     /// Top-level quantization_config takes precedence
     pub quantization_config: Option<QuantizedConfig>,
+    /// Injected by the loader when the built-in MTP head should be loaded (see `MTP_CONFIG_KEY`).
+    #[serde(default, rename = "_mistralrs_mtp")]
+    pub mtp: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mtp_layers_extend_the_paged_kv_mask() {
+        let cfg: TextConfig = serde_json::from_str(
+            r#"{
+                "head_dim": 64, "vocab_size": 32, "hidden_size": 128, "intermediate_size": 256,
+                "num_hidden_layers": 8, "num_attention_heads": 4, "num_key_value_heads": 2,
+                "hidden_act": "silu", "max_position_embeddings": 1024, "rms_norm_eps": 1e-6,
+                "rope_parameters": { "mrope_section": [8, 4, 4] },
+                "linear_key_head_dim": 16, "linear_value_head_dim": 16,
+                "linear_num_key_heads": 2, "linear_num_value_heads": 4,
+                "mtp_num_hidden_layers": 1
+            }"#,
+        )
+        .unwrap();
+        let base = cfg.paged_kv_layers(false);
+        assert_eq!(base.len(), 8);
+        assert_eq!(base.iter().filter(|x| **x).count(), 2);
+        let with_mtp = cfg.paged_kv_layers(true);
+        assert_eq!(with_mtp.len(), 9);
+        assert!(with_mtp[8]);
+        assert_eq!(cfg.mtp_layer_idx(), 8);
+        assert_eq!(cfg.mtp_layers(true), 1);
+        assert_eq!(cfg.mtp_layers(false), 0);
+    }
 }

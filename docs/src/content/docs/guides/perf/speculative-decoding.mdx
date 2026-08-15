@@ -61,9 +61,20 @@ For full control, `with_mtp_config(MtpConfig { model, n_predict })` is equivalen
 
 | Mode | Target models | Assistant model | Status |
 |---|---|---|---|
-| MTP | Gemma 4 | Gemma 4 assistant checkpoints | Supported with paged attention |
+| MTP | Gemma 4 | Gemma 4 assistant checkpoints (`--mtp-model`) | Supported with paged attention |
+| MTP | Qwen3.5, Qwen3.8 | Built into the checkpoint (`--mtp`) | Supported with paged attention |
 
 Legacy target/draft speculative decoding has been removed. New speculative decoding features use the MTP proposer/target path.
+
+## Qwen3.5 / Qwen3.8
+
+Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weights) sharing the target's embeddings and `lm_head`. Pass `--mtp` to load it; no separate assistant model is needed:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 --mtp
+```
+
+The head keeps its own paged KV cache alongside the target's, so the KV budget grows by one attention layer. `--mtp-n-predict` defaults to 2 for these heads. Greedy output is equivalent to non-MTP decoding up to floating-point tie-breaks in the hybrid recurrent layers. UQFF artifacts must include the `mtp.*` tensors to use `--mtp`.
 
 ## Gemma 4
 
