@@ -114,10 +114,14 @@ fn causal_unsplittable_component_end(
     }
 }
 
+/// `block_align` ends text chunks on paged-attention block boundaries. Hybrid models can only
+/// checkpoint recurrent state between forwards, so without this the boundary a prefix lookup asks
+/// for is never observed.
 pub(crate) fn build_prompt_chunk_plan(
     total_len: usize,
     prefix_len: usize,
     chunk_size: usize,
+    block_align: Option<usize>,
     features: &[MultiModalFeature],
 ) -> Vec<PromptChunkPlan> {
     let mut pos = prefix_len.min(total_len);
@@ -202,7 +206,13 @@ pub(crate) fn build_prompt_chunk_plan(
             .map(|feature| feature.offset)
             .min()
             .unwrap_or(total_len);
-        let end = (pos + chunk_size).min(next_feature_start).min(total_len);
+        let mut end = (pos + chunk_size).min(next_feature_start).min(total_len);
+        if let Some(block_size) = block_align.filter(|size| *size > 0) {
+            let aligned = end / block_size * block_size;
+            if aligned > pos && aligned < end {
+                end = aligned;
+            }
+        }
         chunks.push(PromptChunkPlan {
             start: pos,
             end,
@@ -319,6 +329,7 @@ mod tests {
             25,
             0,
             8,
+            None,
             &[feature(10, 6, MultimodalAttentionPolicy::NonCausal)],
         );
 
@@ -361,7 +372,7 @@ mod tests {
         splittable.splittable = true;
 
         assert_eq!(
-            policies(build_prompt_chunk_plan(16, 0, 4, &[unsplittable])),
+            policies(build_prompt_chunk_plan(16, 0, 4, None, &[unsplittable])),
             vec![
                 (0, 2, MultimodalAttentionPolicy::Causal),
                 (2, 12, MultimodalAttentionPolicy::Causal),
@@ -369,7 +380,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            policies(build_prompt_chunk_plan(16, 0, 4, &[splittable])),
+            policies(build_prompt_chunk_plan(16, 0, 4, None, &[splittable])),
             vec![
                 (0, 2, MultimodalAttentionPolicy::Causal),
                 (2, 6, MultimodalAttentionPolicy::Causal),
@@ -391,6 +402,7 @@ mod tests {
                 16,
                 0,
                 4,
+                None,
                 &[unsplittable, splittable],
             )),
             vec![
@@ -407,6 +419,7 @@ mod tests {
             20,
             0,
             8,
+            None,
             &[
                 feature(4, 8, MultimodalAttentionPolicy::NonCausal),
                 feature(8, 4, MultimodalAttentionPolicy::NonCausal),
@@ -429,6 +442,7 @@ mod tests {
             24,
             0,
             8,
+            None,
             &[
                 feature(4, 6, MultimodalAttentionPolicy::NonCausal),
                 feature(8, 6, MultimodalAttentionPolicy::NonCausal),
@@ -452,6 +466,7 @@ mod tests {
             14,
             0,
             8,
+            None,
             &[
                 feature(2, 8, MultimodalAttentionPolicy::Causal),
                 feature(4, 4, MultimodalAttentionPolicy::NonCausal),
@@ -467,6 +482,38 @@ mod tests {
                 (8, 10, MultimodalAttentionPolicy::Causal),
                 (10, 14, MultimodalAttentionPolicy::Causal),
             ]
+        );
+    }
+
+    #[test]
+    fn block_align_splits_the_prompt_tail() {
+        let spans = |plan: Vec<PromptChunkPlan>| {
+            plan.into_iter()
+                .map(|chunk| (chunk.start, chunk.end))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            spans(build_prompt_chunk_plan(65, 0, 4096, Some(32), &[])),
+            vec![(0, 64), (64, 65)]
+        );
+        // Already aligned: no extra chunk, the single boundary is the prompt end.
+        assert_eq!(
+            spans(build_prompt_chunk_plan(64, 0, 4096, Some(32), &[])),
+            vec![(0, 64)]
+        );
+        // Shorter than one block: nothing to snapshot, so do not split.
+        assert_eq!(
+            spans(build_prompt_chunk_plan(20, 0, 4096, Some(32), &[])),
+            vec![(0, 20)]
+        );
+        assert_eq!(
+            spans(build_prompt_chunk_plan(6712, 0, 4096, Some(32), &[])),
+            vec![(0, 4096), (4096, 6688), (6688, 6712)]
+        );
+        assert_eq!(
+            spans(build_prompt_chunk_plan(65, 0, 4096, None, &[])),
+            vec![(0, 65)]
         );
     }
 }

@@ -165,10 +165,17 @@ pub trait ModelConfigLike {
     fn layer_has_paged_kv_cache(&self, _layer_idx: usize) -> bool {
         true
     }
-    fn num_paged_kv_cache_layers(&self) -> usize {
+    /// Paged KV elements per token for one layer, or `None` when the layer keeps no paged cache.
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        self.layer_has_paged_kv_cache(layer_idx)
+            .then(|| self.kv_cache_elements_per_token())
+    }
+    /// Summed over every layer holding a paged cache. Size against this rather than multiplying a
+    /// per-layer average by a layer count: the two diverge as soon as layers differ from each other.
+    fn total_kv_cache_elements_per_token(&self) -> usize {
         (0..self.num_layers())
-            .filter(|&idx| self.layer_has_paged_kv_cache(idx))
-            .count()
+            .filter_map(|idx| self.layer_kv_cache_elements_per_token(idx))
+            .sum()
     }
     fn kv_cache_group_ids(&self) -> Vec<u32> {
         if self.has_kv_cache_sharing() {
@@ -376,6 +383,27 @@ mod tests {
         assert!(topology.uses_own_kv_cache_for_layer(1));
         assert!(!topology.uses_own_kv_cache_for_layer(2));
         assert_eq!(topology.owner_for_layer(3), 1);
+    }
+
+    #[test]
+    fn hybrid_totals_skip_layers_without_a_paged_cache() {
+        let base = ModelConfigMetadata {
+            max_seq_len: 32_768,
+            num_layers: 4,
+            hidden_size: 896,
+            num_kv_heads: 2,
+            num_attn_heads: 16,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        let per_layer = base.kv_cache_elements_per_token();
+        assert_eq!(base.total_kv_cache_elements_per_token(), 4 * per_layer);
+
+        let hybrid = super::HybridPagedKvCacheConfig::new(base, vec![true, false, false, true]);
+        assert_eq!(hybrid.total_kv_cache_elements_per_token(), 2 * per_layer);
+        assert_eq!(hybrid.layer_kv_cache_elements_per_token(1), None);
     }
 
     #[test]

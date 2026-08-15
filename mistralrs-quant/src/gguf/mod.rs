@@ -36,22 +36,8 @@ use crate::{
 pub(crate) const GGUF_AFFINE_MIN_BATCH: usize = 8;
 
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
-pub(crate) fn gguf_affine_adjust_cache_bytes(
-    device: &Device,
-    dtype: DType,
-    available_bytes: usize,
-    requested_cache_bytes: usize,
-    minimum_cache_bytes: usize,
-    may_reduce_cache: bool,
-) -> Result<usize> {
-    packed_affine::adjust_cache_bytes(
-        device,
-        dtype,
-        available_bytes,
-        requested_cache_bytes,
-        minimum_cache_bytes,
-        may_reduce_cache,
-    )
+pub(crate) fn gguf_affine_budget_bytes(device: &Device, dtype: DType) -> usize {
+    packed_affine::budget_bytes(device, dtype)
 }
 
 #[derive(Debug)]

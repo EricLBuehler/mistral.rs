@@ -110,3 +110,4 @@ Text, multimodal, speech, and embedding models support ISQ at load time. Diffusi
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
 | MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |

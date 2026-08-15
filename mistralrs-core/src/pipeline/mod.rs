@@ -78,7 +78,7 @@ pub(crate) fn get_device_layers_for_loader(
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
-    paged_attn_config: Option<&PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<crate::device_map::DeviceMapMetadata> {
     loaders::auto_device_map::get_device_layers(
         loader,
@@ -167,7 +167,7 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
-const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
 
 #[cfg(feature = "cuda")]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
@@ -1704,6 +1704,7 @@ pub trait Pipeline:
                     && !has_suffix_only_prefill
                     && !keep_complete_packed_candidates)
                     .then(|| {
+                        let block_align = self.cache().is_hybrid().then_some(block_size);
                         chunk_size.map(|chunk_size| {
                             input_seqs
                                 .iter()
@@ -1712,6 +1713,7 @@ pub trait Pipeline:
                                         seq.get_toks().len(),
                                         seq.prefix_cache_len(),
                                         chunk_size,
+                                        block_align,
                                         seq.mm_features(),
                                     )
                                 })

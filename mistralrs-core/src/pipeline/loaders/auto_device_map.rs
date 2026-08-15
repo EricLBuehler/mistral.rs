@@ -199,7 +199,7 @@ pub fn get_device_layers(
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
-    paged_attn_config: Option<&PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
     let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
     let non_mapped_max =
@@ -222,6 +222,7 @@ pub fn get_device_layers(
     };
 
     let model_cfg = loader.model_config(config)?;
+    let has_paged_attn = paged_attn_config.is_some();
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
             // For MbAmount, clamp to available memory so the capacity check
@@ -258,14 +259,19 @@ pub fn get_device_layers(
                 // ContextSize passes through to calculate_cache_config.
                 other => other,
             };
+            info!(
+                "Reserving {} MB for activations (predicted).",
+                b_to_mb!(non_mapped_max.max(mapped_max))
+            );
+            // The budget derived here is the only one that accounts for the activation reserve, so
+            // it has to be what the pipelines load with. Recomputing there drops the reserve.
+            cfg.mem_gpu = effective_mem_gpu;
 
             let cache = calculate_cache_config(
                 effective_mem_gpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
-                paged_attn_config
-                    .map(|cfg| cfg.cache_type)
-                    .unwrap_or_default(),
+                cfg.cache_type,
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
@@ -416,7 +422,7 @@ pub fn get_device_layers(
             over
         );
     }
-    if paged_attn_config.is_some_and(|_| includes_cpu) {
+    if has_paged_attn && includes_cpu {
         let original_layers = layer_sizes_backup
             .take()
             .expect("layer sizes backup missing for paged attention fallback");

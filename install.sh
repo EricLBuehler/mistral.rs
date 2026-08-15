@@ -362,8 +362,8 @@ build_features() {
 
             # Add flash attention based on compute capability
             if [ "$cuda_cc" = "90" ]; then
-                features="$features flash-attn-v3"
-                info "Hopper GPU detected - enabling flash-attn-v3"
+                features="$features flash-attn-v3 flash-attn"
+                info "Hopper GPU detected - enabling flash-attn-v3 and flash-attn"
             elif [ "$cuda_cc" -ge 80 ] 2>/dev/null; then
                 features="$features flash-attn"
                 info "Ampere+ GPU detected - enabling flash-attn"
