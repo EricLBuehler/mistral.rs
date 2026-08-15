@@ -1704,6 +1704,7 @@ pub trait Pipeline:
                     && !has_suffix_only_prefill
                     && !keep_complete_packed_candidates)
                     .then(|| {
+                        let block_align = self.cache().is_hybrid().then_some(block_size);
                         chunk_size.map(|chunk_size| {
                             input_seqs
                                 .iter()
@@ -1712,6 +1713,7 @@ pub trait Pipeline:
                                         seq.get_toks().len(),
                                         seq.prefix_cache_len(),
                                         chunk_size,
+                                        block_align,
                                         seq.mm_features(),
                                     )
                                 })
