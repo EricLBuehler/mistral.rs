@@ -177,6 +177,7 @@ axum_static = "1.8.6"
 mime_guess = "2.0.5"
 include_dir = "0.7.4"
 http = "1.4.0"
+http-body = "1.0.1"
 hyper = "1.8.1"
 rust-mcp-schema = { version = "0.9.5", default-features = false, features = ["schema_utils", "latest"] }
 cudaforge = "0.1.2"

@@ -48,7 +48,10 @@ use crate::{
         ResponseFormat,
     },
     skills::SkillStore,
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    streaming::{
+        base_create_streamer, get_keep_alive_interval, observe_response, BaseStreamer, DoneState,
+        StreamOutcomeHandle,
+    },
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{
         parse_audio_url_for_server, parse_image_url_for_server, sanitize_error_message,
@@ -405,95 +408,98 @@ impl futures::Stream for ChatCompletionStreamer {
         }
 
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    // Done now, just need to send the [DONE]
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => {
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::Chunk(mut response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+            Poll::Ready(Some(resp)) => {
+                observe_response(&self.outcome, &resp);
+                match resp {
+                    Response::ModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
+                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(Event::default().data(msg))))
                     }
-                    // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-
-                    if let Some(on_chunk) = &self.on_chunk {
-                        response = on_chunk(response);
+                    Response::ValidationError(e) => {
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )))
                     }
-
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )))
                     }
+                    Response::Chunk(mut response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            self.done_state = DoneState::SendingDone;
+                        }
+                        // Done now, just need to send the [DONE]
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
+                        if let Some(on_chunk) = &self.on_chunk {
+                            response = on_chunk(response);
+                        }
+
+                        if self.store_chunks {
+                            self.chunks.push(response.clone());
+                        }
+
+                        Poll::Ready(Some(Event::default().json_data(response)))
+                    }
+                    Response::AgenticToolCallProgress {
+                        round,
+                        tool_name,
+                        phase,
+                    } => {
+                        let payload = serialize_agentic_progress(round, &tool_name, &phase);
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("agentic_tool_call_progress")
+                                .json_data(payload),
+                        ))
+                    }
+                    Response::AgenticToolApprovalRequired {
+                        approval_id,
+                        session_id,
+                        round,
+                        tool,
+                        arguments,
+                    } => {
+                        let payload = json!({
+                            "type": "agentic_tool_approval_required",
+                            "approval_id": approval_id,
+                            "session_id": session_id,
+                            "round": round,
+                            "tool": tool,
+                            "arguments": arguments,
+                        });
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("agentic_tool_approval_required")
+                                .json_data(payload),
+                        ))
+                    }
+                    Response::BlockDenoisingProgress(_) => {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    Response::File(file) => Poll::Ready(Some(
+                        Event::default().event("file_produced").json_data(file),
+                    )),
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
-                Response::AgenticToolCallProgress {
-                    round,
-                    tool_name,
-                    phase,
-                } => {
-                    let payload = serialize_agentic_progress(round, &tool_name, &phase);
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("agentic_tool_call_progress")
-                            .json_data(payload),
-                    ))
-                }
-                Response::AgenticToolApprovalRequired {
-                    approval_id,
-                    session_id,
-                    round,
-                    tool,
-                    arguments,
-                } => {
-                    let payload = json!({
-                        "type": "agentic_tool_approval_required",
-                        "approval_id": approval_id,
-                        "session_id": session_id,
-                        "round": round,
-                        "tool": tool,
-                        "arguments": arguments,
-                    });
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("agentic_tool_approval_required")
-                            .json_data(payload),
-                    ))
-                }
-                Response::BlockDenoisingProgress(_) => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Response::File(file) => Poll::Ready(Some(
-                    Event::default().event("file_produced").json_data(file),
-                )),
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -505,7 +511,6 @@ pub type ChatCompletionResponder =
     BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
 type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for ChatCompletionResponder {
     /// Converts the chat completion responder into an HTTP response.
@@ -1110,6 +1115,7 @@ pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     Json(mut oairequest): Json<ChatCompletionRequest>,
 ) -> ChatCompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -1199,7 +1205,13 @@ pub async fn chatcompletions(
                 response
             }) as ChatCompletionOnChunkCallback
         });
-        ChatCompletionResponder::Sse(create_streamer(rx, state, on_chunk, None))
+        ChatCompletionResponder::Sse(create_streamer_with_outcome(
+            rx,
+            state,
+            on_chunk,
+            None,
+            stream_outcome.map(|Extension(handle)| handle),
+        ))
     } else {
         process_non_streaming_response_with_model(&mut rx, state, model_override.as_deref()).await
     }
@@ -1220,7 +1232,18 @@ pub fn create_streamer(
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
+    create_streamer_with_outcome(rx, state, on_chunk, on_done, None)
+}
+
+/// Like [`create_streamer`], also reporting usage and errors to the access log at stream end.
+pub fn create_streamer_with_outcome(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    on_chunk: Option<ChatCompletionOnChunkCallback>,
+    on_done: Option<ChatCompletionOnDoneCallback>,
+    outcome: Option<StreamOutcomeHandle>,
+) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done, outcome);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)

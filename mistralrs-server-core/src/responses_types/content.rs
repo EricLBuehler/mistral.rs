@@ -64,6 +64,18 @@ pub enum OpenResponsesInputContent {
         #[serde(skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
+    /// Assistant output text replayed as conversation history
+    #[serde(rename = "output_text")]
+    OutputText {
+        /// The text content
+        text: String,
+    },
+    /// Assistant refusal replayed as conversation history
+    #[serde(rename = "refusal")]
+    Refusal {
+        /// The refusal message
+        refusal: String,
+    },
 }
 
 /// Audio input structure for OpenAI format
@@ -143,6 +155,12 @@ impl InputContent {
                     file_url,
                     filename,
                 },
+                OpenResponsesInputContent::OutputText { text } => {
+                    NormalizedInputContent::Text { text }
+                }
+                OpenResponsesInputContent::Refusal { refusal } => {
+                    NormalizedInputContent::Text { text: refusal }
+                }
             },
             InputContent::OpenAI(c) => match c {
                 OpenAIInputContent::Text { text } => NormalizedInputContent::Text { text },

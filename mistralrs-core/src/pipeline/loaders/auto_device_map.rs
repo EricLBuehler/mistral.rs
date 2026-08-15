@@ -296,7 +296,15 @@ pub fn get_device_layers(
             key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>()
         }
     };
+    // Per paged layer; hybrid models leave the recurrent/linear layers out of the cache entirely.
     let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
+    let kv_bytes_for_layer = |idx: usize| {
+        if model_cfg.layer_has_paged_kv_cache(idx) {
+            kv_cache_bytes
+        } else {
+            0
+        }
+    };
 
     // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
@@ -345,10 +353,11 @@ pub fn get_device_layers(
         // 3) common case, iteratively find the optimal amount of layers to put on the nth device
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
+        let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
         let required_whole_capacity = if ordinal == 0 {
-            remaining + non_mapped_max.max(mapped_max) + kv_cache_bytes * (num_layers - layer)
+            remaining + non_mapped_max.max(mapped_max) + remaining_kv_bytes
         } else {
-            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
+            remaining + mapped_max + remaining_kv_bytes
         };
 
         let layers_on_dev = if cap >= required_whole_capacity {
@@ -363,7 +372,7 @@ pub fn get_device_layers(
                 used_weight_bytes += non_mapped_size_in_bytes;
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
-                let delta = sz + kv_cache_bytes;
+                let delta = sz + kv_bytes_for_layer(layer + count);
                 if used + delta > cap {
                     break;
                 }

@@ -19,7 +19,10 @@ use crate::{
     },
     lora_adapters::resolve_lora_adapter_model,
     openai::{CompletionChunkResponseBody, CompletionRequest, CompletionResponseBody, Grammar},
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
+    streaming::{
+        base_create_streamer, get_keep_alive_interval, observe_response, BaseStreamer, DoneState,
+        StreamOutcomeHandle,
+    },
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{sanitize_error_message, validate_model_name},
 };
@@ -31,6 +34,7 @@ use axum::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
     },
+    Extension,
 };
 use mistralrs_core::{
     CompletionChunkResponse, CompletionResponse, Constraint, MistralRs, NormalRequest, Request,
@@ -109,62 +113,65 @@ impl futures::Stream for CompletionStreamer {
         }
 
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::CompletionModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    // Done now, just need to send the [DONE]
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => {
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::CompletionChunk(mut response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+            Poll::Ready(Some(resp)) => {
+                observe_response(&self.outcome, &resp);
+                match resp {
+                    Response::CompletionModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
+                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(Event::default().data(msg))))
                     }
-                    // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-
-                    if let Some(on_chunk) = &self.on_chunk {
-                        response = on_chunk(response);
+                    Response::ValidationError(e) => {
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )))
                     }
-
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(
+                            Event::default().data(sanitize_error_message(e.as_ref()))
+                        )))
                     }
+                    Response::CompletionChunk(mut response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            self.done_state = DoneState::SendingDone;
+                        }
+                        // Done now, just need to send the [DONE]
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
+                        if let Some(on_chunk) = &self.on_chunk {
+                            response = on_chunk(response);
+                        }
+
+                        if self.store_chunks {
+                            self.chunks.push(response.clone());
+                        }
+
+                        Poll::Ready(Some(Event::default().json_data(response)))
+                    }
+                    Response::AgenticToolCallProgress { .. }
+                    | Response::BlockDenoisingProgress(_)
+                    | Response::AgenticToolApprovalRequired { .. }
+                    | Response::File(_) => {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::Chunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::ModelError(_, _) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
-                Response::AgenticToolCallProgress { .. }
-                | Response::BlockDenoisingProgress(_)
-                | Response::AgenticToolApprovalRequired { .. }
-                | Response::File(_) => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::Chunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::ModelError(_, _) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
+            }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -177,7 +184,6 @@ pub type CompletionResponder =
 
 /// JSON error response structure for model errors.
 type JsonModelError = BaseJsonModelError<CompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
 
 impl IntoResponse for CompletionResponder {
     /// Converts the completion responder into an HTTP response.
@@ -311,6 +317,7 @@ pub fn parse_request(
 )]
 pub async fn completions(
     State(state): ExtractedMistralRsState,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     Json(mut oairequest): Json<CompletionRequest>,
 ) -> CompletionResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -347,7 +354,13 @@ pub async fn completions(
                 response
             }) as CompletionOnChunkCallback
         });
-        CompletionResponder::Sse(create_streamer(rx, state, on_chunk, None))
+        CompletionResponder::Sse(create_streamer_with_outcome(
+            rx,
+            state,
+            on_chunk,
+            None,
+            stream_outcome.map(|Extension(handle)| handle),
+        ))
     } else {
         process_non_streaming_response_with_model(&mut rx, state, model_override.as_deref()).await
     }
@@ -368,7 +381,18 @@ pub fn create_streamer(
     on_chunk: Option<CompletionOnChunkCallback>,
     on_done: Option<CompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<CompletionStreamer>> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
+    create_streamer_with_outcome(rx, state, on_chunk, on_done, None)
+}
+
+/// Like [`create_streamer`], also reporting usage and errors to the access log at stream end.
+pub fn create_streamer_with_outcome(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    on_chunk: Option<CompletionOnChunkCallback>,
+    on_done: Option<CompletionOnDoneCallback>,
+    outcome: Option<StreamOutcomeHandle>,
+) -> Sse<KeepAliveStream<CompletionStreamer>> {
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done, outcome);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)
