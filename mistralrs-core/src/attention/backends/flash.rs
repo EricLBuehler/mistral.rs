@@ -217,14 +217,19 @@ pub(crate) fn flash_attn(
             sdpa_params.softcap.is_some()
         );
     }
-    if head_dim <= 512 {
-        #[cfg(feature = "flash-attn")]
-        {
-            return flash_attn_v2(q, k, v, flash_params, sdpa_params);
-        }
+    // v3 wins on single-sequence prefill and ties elsewhere, so it takes the head dims it supports.
+    if matches!(head_dim, 64 | 128 | 256 | 512) && sdpa_params.softcap.is_none() {
+        return flash_attn_v3(q, k, v, flash_params, sdpa_params);
     }
 
-    flash_attn_v3(q, k, v, flash_params, sdpa_params)
+    #[cfg(feature = "flash-attn")]
+    {
+        flash_attn_v2(q, k, v, flash_params, sdpa_params)
+    }
+    #[cfg(not(feature = "flash-attn"))]
+    {
+        flash_attn_v3(q, k, v, flash_params, sdpa_params)
+    }
 }
 
 #[cfg(all(feature = "flash-attn", not(feature = "flash-attn-v3")))]
