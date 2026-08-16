@@ -163,6 +163,10 @@ impl QuantizeFormatOptions {
             tok_model_id: self.tok_model_id.clone(),
             gqa: 1,
             direct_file_only: self.direct_file_only,
+            rope_scaling: None,
+            rope_scale: 1.0,
+            yarn_orig_ctx: None,
+            override_ctx: None,
         }
     }
 

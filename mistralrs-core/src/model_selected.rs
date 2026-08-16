@@ -7,7 +7,8 @@ use crate::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
         NormalLoaderType, UqffWriteConfig,
     },
-    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
+    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, RopeOverride,
+    SpeechLoaderType,
 };
 
 // Default value functions for serde deserialization
@@ -455,6 +456,11 @@ pub enum ModelSelected {
         #[arg(long)]
         #[serde(default)]
         matformer_slice_name: Option<String>,
+
+        /// YaRN rope override for long-context serving (CLI-only, see `--rope-scaling`).
+        #[arg(skip)]
+        #[serde(default)]
+        rope_override: Option<RopeOverride>,
     },
 
     /// Select a GGUF model with X-LoRA.

@@ -462,6 +462,11 @@ inline __device__ void from_float(uint2& dst, Float4_ src) {
   dst.y = float2_to_half2(src.y);
 }
 
+inline __device__ void from_float(uint4& dst, Float4_ src) {
+  dst.x = float2_to_half2(src.x);
+  dst.y = float2_to_half2(src.y);
+}
+
 inline __device__ void from_float(uint4& dst, Float8_ src) {
   dst.x = float2_to_half2(src.x);
   dst.y = float2_to_half2(src.y);

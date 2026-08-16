@@ -253,7 +253,11 @@ pub fn calculate_cache_config(
 
     if !silent {
         info!("Allocating {mem_gpu} MB for PagedAttention KV cache per GPU");
-        info!("PagedAttention KV cache type is {dtype:?}");
+        if cache_type == PagedCacheType::F4 {
+            info!("PagedAttention KV cache type is F4 (packed u8)");
+        } else {
+            info!("PagedAttention KV cache type is {dtype:?}");
+        }
         info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
     }
     Ok(CacheConfig {

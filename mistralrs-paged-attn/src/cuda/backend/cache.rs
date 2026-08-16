@@ -1,7 +1,9 @@
 use std::{collections::HashMap, iter::zip};
 
 use crate::cuda::backend::slice_ptr;
-use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
+use crate::cuda::ffi::{
+    copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32, copy_blocks_u8,
+};
 use candle_core::backend::BackendDevice;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::Result;
@@ -85,6 +87,13 @@ pub fn copy_blocks(
                 let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
                 (ptr_key, ptr_value)
             }
+            // F4 caches are packed U8 tensors; copy raw bytes.
+            (CudaStorageSlice::U8(slice_key), CudaStorageSlice::U8(slice_value)) => {
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
+                dtype = DType::U8;
+                (ptr_key, ptr_value)
+            }
             _ => {
                 candle_core::bail!("only f32, f16 and bf16 input data type supported!",);
             }
@@ -154,6 +163,18 @@ pub fn copy_blocks(
         },
         candle_core::DType::F32 => unsafe {
             copy_blocks_f32(
+                key_cache_ptr,
+                value_cache_ptr,
+                block_mapping_ptr,
+                num_layers as i32,
+                num_pairs as i32,
+                numel_per_block_key as i32,
+                numel_per_block_value as i32,
+                dev.cuda_stream().cu_stream() as i64,
+            );
+        },
+        candle_core::DType::U8 => unsafe {
+            copy_blocks_u8(
                 key_cache_ptr,
                 value_cache_ptr,
                 block_mapping_ptr,

@@ -21,7 +21,11 @@ extern "C" void paged_attention_v2_bf16(
     uint32_t cache_dtype, // 0 => f16; 1 => bf16; 2 => f32; 3 => fp8_e4m3
     float *k_scale, float *v_scale, const float *sinks) {
 
-  if (cache_dtype == 3) {
+  if (cache_dtype == 4) {
+    // F4 cache
+    CALL_V2_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, uint8_t,
+                                vllm::Fp8KVCacheDataType::kF4);
+  } else if (cache_dtype == 3) {
     // FP8 cache
     CALL_V2_LAUNCHER_BLOCK_SIZE(__nv_bfloat16, uint8_t,
                                 vllm::Fp8KVCacheDataType::kFp8E4M3);

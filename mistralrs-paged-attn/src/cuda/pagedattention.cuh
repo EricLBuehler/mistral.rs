@@ -55,6 +55,30 @@
 
 namespace vllm {
 
+// Build a packed vector from unpacked floats (F4 dequant path).
+template <typename OutVec, int N>
+__device__ __forceinline__ OutVec f4_vec_from_floats(const float (&vals)[N]) {
+  OutVec out;
+  if constexpr (N == 8) {
+    Float8_ f8;
+    f8.x = make_float2(vals[0], vals[1]);
+    f8.y = make_float2(vals[2], vals[3]);
+    f8.z = make_float2(vals[4], vals[5]);
+    f8.w = make_float2(vals[6], vals[7]);
+    from_float(out, f8);
+  } else if constexpr (N == 4) {
+    Float4_ f4;
+    f4.x = make_float2(vals[0], vals[1]);
+    f4.y = make_float2(vals[2], vals[3]);
+    from_float(out, f4);
+  } else if constexpr (N == 2) {
+    from_float(out, make_float2(vals[0], vals[1]));
+  } else {
+    from_float(out, vals[0]);
+  }
+  return out;
+}
+
 // Utility function for attention softmax.
 template <int NUM_WARPS>
 inline __device__ float block_sum(float *red_smem, float sum) {
@@ -258,6 +282,30 @@ __device__ void paged_attention_kernel(
         if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
           k_vecs[j] = *reinterpret_cast<const K_vec *>(
               k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kF4) {
+          // F4: 2 values per byte; the cell (xrow, token) has one scale. The
+          // cache's last dim is the 16-byte token row (32 values), so byte
+          // offsets are computed from value offsets directly.
+          const int value_off = vec_idx * VEC_SIZE;
+          const int cell_xrow = value_off / 32;
+          const int cell_off = value_off % 32;
+          const float scale =
+              k_scale[((physical_block_number * num_kv_heads + kv_head_idx) *
+                           (HEAD_SIZE / 32) +
+                       cell_xrow) *
+                          BLOCK_SIZE +
+                      physical_block_offset];
+          const int byte_off = cell_xrow * BLOCK_SIZE * 16 + cell_off / 2;
+          // k_ptr is already at this token's 16-byte row (physical_block_offset * x).
+          float vals[VEC_SIZE];
+#pragma unroll
+          for (int v = 0; v < VEC_SIZE; v++) {
+            const uint8_t byte = k_ptr[byte_off + v / 2];
+            const uint8_t nib =
+                (v % 2 == 0) ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
+            vals[v] = ((float)((int)nib - 8)) * scale;
+          }
+          k_vecs[j] = f4_vec_from_floats<K_vec, VEC_SIZE>(vals);
         } else {
           using Cache_K_vec = typename vllm::Vec<cache_t, VEC_SIZE>::Type;
           Cache_K_vec fp8_k_vec = *reinterpret_cast<const Cache_K_vec *>(
@@ -397,6 +445,25 @@ __device__ void paged_attention_kernel(
 
         if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kAuto) {
           v_vec = *reinterpret_cast<const V_vec *>(v_ptr + offset);
+        } else if constexpr (kv_dt == vllm::Fp8KVCacheDataType::kF4) {
+          // F4: values packed along the head axis (2 per byte); one scale per
+          // (head, token). V_VEC_SIZE consecutive tokens live in V_VEC_SIZE
+          // consecutive bytes at (row_idx/2) * BLOCK_SIZE + token.
+          const int byte_off = (row_idx / 2) * BLOCK_SIZE + physical_block_offset;
+          const float *v_s =
+              v_scale + (physical_block_number * num_kv_heads + kv_head_idx) *
+                            BLOCK_SIZE +
+                        physical_block_offset;
+          const bool low_nibble = (row_idx % 2) == 0;
+          float vals[V_VEC_SIZE];
+#pragma unroll
+          for (int j = 0; j < V_VEC_SIZE; j++) {
+            const uint8_t byte = v_ptr[byte_off + j];
+            const uint8_t nib =
+                low_nibble ? (byte & 0x0F) : ((byte >> 4) & 0x0F);
+            vals[j] = ((float)((int)nib - 8)) * v_s[j];
+          }
+          v_vec = f4_vec_from_floats<V_vec, V_VEC_SIZE>(vals);
         } else {
           using Cache_V_vec = typename vllm::Vec<cache_t, V_VEC_SIZE>::Type;
           Cache_V_vec fp8_v_vec =

@@ -167,7 +167,7 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
-pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 2048;
 
 #[cfg(feature = "cuda")]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {

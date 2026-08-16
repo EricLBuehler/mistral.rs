@@ -3,8 +3,8 @@
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
     AutoDeviceMapParams, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
-    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
-    MAX_LORA_ALIAS_BYTES,
+    NormalLoaderType, RopeOverride, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
+    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
@@ -65,13 +65,53 @@ pub struct FormatOptions {
     #[serde(default = "default_gqa")]
     pub gqa: usize,
 
+    /// RoPE scaling mode for long-context extension of GGUF models.
+    /// `yarn` mirrors llama.cpp's `--rope-scaling yarn`.
+    #[arg(long, value_enum)]
+    pub rope_scaling: Option<RopeScalingType>,
+
+    /// YaRN rope scaling factor (e.g. 320000/262144 for a 320k target from a 262144 native context).
+    #[arg(long, default_value_t = 1.0)]
+    #[serde(default)]
+    pub rope_scale: f32,
+
+    /// Original (pretraining) context length for YaRN; defaults to the GGUF context length.
+    #[arg(long)]
+    pub yarn_orig_ctx: Option<usize>,
+
+    /// Force the model's max position embeddings to this context length.
+    #[arg(long)]
+    pub override_ctx: Option<usize>,
+
     #[doc(hidden)]
     #[arg(skip)]
     #[serde(skip)]
     pub direct_file_only: bool,
 }
 
+/// RoPE scaling modes accepted by `--rope-scaling`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RopeScalingType {
+    /// YaRN (Yet another RoPE extensioN): interpolation below the correction range,
+    /// extrapolation above it, with the standard 0.1*ln(scale)+1 attention scaling.
+    Yarn,
+    /// Disable rope scaling even if the GGUF carries scaling metadata.
+    None,
+}
+
 impl FormatOptions {
+    pub fn rope_override(&self) -> Option<RopeOverride> {
+        match self.rope_scaling {
+            Some(RopeScalingType::Yarn) => Some(RopeOverride::yarn(
+                self.rope_scale,
+                self.yarn_orig_ctx,
+                self.override_ctx,
+            )),
+            _ => None,
+        }
+    }
+
     pub(crate) fn normalize(&mut self) -> anyhow::Result<()> {
         let mut format = self.format;
         if self.mmproj.is_some() {

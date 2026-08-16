@@ -619,6 +619,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
+            rope_override,
             ..
         } => {
             if lora_runtime_config.is_none() && !lora_adapters.is_empty() {
@@ -643,6 +644,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
+                    rope_override,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

@@ -10,6 +10,7 @@ use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
 
 const KV_SCALE_UPDATE_ITERATION: i32 = 128;
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::Mutex;
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::attention::sliding_window_left;
@@ -652,8 +653,8 @@ impl PagedForwardCtx<'_> {
 
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
-    k_scale: Option<Tensor>,
-    v_scale: Option<Tensor>,
+    k_scale: Mutex<Option<Tensor>>,
+    v_scale: Mutex<Option<Tensor>>,
     kv_updated_times: AtomicI32,
 }
 
@@ -667,8 +668,8 @@ impl PagedAttention {
         };
         Ok(Self {
             alibi_slopes,
-            k_scale: Some(Tensor::new(1f32, device)?),
-            v_scale: Some(Tensor::new(1f32, device)?),
+            k_scale: Mutex::new(Some(Tensor::new(1f32, device)?)),
+            v_scale: Mutex::new(Some(Tensor::new(1f32, device)?)),
             kv_updated_times: AtomicI32::new(0),
         })
     }
@@ -728,8 +729,8 @@ impl PagedAttention {
         let (k, v) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+            self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
             &table,
             &cu_kv,
             dtype,
@@ -750,17 +751,49 @@ impl PagedAttention {
         key_cache: Option<&Tensor>,
         write_cache: bool,
     ) -> Result<()> {
-        if write_cache {
-            if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
-                (&self.k_scale, &self.v_scale, key_cache)
+        if !write_cache {
+            return Ok(());
+        }
+        let Some(key_cache) = key_cache else {
+            return Ok(());
+        };
+        match key_cache.dtype() {
+            // F4: the reshape kernel computes and stores per-cell scales inline;
+            // allocate the per-cell scale tensors once, sized from the caches.
+            DType::U8 => {
+                let mut k_scale = self.k_scale.lock().expect("kv scale mutex poisoned");
+                let mut v_scale = self.v_scale.lock().expect("kv scale mutex poisoned");
+                let device = key_cache.device();
+                let (num_blocks, num_kv_heads, _, block_size, _) =
+                    key_cache.shape().dims5()?;
+                let head_size = tensors.value.dim(3)?;
+                let k_shape = (num_blocks, num_kv_heads, head_size / 32, block_size);
+                let v_shape = (num_blocks, num_kv_heads, block_size);
+                // The constructor seeds a 1-element placeholder; replace it with
+                // the real per-cell tensors on first contact with an F4 cache.
+                let need_k = k_scale
+                    .as_ref()
+                    .is_none_or(|t| t.shape().dims() != vec![k_shape.0, k_shape.1, k_shape.2, k_shape.3]);
+                let need_v = v_scale
+                    .as_ref()
+                    .is_none_or(|t| t.shape().dims() != vec![v_shape.0, v_shape.1, v_shape.2]);
+                if need_k || need_v {
+                    *k_scale = Some(Tensor::zeros(k_shape, DType::F32, device)?);
+                    *v_scale = Some(Tensor::zeros(v_shape, DType::F32, device)?);
+                }
+            }
+            DType::F8E4M3
+                if self.kv_updated_times.load(Ordering::Relaxed)
+                    < KV_SCALE_UPDATE_ITERATION =>
             {
-                if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
-                    && key_cache.dtype() == DType::F8E4M3
-                {
+                let k_scale = self.k_scale.lock().expect("kv scale mutex poisoned");
+                let v_scale = self.v_scale.lock().expect("kv scale mutex poisoned");
+                if let (Some(k_scale), Some(v_scale)) = (k_scale.as_ref(), v_scale.as_ref()) {
                     kv_scale_update(tensors.key, tensors.value, k_scale, v_scale)?;
                     self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            _ => {}
         }
         Ok(())
     }
@@ -870,8 +903,8 @@ impl PagedAttention {
             write_kv_cache(
                 &k_flat,
                 &v_flat,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+                self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -998,8 +1031,8 @@ impl PagedAttention {
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+            self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
             block_tables,
             &cu_kv,
             tensors.query.dtype(),
@@ -1344,8 +1377,8 @@ impl PagedAttention {
             write_kv_cache(
                 &key,
                 &value,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+                self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1411,8 +1444,8 @@ impl PagedAttention {
             write_kv_cache(
                 key.as_ref().unwrap(),
                 value.as_ref().unwrap(),
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
+                self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+                self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1493,8 +1526,8 @@ impl PagedAttention {
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+            self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
             block_tables,
             &cu_kv,
             query.dtype(),
@@ -1641,18 +1674,17 @@ impl PagedAttention {
     ) -> Result<Tensor> {
         paged_attention(
             query,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            self.k_scale.lock().expect("kv scale mutex poisoned").as_ref(),
+            self.v_scale.lock().expect("kv scale mutex poisoned").as_ref(),
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),
             ctx.context_lens(dev).unwrap(),
             ctx.alibi_slopes.as_ref(),
-            if ctx.use_full {
-                ctx.input_metadata.full_max_context_len.unwrap()
-            } else {
-                ctx.input_metadata.max_context_len.unwrap()
-            },
+            ctx.input_metadata
+                .full_max_context_len
+                .or(ctx.input_metadata.max_context_len)
+                .unwrap(),
             ctx.sdpa_params.softmax_scale,
             ctx.sdpa_params.softcap.unwrap_or(1.0f32),
             ctx.sdpa_params.sinks.as_ref(),

@@ -14,12 +14,16 @@ pub enum PagedCacheType {
     #[default]
     Auto,
     F8E4M3,
+    F4,
 }
 
 impl PagedCacheType {
     pub fn to_dtype(&self, act_dtype: DType) -> DType {
         match self {
             PagedCacheType::F8E4M3 => DType::F8E4M3,
+            // Candle has no CUDA storage for sub-byte dtypes; the F4 cache lives
+            // in packed U8 tensors (see F4-KV-STORAGE-ASSESSMENT.md).
+            PagedCacheType::F4 => DType::U8,
             PagedCacheType::Auto => act_dtype,
         }
     }
@@ -31,8 +35,9 @@ impl FromStr for PagedCacheType {
         match s {
             "auto" => Ok(Self::Auto),
             "f8e4m3" => Ok(Self::F8E4M3),
+            "f4" => Ok(Self::F4),
             other => Err(format!(
-                "Unexpected `PagedCacheType`, got `{other}` but expected `auto` and `f8e4m3`."
+                "Unexpected `PagedCacheType`, got `{other}` but expected `auto`, `f8e4m3` and `f4`."
             )),
         }
     }
@@ -102,9 +107,11 @@ impl CacheEngine {
             };
             let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
             let kv_cache_layout =
-                if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
-                    && !device.is_cuda()
+                if (matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
+                    && !device.is_cuda())
+                    || cache_config.cache_type == PagedCacheType::F4
                 {
+                    // F4 is only implemented for the Standard layout/kernels.
                     KvCacheLayout::Standard
                 } else {
                     requested_kv_cache_layout
@@ -115,11 +122,13 @@ impl CacheEngine {
                         model_config,
                         dtype,
                         cache_config.block_size,
+                        cache_config.cache_type,
                         layer_idx,
                     );
                     let value_block_shape = Self::calculate_value_block_shape(
                         model_config,
                         cache_config.block_size,
+                        cache_config.cache_type,
                         layer_idx,
                     );
                     #[allow(unused)]
@@ -377,26 +386,39 @@ impl CacheEngine {
         model_config: &dyn ModelConfigLike,
         dtype: DType,
         block_size: usize,
+        cache_type: PagedCacheType,
         layer_idx: usize,
     ) -> (usize, usize, usize, usize) {
-        let element_size = dtype.size_in_bytes();
-        let x = 16 / element_size;
+        // F4 packs two values per byte: a 32-value cell row is 16 bytes, so the
+        // trailing shape dim is the byte width, not the value count.
+        let (x, byte_width) = if cache_type == PagedCacheType::F4 {
+            (32, 16)
+        } else {
+            let x = 16 / dtype.size_in_bytes();
+            (x, x)
+        };
         (
             model_config.num_kv_heads_for_layer(layer_idx),
             model_config.k_head_dim_for_layer(layer_idx) / x,
             block_size,
-            x,
+            byte_width,
         )
     }
 
     fn calculate_value_block_shape(
         model_config: &dyn ModelConfigLike,
         block_size: usize,
+        cache_type: PagedCacheType,
         layer_idx: usize,
     ) -> (usize, usize, usize) {
+        let head_bytes = if cache_type == PagedCacheType::F4 {
+            model_config.v_head_dim_for_layer(layer_idx) / 2
+        } else {
+            model_config.v_head_dim_for_layer(layer_idx)
+        };
         (
             model_config.num_kv_heads_for_layer(layer_idx),
-            model_config.v_head_dim_for_layer(layer_idx),
+            head_bytes,
             block_size,
         )
     }

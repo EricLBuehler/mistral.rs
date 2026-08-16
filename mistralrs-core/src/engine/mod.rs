@@ -1,6 +1,9 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+    paged_attention::{
+        block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+        AttentionBackendKind, PagedCacheType,
+    },
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
@@ -774,16 +777,30 @@ impl Engine {
                                     block_size,
                                     max_paged_context_len,
                                     sliding_window: pipeline_metadata.sliding_window,
-                                    attention_backend: model_metadata
-                                        .map(|metadata| metadata.attention_backend_kind())
-                                        .unwrap_or(
-                                            crate::paged_attention::AttentionBackendKind::Standard,
-                                        ),
-                                    has_flashinfer_decode_layers: model_metadata
-                                        .is_some_and(|metadata| {
+                                    // F4 caches only exist in the Standard layout/kernels.
+                                    attention_backend: if pipeline_metadata
+                                        .cache_config
+                                        .as_ref()
+                                        .is_some_and(|cfg| {
+                                            cfg.cache_type == PagedCacheType::F4
+                                        })
+                                    {
+                                        AttentionBackendKind::Standard
+                                    } else {
+                                        model_metadata
+                                            .map(|metadata| metadata.attention_backend_kind())
+                                            .unwrap_or(AttentionBackendKind::Standard)
+                                    },
+                                    has_flashinfer_decode_layers: !pipeline_metadata
+                                        .cache_config
+                                        .as_ref()
+                                        .is_some_and(|cfg| {
+                                            cfg.cache_type == PagedCacheType::F4
+                                        })
+                                        && model_metadata.is_some_and(|metadata| {
                                             (0..metadata.num_layers()).any(|layer_idx| {
                                                 metadata.attention_backend_kind_for_layer(layer_idx)
-                                                    == crate::paged_attention::AttentionBackendKind::FlashInfer
+                                                    == AttentionBackendKind::FlashInfer
                                             })
                                         }),
                                     prefill_attention_heads: model_metadata

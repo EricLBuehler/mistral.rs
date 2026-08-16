@@ -2978,6 +2978,70 @@ impl RotaryEmbedding {
             is_gpt_neox,
         })
     }
+
+    /// Partial rotary with YaRN scaling, matching llama.cpp's yarn resolution
+    /// (llama-context.cpp yarn_ext_factor/yarn_attn_factor and rope.cu rope_yarn).
+    pub fn new_partial_yarn(
+        base: f32,
+        rot_dim: usize,
+        max_position_embeddings: usize,
+        original_max_position_embeddings: usize,
+        factor: f32,
+        mscale: f32,
+        mscale_all_dim: f32,
+        beta_fast: f32,
+        beta_slow: f32,
+        device: &Device,
+        dtype: DType,
+    ) -> Result<Self> {
+        let half_dim = rot_dim / 2;
+        // corr_dim(n_rot) = n_dims * log(orig / (n_rot * 2pi)) / (2 * log(base))
+        let corr_dim = |n_rot: f32| {
+            rot_dim as f32 * (original_max_position_embeddings as f32 / (n_rot * 2.0 * std::f32::consts::PI)).ln()
+                / (2.0 * base.ln())
+        };
+        let low = (corr_dim(beta_fast).floor() as i64).clamp(0, half_dim as i64 - 1) as usize;
+        let high = (corr_dim(beta_slow).ceil() as i64).clamp(0, half_dim as i64 - 1) as usize;
+        let inv_freq_extrapolation: Vec<f32> = (0..half_dim)
+            .map(|i| 1f32 / base.powf((2 * i) as f32 / rot_dim as f32))
+            .collect();
+        // Interpolated below the correction range, extrapolated above it, ramped in between.
+        let inv_freq: Vec<f32> = inv_freq_extrapolation
+            .iter()
+            .enumerate()
+            .map(|(i, &extrapolated)| {
+                let range = (high as f32 - low as f32).max(0.001);
+                let ramp = 1.0 - ((i as f32 - low as f32) / range).clamp(0.0, 1.0);
+                let interpolated = extrapolated / factor;
+                interpolated * (1.0 - ramp) + extrapolated * ramp
+            })
+            .collect();
+        // llama.cpp: yarn_attn_factor resolves to get_mscale(f, 1)/get_mscale(f, log_mul)
+        // pre-cancelled against the kernel's 1 + 0.1*ln(scale), netting the product below.
+        let yarn_mscale = |scale: f32, m: f32| {
+            if scale > 1.0 {
+                0.1 * m * scale.ln() + 1.0
+            } else {
+                1.0
+            }
+        };
+        let effective_mscale =
+            yarn_mscale(factor, mscale) / yarn_mscale(factor, mscale_all_dim) * yarn_mscale(factor, 1.0);
+        let inv_freq_len = inv_freq.len();
+        let inv_freq = Tensor::from_vec(inv_freq, (1, inv_freq_len), device)?;
+        let t = Tensor::arange(0u32, max_position_embeddings as u32, device)?
+            .to_dtype(DType::F32)?
+            .reshape((max_position_embeddings, 1))?;
+        let freqs = t.matmul(&inv_freq)?;
+        let sin = (freqs.sin()? * effective_mscale as f64)?.to_dtype(dtype)?;
+        let cos = (freqs.cos()? * effective_mscale as f64)?.to_dtype(dtype)?;
+
+        Ok(Self {
+            cos,
+            sin,
+            is_gpt_neox: true,
+        })
+    }
 }
 
 /// GPT-OSS style rotary embedding with YARN scaling support.
