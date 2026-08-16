@@ -1433,17 +1433,11 @@ impl ModelConfigLike for Gemma4ModelConfigLike {
         }
     }
 
-    fn kv_cache_elements_per_token(&self) -> usize {
-        let num_layers = self.base.num_layers;
-        let total: usize = (0..num_layers)
-            .map(|i| {
-                let kv_heads = self.num_kv_heads_for_layer(i);
-                let k_dim = self.k_head_dim_for_layer(i);
-                let v_dim = self.v_head_dim_for_layer(i);
-                kv_heads * (k_dim + v_dim)
-            })
-            .sum();
-        total / num_layers
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        let kv_heads = self.num_kv_heads_for_layer(layer_idx);
+        let k_dim = self.k_head_dim_for_layer(layer_idx);
+        let v_dim = self.v_head_dim_for_layer(layer_idx);
+        Some(kv_heads * (k_dim + v_dim))
     }
 }
 

@@ -13,26 +13,41 @@ pub enum SpeculativeConfig {
     Mtp(MtpConfig),
 }
 
+/// MTP proposer configuration; `model: None` uses the head built into the target checkpoint.
 #[derive(Clone, Debug)]
 pub struct MtpConfig {
-    pub model: String,
+    pub model: Option<String>,
     pub n_predict: Option<usize>,
 }
 
 impl MtpConfig {
     pub fn new(model: impl Into<String>, n_predict: Option<usize>) -> Self {
         Self {
-            model: model.into(),
+            model: Some(model.into()),
             n_predict,
         }
     }
 
+    pub fn builtin(n_predict: Option<usize>) -> Self {
+        Self {
+            model: None,
+            n_predict,
+        }
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.model.is_none()
+    }
+
     pub fn resolve_path(&self) -> candle_core::Result<PathBuf> {
-        let path = PathBuf::from(&self.model);
-        if path.exists() || self.model.starts_with('.') || self.model.starts_with('/') {
+        let Some(model) = &self.model else {
+            candle_core::bail!("this MTP proposer requires a separate assistant model (`--mtp-model`), not the built-in head");
+        };
+        let path = PathBuf::from(model);
+        if path.exists() || model.starts_with('.') || model.starts_with('/') {
             Ok(path)
         } else {
-            resolve_hf_mtp_path(&self.model)
+            resolve_hf_mtp_path(model)
         }
     }
 }

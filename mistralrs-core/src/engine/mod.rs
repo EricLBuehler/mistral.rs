@@ -858,10 +858,14 @@ impl Engine {
                         self.logger.add_tokens_processed(total_processed_tokens);
 
                         // Capture recurrent states at full-block boundaries so hybrid models can
-                        // reuse recurrent prefix state when paged prefix caching hits.
+                        // reuse recurrent prefix state when paged prefix caching hits. Prompt steps
+                        // only: a chat template re-renders a finished assistant turn differently
+                        // than it was generated, so no later lookup can ever reach a key past the
+                        // end of a prompt. Chunked prefill snapshots inline instead, in
+                        // `snapshot_paged_recurrent_prefix`.
                         {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
-                            if pipeline.cache().is_hybrid() {
+                            if is_prompt && pipeline.cache().is_hybrid() {
                                 let block_size = scheduler.block_size().unwrap();
                                 let hybrid_cache = pipeline.cache().hybrid();
                                 let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);

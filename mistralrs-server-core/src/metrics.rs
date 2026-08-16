@@ -9,18 +9,26 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use axum::{http::StatusCode, response::IntoResponse};
+use axum::{
+    http::{header::CONTENT_TYPE, StatusCode},
+    response::IntoResponse,
+};
+use http_body::{Body as HttpBody, Frame};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use std::pin::Pin;
 use std::sync::OnceLock;
+use std::task::{Context, Poll};
 use std::time::Instant;
 use tracing::{debug, info};
 
 use crate::{
+    handler_core::ResponseErrorMessage,
     lora_adapters::{
         is_resolvable_lora_adapter_model, lifecycle_body_too_large_response,
         list_lora_adapter_models,
     },
     mistralrs_server_router_builder::DEFAULT_MAX_BODY_LIMIT,
+    streaming::{StreamOutcome, StreamOutcomeHandle},
     types::SharedMistralRsState,
 };
 
@@ -31,6 +39,9 @@ const NO_MODEL: &str = "none";
 const UNKNOWN_MODEL: &str = "unknown";
 const DEFAULT_MODEL: &str = "default";
 const OPTIONS_METHOD: &str = "OPTIONS";
+const SSE_CONTENT_TYPE: &str = "text/event-stream";
+// Error bodies are small; cap what we buffer to recover a message for the access log
+const MAX_LOGGED_ERROR_BODY_BYTES: usize = 4 * 1024;
 const MILLIS_PER_SECOND: f64 = 1_000.0;
 const ACCESS_LOG_MS_ROUNDING: f64 = 1_000.0;
 const HTTP_REQUEST_DURATION_BUCKETS: [f64; 18] = [
@@ -227,14 +238,15 @@ pub async fn observe_http(
         None
     };
 
+    let outcome_handle = StreamOutcomeHandle::default();
     let mut response = match early_response {
         Some(response) => response,
         None => {
-            next.run(req.expect("request exists without early response"))
-                .await
+            let mut req = req.expect("request exists without early response");
+            req.extensions_mut().insert(outcome_handle.clone());
+            next.run(req).await
         }
     };
-    let latency = start.elapsed().as_secs_f64();
     let status = response.status().as_u16().to_string();
 
     if config.request_id_header {
@@ -245,39 +257,233 @@ pub async fn observe_http(
         }
     }
 
-    if config.metrics && !housekeeping {
-        drop(in_flight);
-        let labels = [
-            ("method", method.clone()),
-            ("path", route.clone()),
-            ("model", model.clone()),
-            ("status", status.clone()),
-        ];
-        metrics::counter!("http_requests_total", &labels).increment(1);
-        metrics::histogram!("http_request_duration_seconds", &labels).record(latency);
-    } else {
-        drop(in_flight);
+    let completion = RequestCompletion {
+        config,
+        request_id,
+        method,
+        route,
+        model,
+        status,
+        start,
+        housekeeping,
+        log_access,
+        in_flight,
+    };
+
+    // SSE bodies keep working long after the handler returns; finish accounting when the body ends
+    if is_sse(&response) {
+        completion.log_stream_accepted();
+        let (parts, body) = response.into_parts();
+        let body = Body::new(ObservedBody {
+            inner: body,
+            completion: Some(completion),
+            outcome: outcome_handle,
+            ended: false,
+        });
+        return Response::from_parts(parts, body);
     }
 
-    if log_access {
-        log_request_done(
-            config.access_log_format,
-            &request_id,
-            &method,
-            &route,
-            &model,
-            &status,
-            latency,
-        );
+    let error = if response.status().is_client_error() || response.status().is_server_error() {
+        match response.extensions().get::<ResponseErrorMessage>() {
+            Some(ResponseErrorMessage(message)) => Some(message.clone()),
+            None => {
+                let (parts, body) = response.into_parts();
+                let (message, body) = match to_bytes(body, MAX_LOGGED_ERROR_BODY_BYTES).await {
+                    Ok(bytes) => (error_message_from_body(&bytes), Body::from(bytes)),
+                    Err(_) => (None, Body::empty()),
+                };
+                response = Response::from_parts(parts, body);
+                message
+            }
+        }
     } else {
-        let duration_ms = rounded_duration_ms(latency);
-        debug!(
-            "request completed: request_id={} method={} route={} model={} status={} duration_ms={:.3}",
-            request_id, method, route, model, status, duration_ms
-        );
-    }
-
+        None
+    };
+    completion.finish(error.map(RequestError::Message));
     response
+}
+
+/// Axum rejections and our JSON errors carry the message as `{"message": ...}` or raw text.
+fn error_message_from_body(bytes: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let message = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("message")
+                .or_else(|| value.get("error").and_then(|e| e.get("message")))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| text.to_string());
+    Some(message)
+}
+
+fn is_sse(response: &Response) -> bool {
+    response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with(SSE_CONTENT_TYPE))
+}
+
+/// Everything needed to emit the "request completed" line and metrics once, whenever the request truly ends.
+struct RequestCompletion {
+    config: ObservabilityConfig,
+    request_id: String,
+    method: String,
+    route: String,
+    model: String,
+    status: String,
+    start: Instant,
+    housekeeping: bool,
+    log_access: bool,
+    in_flight: Option<InFlightGuard>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StreamEnd {
+    Completed,
+    Error,
+    ClientDisconnected,
+}
+
+impl StreamEnd {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Error => "error",
+            Self::ClientDisconnected => "client_disconnected",
+        }
+    }
+}
+
+struct StreamStats {
+    end: StreamEnd,
+    outcome: StreamOutcome,
+}
+
+enum RequestError {
+    Message(String),
+    Stream(StreamStats),
+}
+
+impl RequestCompletion {
+    fn log_stream_accepted(&self) {
+        debug!(
+            "stream accepted: request_id={} method={} route={} model={} status={} accepted_ms={:.3}",
+            self.request_id,
+            self.method,
+            self.route,
+            self.model,
+            self.status,
+            rounded_duration_ms(self.start.elapsed().as_secs_f64())
+        );
+    }
+
+    fn finish(self, detail: Option<RequestError>) {
+        let latency = self.start.elapsed().as_secs_f64();
+        if self.config.metrics && !self.housekeeping {
+            let labels = [
+                ("method", self.method.clone()),
+                ("path", self.route.clone()),
+                ("model", self.model.clone()),
+                ("status", self.status.clone()),
+            ];
+            metrics::counter!("http_requests_total", &labels).increment(1);
+            metrics::histogram!("http_request_duration_seconds", &labels).record(latency);
+        }
+        drop(self.in_flight);
+
+        if self.log_access {
+            log_request_done(
+                self.config.access_log_format,
+                &self.request_id,
+                &self.method,
+                &self.route,
+                &self.model,
+                &self.status,
+                latency,
+                detail.as_ref(),
+            );
+        } else {
+            debug!(
+                "request completed: request_id={} method={} route={} model={} status={} duration_ms={:.3}",
+                self.request_id,
+                self.method,
+                self.route,
+                self.model,
+                self.status,
+                rounded_duration_ms(latency)
+            );
+        }
+    }
+}
+
+/// Wraps an SSE body so request accounting fires when the stream ends or the client goes away.
+struct ObservedBody {
+    inner: Body,
+    completion: Option<RequestCompletion>,
+    outcome: StreamOutcomeHandle,
+    ended: bool,
+}
+
+impl ObservedBody {
+    fn finish(&mut self, end: StreamEnd) {
+        if let Some(completion) = self.completion.take() {
+            let outcome = self.outcome.snapshot();
+            let end = if outcome.error.is_some() {
+                StreamEnd::Error
+            } else {
+                end
+            };
+            completion.finish(Some(RequestError::Stream(StreamStats { end, outcome })));
+        }
+    }
+}
+
+impl HttpBody for ObservedBody {
+    type Data = axum::body::Bytes;
+    type Error = axum::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        let this = &mut *self;
+        match Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(None) => {
+                this.ended = true;
+                this.finish(StreamEnd::Completed);
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Err(err))) => {
+                this.ended = true;
+                this.finish(StreamEnd::Error);
+                Poll::Ready(Some(Err(err)))
+            }
+            other => other,
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.inner.size_hint()
+    }
+}
+
+impl Drop for ObservedBody {
+    fn drop(&mut self) {
+        if !self.ended {
+            self.finish(StreamEnd::ClientDisconnected);
+        }
+    }
 }
 
 fn request_id(req: &mut Request) -> String {
@@ -513,6 +719,7 @@ fn log_request_start(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_request_done(
     format: AccessLogFormat,
     request_id: &str,
@@ -521,16 +728,44 @@ fn log_request_done(
     model: &str,
     status: &str,
     latency: f64,
+    detail: Option<&RequestError>,
 ) {
     let duration_ms = rounded_duration_ms(latency);
+    let stream = match detail {
+        Some(RequestError::Stream(stats)) => Some(stats),
+        _ => None,
+    };
+    let usage = stream.and_then(|stats| stats.outcome.usage.as_ref());
+    let error = match detail {
+        Some(RequestError::Message(message)) => Some(message.as_str()),
+        Some(RequestError::Stream(stats)) => stats.outcome.error.as_deref(),
+        None => None,
+    };
     match format {
-        AccessLogFormat::Text => info!(
-            "request completed: request_id={} method={} route={} model={} status={} duration_ms={:.3}",
-            request_id, method, route, model, status, duration_ms
-        ),
-        AccessLogFormat::Json => info!(
-            "{}",
-            serde_json::json!({
+        AccessLogFormat::Text => {
+            let mut line = format!(
+                "request completed: request_id={request_id} method={method} route={route} model={model} status={status}"
+            );
+            if let Some(stats) = stream {
+                line.push_str(&format!(" outcome={}", stats.end.as_str()));
+            }
+            line.push_str(&format!(" duration_ms={duration_ms:.3}"));
+            if let Some(usage) = usage {
+                line.push_str(&format!(
+                    " prompt_tokens={} completion_tokens={} prefill_tok_s={:.1} decode_tok_s={:.1}",
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.avg_prompt_tok_per_sec,
+                    usage.avg_compl_tok_per_sec
+                ));
+            }
+            if let Some(error) = error {
+                line.push_str(&format!(" error={error:?}"));
+            }
+            info!("{line}");
+        }
+        AccessLogFormat::Json => {
+            let mut record = serde_json::json!({
                 "event": "request_completed",
                 "request_id": request_id,
                 "method": method,
@@ -538,8 +773,21 @@ fn log_request_done(
                 "model": model,
                 "status": status,
                 "duration_ms": duration_ms,
-            })
-        ),
+            });
+            if let Some(stats) = stream {
+                record["outcome"] = serde_json::Value::String(stats.end.as_str().to_string());
+            }
+            if let Some(usage) = usage {
+                record["prompt_tokens"] = usage.prompt_tokens.into();
+                record["completion_tokens"] = usage.completion_tokens.into();
+                record["prefill_tok_s"] = usage.avg_prompt_tok_per_sec.into();
+                record["decode_tok_s"] = usage.avg_compl_tok_per_sec.into();
+            }
+            if let Some(error) = error {
+                record["error"] = serde_json::Value::String(error.to_string());
+            }
+            info!("{record}");
+        }
     }
 }
 

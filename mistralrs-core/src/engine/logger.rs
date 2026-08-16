@@ -58,6 +58,12 @@ impl IntervalLogger {
                     let stats = t_prefix_cache_stats.lock().unwrap();
                     (stats.hits, stats.total_sequences)
                 };
+                if let (Some(hits), Some(misses)) = (&t_enc_hits, &t_enc_misses) {
+                    metrics::counter!("mistralrs_encoder_cache_hits_total")
+                        .absolute(hits.load(Ordering::Relaxed) as u64);
+                    metrics::counter!("mistralrs_encoder_cache_misses_total")
+                        .absolute(misses.load(Ordering::Relaxed) as u64);
+                }
                 let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
@@ -125,22 +131,27 @@ impl IntervalLogger {
     pub fn add_tokens_processed(&self, num_tokens: usize) {
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
+        metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
     }
 
     pub fn add_new_sequence(&self) {
         self.prefix_cache_stats.lock().unwrap().total_sequences += 1;
+        metrics::counter!("mistralrs_prefix_cache_lookups_total").increment(1);
     }
 
     pub fn add_prefix_cache_hit(&self) {
         self.prefix_cache_stats.lock().unwrap().hits += 1;
+        metrics::counter!("mistralrs_prefix_cache_hits_total").increment(1);
     }
 
     pub fn set_num_running(&self, running: usize) {
         self.num_running.store(running, Ordering::Relaxed);
+        metrics::gauge!("mistralrs_sequences_running").set(running as f64);
     }
 
     pub fn set_num_waiting(&self, waiting: usize) {
         self.num_waiting.store(waiting, Ordering::Relaxed);
+        metrics::gauge!("mistralrs_sequences_waiting").set(waiting as f64);
     }
 
     /// Return cumulative prefix cache (hits, total_sequences).

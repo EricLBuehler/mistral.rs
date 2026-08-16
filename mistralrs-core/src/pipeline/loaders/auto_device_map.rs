@@ -199,7 +199,7 @@ pub fn get_device_layers(
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
-    paged_attn_config: Option<&PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
     let mapped_max = loader.mapped_max_act_size_elems(config, params)? * dtype.size_in_bytes();
     let non_mapped_max =
@@ -222,6 +222,7 @@ pub fn get_device_layers(
     };
 
     let model_cfg = loader.model_config(config)?;
+    let has_paged_attn = paged_attn_config.is_some();
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
             // For MbAmount, clamp to available memory so the capacity check
@@ -258,14 +259,19 @@ pub fn get_device_layers(
                 // ContextSize passes through to calculate_cache_config.
                 other => other,
             };
+            info!(
+                "Reserving {} MB for activations (predicted).",
+                b_to_mb!(non_mapped_max.max(mapped_max))
+            );
+            // The budget derived here is the only one that accounts for the activation reserve, so
+            // it has to be what the pipelines load with. Recomputing there drops the reserve.
+            cfg.mem_gpu = effective_mem_gpu;
 
             let cache = calculate_cache_config(
                 effective_mem_gpu,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
-                paged_attn_config
-                    .map(|cfg| cfg.cache_type)
-                    .unwrap_or_default(),
+                cfg.cache_type,
                 &*model_cfg,
                 &devices[0],
                 &devices.iter().map(|d| Some(d.clone())).collect::<Vec<_>>(),
@@ -296,7 +302,19 @@ pub fn get_device_layers(
             key_shape.iter().product::<usize>() + val_shape.iter().product::<usize>()
         }
     };
+    // Per paged layer; hybrid models leave the recurrent/linear layers out of the cache entirely.
     let kv_cache_bytes = kv_cache_elems * dtype.size_in_bytes();
+    let kv_bytes_for_layer = |idx: usize| {
+        if model_cfg.layer_has_paged_kv_cache(idx) {
+            kv_cache_bytes
+        } else {
+            0
+        }
+    };
+    // Paged layers past the mapped stack (an MTP head) are charged to the non-mapped device.
+    let extra_kv_bytes = (num_layers..model_cfg.num_layers())
+        .map(kv_bytes_for_layer)
+        .sum::<usize>();
 
     // prepare available memory per device, CPU fallback last (unless unified memory)
     let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
@@ -345,10 +363,11 @@ pub fn get_device_layers(
         // 3) common case, iteratively find the optimal amount of layers to put on the nth device
         //   - if this is the first dev: must hold the non-mapped act and non-mapped model
         //   - otherwise, must hold the mapped act
+        let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
         let required_whole_capacity = if ordinal == 0 {
-            remaining + non_mapped_max.max(mapped_max) + kv_cache_bytes * (num_layers - layer)
+            remaining + non_mapped_max.max(mapped_max) + remaining_kv_bytes + extra_kv_bytes
         } else {
-            remaining + mapped_max + kv_cache_bytes * (num_layers - layer)
+            remaining + mapped_max + remaining_kv_bytes
         };
 
         let layers_on_dev = if cap >= required_whole_capacity {
@@ -359,11 +378,11 @@ pub fn get_device_layers(
             let mut used_weight_bytes = 0;
             let mut count = 0;
             if ordinal == 0 {
-                used = used.max(non_mapped_max) + non_mapped_size_in_bytes;
+                used = used.max(non_mapped_max) + non_mapped_size_in_bytes + extra_kv_bytes;
                 used_weight_bytes += non_mapped_size_in_bytes;
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
-                let delta = sz + kv_cache_bytes;
+                let delta = sz + kv_bytes_for_layer(layer + count);
                 if used + delta > cap {
                     break;
                 }
@@ -403,7 +422,7 @@ pub fn get_device_layers(
             over
         );
     }
-    if paged_attn_config.is_some_and(|_| includes_cpu) {
+    if has_paged_attn && includes_cpu {
         let original_layers = layer_sizes_backup
             .take()
             .expect("layer sizes backup missing for paged attention fallback");

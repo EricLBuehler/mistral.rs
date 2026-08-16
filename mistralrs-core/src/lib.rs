@@ -2688,6 +2688,12 @@ impl MistralRs {
             .with_jinja_explicit(loader_config.jinja_explicit.clone())
             .with_max_model_len(loader_config.max_model_len)
             .with_no_kv_cache(unloaded_state.engine_config.no_kv_cache)
+            .with_mtp(
+                loader_config
+                    .mtp_config
+                    .as_ref()
+                    .is_some_and(MtpConfig::is_builtin),
+            )
             .build()
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to build loader: {e}")))?;
 

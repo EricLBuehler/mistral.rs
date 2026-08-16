@@ -732,6 +732,7 @@ impl MistralRsForServerBuilder {
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
+            .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -856,6 +857,7 @@ impl MistralRsForServerBuilder {
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(first_chat_template.clone())
             .with_jinja_explicit(first_jinja_explicit.clone())
+            .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
             .build()?;
 
         mistralrs_instance_info(&*loader);

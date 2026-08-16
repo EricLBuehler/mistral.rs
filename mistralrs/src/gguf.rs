@@ -519,7 +519,7 @@ mod tests {
         );
         assert_eq!(builder.matformer_slice_name.as_deref(), Some("small"));
         let mtp = builder.mtp_config.unwrap();
-        assert_eq!(mtp.model, "org/mtp");
+        assert_eq!(mtp.model.as_deref(), Some("org/mtp"));
         assert_eq!(mtp.n_predict, Some(3));
     }
 
@@ -528,7 +528,10 @@ mod tests {
         let builder = GgufModelBuilder::new("repo", vec!["model.gguf"])
             .with_mtp_config(MtpConfig::new("local-mtp", None));
 
-        assert_eq!(builder.mtp_config.unwrap().model, "local-mtp");
+        assert_eq!(
+            builder.mtp_config.unwrap().model.as_deref(),
+            Some("local-mtp")
+        );
     }
 
     #[test]

@@ -209,6 +209,9 @@ pub(crate) struct Reservation {
 
 impl Reservation {
     pub(crate) fn new(weight: &QMatMul) -> Option<Self> {
+        if !enabled() {
+            return None;
+        }
         let QMatMul::QTensor(weight) = weight else {
             return None;
         };
@@ -276,65 +279,29 @@ pub(crate) fn reserved_bytes(device: &Device, dtype: DType) -> usize {
         .unwrap_or(0)
 }
 
-pub(crate) fn adjust_cache_bytes(
-    device: &Device,
-    dtype: DType,
-    available_bytes: usize,
-    requested_cache_bytes: usize,
-    minimum_cache_bytes: usize,
-    may_reduce_cache: bool,
-) -> Result<usize> {
+/// Bytes the repacked weights will occupy, granting the runtime budget to match.
+///
+/// This is a budget line item alongside model weights, not a correction applied afterwards: the
+/// caller subtracts it so the KV cache is sized around it and the repack can never be denied later.
+pub(crate) fn budget_bytes(device: &Device, dtype: DType) -> usize {
     let Device::Cuda(dev) = device else {
-        return Ok(requested_cache_bytes);
+        return 0;
     };
     let reserved = reserved_bytes(device, dtype);
-    if reserved == 0 {
-        return Ok(requested_cache_bytes);
-    }
-    let stream = dev.cuda_stream();
-    let context = stream.context();
-    let total = context.mem_get_info().w()?.1;
-    let integrated = context
-        .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_INTEGRATED)
-        .w()?
-        != 0;
-    let planned = cache_bytes_with_sidecars(
-        reserved,
-        memory_headroom(total, integrated),
-        available_bytes,
-        requested_cache_bytes,
-        minimum_cache_bytes,
-        may_reduce_cache,
-    );
-    set_memory_budget(dev.id(), planned.map(|_| reserved).unwrap_or(0));
-    Ok(planned.unwrap_or(requested_cache_bytes))
-}
-
-fn cache_bytes_with_sidecars(
-    reserved: usize,
-    headroom: usize,
-    available_bytes: usize,
-    requested_cache_bytes: usize,
-    minimum_cache_bytes: usize,
-    may_reduce_cache: bool,
-) -> Option<usize> {
-    let required_free = reserved.saturating_add(headroom);
-    let max_cache_bytes = available_bytes.saturating_sub(required_free);
-    let adjusted_cache_bytes = if may_reduce_cache {
-        max_cache_bytes.min(requested_cache_bytes.saturating_sub(reserved))
-    } else {
-        requested_cache_bytes
-    };
-    let enabled = adjusted_cache_bytes <= max_cache_bytes
-        && (!may_reduce_cache || adjusted_cache_bytes >= minimum_cache_bytes);
-    enabled.then_some(adjusted_cache_bytes)
+    set_memory_budget(dev.id(), reserved);
+    reserved
 }
 
 fn backend() -> Backend {
     static BACKEND: OnceLock<Backend> = OnceLock::new();
+    // Off by default: the repacked copy is a second full set of weights, so it is only worth its
+    // memory on serving workloads that sustain batches above the per-format minimum. Unit tests
+    // exercise the packed kernels directly, so they default the other way.
     *BACKEND.get_or_init(|| match std::env::var(BACKEND_ENV).as_deref() {
+        Ok("on") | Ok("auto") => Backend::Auto,
         Ok("off") => Backend::Off,
-        _ => Backend::Auto,
+        _ if cfg!(test) => Backend::Auto,
+        _ => Backend::Off,
     })
 }
 
@@ -921,14 +888,6 @@ mod tests {
             "max diff {max_diff}, mean diff {mean_diff}"
         );
         Ok(())
-    }
-
-    #[test]
-    fn cache_plan_counts_sidecars_inside_utilization_budget() {
-        assert_eq!(cache_bytes_with_sidecars(4, 1, 19, 16, 2, true), Some(12));
-        assert_eq!(cache_bytes_with_sidecars(4, 1, 19, 13, 2, false), Some(13));
-        assert_eq!(cache_bytes_with_sidecars(4, 1, 19, 15, 2, false), None);
-        assert_eq!(cache_bytes_with_sidecars(4, 2, 6, 5, 1, true), None);
     }
 
     #[test]

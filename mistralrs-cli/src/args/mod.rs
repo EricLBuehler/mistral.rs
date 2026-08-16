@@ -602,6 +602,11 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
+    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    #[arg(long, conflicts_with = "mtp_model")]
+    #[serde(default)]
+    pub mtp: bool,
+
     /// MTP assistant model id or path.
     #[arg(long)]
     #[serde(default)]
@@ -782,6 +787,10 @@ pub struct BenchRuntimeOptions {
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
 
+    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    #[arg(long, conflicts_with = "mtp_model")]
+    pub mtp: bool,
+
     /// MTP assistant model id or path.
     #[arg(long)]
     pub mtp_model: Option<String>,
@@ -800,12 +809,12 @@ impl BenchRuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        if self.mtp {
+            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+        }
         self.mtp_model
             .clone()
-            .map(|model| mistralrs_core::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
     }
 }
 
@@ -850,12 +859,12 @@ impl RuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
+        if self.mtp {
+            return Some(mistralrs_core::MtpConfig::builtin(self.mtp_n_predict));
+        }
         self.mtp_model
             .clone()
-            .map(|model| mistralrs_core::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+            .map(|model| mistralrs_core::MtpConfig::new(model, self.mtp_n_predict))
     }
 }
 
@@ -920,6 +929,7 @@ impl Default for RuntimeOptions {
             jinja_explicit: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            mtp: false,
             mtp_model: None,
             mtp_n_predict: None,
             mcp_config: None,

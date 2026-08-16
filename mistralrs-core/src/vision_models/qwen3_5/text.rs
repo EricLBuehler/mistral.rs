@@ -2,7 +2,10 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
@@ -13,6 +16,7 @@ use mistralrs_quant::{
 
 use super::{
     config::{LayerType, TextConfig},
+    mtp::Qwen3_5MtpHead,
     packed_gdn::{forward_packed_gdn, packed_gdn_query_lens},
 };
 use crate::{
@@ -67,17 +71,17 @@ impl GdnConfig for TextConfig {
 // ====================== Full Attention layer with MRoPE ======================
 
 #[allow(dead_code)]
-struct FullAttention {
+pub(super) struct FullAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: GemmaRmsNorm,
-    k_norm: GemmaRmsNorm,
+    pub(super) q_norm: GemmaRmsNorm,
+    pub(super) k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+    pub(super) rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
 }
@@ -95,6 +99,19 @@ impl FullAttention {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
+        let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        Self::load_with(vb_sa, vb_sa_norms, cfg, rotary_emb, paged_attn, comm)
+    }
+
+    /// `vb_sa` and `vb_sa_norms` are already placed on the layer's device.
+    pub(super) fn load_with(
+        vb_sa: ShardedVarBuilder,
+        vb_sa_norms: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
@@ -136,7 +153,6 @@ impl FullAttention {
             vb_sa.pp("o_proj"),
         )?;
 
-        let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
         let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
         let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
 
@@ -168,7 +184,7 @@ impl FullAttention {
         x: &Tensor,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut KvCache,
+        kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -239,6 +255,9 @@ impl FullAttention {
                 }
             },
             None => {
+                let kv_cache = kv_cache.ok_or_else(|| {
+                    candle_core::Error::msg("full attention without paged cache needs a KV cache")
+                })?;
                 let (cache_k, cache_v) = kv_cache.append(&k, &v)?;
                 Sdpa.run_attention(
                     &q,
@@ -328,26 +347,77 @@ impl Mlp {
 
 // ====================== Decoder Layer ======================
 
-enum LayerImpl {
+pub(super) enum LayerImpl {
     FullAttention(FullAttention),
     LinearAttention(GatedDeltaNet),
 }
 
-struct DecoderLayer {
-    layer_impl: LayerImpl,
-    input_layernorm: GemmaRmsNorm,
-    post_attention_layernorm: GemmaRmsNorm,
+pub(super) struct DecoderLayer {
+    pub(super) layer_impl: LayerImpl,
+    pub(super) input_layernorm: GemmaRmsNorm,
+    pub(super) post_attention_layernorm: GemmaRmsNorm,
     mlp: Mlp,
 }
 
 impl DecoderLayer {
+    /// A full-attention block; `vb_quant` places quantizable projections (ISQ-aware) and `vb_plain`
+    /// places norms, both already on the layer's device.
+    pub(super) fn load_full_attention(
+        vb_quant: ShardedVarBuilder,
+        vb_plain: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let attn = FullAttention::load_with(
+            vb_quant.pp("self_attn"),
+            vb_plain.pp("self_attn"),
+            cfg,
+            rotary_emb,
+            paged_attn,
+            comm,
+        )?;
+        let input_layernorm = GemmaRmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb_plain.pp("input_layernorm"),
+        )?;
+        let post_attention_layernorm = GemmaRmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb_plain.pp("post_attention_layernorm"),
+        )?;
+        let mlp = Mlp::new(
+            vb_quant.pp("mlp"),
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+            comm,
+        )?;
+        Ok(Self {
+            layer_impl: LayerImpl::FullAttention(attn),
+            input_layernorm,
+            post_attention_layernorm,
+            mlp,
+        })
+    }
+
+    pub(super) fn rotary_emb(&self) -> Option<&Arc<Qwen3VLRotaryEmbedding>> {
+        match &self.layer_impl {
+            LayerImpl::FullAttention(attn) => Some(&attn.rotary_emb),
+            LayerImpl::LinearAttention(_) => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn forward_attention(
+    pub(super) fn forward_attention(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut KvCache,
+        kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
@@ -407,6 +477,28 @@ enum TextWeightPrefix {
     Model,
 }
 
+/// Target activations captured for the MTP proposer: hidden states after the final norm and the
+/// MRoPE position ids they were computed at, `[b, rows, hidden]` / `[3, b, rows]`.
+#[derive(Clone)]
+pub(super) struct SpecCapture {
+    pub(super) hidden: Tensor,
+    pub(super) positions: Tensor,
+}
+
+/// Per-GDN-layer inputs and pre-forward states of the last multi-token decode, so a rejected tail
+/// can be undone by replaying only the accepted prefix.
+pub(super) struct GdnReplayStash {
+    pub(super) slots: Vec<u32>,
+    pub(super) layers: Vec<GdnLayerStash>,
+}
+
+pub(super) struct GdnLayerStash {
+    pub(super) layer_idx: usize,
+    pub(super) input: Tensor,
+    pub(super) conv_state: Tensor,
+    pub(super) recurrent_state: Tensor,
+}
+
 pub struct Qwen3_5TextModel {
     embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
@@ -420,6 +512,13 @@ pub struct Qwen3_5TextModel {
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
     weight_prefix: TextWeightPrefix,
+    pub(super) mtp: Option<Qwen3_5MtpHead>,
+    store_spec_hidden: AtomicBool,
+    // Rows the logits were reduced to (decode: all rows, prompt: the last one)
+    last_spec_capture: Mutex<Option<SpecCapture>>,
+    // Every row of the last forward, so a proposer can catch up over a prompt chunk
+    last_full_capture: Mutex<Option<SpecCapture>>,
+    gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
 }
 
 impl Qwen3_5TextModel {
@@ -427,10 +526,22 @@ impl Qwen3_5TextModel {
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         tie: bool,
+        mtp: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         cfg.validate()?;
+        let mtp = mtp
+            .then(|| {
+                Qwen3_5MtpHead::load(
+                    vb.clone(),
+                    cfg,
+                    &*normal_loading_metadata.mapper,
+                    &normal_loading_metadata,
+                    &attention_mechanism,
+                )
+            })
+            .transpose()?;
         let mapper = normal_loading_metadata.mapper;
         let (vb_m, weight_prefix) =
             if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
@@ -632,7 +743,7 @@ impl Qwen3_5TextModel {
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
+                num_layers: cfg.num_hidden_layers + cfg.mtp_layers(mtp.is_some()),
                 hidden_size: cfg.hidden_size,
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
@@ -646,7 +757,103 @@ impl Qwen3_5TextModel {
             dtype: vb.dtype(),
             mapper,
             weight_prefix,
+            mtp,
+            store_spec_hidden: AtomicBool::new(false),
+            last_spec_capture: Mutex::new(None),
+            last_full_capture: Mutex::new(None),
+            gdn_replay_stash: Mutex::new(None),
         })
+    }
+
+    pub(super) fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden.store(store, Ordering::Relaxed);
+        if !store {
+            *self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            *self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+        }
+    }
+
+    /// Roll the recurrent state of forward-batch row `batch_idx` back to what it was after the first
+    /// `keep_rows` tokens of the last multi-token decode step.
+    pub(super) fn replay_recurrent_prefix(&self, batch_idx: usize, keep_rows: usize) -> Result<()> {
+        let stash_guard = self.gdn_replay_stash.lock().expect("gdn stash poisoned");
+        let Some(stash) = stash_guard.as_ref() else {
+            candle_core::bail!("no GDN replay stash for speculative rollback");
+        };
+        let slot = *stash.slots.get(batch_idx).ok_or_else(|| {
+            candle_core::Error::msg(format!("GDN replay stash has no batch row {batch_idx}"))
+        })?;
+        let mut snapshots = Vec::with_capacity(stash.layers.len());
+        for layer in &stash.layers {
+            let gdn = match &self.layers[layer.layer_idx].layer_impl {
+                LayerImpl::LinearAttention(gdn) => gdn,
+                LayerImpl::FullAttention(_) => {
+                    candle_core::bail!("GDN replay stash points at a full-attention layer")
+                }
+            };
+            let mut cache = GdnLayerCache {
+                conv_state: layer.conv_state.narrow(0, batch_idx, 1)?.contiguous()?,
+                recurrent_state: layer
+                    .recurrent_state
+                    .narrow(0, batch_idx, 1)?
+                    .contiguous()?,
+            };
+            let x = layer
+                .input
+                .narrow(0, batch_idx, 1)?
+                .narrow(1, 0, keep_rows)?
+                .contiguous()?;
+            let x = self.layers[layer.layer_idx].input_layernorm.forward(&x)?;
+            gdn.advance_state(&x, &mut cache)?;
+            snapshots.push(crate::kv_cache::RecurrentStateSnapshot {
+                conv_state: cache.conv_state,
+                recurrent_state: cache.recurrent_state,
+            });
+        }
+        drop(stash_guard);
+        self.cache
+            .hybrid()
+            .restore_recurrent_state(slot as usize, &snapshots)
+    }
+
+    pub(super) fn clear_gdn_replay_stash(&self) {
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+    }
+
+    pub(super) fn last_spec_capture(&self) -> Option<SpecCapture> {
+        self.last_spec_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn last_full_capture(&self) -> Option<SpecCapture> {
+        self.last_full_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn lm_head(&self) -> &Arc<dyn QuantMethod> {
+        &self.lm_head
+    }
+
+    /// Paged KV of the MTP head's own attention layer.
+    pub(super) fn paged_kv_layers(&self) -> Vec<bool> {
+        let mut layers = self
+            .layer_types
+            .iter()
+            .map(|ty| *ty == LayerType::FullAttention)
+            .collect::<Vec<_>>();
+        layers.extend(std::iter::repeat_n(true, usize::from(self.mtp.is_some())));
+        layers
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
@@ -698,6 +905,22 @@ impl Qwen3_5TextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
 
+        // A multi-token decode under an attached proposer is a speculative verify; keep what a
+        // rejected tail needs to be replayed away.
+        let stash_gdn = self.store_spec_hidden.load(Ordering::Relaxed)
+            && xs.dim(1)? > 1
+            && ctx.paged_input_metadata().is_some_and(|meta| {
+                !meta.is_first_prompt_chunk && meta.num_cached_tokens.is_none()
+            });
+        let mut gdn_stash = stash_gdn.then(|| GdnReplayStash {
+            slots: recurrent_metadata
+                .as_ref()
+                .and_then(|meta| meta.state_indices_host())
+                .map(|slots| slots.to_vec())
+                .unwrap_or_default(),
+            layers: Vec::new(),
+        });
+
         // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
         let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
             let mask_flat: Vec<f32> = visual_pos_masks
@@ -734,7 +957,7 @@ impl Qwen3_5TextModel {
                             &xs,
                             &attention_mask.get(xs.device()),
                             &cos_sin,
-                            kv_cache,
+                            Some(kv_cache),
                             ctx.paged_layer(i),
                             ctx.flash_params(),
                         )?;
@@ -752,6 +975,14 @@ impl Qwen3_5TextModel {
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
                         let conv_state = pool.gather_conv_state(&indices)?;
                         let recurrent_state = pool.gather_recurrent_state(&indices)?;
+                        if let Some(stash) = gdn_stash.as_mut() {
+                            stash.layers.push(GdnLayerStash {
+                                layer_idx: i,
+                                input: xs.clone(),
+                                conv_state: conv_state.clone(),
+                                recurrent_state: recurrent_state.clone(),
+                            });
+                        }
 
                         let mut gdn_cache = GdnLayerCache {
                             conv_state,
@@ -792,9 +1023,37 @@ impl Qwen3_5TextModel {
                 }
             }
         }
+        if self.store_spec_hidden.load(Ordering::Relaxed) {
+            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+        }
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
+        let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
+        if store_spec {
+            *self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned") = Some(SpecCapture {
+                hidden: xs.clone(),
+                positions: position_ids.to_device(&self.device)?,
+            });
+        }
         let xs = ctx.logits(&xs)?;
+        if store_spec {
+            // Reduce the position ids exactly like the hidden rows so they stay aligned
+            let positions = position_ids
+                .to_device(&self.device)?
+                .permute((1, 2, 0))?
+                .contiguous()?;
+            let positions = ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?;
+            *self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned") = Some(SpecCapture {
+                hidden: xs.clone(),
+                positions,
+            });
+        }
         self.lm_head.forward(&xs)
     }
 
@@ -865,6 +1124,9 @@ impl IsqModel for Qwen3_5TextModel {
                         .add_tensor("weight", gdn.norm.weight.clone());
                 }
             }
+        }
+        if let Some(mtp) = &self.mtp {
+            mtp.residual_tensors(&uvb);
         }
 
         uvb.to_safetensors()

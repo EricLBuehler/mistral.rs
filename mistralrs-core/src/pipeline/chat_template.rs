@@ -422,6 +422,18 @@ fn is_atem_tool_template(template: &str) -> bool {
     template.contains("<atem:function_calls>") && template.contains("<atem:invoke")
 }
 
+/// Whether the template walks tool call arguments as key/value pairs.
+///
+/// OpenAI sends `arguments` as a JSON string while templates are authored against the map that
+/// transformers passes, so those templates fail on the string unless it is parsed first.
+fn iterates_tool_call_arguments(template: &str) -> bool {
+    let compact = template
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    compact.contains("arguments|items") || compact.contains("arguments.items()")
+}
+
 fn normalize_minijinja_compatibility(template: &str) -> String {
     template.replace(
         "namespace(name=tcid if tcid else '')",
@@ -682,16 +694,15 @@ pub fn apply_chat_template_to(
 
     let is_gemma4_template = is_gemma4_tool_template(&resolved_template);
     let is_liquid_template = is_liquid_tool_template(&resolved_template);
-    let is_atem_template = is_atem_tool_template(&resolved_template);
 
-    if is_atem_template {
-        parse_tool_call_arguments(&mut messages);
-    } else if is_gemma4_template {
-        parse_tool_call_arguments(&mut messages);
+    // HF templates expect tool_calls[].function.arguments as a mapping, not the OpenAI wire string
+    parse_tool_call_arguments(&mut messages);
+    if is_gemma4_template {
         preprocess_gemma4_tool_messages(&mut messages);
     } else if is_liquid_template {
-        parse_tool_call_arguments(&mut messages);
         clear_assistant_tool_call_content(&mut messages);
+    } else if iterates_tool_call_arguments(&resolved_template) {
+        parse_tool_call_arguments(&mut messages);
     }
 
     let mut new_messages = Vec::new();
@@ -1197,6 +1208,22 @@ mod tests {
         assert_eq!(tool_responses[0]["name"], "get_weather");
         // Content was valid JSON → parsed into a Value, not a string
         assert_eq!(tool_responses[0]["response"]["temp"], 72);
+    }
+
+    #[test]
+    fn detects_templates_that_walk_tool_call_arguments() {
+        assert!(super::iterates_tool_call_arguments(
+            "{%- for k, v in tool_call.arguments|items %}"
+        ));
+        assert!(super::iterates_tool_call_arguments(
+            "{%- for k, v in tool_call.arguments | items %}"
+        ));
+        assert!(super::iterates_tool_call_arguments(
+            "{% for k, v in tool_call.arguments.items() %}"
+        ));
+        assert!(!super::iterates_tool_call_arguments(
+            "{{ tool_call.arguments | tojson }}"
+        ));
     }
 
     #[test]

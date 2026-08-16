@@ -120,20 +120,13 @@ const SIZE_IN_MB: usize = 1024 * 1024;
 
 macro_rules! mb_to_blocks {
     ($mb_size:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $mb_size
-            / $dtype_size
-            / $block_size
-            / $config.num_paged_kv_cache_layers()
-            / $config.kv_cache_elements_per_token()
+        $mb_size / $dtype_size / $block_size / $config.total_kv_cache_elements_per_token()
     };
 }
 
 macro_rules! ctxt_to_blocks {
     ($context_len:expr, $dtype_size:expr, $block_size:expr, $config:expr) => {
-        $context_len
-            * $dtype_size
-            * $config.num_paged_kv_cache_layers()
-            * $config.kv_cache_elements_per_token()
+        $context_len * $dtype_size * $config.total_kv_cache_elements_per_token()
     };
 }
 
@@ -177,6 +170,7 @@ pub fn calculate_cache_config(
         model_weight_size_in_bytes.unwrap_or(0) / num_devices / SIZE_IN_MB;
 
     let mut min_mem_gpu = usize::MAX;
+    let mut affine_reserved_mb = 0usize;
     for dev in layer_devices {
         let device = dev.as_ref().unwrap_or(device);
         let post_load_memory = if model_weight_size_in_bytes.is_none() && device.is_cuda() {
@@ -217,26 +211,18 @@ pub fn calculate_cache_config(
                 ctxt_to_blocks!(toks, dtype_size, block_size, config) / SIZE_IN_MB
             }
         };
-        if let Some(memory) = &post_load_memory {
-            let requested_cache_bytes = mem_gpu_mb.saturating_mul(SIZE_IN_MB);
-            let minimum_cache_bytes = dtype_size
-                .saturating_mul(block_size)
-                .saturating_mul(config.num_paged_kv_cache_layers())
-                .saturating_mul(config.kv_cache_elements_per_token())
-                .saturating_add(SIZE_IN_MB - 1)
-                / SIZE_IN_MB
-                * SIZE_IN_MB;
-            let adjusted_cache_bytes = mistralrs_quant::gguf_affine_adjust_cache_bytes(
-                device,
-                model_dtype,
-                memory.available(),
-                requested_cache_bytes,
-                minimum_cache_bytes,
-                matches!(mem_gpu, MemoryGpuConfig::Utilization(_)),
-            )?;
-            mem_gpu_mb = adjusted_cache_bytes / SIZE_IN_MB;
+        // Weights are loaded by now, so the repacked copy has an exact size. Charge it to the
+        // budget like any other resident allocation rather than correcting the cache afterwards.
+        if post_load_memory.is_some() {
+            let affine_mb =
+                mistralrs_quant::gguf_affine_budget_bytes(device, model_dtype) / SIZE_IN_MB;
+            affine_reserved_mb = affine_reserved_mb.max(affine_mb);
+            mem_gpu_mb = mem_gpu_mb.saturating_sub(affine_mb);
         }
         min_mem_gpu = min_mem_gpu.min(mem_gpu_mb);
+    }
+    if affine_reserved_mb > 0 && !silent {
+        info!("Reserving {affine_reserved_mb} MB per GPU for packed GGUF affine weights.");
     }
 
     // On Metal (unified memory), cap KV cache to what the model can actually use.

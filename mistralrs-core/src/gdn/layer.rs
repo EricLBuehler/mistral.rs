@@ -97,6 +97,34 @@ impl GatedDeltaNet {
         self.finish_forward(y, projected.z, batch_size, seq_len, dtype)
     }
 
+    /// Advance `cache` over `x` without producing an output; used to replay an accepted prefix
+    /// after speculative verification rejected the tail of a multi-token step.
+    pub fn advance_state(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<()> {
+        let (batch_size, seq_len, _) = x.dims3()?;
+        let projected = self.project(x, batch_size, seq_len)?;
+        let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+        let mixed_qkv = backend::causal_conv1d(
+            &mixed_qkv,
+            &self.conv1d_weight,
+            &self.dims,
+            cache,
+            RecurrentBatchKind::Prefill,
+        )?;
+        backend::apply_recurrence_from_convolved(
+            &mixed_qkv,
+            &projected.b,
+            &projected.a,
+            &self.a_log,
+            &self.dt_bias,
+            &self.dims,
+            batch_size,
+            seq_len,
+            cache,
+            x.dtype(),
+        )?;
+        Ok(())
+    }
+
     fn project(&self, x: &Tensor, batch_size: usize, seq_len: usize) -> Result<GdnProjection> {
         self.input_proj.forward(x, &self.dims, batch_size, seq_len)
     }
