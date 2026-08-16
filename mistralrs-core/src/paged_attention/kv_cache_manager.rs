@@ -104,6 +104,11 @@ impl KVCacheManager {
         self.block_pool.num_free_blocks()
     }
 
+    /// Total allocatable GPU blocks (excluding the null block).
+    pub fn num_usable_blocks(&self) -> usize {
+        self.block_pool.num_gpu_blocks().saturating_sub(1)
+    }
+
     pub fn num_gpu_blocks(&self) -> usize {
         self.block_pool.num_gpu_blocks()
     }
