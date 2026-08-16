@@ -21,13 +21,7 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::profile::{
-    measure_prefill_activation_bytes, ActivationScaling, PrefillProfileCtx,
-    ACTIVATION_PROBE_CONTEXT,
-};
-use crate::paged_attention::{
-    calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
-};
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
@@ -45,7 +39,6 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
-use crate::pipeline::DEFAULT_PAGED_PREFILL_CHUNK_SIZE;
 use crate::pipeline::{
     get_chat_template, hf::build_api, Modalities, ModelForwardContext, RecurrentBatchKind,
     RecurrentMetadata, SupportedModality,
@@ -126,62 +119,6 @@ pub(crate) struct NormalPipelineBuildArgs {
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
-struct PrefillProfileArgs<'a> {
-    model: &'a (dyn NormalModel + Send + Sync),
-    cache_config: &'a CacheConfig,
-    cache_engine: &'a CacheEngine,
-    model_config: &'a dyn ModelConfigLike,
-    mapper: &'a (dyn DeviceMapper + Send + Sync),
-}
-
-/// Measure what one full-size prefill actually costs, for comparison against the reserve the auto
-/// device mapper predicted. Reported only; nothing is sized off it yet.
-fn report_prefill_activation_profile(args: PrefillProfileArgs<'_>) {
-    let device = args.model.device().clone();
-    if !device.is_cuda() {
-        return;
-    }
-    let capacity_tokens = args.cache_config.num_gpu_blocks * args.cache_config.block_size;
-    // The far probe has to fit alongside its own chunk, so never ask for more than half.
-    let probe_context = ACTIVATION_PROBE_CONTEXT.min(capacity_tokens / 2);
-    let probe = |context_offset: usize| {
-        let kv_cache = args.cache_engine.get_kv_cache();
-        let ctx = PrefillProfileCtx {
-            device: &device,
-            cache_config: args.cache_config,
-            model_config: args.model_config,
-            kv_cache: kv_cache.as_slice(),
-            tokens: DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-            context_offset,
-            sliding_window: args.model.config().sliding_window,
-            mapper: Some(args.mapper),
-            cache: args.model.cache(),
-        };
-        measure_prefill_activation_bytes(ctx, |input, fwd| args.model.forward(input, fwd))
-    };
-
-    let scaling = match (probe(0), probe(probe_context)) {
-        (Ok(base), Ok(far)) => ActivationScaling::from_probes(base, far, probe_context),
-        (Ok(base), Err(e)) => {
-            warn!("Could not profile activation growth past {probe_context} tokens: {e}");
-            ActivationScaling::from_probes(base, base, probe_context)
-        }
-        (Err(e), _) => {
-            warn!("Could not profile prefill activations: {e}");
-            return;
-        }
-    };
-
-    info!(
-        "Prefill activations: {} MB at {} tokens, growing {:.1} KB per context token. \
-         Filling the cache to {capacity_tokens} tokens would need {} MB.",
-        scaling.base_bytes / (1024 * 1024),
-        DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-        scaling.bytes_per_context_token / 1024.0,
-        scaling.bytes_at(capacity_tokens) / (1024 * 1024),
-    );
-}
-
 pub(crate) fn build_normal_pipeline(
     args: NormalPipelineBuildArgs,
 ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
@@ -241,13 +178,6 @@ pub(crate) fn build_normal_pipeline(
             model.device(),
             layer_devices,
         )?;
-        report_prefill_activation_profile(PrefillProfileArgs {
-            model: model.as_ref(),
-            cache_config: &cache_config,
-            cache_engine: &cache_engine,
-            model_config: model_metadata.as_ref(),
-            mapper: mapper.as_ref(),
-        });
         (Some(cache_config), Some(cache_engine))
     } else {
         (None, None)

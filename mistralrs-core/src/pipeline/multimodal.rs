@@ -34,13 +34,7 @@ struct CudaDecodeGraphForwardInput<'a> {
     flash_meta: &'a FlashParams,
     model_specific_args: &'a dyn Any,
 }
-use crate::paged_attention::profile::{
-    measure_prefill_activation_bytes, ActivationScaling, PrefillProfileCtx,
-    ACTIVATION_PROBE_CONTEXT,
-};
-use crate::paged_attention::{
-    calculate_cache_config, AttentionImplementation, CacheConfig, CacheEngine, ModelConfigLike,
-};
+use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
     calculate_eos_tokens, BeginEndUnkPadTok, ChatTemplateValue, GenerationConfig,
 };
@@ -58,7 +52,6 @@ use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::DEFAULT_PAGED_PREFILL_CHUNK_SIZE;
 use crate::pipeline::{
     get_chat_template, hf::build_api, ChatTemplate, IsqOrganization, LocalModelPaths,
     ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
@@ -1248,13 +1241,6 @@ impl Loader for MultimodalLoader {
                 &device,
                 layer_devices,
             )?;
-            report_prefill_activation_profile(
-                model.as_ref(),
-                &cache_config,
-                &cache_engine,
-                model_metadata.as_ref(),
-                pipeline_mapper.as_ref(),
-            );
             (Some(cache_config), Some(cache_engine))
         } else {
             (None, None)
@@ -1538,63 +1524,6 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             adapter_leases,
         }))
     }
-}
-
-/// Measure what one full-size prefill actually costs, for comparison against the reserve the auto
-/// device mapper predicted. Reported only; nothing is sized off it yet.
-fn report_prefill_activation_profile(
-    model: &(dyn MultimodalModel + Send + Sync),
-    cache_config: &CacheConfig,
-    cache_engine: &CacheEngine,
-    model_config: &dyn ModelConfigLike,
-    mapper: &(dyn DeviceMapper + Send + Sync),
-) {
-    let device = model.device().clone();
-    if !device.is_cuda() {
-        return;
-    }
-    let capacity_tokens = cache_config.num_gpu_blocks * cache_config.block_size;
-    // The far probe has to fit alongside its own chunk, so never ask for more than half.
-    let probe_context = ACTIVATION_PROBE_CONTEXT.min(capacity_tokens / 2);
-    let probe = |context_offset: usize| {
-        let kv_cache = cache_engine.get_kv_cache();
-        let ctx = PrefillProfileCtx {
-            device: &device,
-            cache_config,
-            model_config,
-            kv_cache: kv_cache.as_slice(),
-            tokens: DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-            context_offset,
-            sliding_window: model.config().sliding_window,
-            mapper: Some(mapper),
-            cache: model.cache(),
-        };
-        measure_prefill_activation_bytes(ctx, |input, fwd| {
-            let args = model.default_model_specific_args(input);
-            model.forward(input, None, args, fwd)
-        })
-    };
-
-    let scaling = match (probe(0), probe(probe_context)) {
-        (Ok(base), Ok(far)) => ActivationScaling::from_probes(base, far, probe_context),
-        (Ok(base), Err(e)) => {
-            warn!("Could not profile activation growth past {probe_context} tokens: {e}");
-            ActivationScaling::from_probes(base, base, probe_context)
-        }
-        (Err(e), _) => {
-            warn!("Could not profile prefill activations: {e}");
-            return;
-        }
-    };
-
-    info!(
-        "Prefill activations: {} MB at {} tokens, growing {:.1} KB per context token. \
-         Filling the cache to {capacity_tokens} tokens would need {} MB.",
-        scaling.base_bytes / (1024 * 1024),
-        DEFAULT_PAGED_PREFILL_CHUNK_SIZE,
-        scaling.bytes_per_context_token / 1024.0,
-        scaling.bytes_at(capacity_tokens) / (1024 * 1024),
-    );
 }
 
 impl MultimodalPipeline {
