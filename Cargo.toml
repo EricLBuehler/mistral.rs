@@ -48,7 +48,7 @@ axum = "0.8.8"
 mimalloc = "0.1"
 anyhow = "1.0.100"
 serde = "1.0.228"
-serde_json = "1.0.149"
+serde_json = { version = "1.0.149", features = ["preserve_order"] }
 sha2 = "0.10.9"
 indexmap = { version = "2.13.0", features = ["serde"] }
 either = { version = "1.15.0", features = ["serde"] }
@@ -115,7 +115,7 @@ tokenizers = { version = "0.21.4", default-features = false }
 tokio-tungstenite = "0.28.0"
 tqdm = "0.8.0"
 chrono = "0.4.43"
-minijinja = { version = "2.14.0", features = ["builtins", "json"] }
+minijinja = { version = "2.14.0", features = ["builtins", "json", "preserve_order"] }
 minijinja-contrib = { version = "2.14.0", features = ["pycompat"] }
 regex-automata = { version = "0.4.13", features = ["meta"] }
 rustc-hash = "2.1.1"
