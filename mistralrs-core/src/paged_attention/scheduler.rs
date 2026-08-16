@@ -474,6 +474,7 @@ impl PagedAttentionScheduler {
 
             logger.set_num_running(self.running.len());
             logger.set_num_waiting(self.waiting.len());
+            self.publish_kv_block_metrics();
             self.completion_turn_due = true;
 
             return PagedAttentionSchedulerOutput {
@@ -598,11 +599,21 @@ impl PagedAttentionScheduler {
 
         logger.set_num_running(self.running.len());
         logger.set_num_waiting(self.waiting.len());
+        self.publish_kv_block_metrics();
 
         PagedAttentionSchedulerOutput {
             scheduled: self.running.clone().into_iter().collect(),
             num_cached_tokens: Vec::new(), // No prefix cache for completion
         }
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn publish_kv_block_metrics(&self) {
+        let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
+        let total = kv_mgr.num_usable_blocks();
+        let used = total.saturating_sub(kv_mgr.num_free_blocks());
+        metrics::gauge!("mistralrs_kv_cache_blocks_used").set(used as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_total").set(total as f64);
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
