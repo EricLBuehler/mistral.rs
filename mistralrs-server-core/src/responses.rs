@@ -2013,6 +2013,11 @@ pub async fn create_response(
         tokio::spawn(async move {
             let (bg_tx, mut bg_rx) = create_response_channel(None);
 
+            // Background tasks collect the full response internally and never stream to a client.
+            // Force non-streaming generation so the engine sends a terminal Response::Done.
+            let mut oairequest = oairequest;
+            oairequest.stream = Some(false);
+
             let (request, _, conversation_history, _include_config, request_context) =
                 match parse_openresponses_request(
                     oairequest,
@@ -2066,6 +2071,8 @@ pub async fn create_response(
                         files.push(file);
                         continue;
                     }
+                    // Defensive drain for any streaming chunks that reach the background channel.
+                    Some(Response::Chunk(_)) => continue,
                     other => break other,
                 }
             };
@@ -2120,6 +2127,15 @@ pub async fn create_response(
                     task_manager.mark_failed(
                         &task_id,
                         ResponseError::new("internal_error", e.to_string()),
+                    );
+                }
+                None => {
+                    task_manager.mark_failed(
+                        &task_id,
+                        ResponseError::new(
+                            "channel_closed",
+                            "Response channel closed before a terminal message",
+                        ),
                     );
                 }
                 _ => {
