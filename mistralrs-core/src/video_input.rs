@@ -2,6 +2,50 @@ use image::DynamicImage;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+/// Frame count cap applied when a model does not declare its own sampling policy.
+pub const DEFAULT_VIDEO_FRAME_LIMIT: usize = 32;
+
+/// How a model wants video frames sampled at decode time.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VideoFrameSampling {
+    /// Uniformly sample up to this many frames across the whole video.
+    Uniform(usize),
+    /// Sample at a target rate, clamped to a frame-count range (HF `BaseVideoProcessor.sample_frames`).
+    Fps {
+        fps: f64,
+        min_frames: usize,
+        max_frames: usize,
+    },
+}
+
+impl Default for VideoFrameSampling {
+    fn default() -> Self {
+        Self::Uniform(DEFAULT_VIDEO_FRAME_LIMIT)
+    }
+}
+
+impl VideoFrameSampling {
+    /// Number of frames to sample from a video with the given native frame count and rate.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    pub fn target_frames(&self, total_frames: usize, native_fps: f64) -> usize {
+        match *self {
+            Self::Uniform(count) => count.min(total_frames),
+            Self::Fps {
+                fps,
+                min_frames,
+                max_frames,
+            } => {
+                let count = if native_fps > 0.0 {
+                    (total_frames as f64 / native_fps * fps) as usize
+                } else {
+                    total_frames
+                };
+                count.max(min_frames).min(max_frames).min(total_frames)
+            }
+        }
+    }
+}
+
 /// Decoded video input: a sequence of frames with metadata for timestamp generation.
 ///
 /// Create from pre-decoded frames with [`VideoInput::from_frames`], or use the
@@ -114,6 +158,26 @@ pub fn sample_frame_indices(total_frames: usize, num_frames: usize) -> Vec<usize
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fps_sampling_matches_hf_sample_frames() {
+        let fps = VideoFrameSampling::Fps {
+            fps: 2.0,
+            min_frames: 4,
+            max_frames: 768,
+        };
+        assert_eq!(fps.target_frames(240, 24.0), 20);
+        assert_eq!(fps.target_frames(16, 8.0), 4);
+        // min_frames floor clamps back down to the actual frame count.
+        assert_eq!(fps.target_frames(3, 24.0), 3);
+        assert_eq!(fps.target_frames(18000, 30.0), 768);
+        assert_eq!(fps.target_frames(6, 2.0), 6);
+        assert_eq!(
+            VideoFrameSampling::Uniform(32).target_frames(1000, 30.0),
+            32
+        );
+        assert_eq!(VideoFrameSampling::Uniform(32).target_frames(10, 30.0), 10);
+    }
 
     #[test]
     fn test_sample_frame_indices() {

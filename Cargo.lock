@@ -649,7 +649,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -682,7 +682,7 @@ dependencies = [
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -695,7 +695,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "cudaforge",
 ]
@@ -703,7 +703,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "block2",
  "half",
@@ -718,7 +718,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -737,7 +737,7 @@ dependencies = [
 [[package]]
 name = "candle-ug"
 version = "0.11.0"
-source = "git+https://github.com/huggingface/candle.git?rev=27f20fea993c81ea6d32ce44018f42b68466525e#27f20fea993c81ea6d32ce44018f42b68466525e"
+source = "git+https://github.com/huggingface/candle.git?rev=35d7ae7ca5c93e17c77359c3617376b8a72e96a4#35d7ae7ca5c93e17c77359c3617376b8a72e96a4"
 dependencies = [
  "ug",
  "ug-cuda",
@@ -3688,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3714,7 +3714,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-audio"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3724,7 +3724,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-cli"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -3765,7 +3765,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-code-exec"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3783,7 +3783,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3827,6 +3827,7 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
+ "metrics",
  "mime_guess",
  "minijinja",
  "minijinja-contrib",
@@ -3891,7 +3892,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-flash-attn"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3902,7 +3903,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-macros"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3912,7 +3913,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-mcp"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3934,7 +3935,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-metal-compile"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "candle-metal-kernels",
  "objc2-metal",
@@ -3942,7 +3943,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3959,7 +3960,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3985,8 +3986,9 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
+ "bytemuck",
  "byteorder",
  "candle-core",
  "candle-metal-kernels",
@@ -4028,7 +4030,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-sandbox"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "itoa",
@@ -4044,7 +4046,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -4055,6 +4057,7 @@ dependencies = [
  "data-url",
  "either",
  "futures",
+ "http-body",
  "image",
  "indexmap 2.13.0",
  "intel-mkl-src",
@@ -4078,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "candle-core",
  "image",

@@ -76,6 +76,9 @@ fn arg_description(arg: &Arg) -> String {
         .collect();
     if !possible.is_empty() {
         if !desc.is_empty() {
+            if !matches!(desc.trim_end().chars().last(), Some('.' | '!' | '?')) {
+                desc.push('.');
+            }
             desc.push(' ');
         }
         write!(desc, "Possible values: {}.", possible.join(", ")).unwrap();

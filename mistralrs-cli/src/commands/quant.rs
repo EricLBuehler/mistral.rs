@@ -1,15 +1,26 @@
-//! Resolution for the `--quant` front-door.
+//! Resolution for `--quant`.
 
-use std::{fs, path::Path};
+mod gguf_discovery;
+
+use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use tracing::{debug, info, warn};
 
-use mistralrs_core::{
-    auto_tune, parse_isq_value, parse_uqff_shard, probe_hf_repo_files, resolve_uqff_shorthand,
-    AutoTuneRequest, ModelSelected, TokenSource, TuneProfile,
+pub(crate) use gguf_discovery::{
+    has_gguf_model_files, list_local_files_recursive, list_local_gguf_companions,
+    resolve_gguf_projector, resolve_gguf_quant,
 };
 
+use mistralrs_core::{
+    auto_tune, parse_isq_value, parse_uqff_shard, probe_hf_repo_files, resolve_uqff_report_output,
+    resolve_uqff_shorthand, AutoTuneRequest, ModelSelected, TokenSource, TuneProfile,
+};
+use mistralrs_quant::UqffReport;
+
+use super::uqff::read_existing_uqff_report;
+
+const DEFAULT_REVISION: &str = "main";
 const UQFF_REPO_ORG: &str = "mistralrs-community";
 const UQFF_REPO_SUFFIX: &str = "-UQFF";
 const UQFF_REPO_SUFFIX_LOWER: &str = "-uqff";
@@ -76,7 +87,9 @@ async fn resolve_explicit(
 
     let selected_files = selected_repo_files(model_id, token_source)?;
     if let Some(files) = &selected_files {
-        if let Some(resolved) = resolve_selected_uqff(raw, model_id, files)? {
+        let report =
+            read_existing_uqff_report(model_id, DEFAULT_REVISION, files, token_source).await?;
+        if let Some(resolved) = resolve_selected_uqff(raw, model_id, files, report.as_ref())? {
             return Ok(resolved);
         }
     } else if model_name_looks_uqff(model_id) {
@@ -94,13 +107,15 @@ async fn resolve_explicit(
 
     let uqff_repo = sibling_uqff_repo(model_id);
     debug!("quant: probing prebuilt UQFF at `{uqff_repo}`");
-    let Some(files) = probe_hf_repo_files(&uqff_repo, "main", token_source) else {
+    let Some(files) = probe_hf_repo_files(&uqff_repo, DEFAULT_REVISION, token_source) else {
         debug!("quant: no UQFF repo at `{uqff_repo}` (or unreachable)");
         info!("quant: --quant {raw} -> ISQ {raw}");
         return Ok(fallback_isq(raw));
     };
+    let report =
+        read_existing_uqff_report(&uqff_repo, DEFAULT_REVISION, &files, token_source).await?;
 
-    let Some(matched) = resolve_uqff_shorthand(raw, &files) else {
+    let Some(shorthand) = resolve_uqff_quant(raw, &files, report.as_ref())? else {
         let available: Vec<&String> = files.iter().filter(|f| f.ends_with(".uqff")).collect();
         warn!(
             "quant: `{uqff_repo}` has no shard matching `{raw}` (available: {available:?}); falling back to ISQ {raw}"
@@ -108,7 +123,6 @@ async fn resolve_explicit(
         return Ok(fallback_isq(raw));
     };
 
-    let shorthand = uqff_shorthand_from_match(&matched);
     info!(
         "quant: --quant {raw} -> UQFF {shorthand} from `{uqff_repo}`; use `--isq {raw}` to \
          quantize the selected model source instead"
@@ -130,36 +144,24 @@ fn selected_repo_files(model_id: &str, token_source: &TokenSource) -> Result<Opt
     if path.exists() {
         return Ok(Some(local_model_files(path)?));
     }
-    Ok(probe_hf_repo_files(model_id, "main", token_source))
+    Ok(probe_hf_repo_files(
+        model_id,
+        DEFAULT_REVISION,
+        token_source,
+    ))
 }
 
 fn local_model_files(model_path: &Path) -> Result<Vec<String>> {
-    if !model_path.is_dir() {
-        return Ok(Vec::new());
-    }
-
-    let mut files = Vec::new();
-    for entry in fs::read_dir(model_path).map_err(|err| {
-        anyhow!(
-            "Cannot list local model directory `{}`: {err}",
-            model_path.display()
-        )
-    })? {
-        let entry = entry?;
-        if let Some(name) = entry.path().file_name().and_then(|name| name.to_str()) {
-            files.push(name.to_string());
-        }
-    }
-    Ok(files)
+    list_local_files_recursive(model_path)
 }
 
 fn resolve_selected_uqff(
     raw: &str,
     model_id: &str,
     files: &[String],
+    report: Option<&UqffReport>,
 ) -> Result<Option<ResolvedQuant>> {
-    if let Some(matched) = resolve_uqff_shorthand(raw, files) {
-        let shorthand = uqff_shorthand_from_match(&matched);
+    if let Some(shorthand) = resolve_uqff_quant(raw, files, report)? {
         info!("quant: --quant {raw} -> UQFF {shorthand} from selected model `{model_id}`");
         return Ok(Some(ResolvedQuant {
             model_id_swap: None,
@@ -179,6 +181,19 @@ fn resolve_selected_uqff(
     }
 
     Ok(None)
+}
+
+fn resolve_uqff_quant(
+    raw: &str,
+    files: &[String],
+    report: Option<&UqffReport>,
+) -> Result<Option<String>> {
+    if let Some(report) = report {
+        if let Some(output) = resolve_uqff_report_output(raw, files, report)? {
+            return Ok(Some(output.quant.clone()));
+        }
+    }
+    Ok(resolve_uqff_shorthand(raw, files).map(|matched| uqff_shorthand_from_match(&matched)))
 }
 
 fn uqff_shorthand_from_match(matched: &str) -> String {
@@ -247,7 +262,7 @@ mod tests {
             "config.json".to_string(),
         ];
 
-        let resolved = resolve_selected_uqff("8", "mistralrs-community/foo-UQFF", &files)
+        let resolved = resolve_selected_uqff("8", "mistralrs-community/foo-UQFF", &files, None)
             .unwrap()
             .unwrap();
 
@@ -264,7 +279,7 @@ mod tests {
             "config.json".to_string(),
         ];
 
-        let err = resolve_selected_uqff("8", "mistralrs-community/foo-UQFF", &files)
+        let err = resolve_selected_uqff("8", "mistralrs-community/foo-UQFF", &files, None)
             .unwrap_err()
             .to_string();
 
@@ -280,7 +295,7 @@ mod tests {
             "config.json".to_string(),
         ];
 
-        let resolved = resolve_selected_uqff("8", "org/foo", &files)
+        let resolved = resolve_selected_uqff("8", "org/foo", &files, None)
             .unwrap()
             .unwrap();
 
@@ -296,9 +311,41 @@ mod tests {
             "config.json".to_string(),
         ];
 
-        assert!(resolve_selected_uqff("8", "org/foo", &files)
+        assert!(resolve_selected_uqff("8", "org/foo", &files, None)
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn selected_uqff_repo_resolves_report_quant_with_custom_shards() {
+        let files = vec![
+            "release-part-a.uqff".to_string(),
+            "release-part-b.uqff".to_string(),
+            mistralrs_quant::UQFF_REPORT_JSON.to_string(),
+            UQFF_RESIDUAL_SAFETENSORS.to_string(),
+        ];
+        let report = serde_json::from_value(serde_json::json!({
+            "schema": 1,
+            "generated_by": { "tool": "test" },
+            "uqff_version": "0.1.0",
+            "outputs": [{
+                "quant": "q8_0",
+                "shards": ["release-part-a.uqff", "release-part-b.uqff"],
+                "layers": 0,
+                "actual_counts": {},
+                "fallback_count": 0
+            }]
+        }))
+        .unwrap();
+
+        for quant in ["q8_0", "8"] {
+            let resolved =
+                resolve_selected_uqff(quant, "mistralrs-community/foo-UQFF", &files, Some(&report))
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(resolved.from_uqff, Some("q8_0".to_string()));
+            assert_eq!(resolved.in_situ_quant, None);
+        }
     }
 
     #[test]

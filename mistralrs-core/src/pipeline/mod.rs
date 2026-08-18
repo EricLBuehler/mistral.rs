@@ -44,7 +44,8 @@ pub use inputs_processor::InputProcessorOutput;
 pub(crate) use isq::IsqModelLoader;
 pub use isq::{
     expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig, UQFF_MULTI_FILE_DELIMITER,
+    resolve_uqff_report_output, resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig,
+    UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
 pub use loaders::{
@@ -58,12 +59,13 @@ pub use loaders::{
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths,
     MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
-    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
-    Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
-    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, SmolLm3Loader,
-    Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
+    Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
+    Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -76,7 +78,7 @@ pub(crate) fn get_device_layers_for_loader(
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
-    paged_attn_config: Option<&PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<crate::device_map::DeviceMapMetadata> {
     loaders::auto_device_map::get_device_layers(
         loader,
@@ -91,6 +93,42 @@ pub(crate) fn get_device_layers_for_loader(
         paged_attn_config,
     )
 }
+
+fn finish_dynamic_lora_runtime(
+    paths: &dyn ModelPaths,
+    layers: Arc<mistralrs_quant::LoraLayerRegistry>,
+    runtime_config: crate::LoraRuntimeConfig,
+    live_updates: bool,
+) -> Result<Arc<crate::DynamicLoraRuntime>> {
+    let AdapterPaths::Lora(adapter_paths) = paths.get_adapter_paths() else {
+        unreachable!("LoRA loaders require resolved LoRA adapter paths")
+    };
+
+    layers.finalize()?;
+    let runtime = Arc::new(crate::DynamicLoraRuntime::new(
+        layers,
+        runtime_config,
+        live_updates,
+    )?);
+    for adapter in adapter_paths {
+        let info = runtime.load_from_safetensors(
+            adapter.alias.clone(),
+            adapter.source.clone(),
+            adapter.revision.clone(),
+            &adapter.config_path,
+            &adapter.weights_path,
+        )?;
+        tracing::info!(
+            alias = %info.alias,
+            generation = %info.generation,
+            rank = info.rank,
+            bytes = info.bytes,
+            "LoRA adapter preloaded"
+        );
+    }
+    Ok(runtime)
+}
+
 use mistralrs_quant::IsqType;
 pub use multimodal::{MultimodalLoader, MultimodalLoaderBuilder, MultimodalSpecificConfig};
 pub use normal::{NormalLoader, NormalLoaderBuilder, NormalSpecificConfig};
@@ -129,7 +167,7 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
-const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
+pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
 
 #[cfg(feature = "cuda")]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
@@ -1039,6 +1077,7 @@ pub enum ModelCategory {
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
+        video_sampling: crate::VideoFrameSampling,
     },
     Diffusion,
     Audio,
@@ -1200,6 +1239,20 @@ impl ForwardInputsResult {
     }
 }
 
+/// One sequence's slice of a prompt chunk the target just processed, for proposers that keep their
+/// own KV cache; `tokens` is the full prompt so the shifted next token is available past `range`.
+pub struct SpeculativePromptRow {
+    pub seq_idx: usize,
+    pub range: (usize, usize),
+    pub tokens: Vec<u32>,
+}
+
+pub struct SpeculativePromptChunk {
+    /// In forward-batch order (row `i` of the batch is `rows[i].seq_idx`)
+    pub rows: Vec<SpeculativePromptRow>,
+    pub is_final_prompt_chunk: bool,
+}
+
 #[async_trait::async_trait]
 pub trait Pipeline:
     Send
@@ -1245,6 +1298,17 @@ pub trait Pipeline:
         _config: crate::speculative::SpeculativeConfig,
     ) -> Result<(), candle_core::Error> {
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
+    }
+
+    /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
+    /// process the chunk. Default: nothing to do.
+    fn speculative_prompt_chunk(
+        &mut self,
+        _seqs: &[&mut Sequence],
+        _chunk: &SpeculativePromptChunk,
+        _metadata: &PagedAttentionMeta,
+    ) -> Result<(), candle_core::Error> {
+        Ok(())
     }
 
     /// Append pre-sampled token blocks (block-diffusion canvases) to the sequences via the
@@ -1640,6 +1704,7 @@ pub trait Pipeline:
                     && !has_suffix_only_prefill
                     && !keep_complete_packed_candidates)
                     .then(|| {
+                        let block_align = self.cache().is_hybrid().then_some(block_size);
                         chunk_size.map(|chunk_size| {
                             input_seqs
                                 .iter()
@@ -1648,6 +1713,7 @@ pub trait Pipeline:
                                         seq.get_toks().len(),
                                         seq.prefix_cache_len(),
                                         chunk_size,
+                                        block_align,
                                         seq.mm_features(),
                                     )
                                 })
@@ -1682,6 +1748,10 @@ pub trait Pipeline:
                                 .expect("at least one chunk plan is active");
 
                             let mut recurrent_boundaries = Vec::new();
+                            let mut prompt_chunk = SpeculativePromptChunk {
+                                rows: Vec::with_capacity(active_indices.len()),
+                                is_final_prompt_chunk,
+                            };
                             for &seq_idx in &active_indices {
                                 let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
                                 let seq = &mut input_seqs[seq_idx];
@@ -1690,6 +1760,11 @@ pub trait Pipeline:
                                 if chunk.end % block_size == 0 {
                                     recurrent_boundaries.push((seq_idx, chunk.end));
                                 }
+                                prompt_chunk.rows.push(SpeculativePromptRow {
+                                    seq_idx,
+                                    range: (chunk.start, chunk.end),
+                                    tokens: originals[seq_idx].0.clone(),
+                                });
                             }
 
                             let mut chunk_metadata = metadata.clone();
@@ -1724,7 +1799,7 @@ pub trait Pipeline:
                                     *seq_idx = active_indices[*seq_idx];
                                 }
                             }
-                            inputs.push((processed, recurrent_boundaries));
+                            inputs.push((processed, recurrent_boundaries, Some(prompt_chunk)));
                             for &seq_idx in &active_indices {
                                 plan_indices[seq_idx] += 1;
                             }
@@ -1738,6 +1813,18 @@ pub trait Pipeline:
                         inputs
                     } else {
                         metadata.set_noncausal_mm_context(input_seqs);
+                        let prompt_chunk = is_prompt.then(|| SpeculativePromptChunk {
+                            rows: input_seqs
+                                .iter()
+                                .enumerate()
+                                .map(|(seq_idx, seq)| SpeculativePromptRow {
+                                    seq_idx,
+                                    range: (seq.prefix_cache_len(), seq.get_toks().len()),
+                                    tokens: seq.get_toks().to_vec(),
+                                })
+                                .collect(),
+                            is_final_prompt_chunk: true,
+                        });
                         vec![(
                             self.get_processor().inputs_processor().process_inputs(
                                 self.tokenizer(),
@@ -1754,6 +1841,7 @@ pub trait Pipeline:
                                 self.device_mapper(),
                             ),
                             Vec::new(),
+                            prompt_chunk,
                         )]
                     };
 
@@ -1763,7 +1851,9 @@ pub trait Pipeline:
                     let mut embedding_logits = vec![None; input_seqs.len()];
 
                     let mut exec_duration = Duration::ZERO;
-                    for (i, (inputs, recurrent_boundaries)) in inputs_iter.into_iter().enumerate() {
+                    for (i, (inputs, recurrent_boundaries, prompt_chunk)) in
+                        inputs_iter.into_iter().enumerate()
+                    {
                         let InputProcessorOutput {
                             inputs,
                             seq_indices,
@@ -1817,6 +1907,13 @@ pub trait Pipeline:
                         let raw_logits = self
                             .forward_inputs(inputs, return_raw_logits)?
                             .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
+                        if let Some(prompt_chunk) = prompt_chunk.as_ref() {
+                            self.speculative_prompt_chunk(
+                                input_seqs,
+                                prompt_chunk,
+                                &speculative_metadata,
+                            )?;
+                        }
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
 

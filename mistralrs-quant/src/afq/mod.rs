@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{DType, Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Shape, Tensor};
 use safetensors::tensor::Dtype;
 
 use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
@@ -216,7 +216,7 @@ impl QuantMethod for AfqLayer {
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
         self.stats.process(x)?;
-        ops::afq_mm_op(
+        let output = ops::afq_mm_op(
             x,
             &self.w_q,
             &self.scales,
@@ -226,11 +226,15 @@ impl QuantMethod for AfqLayer {
             self.group_size,
             self.bits,
             true,
-        )
+        )?;
+        match &self.bias {
+            Some(bias) => output.broadcast_add(bias),
+            None => Ok(output),
+        }
     }
 
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        ops::afq_mm_op(
+        let output = ops::afq_mm_op(
             x,
             &self.w_q,
             &self.scales,
@@ -240,7 +244,20 @@ impl QuantMethod for AfqLayer {
             self.group_size,
             self.bits,
             true,
-        )
+        )?;
+        let Some(bias) = &self.bias else {
+            return Ok(output);
+        };
+        if bias.rank() == 2 {
+            let mut shape = indices.dims().to_vec();
+            shape.push(bias.dim(1)?);
+            let bias = bias
+                .index_select(&indices.flatten_all()?, 0)?
+                .reshape(Shape::from(shape))?;
+            output.broadcast_add(&bias)
+        } else {
+            output.broadcast_add(bias)
+        }
     }
 
     fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
@@ -288,6 +305,12 @@ impl QuantMethod for AfqLayer {
         if let Some(last) = shape.last_mut() {
             *last = last.saturating_mul(self.group_size as usize);
         }
+        if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
+            candle_core::bail!(
+                "Cannot requantize stacked AFQ expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                request.ty.expect("rank-3 rejection requires an ISQ target")
+            );
+        }
         Ok(crate::plan_weight_isq(
             self.scales.dtype(),
             self.scales.device().clone(),
@@ -309,6 +332,25 @@ impl QuantMethod for AfqLayer {
         imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
+        if dtype.is_none() || (dtype == self.uqff_type() && imatrix_weight.is_none()) {
+            if self.w_q.device().same_device(&device) {
+                return Ok(self);
+            }
+            return Ok(Arc::new(Self {
+                w_q: self.w_q.to_device(&device)?,
+                scales: self.scales.to_device(&device)?,
+                biases: self.biases.to_device(&device)?,
+                bias: self
+                    .bias
+                    .as_ref()
+                    .map(|bias| bias.to_device(&device))
+                    .transpose()?,
+                bits: self.bits,
+                group_size: self.group_size,
+                stats: self.stats.clone(),
+            }));
+        }
+
         match dtype {
             Some(IsqType::F8Q8) => {
                 let _acquired_quantize_guard = guard.acquire(&device);
@@ -353,12 +395,9 @@ impl AfqLayer {
         let group_size =
             AfqGroupSize::try_from(reader.load_u8_scalar(&format!("{key}.weight.group_size"))?)?;
         let group = group_size as usize;
-        let pack = (32 / bits as usize).max(1);
 
-        // Logical dims: w_q packs `pack` input elements per u32 along the last dim.
-        let w_q_dims = reader.tensor_dims(&format!("{key}.weight"))?;
-        let mut dims = w_q_dims.clone();
-        *dims.last_mut().expect("AFQ w_q is non-empty") *= pack;
+        let mut dims = reader.tensor_dims(&format!("{key}.weight.scales"))?;
+        *dims.last_mut().expect("AFQ scales are non-empty") *= group;
         let range = crate::uqff::shard_range(shard, &dims)?;
 
         let (w_q_range, group_range) = match range {
@@ -370,7 +409,11 @@ impl AfqLayer {
                     );
                 }
                 (
-                    Some((dim, start / pack, len / pack)),
+                    Some((
+                        dim,
+                        start * bits as usize / u32::BITS as usize,
+                        len * bits as usize / u32::BITS as usize,
+                    )),
                     Some((dim, start / group, len / group)),
                 )
             }
@@ -481,14 +524,19 @@ impl QuantizedSerde for AfqLayer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
-    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
-        let actual_ty = match self.bits {
+    fn uqff_type(&self) -> Option<IsqType> {
+        Some(match self.bits {
             AfqBits::Two => IsqType::AFQ2,
             AfqBits::Three => IsqType::AFQ3,
             AfqBits::Four => IsqType::AFQ4,
             AfqBits::Six => IsqType::AFQ6,
             AfqBits::Eight => IsqType::AFQ8,
-        };
+        })
+    }
+    fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
+        let actual_ty = self
+            .uqff_type()
+            .expect("AFQ layers always have an ISQ type");
         if ty != actual_ty {
             candle_core::bail!("Cannot serialize AFQ layer as {ty}; actual type is {actual_ty}.");
         }
@@ -529,5 +577,109 @@ impl QuantizedSerde for AfqLayer {
             AfqBits::Six => Ok(IsqType::AFQ6),
             AfqBits::Eight => Ok(IsqType::AFQ8),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_isq_preserves_packed_afq_for_capture_and_exact_target() -> Result<()> {
+        let source = Arc::new(AfqLayer::from_parts(
+            Tensor::zeros((1, 1), DType::U32, &Device::Cpu)?,
+            Tensor::zeros((1, 1), DType::BF16, &Device::Cpu)?,
+            Tensor::zeros((1, 1), DType::BF16, &Device::Cpu)?,
+            Some(Tensor::zeros(1, DType::BF16, &Device::Cpu)?),
+            AfqBits::Four,
+            AfqGroupSize::Med,
+        )) as Arc<dyn QuantMethod>;
+        let n_quantized = AtomicUsize::new(0);
+
+        let captured = source.clone().apply_isq(
+            None,
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &captured));
+        assert_eq!(captured.uqff_type(), Some(IsqType::AFQ4));
+        assert!(captured.has_bias());
+
+        let exact = source.clone().apply_isq(
+            Some(IsqType::AFQ4),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert!(Arc::ptr_eq(&source, &exact));
+        Ok(())
+    }
+
+    #[test]
+    fn three_and_six_bit_uqff_loads_preserve_logical_shape_and_shards() -> Result<()> {
+        const OUTPUT_SIZE: usize = 2;
+        const INPUT_SIZE: usize = 128;
+        const GROUP_SIZE: usize = AfqGroupSize::Low as usize;
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("afq-3-6.uqff");
+        let mut tensors = crate::uqff_version_tensors();
+        for (prefix, bits, ty) in [
+            ("afq3", AfqBits::Three, IsqType::AFQ3),
+            ("afq6", AfqBits::Six, IsqType::AFQ6),
+        ] {
+            let packed_columns = INPUT_SIZE * bits as usize / u32::BITS as usize;
+            let layer = AfqLayer::from_parts(
+                Tensor::zeros((OUTPUT_SIZE, packed_columns), DType::U32, &Device::Cpu)?,
+                Tensor::zeros(
+                    (OUTPUT_SIZE, INPUT_SIZE / GROUP_SIZE),
+                    DType::BF16,
+                    &Device::Cpu,
+                )?,
+                Tensor::zeros(
+                    (OUTPUT_SIZE, INPUT_SIZE / GROUP_SIZE),
+                    DType::BF16,
+                    &Device::Cpu,
+                )?,
+                None,
+                bits,
+                AfqGroupSize::Low,
+            );
+            tensors.extend(layer.serialize_uqff(prefix, ty)?);
+        }
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )?;
+
+        let reader = UqffReader::open(&[path])?;
+        for (prefix, bits) in [("afq3", 3), ("afq6", 6)] {
+            let full = AfqLayer::from_uqff(&reader, prefix, &Device::Cpu, Shard::default())?;
+            assert_eq!(full.w_q.dims(), [OUTPUT_SIZE, INPUT_SIZE * bits / 32]);
+            assert_eq!(full.scales.dims(), [OUTPUT_SIZE, INPUT_SIZE / GROUP_SIZE]);
+            assert_eq!(full.dequantize_w()?.dims(), [OUTPUT_SIZE, INPUT_SIZE]);
+
+            let shard = AfqLayer::from_uqff(
+                &reader,
+                prefix,
+                &Device::Cpu,
+                Shard::Simple {
+                    dim: 1,
+                    rank: 1,
+                    world_size: 2,
+                },
+            )?;
+            assert_eq!(shard.w_q.dims(), [OUTPUT_SIZE, INPUT_SIZE * bits / 64]);
+            assert_eq!(
+                shard.scales.dims(),
+                [OUTPUT_SIZE, INPUT_SIZE / GROUP_SIZE / 2]
+            );
+            assert_eq!(shard.dequantize_w()?.dims(), [OUTPUT_SIZE, INPUT_SIZE / 2]);
+        }
+        Ok(())
     }
 }

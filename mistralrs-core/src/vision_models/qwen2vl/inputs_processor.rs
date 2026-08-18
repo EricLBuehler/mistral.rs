@@ -78,7 +78,7 @@ impl Processor for Qwen2VLProcessor {
     }
 }
 
-fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
+pub(crate) fn replace_first_occurrence(text: &str, to_replace: &str, replacement: &str) -> String {
     if let Some(pos) = text.find(to_replace) {
         let mut result = text.to_string();
         result.replace_range(pos..pos + to_replace.len(), replacement);
@@ -1306,8 +1306,11 @@ impl InputsProcessor for Qwen2VLImageProcessor {
             let query_ranges = input_seqs
                 .iter()
                 .map(|seq| {
-                    seq.active_prompt_query_range()
-                        .unwrap_or(0..seq.prompt_position_source_toks().len())
+                    seq.active_prompt_query_range().unwrap_or_else(|| {
+                        // Paged prefix-cache hits trim the input to the tail without a prefill view.
+                        let len = seq.prompt_position_source_toks().len();
+                        seq.prefix_cache_len().min(len)..len
+                    })
                 })
                 .collect::<Vec<_>>();
             Some(prompt_mrope(

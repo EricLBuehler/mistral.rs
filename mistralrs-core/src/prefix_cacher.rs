@@ -161,6 +161,8 @@ fn features_cover_items(
 pub struct PrefixCacheManagerV2 {
     caches: IndexMap<CacheKey, CacheElement>,
     paged_recurrent_caches: IndexMap<Vec<BlockHash>, Vec<RecurrentStateSnapshot>>,
+    paged_recurrent_bytes: usize,
+    paged_recurrent_reported: bool,
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
@@ -187,6 +189,8 @@ impl PrefixCacheManagerV2 {
         PrefixCacheManagerV2 {
             caches: IndexMap::new(),
             paged_recurrent_caches: IndexMap::new(),
+            paged_recurrent_bytes: 0,
+            paged_recurrent_reported: false,
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
@@ -194,7 +198,18 @@ impl PrefixCacheManagerV2 {
     }
 
     fn paged_recurrent_capacity(&self) -> usize {
-        self.n_on_device.max(1).saturating_mul(8)
+        self.n_on_device.max(1)
+    }
+
+    fn snapshot_bytes(snapshots: &[RecurrentStateSnapshot]) -> usize {
+        snapshots
+            .iter()
+            .map(|snapshot| {
+                snapshot.conv_state.elem_count() * snapshot.conv_state.dtype().size_in_bytes()
+                    + snapshot.recurrent_state.elem_count()
+                        * snapshot.recurrent_state.dtype().size_in_bytes()
+            })
+            .sum()
     }
 
     /// This always keeps the cache on the device.
@@ -306,6 +321,7 @@ impl PrefixCacheManagerV2 {
         let len = self.caches.len();
         self.caches.clear();
         self.paged_recurrent_caches.clear();
+        self.paged_recurrent_bytes = 0;
         Ok(len)
     }
 
@@ -325,11 +341,34 @@ impl PrefixCacheManagerV2 {
         }
 
         // Maintain LRU order by reinserting on update.
-        let _ = self.paged_recurrent_caches.shift_remove(&key);
+        if let Some(prev) = self.paged_recurrent_caches.shift_remove(&key) {
+            self.paged_recurrent_bytes = self
+                .paged_recurrent_bytes
+                .saturating_sub(Self::snapshot_bytes(&prev));
+        }
+        self.paged_recurrent_bytes += Self::snapshot_bytes(&snapshots);
         self.paged_recurrent_caches.insert(key, snapshots);
 
         while self.paged_recurrent_caches.len() > self.paged_recurrent_capacity() {
-            let _ = self.paged_recurrent_caches.shift_remove_index(0);
+            let Some((_, evicted)) = self.paged_recurrent_caches.shift_remove_index(0) else {
+                break;
+            };
+            self.paged_recurrent_bytes = self
+                .paged_recurrent_bytes
+                .saturating_sub(Self::snapshot_bytes(&evicted));
+        }
+
+        // One snapshot spans every recurrent layer at once, so the entry count says nothing about
+        // what the store costs. Report it rather than leaving the ceiling invisible.
+        if self.paged_recurrent_caches.len() == self.paged_recurrent_capacity()
+            && !self.paged_recurrent_reported
+        {
+            self.paged_recurrent_reported = true;
+            info!(
+                "Recurrent prefix cache full at {} entries, {} MB. Adjust with `--prefix-cache-n`.",
+                self.paged_recurrent_caches.len(),
+                self.paged_recurrent_bytes / (1024 * 1024),
+            );
         }
     }
 

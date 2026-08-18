@@ -253,6 +253,7 @@ export interface StreamOptions {
   max_tokens?: number;
   repetition_penalty?: number;
   enable_thinking?: boolean;
+  reasoning_effort?: ReasoningEffort;
   web_search_options?: WebSearchOptions;
   enable_code_execution?: boolean;
   enable_shell?: boolean;
@@ -263,6 +264,8 @@ export interface StreamOptions {
   files?: RequestedFile[];
   abortSignal?: AbortSignal;
 }
+
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh";
 
 export interface RequestedFile {
   name: string;

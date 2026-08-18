@@ -9,7 +9,7 @@ use std::{
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use mistralrs_quant::{NonZeroOp, ShardedVarBuilder};
-use text::Qwen3_5TextModel;
+pub(crate) use text::Qwen3_5TextModel;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
@@ -17,7 +17,7 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
@@ -29,17 +29,19 @@ use crate::{
 };
 
 pub(crate) mod config;
+pub(crate) mod mtp;
 pub(crate) mod packed_gdn;
 pub(crate) mod packed_visual;
+mod speculative;
 mod text;
 
-pub(crate) use config::Config;
+pub(crate) use config::{Config, TextConfig};
 use packed_visual::{PackedVisualEncoder, PackedVisualInput};
 // Re-export the processor from qwen3_vl since the input processing is identical
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen3_5Processor;
 
 pub struct Qwen3_5Model {
-    text: Qwen3_5TextModel,
+    pub(super) text: Qwen3_5TextModel,
     vision: Qwen3VLVisionModel,
     spatial_merge_size: usize,
     image_token_id: u32,
@@ -47,6 +49,9 @@ pub struct Qwen3_5Model {
     vision_start_token_id: u32,
     vision_end_token_id: u32,
     encoder_cache: Arc<Mutex<EncoderCacheManager>>,
+    // Draft tokens per speculative step; 0 while MTP is not attached
+    pub(super) mtp_n_predict: std::sync::atomic::AtomicUsize,
+    pending_prompt_tails: Mutex<std::collections::HashMap<usize, speculative::PendingPromptTail>>,
 }
 
 impl Qwen3_5Model {
@@ -62,7 +67,8 @@ impl Qwen3_5Model {
             vb.pp("vision_tower")
         } else {
             vb.pp("model").pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
@@ -76,6 +82,7 @@ impl Qwen3_5Model {
             &text_config,
             vb.clone(),
             cfg.tie_word_embeddings,
+            cfg.mtp,
             normal_loading_metadata,
             attention_mechanism,
         )?;
@@ -88,6 +95,8 @@ impl Qwen3_5Model {
             vision_start_token_id: cfg.vision_start_token_id,
             vision_end_token_id: cfg.vision_end_token_id,
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+            mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
+            pending_prompt_tails: Mutex::new(std::collections::HashMap::new()),
         })
     }
 
@@ -495,8 +504,6 @@ impl Qwen3_5Model {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Qwen3_5Model {}
-
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5Model {}
 
 impl MultimodalModel for Qwen3_5Model {
@@ -582,6 +589,12 @@ impl MultimodalModel for Qwen3_5Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(HybridPagedKvCacheConfig::new(
+            self.text.cfg.clone(),
+            self.text.paged_kv_layers(),
+        ))
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");

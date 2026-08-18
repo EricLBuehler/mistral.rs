@@ -23,8 +23,8 @@ use either::Either;
 use mistralrs_core::{
     AgentPermission, AgentToolApprovalHandler, ApproximateUserLocation,
     ChatCompletionChunkResponse, ChatCompletionResponse, CodeExecutionPermission, Function,
-    MistralRs, Request, RequestMessage, Response, TokenizationRequest, Tool, ToolChoice, ToolType,
-    Usage, WebSearchOptions, WebSearchUserLocation,
+    MistralRs, ReasoningEffort, Request, RequestMessage, Response, TokenizationRequest, Tool,
+    ToolChoice, ToolType, Usage, WebSearchOptions, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -46,7 +46,7 @@ use crate::{
         ResponseFormat, StopTokens, ToolCall,
     },
     skills::SkillStore,
-    streaming::get_keep_alive_interval,
+    streaming::{get_keep_alive_interval, observe_response, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, SharedMistralRsState},
     util::sanitize_error_message,
 };
@@ -115,8 +115,11 @@ pub struct AnthropicMessagesRequest {
     pub container: Option<AnthropicContainer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnthropicThinking>,
+    /// mistral.rs extension for toggling reasoning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_thinking: Option<bool>,
+    /// mistral.rs extension accepting off, low, medium, high, or xhigh. "none" aliases "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[schema(value_type = Option<Object>)]
@@ -392,8 +395,37 @@ struct AnthropicConvertedTools {
     server_tool_names: Vec<String>,
 }
 
+fn resolve_anthropic_thinking(
+    thinking: Option<&AnthropicThinking>,
+    enable_thinking: Option<bool>,
+) -> Result<Option<bool>> {
+    let native = thinking
+        .map(|thinking| match thinking.tp.as_str() {
+            "enabled" | "adaptive" => Ok(true),
+            "disabled" => Ok(false),
+            other => anyhow::bail!("Unsupported Anthropic thinking type `{other}`."),
+        })
+        .transpose()?;
+
+    if let (Some(native), Some(extension)) = (native, enable_thinking) {
+        if native != extension {
+            anyhow::bail!("Anthropic `thinking.type` conflicts with mistral.rs `enable_thinking`.");
+        }
+    }
+
+    Ok(enable_thinking.or(native))
+}
+
 impl AnthropicMessagesRequest {
     fn into_chat_completion_request(self) -> Result<ChatCompletionRequest> {
+        let enable_thinking =
+            resolve_anthropic_thinking(self.thinking.as_ref(), self.enable_thinking)?;
+        let reasoning_effort = self
+            .reasoning_effort
+            .as_deref()
+            .map(str::parse)
+            .transpose()?;
+        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
         let mut converted_tools = convert_tools_and_agentic(
             self.tools,
             self.web_search_options,
@@ -459,6 +491,7 @@ impl AnthropicMessagesRequest {
             frequency_penalty: self.frequency_penalty,
             repetition_penalty: self.repetition_penalty,
             stop_seqs: self.stop_sequences.map(StopTokens::Multi),
+            ignore_eos: false,
             temperature: self.temperature,
             top_p: self.top_p,
             stream: self.stream,
@@ -479,11 +512,7 @@ impl AnthropicMessagesRequest {
             dry_base: self.dry_base,
             dry_allowed_length: self.dry_allowed_length,
             dry_sequence_breakers: self.dry_sequence_breakers,
-            enable_thinking: self.enable_thinking.or_else(|| {
-                self.thinking
-                    .as_ref()
-                    .map(|thinking| thinking.tp == "enabled")
-            }),
+            enable_thinking,
             reasoning_effort: self.reasoning_effort,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
@@ -727,6 +756,7 @@ fn append_anthropic_blocks(
             name: None,
             tool_calls,
             tool_call_id: None,
+            reasoning_content: None,
         });
         return Ok(());
     }
@@ -789,6 +819,7 @@ fn flush_user_content(
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     });
     text_parts.clear();
 }
@@ -800,6 +831,7 @@ fn message_with_text(role: impl Into<String>, text: String) -> Message {
         name: None,
         tool_calls: None,
         tool_call_id: None,
+        reasoning_content: None,
     }
 }
 
@@ -842,6 +874,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         name: None,
         tool_calls: None,
         tool_call_id: Some(tool_call_id),
+        reasoning_content: None,
     })
 }
 
@@ -996,10 +1029,15 @@ pub struct AnthropicStreamer {
     text_block_index: Option<usize>,
     next_content_index: usize,
     ping: Interval,
+    outcome: Option<StreamOutcomeHandle>,
 }
 
 impl AnthropicStreamer {
-    fn new(rx: Receiver<Response>, state: SharedMistralRsState) -> Self {
+    fn new(
+        rx: Receiver<Response>,
+        state: SharedMistralRsState,
+        outcome: Option<StreamOutcomeHandle>,
+    ) -> Self {
         let ping_interval = Duration::from_millis(get_keep_alive_interval());
         let mut ping = interval_at(Instant::now() + ping_interval, ping_interval);
         ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -1013,6 +1051,7 @@ impl AnthropicStreamer {
             text_block_index: None,
             next_content_index: 0,
             ping,
+            outcome,
         }
     }
 
@@ -1254,69 +1293,75 @@ impl futures::Stream for AnthropicStreamer {
             }
 
             match self.rx.poll_recv(cx) {
-                Poll::Ready(Some(resp)) => match resp {
-                    Response::Chunk(chunk) => self.handle_chunk(chunk),
-                    Response::ModelError(msg, _) => {
-                        MistralRs::maybe_log_error(
-                            self.state.clone(),
-                            &crate::handler_core::ModelErrorMessage(msg.to_string()),
-                        );
-                        self.handle_error_event("api_error", msg);
+                Poll::Ready(Some(resp)) => {
+                    observe_response(&self.outcome, &resp);
+                    match resp {
+                        Response::Chunk(chunk) => self.handle_chunk(chunk),
+                        Response::ModelError(msg, _) => {
+                            MistralRs::maybe_log_error(
+                                self.state.clone(),
+                                &crate::handler_core::ModelErrorMessage(msg.to_string()),
+                            );
+                            self.handle_error_event("api_error", msg);
+                        }
+                        Response::ValidationError(e) => {
+                            self.handle_error_event(
+                                "invalid_request_error",
+                                sanitize_error_message(e.as_ref()),
+                            );
+                        }
+                        Response::InternalError(e) => {
+                            MistralRs::maybe_log_error(self.state.clone(), &*e);
+                            self.handle_error_event(
+                                "api_error",
+                                sanitize_error_message(e.as_ref()),
+                            );
+                        }
+                        Response::AgenticToolCallProgress {
+                            round,
+                            tool_name,
+                            phase,
+                        } => {
+                            self.enqueue_json(
+                                "agentic_tool_call_progress",
+                                crate::chat_completion::serialize_agentic_progress(
+                                    round, &tool_name, &phase,
+                                ),
+                            );
+                        }
+                        Response::AgenticToolApprovalRequired {
+                            approval_id,
+                            session_id,
+                            round,
+                            tool,
+                            arguments,
+                        } => {
+                            self.enqueue_json(
+                                "agentic_tool_approval_required",
+                                json!({
+                                    "type": "agentic_tool_approval_required",
+                                    "approval_id": approval_id,
+                                    "session_id": session_id,
+                                    "round": round,
+                                    "tool": tool,
+                                    "arguments": arguments,
+                                }),
+                            );
+                        }
+                        Response::File(file) => {
+                            self.enqueue_json("file_produced", json!(file));
+                        }
+                        Response::BlockDenoisingProgress(_) => {}
+                        Response::Done(_)
+                        | Response::CompletionDone(_)
+                        | Response::CompletionModelError(_, _)
+                        | Response::CompletionChunk(_)
+                        | Response::ImageGeneration(_)
+                        | Response::Speech { .. }
+                        | Response::Raw { .. }
+                        | Response::Embeddings { .. } => unreachable!(),
                     }
-                    Response::ValidationError(e) => {
-                        self.handle_error_event(
-                            "invalid_request_error",
-                            sanitize_error_message(e.as_ref()),
-                        );
-                    }
-                    Response::InternalError(e) => {
-                        MistralRs::maybe_log_error(self.state.clone(), &*e);
-                        self.handle_error_event("api_error", sanitize_error_message(e.as_ref()));
-                    }
-                    Response::AgenticToolCallProgress {
-                        round,
-                        tool_name,
-                        phase,
-                    } => {
-                        self.enqueue_json(
-                            "agentic_tool_call_progress",
-                            crate::chat_completion::serialize_agentic_progress(
-                                round, &tool_name, &phase,
-                            ),
-                        );
-                    }
-                    Response::AgenticToolApprovalRequired {
-                        approval_id,
-                        session_id,
-                        round,
-                        tool,
-                        arguments,
-                    } => {
-                        self.enqueue_json(
-                            "agentic_tool_approval_required",
-                            json!({
-                                "type": "agentic_tool_approval_required",
-                                "approval_id": approval_id,
-                                "session_id": session_id,
-                                "round": round,
-                                "tool": tool,
-                                "arguments": arguments,
-                            }),
-                        );
-                    }
-                    Response::File(file) => {
-                        self.enqueue_json("file_produced", json!(file));
-                    }
-                    Response::BlockDenoisingProgress(_) => {}
-                    Response::Done(_)
-                    | Response::CompletionDone(_)
-                    | Response::CompletionModelError(_, _)
-                    | Response::CompletionChunk(_)
-                    | Response::ImageGeneration(_)
-                    | Response::Speech { .. }
-                    | Response::Raw { .. }
-                    | Response::Embeddings { .. } => unreachable!(),
-                },
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => {
                     if Pin::new(&mut self.ping).poll_tick(cx).is_ready() {
@@ -1408,8 +1453,12 @@ fn handle_validation_error(e: anyhow::Error) -> AnthropicMessagesResponder {
     AnthropicMessagesResponder::ValidationError(e.into())
 }
 
-fn create_streamer(rx: Receiver<Response>, state: SharedMistralRsState) -> AnthropicMessagesSse {
-    let streamer = AnthropicStreamer::new(rx, state);
+fn create_streamer(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    outcome: Option<StreamOutcomeHandle>,
+) -> AnthropicMessagesSse {
+    let streamer = AnthropicStreamer::new(rx, state, outcome);
     Sse::new(streamer)
         .keep_alive(KeepAlive::new().interval(Duration::from_millis(get_keep_alive_interval())))
 }
@@ -1472,6 +1521,7 @@ pub async fn anthropic_messages(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     Json(request): Json<AnthropicMessagesRequest>,
 ) -> AnthropicMessagesResponder {
     let (tx, mut rx) = create_response_channel(None);
@@ -1537,7 +1587,11 @@ pub async fn anthropic_messages(
     }
 
     if is_streaming {
-        AnthropicMessagesResponder::Sse(create_streamer(rx, state))
+        AnthropicMessagesResponder::Sse(create_streamer(
+            rx,
+            state,
+            stream_outcome.map(|Extension(handle)| handle),
+        ))
     } else {
         process_non_streaming_response(&mut rx, state).await
     }
@@ -1863,5 +1917,33 @@ mod tests {
         ));
         assert_eq!(chat.reasoning_effort, Some("high".to_string()));
         assert_eq!(chat.enable_thinking, Some(true));
+    }
+
+    #[test]
+    fn maps_anthropic_adaptive_thinking_to_enabled() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "thinking": {"type": "adaptive"}
+        }))
+        .unwrap();
+
+        let chat = req.into_chat_completion_request().unwrap();
+        assert_eq!(chat.enable_thinking, Some(true));
+    }
+
+    #[test]
+    fn rejects_conflicting_anthropic_thinking_controls() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "thinking": {"type": "disabled"},
+            "enable_thinking": true
+        }))
+        .unwrap();
+
+        assert!(req.into_chat_completion_request().is_err());
     }
 }

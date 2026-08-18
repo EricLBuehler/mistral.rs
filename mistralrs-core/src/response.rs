@@ -33,7 +33,7 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
-    /// Reasoning/analysis content from Harmony format (separate from final content).
+    /// Reasoning/analysis content separated from final content.
     /// This contains chain-of-thought reasoning that is not intended for end users.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
@@ -49,7 +49,7 @@ pub struct Delta {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
-    /// Reasoning/analysis content delta from Harmony format.
+    /// Reasoning/analysis content delta.
     /// This contains incremental chain-of-thought reasoning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,

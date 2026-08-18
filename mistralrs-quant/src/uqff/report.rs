@@ -253,6 +253,7 @@ struct GroupScan {
     shards: Vec<String>,
     tensors: HashMap<String, TensorMeta>,
     tensor_sources: HashMap<String, String>,
+    version_tensors: HashMap<String, Vec<(String, TensorMeta)>>,
     duplicate_names: Vec<String>,
     metadata: Vec<UqffMetadataSummary>,
 }
@@ -310,9 +311,10 @@ pub fn write_uqff_report(path: &Path, report: &UqffReport) -> Result<PathBuf> {
 }
 
 pub async fn inspect_uqff_path(path: &Path, options: UqffReportOptions) -> Result<UqffInspection> {
+    let existing_report = read_existing_report_for_input(path)?;
     let artifacts = UqffArtifacts {
-        groups: resolve_uqff_groups(path)?,
-        existing_report: read_existing_report(path)?,
+        groups: resolve_uqff_groups_with_report(path, existing_report.as_ref())?,
+        existing_report,
     };
     inspect_uqff_artifacts(&artifacts, options).await
 }
@@ -335,7 +337,7 @@ pub async fn inspect_uqff_artifacts(
         let prefixes = layer_prefixes(&scan);
         let output = build_output_report(&scan, None);
         let label_map = labels_by_module(&output);
-        let serde_type_map = serde_type_by_module(&prefixes, &headers);
+        let serde_type_map = serde_type_by_module(&scan, &prefixes, &headers);
         for (name, tensor) in &scan.tensors {
             let module = owning_layer_prefix(name, &prefixes);
             let shard = scan
@@ -387,9 +389,10 @@ pub async fn inspect_uqff_artifacts(
 }
 
 pub async fn verify_uqff_path(path: &Path, options: UqffVerifyOptions) -> Result<UqffVerifyResult> {
+    let existing_report = read_existing_report_for_input(path)?;
     let artifacts = UqffArtifacts {
-        groups: resolve_uqff_groups(path)?,
-        existing_report: read_existing_report(path)?,
+        groups: resolve_uqff_groups_with_report(path, existing_report.as_ref())?,
+        existing_report,
     };
     verify_uqff_artifacts(&artifacts, options).await
 }
@@ -426,17 +429,38 @@ pub async fn verify_uqff_artifacts(
                 errors.push(format!("{}: duplicate tensor key `{name}`", scan.quant));
             }
         }
-        validate_group(&scan, &mut warnings, &mut errors, &options);
+        let report_backed = artifacts.existing_report.as_ref().is_some_and(|report| {
+            report
+                .outputs
+                .iter()
+                .any(|output| output.quant == scan.quant)
+        });
+        validate_group(&scan, &mut warnings, &mut errors, &options, report_backed);
         if version.is_none() {
             version = version_string_for_scan(&scan);
         }
         let output = build_output_report(&scan, None);
-        if options.strict && output.fallback_count > 0 {
+        let strict_fallback_count = output
+            .fallbacks
+            .iter()
+            .filter(|fallback| {
+                !is_intentional_native_layer(
+                    artifacts.existing_report.as_ref().and_then(|report| {
+                        report
+                            .outputs
+                            .iter()
+                            .find(|existing| existing.quant == output.quant)
+                    }),
+                    fallback,
+                )
+            })
+            .count();
+        if options.strict && strict_fallback_count > 0 {
             errors.push(format!(
                 "{}: strict mode rejects {} fallback layer{}",
                 output.quant,
-                output.fallback_count,
-                if output.fallback_count == 1 { "" } else { "s" }
+                strict_fallback_count,
+                if strict_fallback_count == 1 { "" } else { "s" }
             ));
         }
         outputs.push(output);
@@ -450,6 +474,7 @@ pub async fn verify_uqff_artifacts(
         uqff_version: version.unwrap_or_else(current_uqff_version),
         outputs,
     };
+    validate_output_integrity("artifacts", &report.outputs, &mut errors);
 
     match &artifacts.existing_report {
         Some(existing) => {
@@ -472,6 +497,21 @@ pub async fn verify_uqff_artifacts(
     })
 }
 
+fn is_intentional_native_layer(
+    existing: Option<&UqffOutputReport>,
+    fallback: &UqffFallbackReport,
+) -> bool {
+    existing.is_some_and(|output| {
+        output.layer_details.iter().any(|layer| {
+            layer.module == fallback.module
+                && layer.default_target.is_none()
+                && layer.resolved_target.is_none()
+                && layer.stored == fallback.to
+                && layer.shape == fallback.shape
+        })
+    })
+}
+
 pub fn build_output_report_from_layers(
     quant: String,
     shards: Vec<String>,
@@ -486,12 +526,13 @@ pub fn build_output_report_from_layers(
         let resolved = layer
             .resolved_target
             .as_deref()
-            .or(layer.default_target.as_deref())
-            .unwrap_or(&quant);
-        if issue.is_some() || is_fallback_storage(&layer.stored, resolved) {
+            .or(layer.default_target.as_deref());
+        if issue.is_some()
+            || resolved.is_some_and(|resolved| is_fallback_storage(&layer.stored, resolved))
+        {
             fallbacks.push(UqffFallbackReport {
                 module: layer.module.clone(),
-                from: resolved.to_string(),
+                from: resolved.unwrap_or(&quant).to_string(),
                 to: layer.stored.clone(),
                 shape: issue
                     .as_ref()
@@ -528,60 +569,126 @@ pub fn stored_type_from_tensors(
 }
 
 fn resolve_uqff_groups(path: &Path) -> Result<Vec<UqffArtifactGroup>> {
-    let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
-    if path.is_dir() {
-        for entry in std::fs::read_dir(path).map_err(|e| Error::from(e).with_path(path))? {
-            let entry = entry.map_err(Error::from)?;
-            let entry_path = entry.path();
-            if entry_path.extension().and_then(|ext| ext.to_str()) == Some("uqff") {
-                let quant = group_key_for_path(&entry_path);
-                groups.entry(quant).or_default().push(entry_path);
-            }
-        }
-    } else if path.is_file() {
-        let quant = group_key_for_path(path);
-        let parent = path.parent().unwrap_or_else(|| Path::new("."));
-        let stem = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .unwrap_or_default();
-        let discover_siblings = shard_index_from_stem(stem).is_some();
-        if discover_siblings {
-            for entry in std::fs::read_dir(parent).map_err(|e| Error::from(e).with_path(parent))? {
-                let entry = entry.map_err(Error::from)?;
-                let entry_path = entry.path();
-                if entry_path.extension().and_then(|ext| ext.to_str()) == Some("uqff")
-                    && group_key_for_path(&entry_path) == quant
-                {
-                    groups.entry(quant.clone()).or_default().push(entry_path);
-                }
-            }
-        } else {
-            groups.entry(quant).or_default().push(path.to_path_buf());
-        }
-    } else {
-        candle_core::bail!("UQFF path `{}` does not exist.", path.display());
+    resolve_uqff_groups_with_report(path, None)
+}
+
+fn resolve_uqff_groups_with_report(
+    path: &Path,
+    report: Option<&UqffReport>,
+) -> Result<Vec<UqffArtifactGroup>> {
+    let paths = resolve_uqff_paths(path, report)?;
+    if paths.is_empty() {
+        candle_core::bail!("No `.uqff` files found at `{}`.", path.display());
     }
 
-    if groups.is_empty() {
-        candle_core::bail!("No `.uqff` files found at `{}`.", path.display());
+    let mut remaining = paths
+        .into_iter()
+        .map(|path| (artifact_name(&path), path))
+        .collect::<BTreeMap<_, _>>();
+    let mut groups: BTreeMap<String, Vec<PathBuf>> = BTreeMap::new();
+    let mut reported_quants = HashSet::new();
+    if let Some(report) = report {
+        for output in &report.outputs {
+            reported_quants.insert(output.quant.as_str());
+            for shard in &output.shards {
+                let Some(path) = remaining.remove(&reported_artifact_name(shard)) else {
+                    continue;
+                };
+                groups.entry(output.quant.clone()).or_default().push(path);
+            }
+        }
+    }
+
+    for (_, path) in remaining {
+        groups
+            .entry(group_key_for_path(&path))
+            .or_default()
+            .push(path);
     }
 
     Ok(groups
         .into_iter()
         .map(|(quant, mut files)| {
-            files.sort_by_key(|path| {
-                path.file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .and_then(shard_index_from_stem)
-                    .unwrap_or(0)
-            });
+            if !reported_quants.contains(quant.as_str()) {
+                files.sort_by_key(|path| {
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .and_then(shard_index_from_stem)
+                        .unwrap_or(0)
+                });
+            }
             UqffArtifactGroup {
                 quant,
                 files: files.into_iter().map(UqffArtifactFile::from_path).collect(),
             }
         })
         .collect())
+}
+
+fn resolve_uqff_paths(path: &Path, report: Option<&UqffReport>) -> Result<Vec<PathBuf>> {
+    if path.is_dir() {
+        return std::fs::read_dir(path)
+            .map_err(|e| Error::from(e).with_path(path))?
+            .filter_map(|entry| match entry {
+                Ok(entry)
+                    if entry.path().extension().and_then(|ext| ext.to_str()) == Some("uqff") =>
+                {
+                    Some(Ok(entry.path()))
+                }
+                Ok(_) => None,
+                Err(err) => Some(Err(Error::from(err))),
+            })
+            .collect();
+    }
+    if !path.is_file() {
+        candle_core::bail!("UQFF path `{}` does not exist.", path.display());
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    if let Some(output) = report.and_then(|report| report.outputs.first()) {
+        return Ok(output
+            .shards
+            .iter()
+            .map(|shard| parent.join(reported_artifact_name(shard)))
+            .filter(|path| path.is_file())
+            .collect());
+    }
+
+    let quant = group_key_for_path(path);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    if shard_index_from_stem(stem).is_none() {
+        return Ok(vec![path.to_path_buf()]);
+    }
+    std::fs::read_dir(parent)
+        .map_err(|e| Error::from(e).with_path(parent))?
+        .filter_map(|entry| match entry {
+            Ok(entry) => {
+                let entry_path = entry.path();
+                (entry_path.extension().and_then(|ext| ext.to_str()) == Some("uqff")
+                    && group_key_for_path(&entry_path) == quant)
+                    .then_some(Ok(entry_path))
+            }
+            Err(err) => Some(Err(Error::from(err))),
+        })
+        .collect()
+}
+
+fn artifact_name(path: &Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn reported_artifact_name(shard: &str) -> String {
+    Path::new(shard)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(shard)
+        .to_string()
 }
 
 async fn scan_groups(groups: &[UqffArtifactGroup], mode: ScanMode) -> Result<Vec<GroupScan>> {
@@ -595,6 +702,7 @@ async fn scan_groups_lossy(groups: &[UqffArtifactGroup], mode: ScanMode) -> Vec<
 async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupScan> {
     let mut tensors = HashMap::new();
     let mut tensor_sources = HashMap::new();
+    let mut version_tensors = HashMap::<String, Vec<(String, TensorMeta)>>::new();
     let mut duplicate_names = Vec::new();
     let mut metadata = Vec::new();
     let mut seen = HashSet::new();
@@ -603,6 +711,7 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
         let shard_name = file.name().to_string();
         let (data_offset, header) = read_safetensors_metadata(file).await?;
         let mut data_ranges = Vec::new();
+        let mut version_names = Vec::new();
 
         if let Some(header_metadata) = header.metadata() {
             for (key, value) in header_metadata {
@@ -615,7 +724,9 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
         }
 
         for (name, info) in header.tensors() {
-            if !is_version_key(&name) && !seen.insert(name.clone()) {
+            if is_version_key(&name) {
+                version_names.push(name.clone());
+            } else if !seen.insert(name.clone()) {
                 duplicate_names.push(name.clone());
             }
             let size_bytes = info.data_offsets.1 - info.data_offsets.0;
@@ -642,6 +753,16 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
                 meta.data = Some(data);
             }
         }
+        for name in version_names {
+            let meta = tensors
+                .get(&name)
+                .expect("version tensor was inserted above")
+                .clone();
+            version_tensors
+                .entry(name)
+                .or_default()
+                .push((shard_name.clone(), meta));
+        }
     }
 
     Ok(GroupScan {
@@ -653,6 +774,7 @@ async fn scan_group(group: &UqffArtifactGroup, mode: ScanMode) -> Result<GroupSc
             .collect(),
         tensors,
         tensor_sources,
+        version_tensors,
         duplicate_names,
         metadata,
     })
@@ -662,7 +784,7 @@ fn should_read_tensor_data(name: &str, size_bytes: usize, mode: ScanMode) -> boo
     if size_bytes > SMALL_METADATA_TENSOR_BYTES {
         return false;
     }
-    is_storage_discriminator_key(name) || matches!(mode, ScanMode::Verify) && is_version_key(name)
+    is_scanned_metadata_key(name) || matches!(mode, ScanMode::Verify) && is_version_key(name)
 }
 
 async fn read_tensor_data_ranges(
@@ -778,8 +900,8 @@ fn build_output_report(scan: &GroupScan, issues: Option<&QuantizationReport>) ->
     let prefixes = layer_prefixes(scan);
 
     for prefix in prefixes {
-        let stored = unique_layer_match(&prefix, &headers)
-            .map(|matched| stored_label_for_scan(scan, &prefix, matched.serde_type))
+        let stored = matching_serde_type_for_scan(scan, &prefix, &headers)
+            .map(|serde_type| stored_label_for_scan(scan, &prefix, serde_type))
             .unwrap_or_else(|| "unknown".to_string());
         let shape = tensor_shape_for_prefix(scan, &prefix);
         let layer = UqffLayerReport {
@@ -822,6 +944,7 @@ fn validate_group(
     warnings: &mut Vec<String>,
     errors: &mut Vec<String>,
     options: &UqffVerifyOptions,
+    report_backed: bool,
 ) {
     validate_version_tensor_headers(scan, errors);
     match read_version_for_verify(scan) {
@@ -850,12 +973,14 @@ fn validate_group(
         }
     }
 
-    validate_contiguous_shards(scan, errors);
+    if !report_backed {
+        validate_contiguous_shards(scan, errors);
+    }
     validate_tensor_keys(scan, errors);
 
     let headers = header_map_for_scan(scan);
     for prefix in layer_prefixes(scan) {
-        validate_layer(&prefix, &headers, errors);
+        validate_layer(scan, &prefix, &headers, errors);
     }
 }
 
@@ -866,16 +991,49 @@ fn validate_version_tensor_headers(scan: &GroupScan, errors: &mut Vec<String>) {
         super::UQFF_VERSION_PATCH_KEY,
     ] {
         validate_header_tensor(scan, key, Dtype::U32, &[], errors);
+        let Some(copies) = scan.version_tensors.get(key) else {
+            continue;
+        };
+        let mut expected = None;
+        for (shard, tensor) in copies {
+            let Some(value) = scalar_u32(tensor) else {
+                errors.push(format!(
+                    "{}: invalid `{key}` scalar U32 in `{shard}`",
+                    scan.quant
+                ));
+                continue;
+            };
+            if let Some(expected) = expected {
+                if value != expected {
+                    errors.push(format!(
+                        "{}: conflicting `{key}` value {value} in `{shard}`; expected {expected}",
+                        scan.quant
+                    ));
+                }
+            } else {
+                expected = Some(value);
+            }
+        }
     }
 }
 
 fn validate_contiguous_shards(scan: &GroupScan, errors: &mut Vec<String>) {
-    let mut indexes = scan
+    let Some(mut indexes) = scan
         .shards
         .iter()
-        .filter_map(|shard| shard.strip_suffix(".uqff"))
-        .filter_map(shard_index_from_stem)
-        .collect::<Vec<_>>();
+        .map(|shard| {
+            let path = Path::new(shard);
+            if group_key_for_path(path) != scan.quant {
+                return None;
+            }
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(shard_index_from_stem)
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
     if indexes.is_empty() {
         return;
     }
@@ -931,6 +1089,7 @@ fn validate_tensor_keys(scan: &GroupScan, errors: &mut Vec<String>) {
 }
 
 fn validate_layer(
+    scan: &GroupScan,
     prefix: &str,
     headers: &HashMap<String, UqffTensorHeader>,
     errors: &mut Vec<String>,
@@ -939,9 +1098,24 @@ fn validate_layer(
     if !layer.scalar(UQFF_WEIGHT_FORMAT_SUFFIX, Dtype::U8) {
         errors.push(format!("{prefix}: invalid `weight.format` header"));
     }
+    let declared = declared_serde_type_for_scan(scan, prefix);
+    if let Err(err) = &declared {
+        errors.push(format!(
+            "{prefix}: invalid `weight.format` discriminator: {err}"
+        ));
+    }
     match layer_matches(prefix, headers).as_slice() {
         [] => errors.push(format!("{prefix}: unrecognized UQFF layer structure")),
-        [_] => {}
+        [matched] => {
+            if let Ok(declared) = declared {
+                if declared != matched.serde_type {
+                    errors.push(format!(
+                        "{prefix}: `weight.format` declares {declared:?}, but tensor structure matches {:?}",
+                        matched.serde_type
+                    ));
+                }
+            }
+        }
         matches => {
             let labels = matches
                 .iter()
@@ -951,6 +1125,14 @@ fn validate_layer(
             errors.push(format!(
                 "{prefix}: ambiguous UQFF layer structure: {labels}"
             ));
+        }
+    }
+    let shape_key = format!("{prefix}.weight.shape");
+    if let Some(shape) = scan.tensors.get(&shape_key) {
+        let valid = scalar_u32_vec(shape)
+            .is_some_and(|shape| !shape.is_empty() && shape.iter().all(|dim| *dim > 0));
+        if !valid {
+            errors.push(format!("{prefix}: invalid `weight.shape` payload"));
         }
     }
 }
@@ -976,13 +1158,14 @@ fn validate_report_consistency(
     actual: &UqffReport,
     errors: &mut Vec<String>,
 ) {
+    validate_output_integrity(UQFF_REPORT_JSON, &existing.outputs, errors);
     let actual_outputs = actual
         .outputs
         .iter()
-        .map(|output| (&output.quant, output))
+        .map(|output| (output.quant.as_str(), output))
         .collect::<HashMap<_, _>>();
     for output in &existing.outputs {
-        let Some(actual_output) = actual_outputs.get(&output.quant) else {
+        let Some(actual_output) = actual_outputs.get(output.quant.as_str()) else {
             errors.push(format!(
                 "{UQFF_REPORT_JSON}: output `{}` is not present in artifacts",
                 output.quant
@@ -1008,6 +1191,74 @@ fn validate_report_consistency(
             ));
         }
     }
+    let reported_outputs = existing
+        .outputs
+        .iter()
+        .map(|output| output.quant.as_str())
+        .collect::<HashSet<_>>();
+    for output in &actual.outputs {
+        if !reported_outputs.contains(output.quant.as_str()) {
+            errors.push(format!(
+                "{UQFF_REPORT_JSON}: artifact output `{}` is not present in the report",
+                output.quant
+            ));
+        }
+    }
+}
+
+fn validate_output_integrity(source: &str, outputs: &[UqffOutputReport], errors: &mut Vec<String>) {
+    if outputs.is_empty() {
+        errors.push(format!("{source}: outputs list is empty"));
+        return;
+    }
+
+    let mut quants = HashSet::new();
+    let mut claimed_shards = HashMap::new();
+    for output in outputs {
+        if output.quant.trim().is_empty() {
+            errors.push(format!("{source}: output has an empty quant identifier"));
+        } else if !quants.insert(output.quant.as_str()) {
+            errors.push(format!(
+                "{source}: duplicate output quant identifier `{}`",
+                output.quant
+            ));
+        }
+        if output.shards.is_empty() {
+            errors.push(format!(
+                "{source}: output `{}` has an empty shard list",
+                output.quant
+            ));
+        }
+        if output.layers == 0 {
+            errors.push(format!(
+                "{source}: output `{}` contains no UQFF layers",
+                output.quant
+            ));
+        }
+
+        let mut output_shards = HashSet::new();
+        for shard in &output.shards {
+            if shard.trim().is_empty() {
+                errors.push(format!(
+                    "{source}: output `{}` has an empty shard name",
+                    output.quant
+                ));
+                continue;
+            }
+            if !output_shards.insert(shard.as_str()) {
+                errors.push(format!(
+                    "{source}: output `{}` claims shard `{shard}` more than once",
+                    output.quant
+                ));
+            }
+            if let Some(owner) = claimed_shards.insert(shard.as_str(), output.quant.as_str()) {
+                errors.push(format!(
+                    "{source}: outputs `{owner}` and `{}` both claim shard `{shard}`",
+                    output.quant
+                ));
+            }
+        }
+    }
 }
 
 fn read_existing_report(path: &Path) -> Result<Option<UqffReport>> {
@@ -1020,6 +1271,22 @@ fn read_existing_report(path: &Path) -> Result<Option<UqffReport>> {
     serde_json::from_str(&data)
         .map(Some)
         .map_err(|e| Error::Msg(format!("{}: {e}", report_path.display())))
+}
+
+fn read_existing_report_for_input(path: &Path) -> Result<Option<UqffReport>> {
+    let mut report = read_existing_report(path)?;
+    if path.is_file() {
+        let selected = artifact_name(path);
+        if let Some(report) = &mut report {
+            report.outputs.retain(|output| {
+                output
+                    .shards
+                    .iter()
+                    .any(|shard| reported_artifact_name(shard) == selected)
+            });
+        }
+    }
+    Ok(report)
 }
 
 fn report_path_for_input(path: &Path) -> Result<PathBuf> {
@@ -1075,14 +1342,17 @@ fn header_map_for_scan(scan: &GroupScan) -> HashMap<String, UqffTensorHeader> {
 }
 
 fn layer_prefixes(scan: &GroupScan) -> Vec<String> {
-    let suffix = format!(".{UQFF_WEIGHT_FORMAT_SUFFIX}");
     let mut prefixes = scan
         .tensors
         .keys()
-        .filter_map(|name| name.strip_suffix(&suffix))
+        .filter_map(|name| {
+            name.strip_suffix(".weight")
+                .or_else(|| name.rsplit_once(".weight.").map(|(prefix, _suffix)| prefix))
+        })
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     prefixes.sort();
+    prefixes.dedup();
     prefixes
 }
 
@@ -1110,15 +1380,36 @@ fn unique_layer_match(
 }
 
 fn serde_type_by_module(
+    scan: &GroupScan,
     prefixes: &[String],
     headers: &HashMap<String, UqffTensorHeader>,
 ) -> HashMap<String, QuantizedSerdeType> {
     prefixes
         .iter()
         .filter_map(|prefix| {
-            unique_layer_match(prefix, headers).map(|matched| (prefix.clone(), matched.serde_type))
+            matching_serde_type_for_scan(scan, prefix, headers)
+                .map(|serde_type| (prefix.clone(), serde_type))
         })
         .collect()
+}
+
+fn matching_serde_type_for_scan(
+    scan: &GroupScan,
+    prefix: &str,
+    headers: &HashMap<String, UqffTensorHeader>,
+) -> Option<QuantizedSerdeType> {
+    let structural = unique_layer_match(prefix, headers)?.serde_type;
+    (declared_serde_type_for_scan(scan, prefix).ok()? == structural).then_some(structural)
+}
+
+fn declared_serde_type_for_scan(scan: &GroupScan, prefix: &str) -> Result<QuantizedSerdeType> {
+    let key = format!("{prefix}.{UQFF_WEIGHT_FORMAT_SUFFIX}");
+    let value = scan
+        .tensors
+        .get(&key)
+        .and_then(scalar_u8)
+        .ok_or_else(|| Error::Msg(format!("invalid `{key}` payload")))?;
+    QuantizedSerdeType::try_from(value as usize)
 }
 
 fn owning_layer_prefix<'a>(name: &str, prefixes: &'a [String]) -> Option<&'a str> {
@@ -1226,7 +1517,11 @@ fn stored_label_for_scan(scan: &GroupScan, prefix: &str, serde_type: QuantizedSe
 
 fn scalar_u32_vec(meta: &TensorMeta) -> Option<Vec<usize>> {
     let data = meta.data.as_deref()?;
-    if meta.dtype != Dtype::U32 || data.len() % 4 != 0 {
+    let expected_len = meta
+        .shape
+        .first()?
+        .checked_mul(std::mem::size_of::<u32>())?;
+    if meta.dtype != Dtype::U32 || meta.shape.len() != 1 || data.len() != expected_len {
         return None;
     }
     Some(
@@ -1323,8 +1618,11 @@ fn is_version_key(name: &str) -> bool {
     )
 }
 
-fn is_storage_discriminator_key(name: &str) -> bool {
-    name.ends_with(".weight.bits") || name.ends_with(".weight.dtype")
+fn is_scanned_metadata_key(name: &str) -> bool {
+    name.ends_with(".weight.format")
+        || name.ends_with(".weight.bits")
+        || name.ends_with(".weight.dtype")
+        || name.ends_with(".weight.shape")
 }
 
 fn is_invalid_uqff_tensor_key(name: &str) -> bool {
@@ -1363,7 +1661,7 @@ fn is_fallback_storage(stored: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::UqffTensor;
+    use crate::{UqffReader, UqffTensor};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -1389,24 +1687,47 @@ mod tests {
         ]);
         safetensors::serialize_to_file(
             tensors.iter().map(|tensor| (tensor.name(), tensor)),
-            None,
+            Some(HashMap::from([
+                ("uqff.producer".to_string(), "test".to_string()),
+                ("uqff.version".to_string(), current_uqff_version()),
+            ])),
             path,
         )
         .unwrap();
     }
 
-    fn push_synthetic_afq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
+    fn push_synthetic_afq_layer_with_format(
+        tensors: &mut Vec<UqffTensor>,
+        prefix: &str,
+        bits: u8,
+        format: u8,
+    ) {
         tensors.extend([
-            UqffTensor::from_u8_scalar(
-                format!("{prefix}.weight.format"),
-                QuantizedSerdeType::Afq as u8,
-            ),
+            UqffTensor::from_u8_scalar(format!("{prefix}.weight.format"), format),
             UqffTensor::from_u8_scalar(format!("{prefix}.weight.bits"), bits),
             UqffTensor::from_u8_scalar(format!("{prefix}.weight.group_size"), 64),
             UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0], vec![1]),
             UqffTensor::from_raw_u8(format!("{prefix}.weight.scales"), vec![0], vec![1]),
             UqffTensor::from_raw_u8(format!("{prefix}.weight.biases"), vec![0], vec![1]),
         ]);
+    }
+
+    fn push_synthetic_afq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
+        push_synthetic_afq_layer_with_format(tensors, prefix, bits, QuantizedSerdeType::Afq as u8);
+    }
+
+    fn write_synthetic_afq_shard(path: &Path, prefix: &str) {
+        let mut tensors = super::super::uqff_version_tensors();
+        push_synthetic_afq_layer(&mut tensors, prefix, 3);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            Some(HashMap::from([
+                ("uqff.producer".to_string(), "test".to_string()),
+                ("uqff.version".to_string(), current_uqff_version()),
+            ])),
+            path,
+        )
+        .unwrap();
     }
 
     fn push_synthetic_hqq_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, bits: u8) {
@@ -1561,6 +1882,284 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn report_uses_logical_weight_shape_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q4k-0.uqff");
+        let mut tensors = super::super::uqff_version_tensors();
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                "model.layers.0.weight.format",
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_raw_u8("model.layers.0.weight", vec![0], vec![1]),
+            UqffTensor::from_u32_scalar("model.layers.0.weight.dtype", 12),
+            UqffTensor::from_u32_vec("model.layers.0.weight.shape", vec![17, 23], vec![2]),
+        ]);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let report = build_uqff_report(&path, UqffReportOptions::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.outputs[0].layer_details[0].shape, vec![17, 23]);
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_invalid_or_mismatched_format_payload_without_report() {
+        for (format, expected) in [
+            (
+                QuantizedSerdeType::Unquant as u8,
+                "tensor structure matches Afq",
+            ),
+            (u8::MAX, "invalid `weight.format` discriminator"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("afq3-0.uqff");
+            let mut tensors = super::super::uqff_version_tensors();
+            push_synthetic_afq_layer_with_format(&mut tensors, "model.layers.0", 3, format);
+            safetensors::serialize_to_file(
+                tensors.iter().map(|tensor| (tensor.name(), tensor)),
+                None,
+                &path,
+            )
+            .unwrap();
+
+            let result = verify_uqff_path(
+                &path,
+                UqffVerifyOptions {
+                    strict: false,
+                    allow_newer_minor: false,
+                },
+            )
+            .await
+            .unwrap();
+
+            assert!(!result.ok);
+            assert!(
+                result.errors.iter().any(|error| error.contains(expected)),
+                "{:?}",
+                result.errors
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_missing_format_payload_without_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afq3-0.uqff");
+        let mut tensors = super::super::uqff_version_tensors();
+        tensors.extend([
+            UqffTensor::from_u8_scalar("model.layers.0.weight.bits", 3),
+            UqffTensor::from_u8_scalar("model.layers.0.weight.group_size", 64),
+            UqffTensor::from_raw_u8("model.layers.0.weight", vec![0], vec![1]),
+            UqffTensor::from_raw_u8("model.layers.0.weight.scales", vec![0], vec![1]),
+            UqffTensor::from_raw_u8("model.layers.0.weight.biases", vec![0], vec![1]),
+        ]);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let result = verify_uqff_path(
+            &path,
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("invalid `weight.format` header")));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_malformed_logical_shape_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q4k-0.uqff");
+        let mut tensors = super::super::uqff_version_tensors();
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                "model.layers.0.weight.format",
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_raw_u8("model.layers.0.weight", vec![0], vec![1]),
+            UqffTensor::from_u32_scalar("model.layers.0.weight.dtype", 12),
+            UqffTensor::from_u32_vec("model.layers.0.weight.shape", vec![17, 0], vec![2]),
+        ]);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+
+        let result = verify_uqff_path(
+            &path,
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("invalid `weight.shape` payload")));
+    }
+
+    #[tokio::test]
+    async fn local_report_controls_custom_shards_and_exposes_missing_or_extra_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("afq3-0.uqff");
+        let second = dir.path().join("afq3-1.uqff");
+        write_synthetic_afq_shard(&first, "model.layers.0");
+        write_synthetic_afq_shard(&second, "model.layers.1");
+        let mut report = build_uqff_report(dir.path(), UqffReportOptions::default())
+            .await
+            .unwrap();
+        let custom_first = dir.path().join("custom-1.uqff");
+        let custom_second = dir.path().join("projection-final.uqff");
+        std::fs::rename(first, &custom_first).unwrap();
+        std::fs::rename(second, &custom_second).unwrap();
+        report.outputs[0].shards = vec![
+            "custom-1.uqff".to_string(),
+            "projection-final.uqff".to_string(),
+        ];
+        write_uqff_report(dir.path(), &report).unwrap();
+
+        let valid = verify_uqff_path(
+            &custom_first,
+            UqffVerifyOptions {
+                strict: true,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(valid.ok, "{:?}", valid.errors);
+
+        let inspection = inspect_uqff_path(&custom_first, UqffReportOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(inspection.report.outputs[0].quant, "afq3");
+        assert!(inspection
+            .tensors
+            .iter()
+            .all(|tensor| tensor.group == "afq3"));
+        assert!(inspection
+            .tensors
+            .iter()
+            .any(|tensor| tensor.name.starts_with("model.layers.0.")));
+        assert!(inspection
+            .tensors
+            .iter()
+            .any(|tensor| tensor.name.starts_with("model.layers.1.")));
+
+        write_synthetic_afq_shard(&dir.path().join("surprise.uqff"), "model.layers.2");
+        let extra = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: true,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!extra.ok);
+        assert!(extra.errors.iter().any(|error| {
+            error.contains("artifact output `surprise` is not present in the report")
+        }));
+
+        std::fs::rename(&custom_second, dir.path().join("projection-final.bak")).unwrap();
+        let missing = verify_uqff_path(
+            &custom_first,
+            UqffVerifyOptions {
+                strict: true,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!missing.ok);
+        assert!(missing
+            .errors
+            .iter()
+            .any(|error| error.contains("shard list does not match artifacts")));
+    }
+
+    #[test]
+    fn report_consistency_rejects_empty_duplicate_overlapping_and_unreported_outputs() {
+        let output = |quant: &str, shards: &[&str]| UqffOutputReport {
+            quant: quant.to_string(),
+            shards: shards.iter().map(|shard| (*shard).to_string()).collect(),
+            layers: 0,
+            actual_counts: BTreeMap::new(),
+            fallback_count: 0,
+            fallbacks: Vec::new(),
+            layer_details: Vec::new(),
+        };
+        let existing = UqffReport {
+            schema: 1,
+            generated_by: UqffGeneratedBy::default(),
+            base_model: None,
+            repo_id: None,
+            uqff_version: current_uqff_version(),
+            outputs: vec![
+                output("q4k", &[]),
+                output("q4k", &["shared.uqff", "shared.uqff"]),
+                output("q6k", &["shared.uqff"]),
+            ],
+        };
+        let actual = UqffReport {
+            outputs: vec![output("q8_0", &["artifact.uqff"])],
+            ..existing.clone()
+        };
+        let mut errors = Vec::new();
+        validate_report_consistency(&existing, &actual, &mut errors);
+        validate_output_integrity(
+            "artifacts",
+            &[
+                output("q8_0", &["artifact.uqff"]),
+                output("q8_0", &["artifact.uqff"]),
+            ],
+            &mut errors,
+        );
+        validate_output_integrity(UQFF_REPORT_JSON, &[], &mut errors);
+
+        for expected in [
+            "outputs list is empty",
+            "empty shard list",
+            "duplicate output quant identifier `q4k`",
+            "claims shard `shared.uqff` more than once",
+            "both claim shard `shared.uqff`",
+            "output `q4k` is not present in artifacts",
+            "artifact output `q8_0` is not present in the report",
+            "duplicate output quant identifier `q8_0`",
+            "both claim shard `artifact.uqff`",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "missing {expected:?} in {errors:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn mixed_storage_discriminators_drive_report_inspect_and_verify() {
         let dir = tempfile::tempdir().unwrap();
         write_synthetic_mixed_formats(dir.path());
@@ -1647,6 +2246,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn verify_strict_accepts_reported_intentional_native_layers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_synthetic_afq3(&dir.path().join("afq3-0.uqff"));
+
+        let mut report = build_uqff_report(dir.path(), UqffReportOptions::default())
+            .await
+            .unwrap();
+        let output = &mut report.outputs[0];
+        let native = output
+            .layer_details
+            .iter_mut()
+            .find(|layer| layer.module == "model.layers.1")
+            .unwrap();
+        native.default_target = None;
+        native.resolved_target = None;
+        let native_module = native.module.clone();
+        output
+            .fallbacks
+            .retain(|fallback| fallback.module != native_module);
+        output.fallback_count = output.fallbacks.len();
+        write_uqff_report(dir.path(), &report).unwrap();
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: true,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(result.ok, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
     async fn verify_rejects_old_numeric_sibling_shard() {
         let dir = tempfile::tempdir().unwrap();
         write_synthetic_afq3(&dir.path().join("afq3-0.uqff"));
@@ -1676,6 +2311,72 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("invalid old-format tensor key")));
+    }
+
+    #[tokio::test]
+    async fn verified_self_contained_shards_open_in_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("afq3-0.uqff");
+        let second = dir.path().join("afq3-1.uqff");
+        write_synthetic_afq_shard(&first, "model.layers.0");
+        write_synthetic_afq_shard(&second, "model.layers.1");
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.ok, "{:?}", result.errors);
+
+        let reader = UqffReader::open(&[first, second]).unwrap();
+        assert!(reader.contains("model.layers.0.weight"));
+        assert!(reader.contains("model.layers.1.weight"));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_conflicting_version_copies() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("afq3-0.uqff");
+        let second = dir.path().join("afq3-1.uqff");
+        write_synthetic_afq_shard(&first, "model.layers.0");
+
+        let mut tensors = vec![
+            UqffTensor::from_u32_scalar(
+                super::super::UQFF_VERSION_MAJOR_KEY,
+                UQFF_VERSION_MAJOR + 1,
+            ),
+            UqffTensor::from_u32_scalar(super::super::UQFF_VERSION_MINOR_KEY, UQFF_VERSION_MINOR),
+            UqffTensor::from_u32_scalar(super::super::UQFF_VERSION_PATCH_KEY, UQFF_VERSION_PATCH),
+        ];
+        push_synthetic_afq_layer(&mut tensors, "model.layers.1", 3);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            Some(HashMap::from([
+                ("uqff.producer".to_string(), "test".to_string()),
+                ("uqff.version".to_string(), current_uqff_version()),
+            ])),
+            &second,
+        )
+        .unwrap();
+
+        let result = verify_uqff_path(
+            dir.path(),
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!result.ok);
+        assert!(result
+            .errors
+            .iter()
+            .any(|error| error.contains("conflicting `uqff.version.major`")));
     }
 
     #[test]

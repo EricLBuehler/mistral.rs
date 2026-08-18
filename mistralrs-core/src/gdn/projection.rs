@@ -14,6 +14,11 @@ pub enum GdnInputProjection {
         in_proj_b: Arc<dyn QuantMethod>,
         in_proj_a: Arc<dyn QuantMethod>,
     },
+    SplitQkvzGroupedBa {
+        in_proj_qkv: Arc<dyn QuantMethod>,
+        in_proj_z: Arc<dyn QuantMethod>,
+        in_proj_ba: Arc<dyn QuantMethod>,
+    },
 }
 
 impl GdnInputProjection {
@@ -45,6 +50,18 @@ impl GdnInputProjection {
                 in_proj_z.forward(x)?,
                 in_proj_b.forward(x)?,
                 in_proj_a.forward(x)?,
+                dims,
+                batch_size,
+                seq_len,
+            ),
+            Self::SplitQkvzGroupedBa {
+                in_proj_qkv,
+                in_proj_z,
+                in_proj_ba,
+            } => GdnProjection::from_split_grouped_ba(
+                in_proj_qkv.forward(x)?,
+                in_proj_z.forward(x)?,
+                in_proj_ba.forward(x)?,
                 dims,
                 batch_size,
                 seq_len,
@@ -119,6 +136,27 @@ impl GdnProjection {
             b: mixed_b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: mixed_a.reshape((batch_size, seq_len, dims.num_v_heads))?,
         })
+    }
+
+    pub fn from_split_grouped_ba(
+        mixed_qkv: Tensor,
+        mixed_z: Tensor,
+        mixed_ba: Tensor,
+        dims: &GdnDims,
+        batch_size: usize,
+        seq_len: usize,
+    ) -> Result<Self> {
+        let mixed_ba =
+            mixed_ba.reshape((batch_size, seq_len, dims.num_k_heads, 2 * dims.v_per_group))?;
+        let b = mixed_ba.narrow(D::Minus1, 0, dims.v_per_group)?.reshape((
+            batch_size,
+            seq_len,
+            dims.num_v_heads,
+        ))?;
+        let a = mixed_ba
+            .narrow(D::Minus1, dims.v_per_group, dims.v_per_group)?
+            .reshape((batch_size, seq_len, dims.num_v_heads))?;
+        Self::from_split(mixed_qkv, mixed_z, b, a, dims, batch_size, seq_len)
     }
 
     pub fn conv_input(&self, dims: &GdnDims, batch_size: usize, seq_len: usize) -> Result<Tensor> {

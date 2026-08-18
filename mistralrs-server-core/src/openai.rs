@@ -7,9 +7,9 @@ use either::Either;
 use mistralrs_core::{
     AdapterGenerationId, AdapterSelection as CoreAdapterSelection, AgentPermission,
     AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
-    ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
-    ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
-    WebSearchReturnTokenBudget, WebSearchUserLocation,
+    ImageGenerationResponseFormat, LlguidanceGrammar, ReasoningEffort, SearchContextSize, Tool,
+    ToolChoice, ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -113,6 +113,14 @@ impl MessageContent {
     /// Create a new MessageContent from multimodal parts
     pub fn from_parts(parts: Vec<HashMap<String, MessageInnerContent>>) -> Self {
         MessageContent(Either::Right(parts))
+    }
+
+    /// Plain text content, if this is not multimodal parts
+    pub fn as_text(&self) -> Option<String> {
+        match &self.0 {
+            Either::Left(text) => Some(text.clone()),
+            Either::Right(_) => None,
+        }
     }
 
     /// Create a text content part for multimodal messages
@@ -293,6 +301,8 @@ pub struct ToolCall {
 ///     role: "user".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 ///
 /// // System message
@@ -301,6 +311,8 @@ pub struct ToolCall {
 ///     role: "system".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -315,6 +327,9 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
+    /// Reasoning emitted with an assistant message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -628,6 +643,12 @@ pub enum OpenAiShellToolType {
     Shell,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub enum OpenAiNamespaceToolType {
+    #[serde(rename = "namespace")]
+    Namespace,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum OpenAiTool {
@@ -636,6 +657,32 @@ pub enum OpenAiTool {
     WebSearch(OpenAiWebSearchTool),
     CodeInterpreter(OpenAiCodeInterpreterTool),
     Shell(OpenAiShellTool),
+    Namespace(OpenAiNamespaceTool),
+}
+
+/// A grouping of client-executed tools; the model sees each inner tool as `<namespace>.<name>`.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct OpenAiNamespaceTool {
+    #[serde(rename = "type")]
+    pub tp: OpenAiNamespaceToolType,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<OpenAiNamespaceEntry>,
+}
+
+impl OpenAiNamespaceTool {
+    pub fn qualified_name(&self, tool_name: &str) -> String {
+        format!("{}.{}", self.name, tool_name)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum OpenAiNamespaceEntry {
+    Function(OpenAiResponsesFunctionTool),
+    Unsupported(Value),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -693,9 +740,6 @@ impl OpenAiWebSearchTool {
         }
         if is_preview && self.return_token_budget.is_some() {
             bail!("tools[].type=\"web_search_preview\" return_token_budget is not supported.");
-        }
-        if !is_preview && self.external_web_access == Some(false) {
-            bail!("tools[].type=\"web_search\" external_web_access=false is not supported.");
         }
         if self.image_settings.is_some()
             || self.search_content_types.as_ref().is_some_and(|types| {
@@ -1020,6 +1064,12 @@ fn normalize_openai_tools(
                          use web_search_options with Chat Completions"
                     );
                 }
+                // external_web_access=false means the client disabled search; drop the tool
+                if !matches!(tool.tp, OpenAiWebSearchToolType::WebSearchPreview)
+                    && tool.external_web_access == Some(false)
+                {
+                    continue;
+                }
                 if normalized_web_search_options.is_some() {
                     bail!("Only one web search configuration may be provided.");
                 }
@@ -1035,6 +1085,26 @@ fn normalize_openai_tools(
                 }
                 enable_shell = true;
                 shell_skill_references.extend(tool.into_skill_references()?);
+            }
+            OpenAiTool::Namespace(namespace) => {
+                if matches!(surface, OpenAiToolSurface::ChatCompletions) {
+                    bail!("tools[].type=\"namespace\" is only supported by the Responses API.");
+                }
+                for entry in &namespace.tools {
+                    match entry {
+                        OpenAiNamespaceEntry::Function(tool) => {
+                            let mut tool = tool.clone().into_core_tool();
+                            tool.function.name = namespace.qualified_name(&tool.function.name);
+                            function_tools.push(tool);
+                        }
+                        OpenAiNamespaceEntry::Unsupported(_) => {
+                            tracing::warn!(
+                                "Skipping unsupported non-function tool in namespace `{}`.",
+                                namespace.name
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -1101,6 +1171,10 @@ pub struct ChatCompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1168,8 +1242,10 @@ pub struct ChatCompletionRequest {
     /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
-    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    /// Reasoning effort level for models and templates that support it.
+    /// Valid values are "off", "low", "medium", "high", and "xhigh".
+    /// "none" is accepted as an alias for "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
     /// Maximum number of tool-call rounds the server will auto-execute.
@@ -1398,6 +1474,10 @@ pub struct CompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Stream the response as server-sent events.
     pub stream: Option<bool>,
     /// Sampling temperature; higher values increase randomness.
@@ -1796,6 +1876,10 @@ pub struct ResponsesCreateRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Continue generation past EOS until another stop condition is met.
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1867,15 +1951,14 @@ pub struct ResponsesCreateRequest {
     /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    /// Toggle thinking output for models that support it.
+    /// Legacy schema field. The active Responses endpoint ignores this top-level control.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
 }
@@ -2009,6 +2092,29 @@ pub struct ResponsesDeltaContent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ignore_eos_defaults_false_and_accepts_true() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello"})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello"})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello"})).unwrap();
+        assert!(!chat.ignore_eos);
+        assert!(!completion.ignore_eos);
+        assert!(!responses.ignore_eos);
+
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "ignore_eos": true})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "ignore_eos": true})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "ignore_eos": true})).unwrap();
+        assert!(chat.ignore_eos);
+        assert!(completion.ignore_eos);
+        assert!(responses.ignore_eos);
+    }
 
     #[test]
     fn adapter_selection_accepts_alias_and_exact_generation() {
@@ -2184,6 +2290,35 @@ mod tests {
         assert_eq!(tools[0].function.name, "get_customer");
         assert_eq!(tools[0].function.strict, Some(true));
         assert!(!normalized.enable_code_execution);
+    }
+
+    #[test]
+    fn flattens_namespace_tools() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "function", "name": "exec_command" },
+            {
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "description": "Tools for spawning and managing sub-agents.",
+                "tools": [
+                    { "type": "function", "name": "spawn_agent", "parameters": { "type": "object" } },
+                    { "type": "custom", "name": "grammar_tool", "format": { "type": "grammar", "syntax": "lark", "definition": "start: x" } }
+                ]
+            }
+        ]))
+        .unwrap();
+
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+        let tools = normalized.tools.unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].function.name, "exec_command");
+        assert_eq!(tools[1].function.name, "multi_agent_v1.spawn_agent");
+
+        let chat_tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "namespace", "name": "ns", "tools": [] }
+        ]))
+        .unwrap();
+        assert!(normalize_chat_completion_tools(Some(chat_tools), None).is_err());
     }
 
     #[test]
@@ -2467,7 +2602,8 @@ mod tests {
         let external_access_tools: Vec<OpenAiTool> =
             serde_json::from_value(json!([{ "type": "web_search", "external_web_access": false }]))
                 .unwrap();
-        assert!(normalize_responses_tools(Some(external_access_tools)).is_err());
+        let normalized = normalize_responses_tools(Some(external_access_tools)).unwrap();
+        assert!(normalized.web_search_options.is_none());
 
         let preview_filters_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
             "type": "web_search_preview",

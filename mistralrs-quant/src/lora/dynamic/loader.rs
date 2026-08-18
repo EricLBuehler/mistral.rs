@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 mod expert;
 
-use candle_core::Result;
+use candle_core::{Result, Tensor};
 
-use crate::{LoraConfig, Shard, ShardedVarBuilder};
+use crate::{shard_range, LoraConfig, Shard, ShardedVarBuilder};
 
 use self::expert::{
     load_expert_site, plan_expert_site, ExpertSiteMeta, GateUpOrder, LoadedExpertProjection,
@@ -220,6 +220,49 @@ fn tensor_elements_after_shard(
     Ok(elements)
 }
 
+struct FactorLoadSpec<'a> {
+    shape: [usize; 2],
+    name: &'a str,
+    shard: Shard,
+    feature_dim: usize,
+    runtime_to_canonical: Option<&'a [usize]>,
+}
+
+fn load_factor(weights: &ShardedVarBuilder, spec: FactorLoadSpec<'_>) -> Result<Tensor> {
+    let FactorLoadSpec {
+        shape,
+        name,
+        shard,
+        feature_dim,
+        runtime_to_canonical,
+    } = spec;
+    let Some(runtime_to_canonical) = runtime_to_canonical else {
+        return weights.get_with_hints((shape[0], shape[1]), name, shard);
+    };
+
+    let tensor = weights.get_with_hints((shape[0], shape[1]), name, Shard::default())?;
+    let (tensor, indices) = match shard_range(shard, &shape)? {
+        Some((dim, start, len)) if dim == feature_dim => {
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| candle_core::Error::msg("LoRA feature shard range overflow"))?;
+            let indices = runtime_to_canonical.get(start..end).ok_or_else(|| {
+                candle_core::Error::msg("LoRA feature shard exceeds runtime-to-canonical map")
+            })?;
+            (tensor, indices)
+        }
+        Some(_) => (shard.apply_to(&tensor)?, runtime_to_canonical),
+        None => (tensor, runtime_to_canonical),
+    };
+    let indices = indices
+        .iter()
+        .map(|&index| u32::try_from(index).map_err(candle_core::Error::wrap))
+        .collect::<Result<Vec<_>>>()?;
+    let index_count = indices.len();
+    let indices = Tensor::from_vec(indices, index_count, tensor.device())?;
+    tensor.index_select(&indices, feature_dim)?.contiguous()
+}
+
 fn validate_consumption(tensors: &AdapterTensorIndex, consumed: &BTreeSet<String>) -> Result<()> {
     let unconsumed = tensors.unconsumed(consumed);
     if !unconsumed.is_empty() {
@@ -347,15 +390,25 @@ pub fn load_dynamic_lora_weights(
             .set_device(site.device().clone())
             .set_dtype(site.activation_dtype());
         let spec = site.spec();
-        let a = site_weights.get_with_hints(
-            (load.rank, spec.in_features()),
-            load.a_name,
-            load.a_shard,
+        let a = load_factor(
+            &site_weights,
+            FactorLoadSpec {
+                shape: [load.rank, spec.in_features()],
+                name: load.a_name,
+                shard: load.a_shard,
+                feature_dim: 1,
+                runtime_to_canonical: spec.input_runtime_to_canonical(),
+            },
         )?;
-        let b = site_weights.get_with_hints(
-            (spec.out_features(), load.rank),
-            load.b_name,
-            load.b_shard,
+        let b = load_factor(
+            &site_weights,
+            FactorLoadSpec {
+                shape: [spec.out_features(), load.rank],
+                name: load.b_name,
+                shard: load.b_shard,
+                feature_dim: 0,
+                runtime_to_canonical: spec.output_runtime_to_canonical(),
+            },
         )?;
         consumed.insert(load.a_name.to_string());
         consumed.insert(load.b_name.to_string());
@@ -404,11 +457,15 @@ mod tests {
         let q_b = "base_model.model.model.layers.0.q_proj.lora_B.weight";
         let k_a = "model.layers.0.k_proj.lora_A.default.weight";
         let k_b = "model.layers.0.k_proj.lora_B.default.weight";
+        let nested_a = "base_model.model.language_model.model.layers.0.q_proj.lora_A.weight";
+        let nested_b = "base_model.model.language_model.model.layers.0.q_proj.lora_B.weight";
         let index = AdapterTensorIndex::new(vec![
             q_a.to_string(),
             q_b.to_string(),
             k_a.to_string(),
             k_b.to_string(),
+            nested_a.to_string(),
+            nested_b.to_string(),
             "unexpected.weight".to_string(),
         ]);
 
@@ -420,10 +477,16 @@ mod tests {
             index.pair_for_site("model.layers.0.k_proj")?,
             Some((k_a, k_b))
         );
+        assert_eq!(
+            index.pair_for_site("language_model.model.layers.0.q_proj")?,
+            Some((nested_a, nested_b))
+        );
         let consumed = BTreeSet::from([q_a.to_string(), q_b.to_string()]);
         assert_eq!(
             index.unconsumed(&consumed),
             vec![
+                nested_a.to_string(),
+                nested_b.to_string(),
                 k_a.to_string(),
                 k_b.to_string(),
                 "unexpected.weight".to_string()
@@ -618,6 +681,39 @@ mod tests {
     }
 
     #[test]
+    fn site_prefix_alias_loads_canonical_qwen35_moe_adapter_names() -> Result<()> {
+        let device = Device::Cpu;
+        let runtime_path = "model.layers.0.self_attn.q_proj";
+        let canonical_path = "model.language_model.layers.0.self_attn.q_proj";
+        let backend = HashMap::from([
+            (
+                format!("base_model.model.{canonical_path}.lora_A.default.weight"),
+                Tensor::new(&[[1f32, 0.]], &device)?,
+            ),
+            (
+                format!("base_model.model.{canonical_path}.lora_B.default.weight"),
+                Tensor::new(&[[1f32], [0.]], &device)?,
+            ),
+        ]);
+        let weights = ShardedSafeTensors::wrap(backend, DType::F32, device.clone());
+        let registry =
+            LoraLayerRegistry::new_with_site_prefix_alias("model", "model.language_model")?;
+        let site = registry.register(
+            LoraSiteKey::new(runtime_path),
+            LoraLinearSpec::replicated(2, 2),
+            DType::F32,
+            device,
+        )?;
+        registry.finalize()?;
+
+        let loaded = load_dynamic_lora_weights(&registry, &config("q_proj", 1, 1.0), &weights)?;
+        assert_eq!(site.key().path(), canonical_path);
+        assert_eq!(loaded.linear.len(), 1);
+        assert!(loaded.experts.is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn loads_compact_expert_site_from_safetensors_metadata() -> Result<()> {
         let device = Device::Cpu;
         let path = "model.layers.0.mlp.experts";
@@ -787,6 +883,155 @@ mod tests {
         assert_eq!(
             weights.b.to_vec2::<f32>()?,
             vec![vec![1., 2.], vec![3., 4.], vec![5., 6.], vec![7., 8.]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn loads_peft_weights_with_runtime_feature_permutations() -> Result<()> {
+        let device = Device::Cpu;
+        let path = "model.layers.0.linear_attn.in_proj_z";
+        let backend = HashMap::from([
+            (
+                format!("{path}.lora_A.weight"),
+                Tensor::new(&[[1f32, 2., 3., 4.], [5., 6., 7., 8.]], &device)?,
+            ),
+            (
+                format!("{path}.lora_B.weight"),
+                Tensor::new(&[[1f32, 2.], [3., 4.], [5., 6.], [7., 8.]], &device)?,
+            ),
+        ]);
+        let weights = ShardedSafeTensors::wrap(backend, DType::F32, device.clone());
+        let registry = LoraLayerRegistry::new();
+        let spec = LoraLinearSpec::replicated(4, 4)
+            .with_input_runtime_to_canonical(vec![0, 2, 1, 3])?
+            .with_output_runtime_to_canonical(vec![2, 0, 3, 1])?;
+        registry.register(LoraSiteKey::new(path), spec, DType::F32, device)?;
+        registry.finalize()?;
+
+        let mut loaded =
+            load_dynamic_lora_weights(&registry, &config("in_proj_z", 2, 2.0), &weights)?.linear;
+        let (_, weights) = loaded.pop().expect("loaded registered LoRA site");
+        assert!(loaded.is_empty());
+        assert_eq!(
+            weights.a.to_vec2::<f32>()?,
+            vec![vec![1., 3., 2., 4.], vec![5., 7., 6., 8.]]
+        );
+        assert_eq!(
+            weights.b.to_vec2::<f32>()?,
+            vec![vec![5., 6.], vec![1., 2.], vec![7., 8.], vec![3., 4.]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn row_sharding_gathers_runtime_order_from_canonical_input_columns() -> Result<()> {
+        let device = Device::Cpu;
+        let path = "model.layers.0.linear_attn.out_proj";
+        let backend = HashMap::from([
+            (
+                format!("{path}.lora_A.weight"),
+                Tensor::new(
+                    &[
+                        [1f32, 2., 3., 4., 5., 6., 7., 8.],
+                        [11., 12., 13., 14., 15., 16., 17., 18.],
+                    ],
+                    &device,
+                )?,
+            ),
+            (
+                format!("{path}.lora_B.weight"),
+                Tensor::new(&[[1f32, 2.], [3., 4.]], &device)?,
+            ),
+        ]);
+        let weights = ShardedSafeTensors::wrap(backend, DType::F32, device.clone());
+        let registry = LoraLayerRegistry::new();
+        let spec = LoraLinearSpec::row(
+            8,
+            2,
+            Shard::Simple {
+                dim: 1,
+                rank: 1,
+                world_size: 2,
+            },
+        )
+        .with_input_runtime_to_canonical(vec![0, 1, 4, 5, 2, 3, 6, 7])?;
+        registry.register(LoraSiteKey::new(path), spec, DType::F32, device)?;
+        registry.finalize()?;
+        let config = config("out_proj", 2, 2.0);
+
+        assert_eq!(
+            plan_dynamic_lora_weights(&registry, &config, &weights)?.bytes(),
+            48
+        );
+        let mut loaded = load_dynamic_lora_weights(&registry, &config, &weights)?.linear;
+        let (_, weights) = loaded.pop().expect("loaded registered LoRA site");
+        assert_eq!(
+            weights.a.to_vec2::<f32>()?,
+            vec![vec![3., 4., 7., 8.], vec![13., 14., 17., 18.]]
+        );
+        assert_eq!(
+            weights.b.to_vec2::<f32>()?,
+            vec![vec![1., 2.], vec![3., 4.]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn column_sharding_gathers_runtime_order_from_canonical_output_rows() -> Result<()> {
+        let device = Device::Cpu;
+        let path = "model.layers.0.linear_attn.in_proj_b";
+        let backend = HashMap::from([
+            (
+                format!("{path}.lora_A.weight"),
+                Tensor::new(&[[1f32, 2.], [3., 4.]], &device)?,
+            ),
+            (
+                format!("{path}.lora_B.weight"),
+                Tensor::new(
+                    &[
+                        [1f32, 2.],
+                        [3., 4.],
+                        [5., 6.],
+                        [7., 8.],
+                        [9., 10.],
+                        [11., 12.],
+                        [13., 14.],
+                        [15., 16.],
+                    ],
+                    &device,
+                )?,
+            ),
+        ]);
+        let weights = ShardedSafeTensors::wrap(backend, DType::F32, device.clone());
+        let registry = LoraLayerRegistry::new();
+        let spec = LoraLinearSpec::column(
+            2,
+            8,
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: 2,
+            },
+        )
+        .with_output_runtime_to_canonical(vec![0, 1, 4, 5, 2, 3, 6, 7])?;
+        registry.register(LoraSiteKey::new(path), spec, DType::F32, device)?;
+        registry.finalize()?;
+        let config = config("in_proj_b", 2, 2.0);
+
+        assert_eq!(
+            plan_dynamic_lora_weights(&registry, &config, &weights)?.bytes(),
+            48
+        );
+        let mut loaded = load_dynamic_lora_weights(&registry, &config, &weights)?.linear;
+        let (_, weights) = loaded.pop().expect("loaded registered LoRA site");
+        assert_eq!(
+            weights.a.to_vec2::<f32>()?,
+            vec![vec![1., 2.], vec![3., 4.]]
+        );
+        assert_eq!(
+            weights.b.to_vec2::<f32>()?,
+            vec![vec![5., 6.], vec![7., 8.], vec![13., 14.], vec![15., 16.]]
         );
         Ok(())
     }

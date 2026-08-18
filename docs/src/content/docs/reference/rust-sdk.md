@@ -29,6 +29,18 @@ async fn send_raw_chat_request<R: RequestLike>(&self, request: R) -> Result<(Vec
 ```
 Returns raw logits of the first generated token plus the prompt tokens. Example: [perplexity](/mistral.rs/examples/rust/advanced/perplexity/).
 
+## Reasoning
+
+`ReasoningEffort::{Off, Low, Medium, High, XHigh}` is accepted by `TextMessages::with_reasoning_effort`, `MultimodalMessages::with_reasoning_effort`, `RequestBuilder::with_reasoning_effort`, and `AgentBuilder::with_reasoning_effort`. The existing `enable_thinking(bool)` or `with_enable_thinking(bool)` methods remain available. Omission leaves effort unspecified with thinking enabled; contradictory explicit controls return a request-validation error.
+
+```rust
+let messages = TextMessages::new()
+    .add_message(TextMessageRole::User, "Solve this carefully.")
+    .with_reasoning_effort(ReasoningEffort::High);
+```
+
+The effort is passed to the model's chat template; it does not change sampling parameters directly.
+
 ## Structured output
 
 ```rust
@@ -108,6 +120,14 @@ async fn tokenize(&self, text: Either<TextMessages, String>, tools: Option<Vec<T
     add_special_tokens: bool, add_generation_prompt: bool, enable_thinking: Option<bool>) -> Result<Vec<u32>>
 ```
 Tokenize raw text or chat messages (messages go through the chat template; `tools` only applies to messages).
+
+```rust
+async fn tokenize_with_reasoning_effort(&self, text: Either<TextMessages, String>,
+    tools: Option<Vec<Tool>>, add_special_tokens: bool, add_generation_prompt: bool,
+    enable_thinking: Option<bool>, reasoning_effort: Option<ReasoningEffort>) -> Result<Vec<u32>>
+```
+
+Use this variant for chat messages when tokenization must reflect an explicit effort. Raw strings are tokenized directly and do not render the chat template.
 
 ```rust
 async fn detokenize(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> Result<String>

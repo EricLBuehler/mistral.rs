@@ -1,0 +1,279 @@
+---
+title: Run GGUF models
+description: Load local or Hugging Face GGUF files, including multimodal projectors, LoRA adapters, and asset overrides.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide covers local and Hugging Face GGUF files for interactive chat, agents, and API serving.
+Select a local file by filename, or select a repository artifact by exact filename or quantization
+level. When a model needs external configuration or processor assets, mistral.rs resolves them as
+described below.
+
+## Quick start
+
+```bash
+# Run a local GGUF.
+mistralrs run -f /path/to/model.gguf
+
+# Choose a published 4-bit GGUF from a Hugging Face repository.
+mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
+
+# Serve the same model through the OpenAI-compatible API.
+mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
+```
+
+The `.gguf` suffix selects GGUF automatically. `--format gguf` remains available, but is not needed
+for these commands.
+
+GGUF changes how model weights and companion assets are loaded, not the inference surface. Once
+loaded, the model uses the same Chat Completions, Responses, structured-output, tool-calling, and
+CLI agent paths as its non-GGUF counterpart. Tool calling still depends on checkpoint behavior and
+a compatible chat template.
+
+## Select a GGUF file
+
+| Goal | Command |
+|---|---|
+| Run an exact local file | `mistralrs run -f /path/model-Q4_K_M.gguf` |
+| Run an exact Hub file | `mistralrs run -m owner/repo -f model-Q4_K_M.gguf` |
+| Choose a published bit width | `mistralrs run -m owner/repo --quant 4` |
+| Choose from a local directory | `mistralrs run -m /path/to/gguf-dir --quant 4` |
+
+Replace `run` with `serve` or `bench` without changing the model flags. When `-m` is omitted, the
+directory containing the local `-f` file is used as the model directory.
+
+`--quant` selects an existing artifact. For example, `--quant 4` ranks the repository's 4-bit files
+and prefers `Q4_K_M` when it is available. Use `-f` when you need an exact variant, or when a
+repository contains several models rather than variants of one model. Use a supported bit width or
+quant name for GGUF. `--quant auto` is for standard model repositories and does not select GGUF
+artifacts. IQ GGUF artifacts are not supported yet; choose a Q/K variant from the repository.
+
+Split GGUF files use semicolon-separated names:
+
+```bash
+mistralrs run -m owner/repo \
+  -f 'model-00001-of-00002.gguf;model-00002-of-00002.gguf'
+```
+
+Local shards supplied without `-m` must all be in the same directory.
+
+## Python and Rust
+
+The SDKs select an exact GGUF artifact:
+
+<Tabs>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="unsloth/Qwen3-0.6B-GGUF",
+        quantized_filename="Qwen3-0.6B-Q4_K_M.gguf",
+    )
+)
+```
+
+[Full Python example](/mistral.rs/examples/python/gguf/).
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::GgufModelBuilder;
+
+let model = GgufModelBuilder::new(
+    "unsloth/Qwen3-0.6B-GGUF",
+    vec!["Qwen3-0.6B-Q4_K_M.gguf"],
+)
+.build()
+.await?;
+```
+
+[Full Rust example](/mistral.rs/examples/rust/getting-started/gguf/), or
+[load a local file](/mistral.rs/examples/rust/getting-started/gguf-locally/).
+
+</TabItem>
+</Tabs>
+
+## Model assets and projectors
+
+For text models, mistral.rs reads the tokenizer and chat template from the GGUF when they are
+available. It also uses the selected repository or the file's base-model information to find
+configuration and processor files when the model needs them.
+
+For supported multimodal GGUF repositories, mistral.rs selects a compatible companion projector,
+preferring one that matches the model dtype. The direct local shorthand, `-f /path/model.gguf` with
+`-m` omitted, also selects an unambiguous projector stored beside the model. No explicit projector
+or asset flags are needed when these selections are unambiguous:
+
+```bash
+mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
+```
+
+Use these options to select files explicitly:
+
+| Option | Use it when |
+|---|---|
+| `-f <file.gguf>` | You want an exact model file instead of automatic quant selection. |
+| `--mmproj <file.gguf>` | You want an exact multimodal projector, or the projector is not stored beside the selected local model. |
+| `--tok-model-id <model-id-or-path>` | The original configuration, tokenizer, or processor assets cannot be identified automatically. |
+| `-t <tokenizer.json>` | You want to provide a tokenizer file directly. |
+| `-c <template>` | You want to override the chat template. |
+
+`--mmproj` accepts semicolon-separated files for models with multiple projector components.
+
+## Multimodal GGUF
+
+Supported multimodal GGUF repositories use the same command shape as text models. Media is passed
+through the normal CLI or OpenAI-compatible request formats:
+
+```bash
+mistralrs run \
+  -m unsloth/gemma-4-E4B-it-GGUF \
+  --quant 4 \
+  --image photo.jpg \
+  -i "Describe this image."
+```
+
+For a fully local model, put an unambiguous `mmproj*.gguf` beside the main GGUF and provide the
+original model assets when the GGUF does not identify them:
+
+```bash
+mistralrs run \
+  -f /models/Qwen3.5-4B-Q4_K_M.gguf \
+  --tok-model-id /models/Qwen3.5-4B
+```
+
+The SDKs use the same model and projector files:
+
+<Tabs>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.GGUF(
+        quantized_model_id="unsloth/gemma-4-E4B-it-GGUF",
+        quantized_filename="gemma-4-E4B-it-Q4_K_M.gguf",
+        mmproj_filename="mmproj-BF16.gguf",
+    )
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::GgufModelBuilder;
+
+let model = GgufModelBuilder::new(
+    "unsloth/gemma-4-E4B-it-GGUF",
+    vec!["gemma-4-E4B-it-Q4_K_M.gguf"],
+)
+.with_mmproj_files(vec!["mmproj-BF16.gguf"])
+.build()
+.await?;
+```
+
+</TabItem>
+</Tabs>
+
+When loading online, `--tok-model-id` can be omitted if the GGUF identifies its original model.
+Image, audio, and video availability depends on the selected model. See
+[multimodal input](/mistral.rs/guides/models/multimodal-input/) for request examples and
+[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the supported families. The
+[Gemma 4 GGUF server example](/mistral.rs/examples/server/gemma4-gguf/) shows a complete media
+request.
+
+## GGUF with dynamic LoRA
+
+Preload compatible LoRA adapters while serving a GGUF:
+
+```bash
+mistralrs serve \
+  -m Qwen/Qwen2.5-0.5B-Instruct-GGUF \
+  --quant 4 \
+  --lora philosophy=closestfriend/brie-qwen2.5-0.5b
+```
+
+Each request can select a loaded adapter by alias, and base-model requests can run alongside adapted
+requests. Multimodal GGUF applies adapters to the language model; projector, vision, and audio
+adapters are not supported. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for
+request routing and runtime adapter management.
+
+Dynamic LoRA is rejected for GGUF architectures whose rotary Q/K layout does not match canonical
+adapter weights. This prevents an adapter from loading successfully with the wrong feature order.
+The [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) lists the affected
+architectures.
+
+## Requantize with ISQ
+
+Artifact selection and requantization are different operations:
+
+| Option | Result |
+|---|---|
+| `--quant 4` | Selects a published 4-bit GGUF without changing its weights. |
+| `--isq q4k` | Converts compatible weights from the exact GGUF supplied with `-f` while loading. |
+
+```bash
+mistralrs run -f /path/model-BF16.gguf --isq q4k
+```
+
+Start with a high-precision or higher-bit source when possible to avoid compounding quantization
+loss. K-quant conversion can also use `--imatrix <path>` or `--calibration-file <path>`. See the
+[quantization guide](/mistral.rs/guides/quantization/quantize-a-model/) for choosing a format and
+collecting importance data.
+
+## Run offline
+
+Set `HF_HUB_OFFLINE=1` to disable network access and use only local files and the Hugging Face cache:
+
+```bash
+HF_HUB_OFFLINE=1 mistralrs run -f /models/model-Q4_K_M.gguf
+```
+
+A standalone text GGUF can use its embedded tokenizer and template. Multimodal models also need a
+local projector and their original configuration; some models use additional processor assets. Put
+the projector beside the main GGUF and the supporting assets in the cache, or pass a local asset
+directory with `--tok-model-id`:
+
+```bash
+HF_HUB_OFFLINE=1 mistralrs run \
+  -f /models/model.gguf \
+  --tok-model-id /models/original-assets
+```
+
+See [environment variables](/mistral.rs/reference/environment-variables/) for cache locations and
+token configuration.
+
+## Migrating existing GGUF commands
+
+Existing explicit commands remain accepted. Arguments inferred from the file or repository can be
+omitted:
+
+| Existing form | Shorter form |
+|---|---|
+| `mistralrs run -m . --format gguf -f model.gguf` | `mistralrs run -f model.gguf` |
+| `mistralrs run -m owner/repo --format gguf -f model.gguf` | `mistralrs run -m owner/repo -f model.gguf` |
+| `... --tok-model-id owner/base` | Omit when the GGUF identifies its base model. |
+| `... --mmproj mmproj-BF16.gguf` | Omit when the repository identifies one projector, or when the direct local shorthand finds one adjacent projector. |
+
+Keep an explicit override when a repository contains several independent models, several equally
+ranked projectors, or incomplete GGUF metadata.
+
+## Troubleshooting
+
+| Message or symptom | What to do |
+|---|---|
+| No GGUF matches `--quant` | Use `-f` to choose an available file, or choose a bit width that the repository publishes. |
+| Unknown or unsupported GGUF architecture | Check [GGUF compatibility](/mistral.rs/reference/gguf-support/) and use a GGUF produced for a supported family. |
+| No companion projector was found | Pass `--mmproj`, or use a repository that includes the model's projector. |
+| An architecture is supported only as a multimodal model | Supply its companion projector; see [GGUF compatibility](/mistral.rs/reference/gguf-support/#multimodal-model-families). |
+| Projector selection is ambiguous | Pass the exact projector filename with `--mmproj`. |
+| Original configuration or processor assets are missing | Pass the original model ID or a local asset directory with `--tok-model-id`. |
+| Tokenizer conversion reports an unsupported profile | Supply the original `tokenizer.json` with `-t`, or use `--tok-model-id`. |
+| An IQ GGUF does not load | IQ GGUF formats are not supported yet; choose a supported Q/K quant listed in [GGUF compatibility](/mistral.rs/reference/gguf-support/#storage-formats). |

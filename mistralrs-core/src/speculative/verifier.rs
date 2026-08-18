@@ -31,11 +31,7 @@ pub async fn finish_verified_step<P: Pipeline>(
     anchor_to_emit: Option<Logprobs>,
 ) -> Result<VerificationOutcome> {
     let general_metadata = pipeline.get_metadata();
-    let eos_tok = if disable_eos_stop {
-        None
-    } else {
-        Some(&general_metadata.eos_tok[..])
-    };
+    let eos_tok = seq.effective_eos_tokens(&general_metadata.eos_tok, disable_eos_stop);
     let return_logprobs = seq.return_logprobs();
 
     if let Some(anchor) = anchor_to_emit {
@@ -53,7 +49,11 @@ pub async fn finish_verified_step<P: Pipeline>(
     }
 
     if let Some(proposal_logits) = proposal_logits {
-        if !seq.sampler().is_argmax() && matches!(seq.recognizer, SequenceRecognizer::None) {
+        if stochastic_verification_allowed(
+            seq.sampler().is_argmax(),
+            !matches!(seq.recognizer, SequenceRecognizer::None),
+            seq.tool_call_state.is_some(),
+        ) {
             return finish_verified_step_stochastic(
                 pipeline,
                 seq,
@@ -154,6 +154,14 @@ pub async fn finish_verified_step<P: Pipeline>(
     })
 }
 
+fn stochastic_verification_allowed(
+    is_argmax: bool,
+    has_constraint: bool,
+    has_tool_call_state: bool,
+) -> bool {
+    !is_argmax && !has_constraint && !has_tool_call_state
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn finish_verified_step_stochastic<P: Pipeline>(
     pipeline: &P,
@@ -200,7 +208,7 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
             rng.random::<f32>()
         };
 
-        if draw <= accept_prob {
+        if accepts_draft(draw, accept_prob) {
             accepted += 1;
             let sampled =
                 sampler.logprobs_from_probs(draft, &target_probs.reporting, return_logprobs)?;
@@ -326,4 +334,28 @@ fn normalize_probs(probs: &mut [f32]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn accepts_draft(draw: f32, accept_prob: f32) -> bool {
+    draw < accept_prob
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{accepts_draft, stochastic_verification_allowed};
+
+    #[test]
+    fn tool_sequences_use_per_row_target_sampling() {
+        assert!(stochastic_verification_allowed(false, false, false));
+        assert!(!stochastic_verification_allowed(false, false, true));
+        assert!(!stochastic_verification_allowed(false, true, false));
+        assert!(!stochastic_verification_allowed(true, false, false));
+    }
+
+    #[test]
+    fn zero_probability_drafts_are_never_accepted() {
+        assert!(!accepts_draft(0.0, 0.0));
+        assert!(accepts_draft(0.0, 1.0));
+        assert!(accepts_draft(0.999, 1.0));
+    }
 }

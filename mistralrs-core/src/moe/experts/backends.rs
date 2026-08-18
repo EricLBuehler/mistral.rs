@@ -3,7 +3,7 @@ use candle_nn::Linear;
 use mistralrs_quant::{
     apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, LoraExpertInputMode,
     LoraExpertProjection, PreQuantizedExperts, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    Shard, ShardedVarBuilder, UnquantLinear, UqffExpertKeys,
+    QuantizedExpertKeys, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use std::sync::Arc;
 
@@ -57,6 +57,12 @@ pub(super) struct FastExpertsWeights {
     pub(super) fused_down_proj: Arc<dyn QuantMethod>,
     /// Sharded across ranks (partial sums needing an all-reduce) vs replicated.
     pub(super) sharded: bool,
+}
+
+fn should_stage_prequantized_on_cpu(experts_vb: &ShardedVarBuilder) -> bool {
+    ["gate_proj", "up_proj", "down_proj"]
+        .iter()
+        .all(|name| should_apply_immediate_isq(&experts_vb.pp(name)))
 }
 
 #[cfg(feature = "cuda")]
@@ -149,34 +155,40 @@ pub(super) fn experts_are_prequantized(
 }
 
 impl FastExpertsWeights {
-    /// Load the three stacked expert layers from a UQFF artifact under their canonical names.
-    /// Shards across ranks when the quantization geometry allows; replicates otherwise.
-    pub(super) fn from_uqff(
+    pub(super) fn from_weight_source(
         cfg: &MoEExpertsConfig,
         experts_vb: &ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Option<FastExpertsWeights>> {
-        let Some(reader) = experts_vb.uqff_reader() else {
+        let Some(source) = experts_vb.weight_source() else {
             return Ok(None);
         };
-        let keys = UqffExpertKeys::new(&experts_vb.prefix());
-        if !reader.contains(&format!("{}.weight", keys.gate)) {
+        let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
+        if !source.contains(&format!("{}.weight", keys.gate)) {
             return Ok(None);
         }
 
         let rank = comm.rank();
         let world_size = comm.world_size();
         let inter = cfg.moe_intermediate_size;
+        let down_has_bias = source.contains(&format!("{}.bias", keys.down));
         // down shards its packed (input) dim, so the per-rank slice must be block-aligned.
         let sharded = world_size > 1
+            && !down_has_bias
             && inter.is_multiple_of(world_size)
-            && reader
+            && source
                 .shard_alignment(&keys.down)
                 .is_ok_and(|align| (inter / world_size).is_multiple_of(align));
         if world_size > 1 && !sharded {
-            mistralrs_quant::log::once_log_warn(
-                "UQFF expert quantization geometry does not allow sharding; replicating experts per rank.",
-            );
+            if down_has_bias {
+                mistralrs_quant::log::once_log_warn(
+                    "Biased expert down projections require replication across ranks.",
+                );
+            } else {
+                mistralrs_quant::log::once_log_warn(
+                    "Expert quantization geometry does not allow sharding; replicating experts per rank.",
+                );
+            }
         }
 
         let (gate_shard, down_shard) = if sharded {
@@ -196,16 +208,22 @@ impl FastExpertsWeights {
             (Shard::default(), Shard::default())
         };
 
-        let device = experts_vb.device();
-        let load = |key: &str, shard: Shard| -> Result<Arc<dyn QuantMethod>> {
-            reader.load_linear(key, device, shard)?.ok_or_else(|| {
-                candle_core::Error::Msg(format!("Missing UQFF expert tensor `{key}`."))
-            })
+        let load = |key: &str,
+                    predicate_vb: ShardedVarBuilder,
+                    shard: Shard|
+         -> Result<Arc<dyn QuantMethod>> {
+            let load_device = mistralrs_quant::weight_source_load_device(&predicate_vb);
+            let layer = source
+                .load_linear(key, &load_device, shard)?
+                .ok_or_else(|| {
+                    candle_core::Error::Msg(format!("Missing expert weight `{key}`."))
+                })?;
+            apply_immediate_isq_with_key(layer, predicate_vb, Some(key.to_string()), Some(shard))
         };
         Ok(Some(FastExpertsWeights {
-            fused_gate_proj: load(&keys.gate, gate_shard)?,
-            fused_up_proj: load(&keys.up, gate_shard)?,
-            fused_down_proj: load(&keys.down, down_shard)?,
+            fused_gate_proj: load(&keys.gate, experts_vb.pp("gate_proj"), gate_shard)?,
+            fused_up_proj: load(&keys.up, experts_vb.pp("up_proj"), gate_shard)?,
+            fused_down_proj: load(&keys.down, experts_vb.pp("down_proj"), down_shard)?,
             sharded,
         }))
     }
@@ -261,7 +279,7 @@ impl FastExpertsWeights {
                 QuantMethodConfig::Unquantized(Linear::new(w, None)),
             )?))
         };
-        let keys = UqffExpertKeys::new(&experts_vb.prefix());
+        let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
         let shard = (comm.world_size() == 1).then(mistralrs_quant::Shard::default);
         let checkpoint = ExpertCheckpoint::new(cfg, read_vb, comm)?;
         let load = |proj: ExpertProj,
@@ -606,12 +624,36 @@ mod tests {
 }
 
 impl FastExpertsWeights {
+    fn apply_immediate_isq(self, experts_vb: ShardedVarBuilder) -> Result<Self> {
+        let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
+        let load = |layer: Arc<dyn QuantMethod>, name: &str, key: String| {
+            apply_immediate_isq_with_key(
+                layer,
+                experts_vb.pp(name),
+                Some(key),
+                Some(Shard::default()),
+            )
+        };
+        Ok(Self {
+            fused_gate_proj: load(self.fused_gate_proj, "gate_proj", keys.gate)?,
+            fused_up_proj: load(self.fused_up_proj, "up_proj", keys.up)?,
+            fused_down_proj: load(self.fused_down_proj, "down_proj", keys.down)?,
+            sharded: self.sharded,
+        })
+    }
+
     /// Pre-quantized standard tree (`experts.*` / `switch_mlp.*`).
     pub(super) fn load_prequantized(
         cfg: &MoEExpertsConfig,
         vb: ShardedVarBuilder,
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<FastExpertsWeights> {
+        let experts_vb = vb.pp("experts");
+        let read_vb = if should_stage_prequantized_on_cpu(&experts_vb) && !vb.device().is_cpu() {
+            vb.set_device(Device::Cpu)
+        } else {
+            vb
+        };
         let PreQuantizedExperts {
             fused_gate_proj,
             fused_up_proj,
@@ -621,14 +663,15 @@ impl FastExpertsWeights {
             cfg.moe_intermediate_size,
             cfg.num_experts,
             quantization_config,
-            vb,
+            read_vb,
         )?;
-        Ok(FastExpertsWeights {
+        FastExpertsWeights {
             fused_gate_proj,
             fused_up_proj,
             fused_down_proj,
             sharded: false,
-        })
+        }
+        .apply_immediate_isq(experts_vb)
     }
 }
 
@@ -1607,5 +1650,87 @@ impl FastExpertsWeights {
         } else {
             Ok(Some(down.to_dtype(forward.original_dtype)?))
         }
+    }
+}
+
+#[cfg(test)]
+mod immediate_isq_tests {
+    use super::*;
+    use candle_core::Device;
+    use regex::Regex;
+    use std::collections::HashMap;
+
+    struct ClearImmediateIsq;
+
+    impl Drop for ClearImmediateIsq {
+        fn drop(&mut self) {
+            mistralrs_quant::clear_immediate_isq();
+        }
+    }
+
+    fn dummy() -> Result<Arc<dyn QuantMethod>> {
+        Ok(Arc::new(DummyLayer::new(QuantMethodConfig::Dummy)?))
+    }
+
+    fn experts_vb() -> ShardedVarBuilder {
+        mistralrs_quant::ShardedSafeTensors::wrap(HashMap::new(), DType::F32, Device::Cpu)
+            .pp("model.layers.0.mlp.experts")
+    }
+
+    #[test]
+    fn partial_prequantized_selection_keeps_original_load_device() {
+        mistralrs_quant::set_immediate_isq(
+            Some(mistralrs_quant::IsqType::Q8_0),
+            vec![
+                Regex::new(r"^model\.layers\.0\.mlp\.experts\.gate_proj\.weight$")
+                    .expect("valid regex"),
+            ],
+            mistralrs_quant::IsqCaptureMode::CaptureMatches,
+        );
+        let _clear = ClearImmediateIsq;
+
+        assert!(!should_stage_prequantized_on_cpu(&experts_vb()));
+    }
+
+    #[test]
+    fn prequantized_experts_register_canonical_immediate_isq_keys() -> Result<()> {
+        let experts_vb = experts_vb();
+        let tracker = experts_vb.tracker().clone();
+        mistralrs_quant::set_immediate_isq(
+            Some(mistralrs_quant::IsqType::Q8_0),
+            vec![Regex::new(
+                r"^model\.layers\.0\.mlp\.experts\.(gate_proj|up_proj|down_proj)\.weight$",
+            )
+            .expect("valid regex")],
+            mistralrs_quant::IsqCaptureMode::CaptureMatches,
+        );
+        let _clear = ClearImmediateIsq;
+        assert!(should_stage_prequantized_on_cpu(&experts_vb));
+
+        FastExpertsWeights {
+            fused_gate_proj: dummy()?,
+            fused_up_proj: dummy()?,
+            fused_down_proj: dummy()?,
+            sharded: false,
+        }
+        .apply_immediate_isq(experts_vb)?;
+
+        let modules = tracker.get().clone();
+        assert_eq!(modules.len(), 3);
+        assert_eq!(
+            modules
+                .iter()
+                .map(|module| module.key.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "model.layers.0.mlp.experts.gate_proj",
+                "model.layers.0.mlp.experts.up_proj",
+                "model.layers.0.mlp.experts.down_proj",
+            ]
+        );
+        for module in modules {
+            module.ct.resolve()?;
+        }
+        Ok(())
     }
 }

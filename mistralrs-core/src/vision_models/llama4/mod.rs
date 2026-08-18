@@ -71,16 +71,18 @@ impl Llama4Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let non_text_vb = vb.clone().without_lora_registry();
         let vision_model = Llama4VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_model"),
+            non_text_vb.pp("vision_model"),
             &normal_loading_metadata.real_device,
             &normal_loading_metadata.mapper.get_comm_for(0)?,
             &normal_loading_metadata.multi_progress,
         )?;
         let multi_modal_projector = Llama4MultiModalProjector::new(
             cfg,
-            vb.pp("multi_modal_projector")
+            non_text_vb
+                .pp("multi_modal_projector")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let language_model = TextModel::new(

@@ -15,12 +15,21 @@ use crate::types::SharedMistralRsState;
 /// of blocking but uses more memory.
 pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
+/// Error message attached to a failed response so the access log can report it.
+#[derive(Clone, Debug)]
+pub struct ResponseErrorMessage(pub String);
+
 /// Trait for converting errors to HTTP responses with appropriate status codes.
 pub(crate) trait ErrorToResponse: Serialize {
+    fn error_message(&self) -> String;
+
     /// Converts the error to an HTTP response with the specified status code.
     fn to_response(&self, code: StatusCode) -> axum::response::Response {
         let mut response = Json(self).into_response();
         *response.status_mut() = code;
+        response
+            .extensions_mut()
+            .insert(ResponseErrorMessage(self.error_message()));
         response
     }
 }
@@ -45,7 +54,11 @@ impl std::fmt::Display for JsonError {
 }
 
 impl std::error::Error for JsonError {}
-impl ErrorToResponse for JsonError {}
+impl ErrorToResponse for JsonError {
+    fn error_message(&self) -> String {
+        self.message.clone()
+    }
+}
 
 /// Internal error type for model-related errors with a descriptive message.
 ///
@@ -75,6 +88,12 @@ impl<T> BaseJsonModelError<T> {
             message,
             partial_response,
         }
+    }
+}
+
+impl<T: Serialize> ErrorToResponse for BaseJsonModelError<T> {
+    fn error_message(&self) -> String {
+        self.message.clone()
     }
 }
 

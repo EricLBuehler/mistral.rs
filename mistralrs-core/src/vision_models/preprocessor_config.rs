@@ -8,6 +8,9 @@ use serde_json::{Map, Value};
 #[derive(Deserialize, Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct PreProcessorConfig {
+    // Populated from video_preprocessor_config.json when the repo ships one; never deserialized from this file.
+    #[serde(skip)]
+    pub(crate) video: Option<Box<PreProcessorConfig>>,
     pub(crate) do_convert_rgb: Option<bool>,
     pub(crate) do_image_splitting: Option<bool>,
     pub(crate) do_normalize: Option<bool>,

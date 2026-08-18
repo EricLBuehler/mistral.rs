@@ -1,6 +1,6 @@
 ---
 title: Use pre-quantized UQFF models
-description: Native quantized file format. Loads directly without runtime conversion.
+description: Create mistral.rs UQFF files and load them without runtime conversion.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -60,8 +60,10 @@ let model = UqffTextModelBuilder::new("<repo>", vec!["q4k-0.uqff".into()])
 </TabItem>
 </Tabs>
 
-For sharded UQFFs, pass the first shard's filename. Shards share a common prefix and end in
-`-0`, `-1`, ... (e.g. `q4k-0.uqff`, `q4k-1.uqff`); discovery matches the trailing numeric suffix.
+Conventionally named shards share a prefix and end in `-0`, `-1`, and so on, such as
+`q4k-0.uqff` and `q4k-1.uqff`; selecting one discovers the contiguous shard set. When
+`uqff_report.json` declares an output, its shard list is authoritative and may use custom
+filenames.
 
 UQFF models work under tensor parallelism: each rank loads only its slice of the quantized
 weights.
@@ -71,7 +73,7 @@ Full example: [Rust](/mistral.rs/examples/rust/quantization/uqff/),
 
 ## Producing a UQFF
 
-The `quantize` subcommand converts an unquantized model to UQFF:
+The `quantize` subcommand converts a supported model source to UQFF:
 
 ```bash
 mistralrs quantize \
@@ -80,7 +82,36 @@ mistralrs quantize \
   -o gemma-q4k.uqff
 ```
 
-A one-time operation. The result loads directly afterward.
+The generated UQFF can be reused without repeating the conversion.
+
+GGUF inputs use the same file selection as `run`. For a local file, `-f` infers GGUF and makes
+`-m` optional:
+
+```bash
+mistralrs quantize \
+  -f /path/model-BF16.gguf \
+  --isq q4k \
+  -o model-q4k.uqff
+```
+
+For a GGUF repository, `--quant` selects the input artifact and `--isq` selects the output UQFF
+format:
+
+```bash
+mistralrs quantize \
+  -m <gguf-repo> \
+  --quant 8 \
+  --isq q4k \
+  -o output/
+```
+
+A UQFF produced from GGUF preserves the source Q/K rotary layout. If that layout is adjacent,
+dynamic LoRA and X-LoRA remain unsupported after conversion; UQFF does not reorder those features.
+
+`--quant` and `-f` are mutually exclusive, and `--quant auto` does not select a GGUF artifact.
+Starting from a high-precision or higher-bit GGUF avoids compounding quantization loss. Supported
+multimodal repositories select their projector and supporting assets when the candidates are
+unambiguous; `--mmproj` and `--tok-model-id` override those choices.
 
 `--isq` can be repeated or comma-separated to produce multiple variants in one run; pass a
 directory as `-o` in that case. Numeric shorthands expand to all platform variants (`--isq 4`
@@ -97,16 +128,17 @@ Sensitive token embeddings and output heads follow the higher-precision defaults
 [quantization type reference](/mistral.rs/reference/quantization-types/). For example, AFQ4 uses
 AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
 type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
-precedence. The active model loader declares the exact tensors covered by this policy; similarly
-named tensors in vision, audio, or auxiliary subtrees are not promoted implicitly.
+precedence. This promotion applies to the language model's embeddings and output head, not its
+vision, audio, or other auxiliary components.
 
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 
-`quantize` also writes `uqff_report.json` beside the UQFF files. The report is informational:
-loaders ignore it, but it records the generated variants, shard names, stored layer formats,
-producer version, and any fallback layers. Existing UQFF repos do not need to be regenerated.
-Instead, you can backfill a report by scanning the artifacts:
+`quantize` also writes `uqff_report.json` beside the UQFF files. It records the generated variants,
+shard names, stored layer formats, producer version, and fallback layers. When present, loaders use
+it to resolve quantization names and shard sets, including custom filenames. Conventionally named
+UQFF repositories remain loadable without a report. A report can be generated for existing
+artifacts by scanning them:
 
 ```bash
 mistralrs uqff report -m gemma4_26b_a4b/ \

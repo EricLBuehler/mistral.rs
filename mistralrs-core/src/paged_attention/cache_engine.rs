@@ -93,6 +93,13 @@ impl CacheEngine {
             .map(|x| x.as_ref().unwrap_or(device))
             .enumerate()
         {
+            // Hybrid models keep no paged cache on linear/recurrent layers, but the vec stays indexed
+            // by absolute layer index, so those get an empty tensor of the right rank instead.
+            let num_gpu_blocks = if model_config.layer_has_paged_kv_cache(layer_idx) {
+                cache_config.num_gpu_blocks
+            } else {
+                0
+            };
             let requested_kv_cache_layout = model_config.kv_cache_layout_for_layer(layer_idx);
             let kv_cache_layout =
                 if matches!(requested_kv_cache_layout, KvCacheLayout::FlashInferHnd)
@@ -121,7 +128,7 @@ impl CacheEngine {
                         {
                             use candle_core::{MetalStorage, Shape, Storage};
 
-                            let elem_count = cache_config.num_gpu_blocks
+                            let elem_count = num_gpu_blocks
                                 * key_block_shape.0
                                 * key_block_shape.1
                                 * key_block_shape.2
@@ -136,7 +143,7 @@ impl CacheEngine {
                             Tensor::from((
                                 storage,
                                 Shape::from_dims(&[
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     key_block_shape.0,
                                     key_block_shape.1,
                                     key_block_shape.2,
@@ -153,7 +160,7 @@ impl CacheEngine {
                         unsafe {
                             Tensor::empty(
                                 (
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     key_block_shape.0,
                                     key_block_shape.1,
                                     key_block_shape.2,
@@ -170,7 +177,7 @@ impl CacheEngine {
                         {
                             use candle_core::{MetalStorage, Shape, Storage};
 
-                            let elem_count = cache_config.num_gpu_blocks
+                            let elem_count = num_gpu_blocks
                                 * value_block_shape.0
                                 * value_block_shape.1
                                 * value_block_shape.2;
@@ -184,7 +191,7 @@ impl CacheEngine {
                             Tensor::from((
                                 storage,
                                 Shape::from_dims(&[
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     value_block_shape.0,
                                     value_block_shape.1,
                                     value_block_shape.2,
@@ -200,7 +207,7 @@ impl CacheEngine {
                         unsafe {
                             Tensor::empty(
                                 (
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     value_block_shape.0,
                                     value_block_shape.1,
                                     value_block_shape.2,
@@ -224,7 +231,7 @@ impl CacheEngine {
                         {
                             use candle_core::{MetalStorage, Shape, Storage};
 
-                            let elem_count = cache_config.num_gpu_blocks
+                            let elem_count = num_gpu_blocks
                                 * key_block_shape.0
                                 * key_block_shape.1
                                 * key_block_shape.2;
@@ -238,7 +245,7 @@ impl CacheEngine {
                             Tensor::from((
                                 storage,
                                 Shape::from_dims(&[
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     key_block_shape.0,
                                     key_block_shape.1,
                                     key_block_shape.2,
@@ -254,7 +261,7 @@ impl CacheEngine {
                         unsafe {
                             Tensor::empty(
                                 (
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     key_block_shape.0,
                                     key_block_shape.1,
                                     key_block_shape.2,
@@ -267,7 +274,7 @@ impl CacheEngine {
                     let value_blocks = unsafe {
                         Tensor::empty(
                             (
-                                cache_config.num_gpu_blocks,
+                                num_gpu_blocks,
                                 key_block_shape.0,
                                 key_block_shape.1,
                                 key_block_shape.2,
@@ -288,9 +295,8 @@ impl CacheEngine {
                         {
                             use candle_core::{MetalStorage, Shape, Storage};
 
-                            let elem_count = cache_config.num_gpu_blocks
-                                * cache_config.block_size
-                                * kv_lora_rank;
+                            let elem_count =
+                                num_gpu_blocks * cache_config.block_size * kv_lora_rank;
                             let buffer = dev.new_private_buffer(elem_count, dtype, "k_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
@@ -301,7 +307,7 @@ impl CacheEngine {
                             Tensor::from((
                                 storage,
                                 Shape::from_dims(&[
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     cache_config.block_size,
                                     kv_lora_rank,
                                 ]),
@@ -315,11 +321,7 @@ impl CacheEngine {
                     } else {
                         unsafe {
                             Tensor::empty(
-                                (
-                                    cache_config.num_gpu_blocks,
-                                    cache_config.block_size,
-                                    kv_lora_rank,
-                                ),
+                                (num_gpu_blocks, cache_config.block_size, kv_lora_rank),
                                 dtype,
                                 device,
                             )?
@@ -331,9 +333,8 @@ impl CacheEngine {
                         {
                             use candle_core::{MetalStorage, Shape, Storage};
 
-                            let elem_count = cache_config.num_gpu_blocks
-                                * cache_config.block_size
-                                * kpe_head_dim;
+                            let elem_count =
+                                num_gpu_blocks * cache_config.block_size * kpe_head_dim;
                             let buffer = dev.new_private_buffer(elem_count, dtype, "v_cache")?;
                             let storage = Storage::Metal(MetalStorage::new(
                                 buffer,
@@ -344,7 +345,7 @@ impl CacheEngine {
                             Tensor::from((
                                 storage,
                                 Shape::from_dims(&[
-                                    cache_config.num_gpu_blocks,
+                                    num_gpu_blocks,
                                     cache_config.block_size,
                                     kpe_head_dim,
                                 ]),
@@ -358,11 +359,7 @@ impl CacheEngine {
                     } else {
                         unsafe {
                             Tensor::empty(
-                                (
-                                    cache_config.num_gpu_blocks,
-                                    cache_config.block_size,
-                                    kpe_head_dim,
-                                ),
+                                (num_gpu_blocks, cache_config.block_size, kpe_head_dim),
                                 dtype,
                                 device,
                             )?

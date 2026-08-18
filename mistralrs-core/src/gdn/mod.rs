@@ -11,6 +11,6 @@ mod projection;
 mod weights;
 
 pub use cache::GdnLayerCache;
-pub use config::GdnConfig;
+pub use config::{GdnConfig, GdnVHeadLayout, GDN_V_HEAD_LAYOUT_CONFIG_KEY};
 pub use layer::GatedDeltaNet;
 pub use weights::GdnInputProjectionKind;

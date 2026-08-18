@@ -15,17 +15,22 @@ mistralrs quantize [OPTIONS] [COMMAND]
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` |  | HuggingFace model ID or local path to model directory |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization level(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
+| `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
+| `--isq <IN_SITU_QUANT>` |  | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` |  | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type) |
@@ -41,22 +46,27 @@ mistralrs quantize [OPTIONS] [COMMAND]
 Auto-detect model type (recommended)
 
 ```
-mistralrs quantize auto [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
+mistralrs quantize auto [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | Model ID to load (HuggingFace repo or local path) |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--isq <IN_SITU_QUANT>` | required | In-situ quantization level(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
+| `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
+| `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -72,23 +82,28 @@ mistralrs quantize auto [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --
 Text generation model with explicit architecture
 
 ```
-mistralrs quantize text [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
+mistralrs quantize text [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | Model ID to load (HuggingFace repo or local path) |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
+| `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
 | `-a, --arch <ARCH>` |  | Model architecture (required for text models) |
-| `--isq <IN_SITU_QUANT>` | required | In-situ quantization level(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
+| `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -101,22 +116,27 @@ mistralrs quantize text [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --
 Multimodal model
 
 ```
-mistralrs quantize multimodal [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
+mistralrs quantize multimodal [OPTIONS] --isq <IN_SITU_QUANT> --output <OUTPUT_PATH>
 ```
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | Model ID to load (HuggingFace repo or local path) |
+| `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--isq <IN_SITU_QUANT>` | required | In-situ quantization level(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
+| `--format <FORMAT>` |  | Input model format: plain (safetensors) or GGUF. Auto-detected from `-f` when omitted. Possible values: `plain`, `gguf`. |
+| `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF filename(s), separated by semicolons for multiple files |
+| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a GGUF model |
+| `--quant <QUANT>` |  | Select an input GGUF artifact by bit width or quant name |
+| `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |
@@ -137,17 +157,17 @@ mistralrs quantize embedding [OPTIONS] --model-id <MODEL_ID> --isq <IN_SITU_QUAN
 
 | Option | Default | Description |
 |---|---|---|
-| `-m, --model-id <MODEL_ID>` | required | Model ID to load (HuggingFace repo or local path) |
+| `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `--dtype <DTYPE>` | `auto` | Model data type |
-| `--isq <IN_SITU_QUANT>` | required | In-situ quantization level(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
+| `--isq <IN_SITU_QUANT>` | required | Output UQFF quantization type(s). Multiple values can be comma-separated or specified via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0") |
 | `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
 | `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
 | `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") |
 | `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
-| `--hf-cache <HF_CACHE>` |  | Custom HuggingFace cache directory |
+| `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 | `--max-seq-len <MAX_SEQ_LEN>` | `4096` | Max sequence length for automatic device mapping |
 | `--max-batch-size <MAX_BATCH_SIZE>` | `1` | Max batch size for automatic device mapping |
 | `-o, --output <OUTPUT_PATH>` | required | Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type). Examples: `-o model/model-q4k.uqff` or `-o output/` |

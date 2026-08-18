@@ -9,10 +9,11 @@ use std::{
 use candle_core::Result;
 pub(crate) use dynamic::maybe_wrap_dynamic_lora_with_key;
 pub use dynamic::{
-    add_expert_delta_reference, apply_dynamic_lora_delta, load_dynamic_lora_weights,
-    maybe_wrap_dynamic_lora, plan_dynamic_lora_weights, register_dynamic_lora_site,
-    with_lora_execution, with_lora_execution_repeated_row, with_lora_execution_row_range,
-    DynamicLoraLoadPlan, DynamicLoraWeights, LoraAdapterWeights, LoraExecution, LoraExecutionArena,
+    add_expert_delta_reference, apply_dynamic_lora_delta, has_active_lora_execution,
+    is_dynamic_lora_site_active, load_dynamic_lora_weights, maybe_wrap_dynamic_lora,
+    plan_dynamic_lora_weights, register_dynamic_lora_site, with_lora_execution,
+    with_lora_execution_repeated_row, with_lora_execution_row_range, DynamicLoraLoadPlan,
+    DynamicLoraWeights, LoraAdapterWeights, LoraExecution, LoraExecutionArena,
     LoraExecutionArenaStats, LoraExpertDelta, LoraExpertExecution, LoraExpertInputMode,
     LoraExpertProjection, LoraExpertProjectionNames, LoraExpertProjectionWeights,
     LoraExpertSiteHandle, LoraExpertSiteSpec, LoraExpertWeights, LoraGateUpOrder,

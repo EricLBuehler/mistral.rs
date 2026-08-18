@@ -85,7 +85,7 @@ impl QuantMethod for MXFP4Layer {
     }
 
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
-        self.dequantize_weights()
+        self.dequantize_weights_to(self.blocks.device())
     }
 
     fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
@@ -193,10 +193,20 @@ impl QuantMethod for MXFP4Layer {
         (DType::BF16, self.scales.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         let mut shape = self.blocks.dims().to_vec();
         if let Some(last) = shape.last_mut() {
             *last = last.saturating_mul(2);
+        }
+        if shape.len() == 3 && request.ty.is_some_and(|ty| !Self::supports_stacked_isq(ty)) {
+            candle_core::bail!(
+                "Cannot requantize packed MXFP4 expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ.",
+                request.ty.expect("rank-3 rejection requires an ISQ target")
+            );
         }
         Ok(crate::plan_weight_isq(
             DType::BF16,
@@ -209,17 +219,72 @@ impl QuantMethod for MXFP4Layer {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizeOntoGuard,
+        dtype: Option<IsqType>,
+        device: Device,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        candle_core::bail!("MXFP4Layer does not support ISQ")
+        if dtype.is_none() || (dtype == Some(IsqType::MXFP4) && imatrix_weight.is_none()) {
+            let blocks = self.blocks.to_device(&device)?;
+            let scales = self.scales.to_device(&device)?;
+            let bias = self
+                .bias
+                .as_ref()
+                .map(|bias| bias.to_device(&device))
+                .transpose()?;
+            return Ok(Arc::new(Self::from_parts(blocks, scales, bias)));
+        }
+
+        let weight = self.dequantize_weights_to(&Device::Cpu)?;
+        let bias = self
+            .bias
+            .as_ref()
+            .map(|bias| bias.to_device(&Device::Cpu))
+            .transpose()?;
+
+        if weight.rank() == 3 {
+            let Some(dtype) = dtype else {
+                return Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    candle_nn::Linear::new(weight, bias),
+                ))?)
+                .apply_isq(None, device, n_quantized, imatrix_weight, guard);
+            };
+
+            if candle_core::quantized::GgmlDType::try_from(dtype).is_ok() {
+                n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let weight = crate::GgufMatMul::quantize_expert_stack(
+                    &weight,
+                    dtype,
+                    imatrix_weight.as_deref(),
+                    &device,
+                    guard,
+                )?;
+                let bias = bias
+                    .map(|bias| bias.to_dtype(DType::F32)?.to_device(&device))
+                    .transpose()?;
+                return Ok(Arc::new(crate::GgufMatMul::from_qtensor(weight, bias)));
+            }
+
+            if !Self::supports_stacked_isq(dtype) {
+                candle_core::bail!(
+                    "Cannot requantize packed MXFP4 expert weights to {dtype}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ."
+                );
+            }
+        }
+
+        Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+            candle_nn::Linear::new(weight, bias),
+        ))?)
+        .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 }
 
 impl MXFP4Layer {
+    pub fn supports_stacked_isq(ty: IsqType) -> bool {
+        ty.supports_stacked_gather() || ty == IsqType::MXFP4
+    }
+
     pub fn from_parts(blocks: Tensor, scales: Tensor, bias: Option<Tensor>) -> Self {
         Self {
             blocks,
@@ -490,10 +555,6 @@ impl MXFP4Layer {
         name: &str,
         vb: ShardedVarBuilder,
     ) -> Result<Arc<dyn QuantMethod>> {
-        if !Self::device_supported(vb.device()) {
-            candle_core::bail!("MXFP4Layer requires CUDA or Metal device.");
-        }
-
         let num_blocks = in_dim / MXFP4_BLOCK_SIZE;
 
         let blocks_4d = vb.get_with_hints_dtype(
@@ -551,7 +612,7 @@ impl MXFP4Layer {
     /// blocks: [num_experts, N, K/2] packed bytes
     /// scales: [num_experts, N, K/32] E8M0 scales
     /// Returns: [num_experts, N, K] f32 weights
-    fn dequantize_weights(&self) -> Result<Tensor> {
+    fn dequantize_weights_to(&self, device: &Device) -> Result<Tensor> {
         let blocks_dims = self.blocks.dims();
 
         let (num_experts, n, k_half) = if blocks_dims.len() == 3 {
@@ -599,8 +660,8 @@ impl MXFP4Layer {
         };
 
         Tensor::from_vec(weights, shape.as_slice(), &Device::Cpu)?
-            .to_device(self.blocks.device())?
-            .to_dtype(DType::BF16)
+            .to_dtype(DType::BF16)?
+            .to_device(device)
     }
 
     fn dequantize_rows(blocks: &Tensor, scales: &Tensor) -> Result<Tensor> {
@@ -834,6 +895,9 @@ impl QuantizedSerde for MXFP4Layer {
     fn isq_serde_supported(&self) -> bool {
         true
     }
+    fn uqff_type(&self) -> Option<IsqType> {
+        Some(IsqType::MXFP4)
+    }
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         if ty != IsqType::MXFP4 {
             candle_core::bail!("Cannot serialize MXFP4 layer as {ty}; actual type is MXFP4.");
@@ -891,6 +955,46 @@ mod tests {
         weight.index_select(&ids, 0)?.reshape(shape)
     }
 
+    fn stacked_test_layer() -> Result<Arc<MXFP4Layer>> {
+        const EXPERTS: usize = 2;
+        const OUTPUT: usize = 4;
+        let blocks = Tensor::from_vec(
+            vec![0x22u8; EXPERTS * OUTPUT * TEST_HIDDEN_SIZE / 2],
+            (EXPERTS, OUTPUT, TEST_HIDDEN_SIZE / 2),
+            &Device::Cpu,
+        )?;
+        let scales = Tensor::from_vec(
+            vec![127u8; EXPERTS * OUTPUT * TEST_HIDDEN_SIZE / MXFP4_BLOCK_SIZE],
+            (EXPERTS, OUTPUT, TEST_HIDDEN_SIZE / MXFP4_BLOCK_SIZE),
+            &Device::Cpu,
+        )?;
+        let bias = Tensor::from_vec(
+            vec![0.0f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            (EXPERTS, OUTPUT),
+            &Device::Cpu,
+        )?;
+        Ok(Arc::new(MXFP4Layer::from_parts(blocks, scales, Some(bias))))
+    }
+
+    fn stacked_test_inputs() -> Result<(Tensor, Tensor)> {
+        let input = Tensor::ones((2, 1, TEST_HIDDEN_SIZE), DType::F32, &Device::Cpu)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (2, 1), &Device::Cpu)?;
+        Ok((input, indices))
+    }
+
+    fn assert_close(actual: &Tensor, expected: &Tensor, tolerance: f32) -> Result<()> {
+        let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "expected {expected}, got {actual}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn embedding_selects_quantized_rows() -> Result<()> {
         let layer = test_layer()?;
@@ -946,6 +1050,102 @@ mod tests {
             output.flatten_all()?.to_vec1::<half::bf16>()?,
             expected.flatten_all()?.to_vec1::<half::bf16>()?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn stacked_mxfp4_requantizes_to_ggml_with_bias() -> Result<()> {
+        let layer = stacked_test_layer()?;
+        let (input, indices) = stacked_test_inputs()?;
+        let expected = layer.gather_forward(&input, &indices)?;
+        let n_quantized = AtomicUsize::new(0);
+        let converted = layer.apply_isq(
+            Some(IsqType::Q4_0),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let actual = converted.gather_forward(&input, &indices)?;
+
+        assert_ne!(converted.name(), "mxfp4-layer");
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_close(&actual, &expected, 0.01)
+    }
+
+    #[test]
+    fn stacked_mxfp4_preserves_packed_capture_and_exact_target() -> Result<()> {
+        let source = stacked_test_layer()? as Arc<dyn QuantMethod>;
+        let n_quantized = AtomicUsize::new(0);
+        let captured = source.clone().apply_isq(
+            None,
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(captured.uqff_type(), Some(IsqType::MXFP4));
+        assert!(captured.has_bias());
+
+        let exact = source.apply_isq(
+            Some(IsqType::MXFP4),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(exact.uqff_type(), Some(IsqType::MXFP4));
+        assert!(exact.has_bias());
+        Ok(())
+    }
+
+    #[test]
+    fn stacked_mxfp4_requantizes_to_afq_with_selected_bias() -> Result<()> {
+        let layer = stacked_test_layer()?;
+        let (input, indices) = stacked_test_inputs()?;
+        let expected = layer.gather_forward(&input, &indices)?;
+        let n_quantized = AtomicUsize::new(0);
+        let converted = layer.apply_isq(
+            Some(IsqType::AFQ4),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        let actual = converted.gather_forward(&input, &indices)?;
+
+        assert_ne!(converted.name(), "mxfp4-layer");
+        assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_close(&actual, &expected, 0.01)
+    }
+
+    #[test]
+    fn stacked_mxfp4_rejects_targets_without_expert_gather() -> Result<()> {
+        let layer = stacked_test_layer()?;
+        let request = crate::IsqRequest {
+            ty: Some(IsqType::F8Q8),
+            device: Device::Cpu,
+            has_imatrix: false,
+            capture: crate::IsqCaptureMode::Immediate,
+            consumer: crate::IsqConsumer::UqffWrite,
+            module_key: "experts".to_string(),
+        };
+        let plan_error = layer.plan_isq(&request).unwrap_err();
+        assert!(plan_error
+            .to_string()
+            .contains("does not support stacked expert gather"));
+        let error = layer
+            .apply_isq(
+                Some(IsqType::F8Q8),
+                Device::Cpu,
+                &AtomicUsize::new(0),
+                None,
+                QuantizeOntoGuard::new(),
+            )
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("packed MXFP4 expert weights"));
+        assert!(message.contains("does not support stacked expert gather"));
         Ok(())
     }
 }

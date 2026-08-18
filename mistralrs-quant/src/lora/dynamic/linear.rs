@@ -69,6 +69,10 @@ impl QuantizedSerde for DynamicLoraLinear {
         self.base.isq_serde_supported()
     }
 
+    fn uqff_type(&self) -> Option<IsqType> {
+        self.base.uqff_type()
+    }
+
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         self.base.serialize_uqff(prefix, ty)
     }

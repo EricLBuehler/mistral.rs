@@ -9,10 +9,10 @@ use crate::{
     pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
 };
 
-use super::MlaWeights;
+use super::{MlaKvBProjection, MlaWeights};
 
 #[cfg(any(all(feature = "cuda", target_family = "unix"), test))]
-fn supports_cached_mla_weights(kv_b_proj: &dyn mistralrs_quant::QuantMethod) -> bool {
+fn supports_cached_mla_weights(kv_b_proj: &MlaKvBProjection) -> bool {
     !kv_b_proj.is_dynamic_lora_active()
 }
 
@@ -59,6 +59,15 @@ fn mla_direct_attention(
         .narrow(D::Minus1, 0, value_head_dim)
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn project_split_mla_value(output: Tensor, kv_b_proj: &MlaKvBProjection) -> Result<Tensor> {
+    if kv_b_proj.is_split() {
+        kv_b_proj.project_value(&output)
+    } else {
+        Ok(output)
+    }
+}
+
 /// Check if MLA is disabled via environment variable.
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn is_mla_disabled() -> bool {
@@ -82,7 +91,7 @@ pub fn should_use_mla_decode(
     paged_attn_enabled: bool,
     device: &Device,
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    kv_b_proj: &MlaKvBProjection,
 ) -> bool {
     !is_mla_disabled()
         && matches!(attention_mask, AttentionMask::None)
@@ -103,7 +112,7 @@ pub fn should_use_mla_decode(
     _paged_attn_enabled: bool,
     _device: &Device,
     _metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
-    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    _kv_b_proj: &MlaKvBProjection,
 ) -> bool {
     false
 }
@@ -119,7 +128,7 @@ pub fn should_use_mla_decode(
 pub fn should_use_mla_cache(
     paged_attn_enabled: bool,
     device: &Device,
-    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    kv_b_proj: &MlaKvBProjection,
 ) -> bool {
     !is_mla_disabled()
         && paged_attn_enabled
@@ -131,7 +140,7 @@ pub fn should_use_mla_cache(
 pub fn should_use_mla_cache(
     _paged_attn_enabled: bool,
     _device: &Device,
-    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    _kv_b_proj: &MlaKvBProjection,
 ) -> bool {
     false
 }
@@ -165,7 +174,7 @@ pub fn mla_decode_forward(
     k_pe: &Tensor,
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     mla_weights: &MlaWeights,
-    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    kv_b_proj: &MlaKvBProjection,
     sdpa_params: &SdpaParams,
     num_attention_heads: usize,
     kv_lora_rank: usize,
@@ -245,19 +254,31 @@ pub fn mla_decode_forward(
 
     let q_nope = q_nope.squeeze(2)?.contiguous()?;
     let q_pe = q_pe.squeeze(2)?.contiguous()?;
-    let (w_uk, w_uv_t) = mla_weights.get_or_compute(
-        kv_b_proj,
-        q_nope.device(),
-        num_attention_heads,
-        kv_lora_rank,
-        qk_nope_head_dim,
-        v_head_dim,
-    )?;
-    let ql_nope = q_nope
-        .unsqueeze(D::Minus2)?
-        .broadcast_matmul(&w_uk.unsqueeze(0)?)?
-        .squeeze(D::Minus2)?
-        .contiguous()?;
+    let (ql_nope, w_uv_t) = match kv_b_proj.fused_projection() {
+        Some(fused) => {
+            let (w_uk, w_uv_t) = mla_weights.get_or_compute(
+                fused,
+                q_nope.device(),
+                num_attention_heads,
+                kv_lora_rank,
+                qk_nope_head_dim,
+                v_head_dim,
+            )?;
+            let ql_nope = q_nope
+                .unsqueeze(D::Minus2)?
+                .broadcast_matmul(&w_uk.unsqueeze(0)?)?
+                .squeeze(D::Minus2)?
+                .contiguous()?;
+            (ql_nope, Some(w_uv_t))
+        }
+        None => (
+            kv_b_proj
+                .project_query(&q_nope.unsqueeze(D::Minus2)?)?
+                .squeeze(D::Minus2)?
+                .contiguous()?,
+            None,
+        ),
+    };
 
     let attn_latent = mistralrs_paged_attn::flashinfer_mla_decode(
         &ql_nope,
@@ -274,10 +295,15 @@ pub fn mla_decode_forward(
         sdpa_params.softmax_scale,
     )?;
 
-    attn_latent
-        .unsqueeze(D::Minus2)?
-        .broadcast_matmul(&w_uv_t.unsqueeze(0)?)?
-        .squeeze(D::Minus2)
+    match w_uv_t {
+        Some(w_uv_t) => attn_latent
+            .unsqueeze(D::Minus2)?
+            .broadcast_matmul(&w_uv_t.unsqueeze(0)?)?
+            .squeeze(D::Minus2),
+        None => kv_b_proj
+            .project_value(&attn_latent.unsqueeze(D::Minus2)?)?
+            .squeeze(D::Minus2),
+    }
 }
 
 #[cfg(not(all(feature = "cuda", target_family = "unix")))]
@@ -289,7 +315,7 @@ pub fn mla_decode_forward(
     _k_pe: &Tensor,
     _metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     _mla_weights: &MlaWeights,
-    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    _kv_b_proj: &MlaKvBProjection,
     _sdpa_params: &SdpaParams,
     _num_attention_heads: usize,
     _kv_lora_rank: usize,
@@ -337,7 +363,7 @@ pub fn mla_cache_forward(
     seqlen_offsets: &[usize],
     metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     flash_params: &FlashParams,
-    kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    kv_b_proj: &MlaKvBProjection,
     sdpa_params: &SdpaParams,
     num_attention_heads: usize,
     kv_lora_rank: usize,
@@ -385,19 +411,18 @@ pub fn mla_cache_forward(
     let prefix_lens = seqlen_offsets;
     let needs_prefix = prefix_lens.iter().any(|&len| len > 0);
     if !needs_prefix && !matches!(attention_mask, AttentionMask::None) {
-        mla_direct_attention(q, k, v, attention_mask, flash_params, sdpa_params)
+        project_split_mla_value(
+            mla_direct_attention(q, k, v, attention_mask, flash_params, sdpa_params)?,
+            kv_b_proj,
+        )
     } else {
         let ((key_cache, value_cache), input_metadata) =
             match (key_cache, value_cache, input_metadata) {
                 (Some(k), Some(v), Some(m)) => ((k, v), m),
                 _ => {
-                    return mla_direct_attention(
-                        q,
-                        k,
-                        v,
-                        attention_mask,
-                        flash_params,
-                        sdpa_params,
+                    return project_split_mla_value(
+                        mla_direct_attention(q, k, v, attention_mask, flash_params, sdpa_params)?,
+                        kv_b_proj,
                     );
                 }
             };
@@ -492,15 +517,22 @@ pub fn mla_cache_forward(
                 &token_to_seq,
             )?;
 
-            let mut kv_prefix = kv_b_proj.forward(&ckv_prefix)?;
-            kv_prefix = kv_prefix.reshape((
-                total_prefix_tokens,
-                num_attention_heads,
-                qk_nope_head_dim + v_head_dim,
-            ))?;
-            let kv_prefix_split = kv_prefix.split(&[qk_nope_head_dim, v_head_dim], D::Minus1)?;
-            let k_nope_prefix = kv_prefix_split[0].clone();
-            let v_prefix_full = kv_prefix_split[1].clone();
+            let (k_nope_prefix, v_prefix_full) = if let Some(fused) = kv_b_proj.fused_projection() {
+                let kv_prefix = fused.forward(&ckv_prefix)?.reshape((
+                    total_prefix_tokens,
+                    num_attention_heads,
+                    qk_nope_head_dim + v_head_dim,
+                ))?;
+                let kv_prefix = kv_prefix.split(&[qk_nope_head_dim, v_head_dim], D::Minus1)?;
+                (kv_prefix[0].clone(), kv_prefix[1].clone())
+            } else {
+                let latent = ckv_prefix.unsqueeze(1)?.expand((
+                    total_prefix_tokens,
+                    num_attention_heads,
+                    kv_lora_rank,
+                ))?;
+                (latent.clone(), latent)
+            };
             let kpe_prefix = kpe_prefix.unsqueeze(1)?.expand((
                 total_prefix_tokens,
                 num_attention_heads,
@@ -515,11 +547,16 @@ pub fn mla_cache_forward(
         for (seq_idx, cur_len) in cur_lens.iter().enumerate() {
             let cur_len = (*cur_len).min(seq_len);
             if cur_len == 0 {
-                outputs.push(Tensor::zeros(
-                    (seq_len, num_attention_heads, v_head_dim),
+                let output = Tensor::zeros(
+                    (1, num_attention_heads, seq_len, v_head_dim),
                     q.dtype(),
                     q.device(),
-                )?);
+                )?;
+                outputs.push(
+                    project_split_mla_value(output, kv_b_proj)?
+                        .squeeze(0)?
+                        .transpose(0, 1)?,
+                );
                 continue;
             }
             let mut q_i = q.narrow(0, seq_idx, 1)?;
@@ -594,6 +631,7 @@ pub fn mla_cache_forward(
                 sdpa_params,
                 flash_params.causal,
             )?;
+            let attn_out_i = project_split_mla_value(attn_out_i, kv_b_proj)?;
             let mut attn_out_i = attn_out_i.squeeze(0)?.transpose(0, 1)?;
             if cur_len < seq_len {
                 attn_out_i = attn_out_i.pad_with_zeros(D::Minus(3), 0, seq_len - cur_len)?;
@@ -616,7 +654,7 @@ pub fn mla_cache_forward(
     _seqlen_offsets: &[usize],
     _metadata: &Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
     _flash_params: &FlashParams,
-    _kv_b_proj: &dyn mistralrs_quant::QuantMethod,
+    _kv_b_proj: &MlaKvBProjection,
     _sdpa_params: &SdpaParams,
     _num_attention_heads: usize,
     _kv_lora_rank: usize,
@@ -642,6 +680,7 @@ mod tests {
     };
 
     use super::{pad_mla_value_for_flash, supports_cached_mla_weights};
+    use crate::mla::MlaKvBProjection;
 
     #[test]
     fn flash_attention_value_padding_preserves_the_output_width() -> candle_core::Result<()> {
@@ -680,10 +719,11 @@ mod tests {
             .next()
             .expect("registered KV projection");
 
-        assert!(supports_cached_mla_weights(projection.as_ref()));
+        let projection = MlaKvBProjection::fused(projection);
+        assert!(supports_cached_mla_weights(&projection));
         let inactive_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0), None]);
         let supported = with_lora_execution(Some(Arc::new(inactive_execution)), || {
-            supports_cached_mla_weights(projection.as_ref())
+            supports_cached_mla_weights(&projection)
         });
         assert!(supported);
 
@@ -698,7 +738,7 @@ mod tests {
             )?,
         )?;
         let supported = with_lora_execution(Some(Arc::new(execution)), || {
-            supports_cached_mla_weights(projection.as_ref())
+            supports_cached_mla_weights(&projection)
         });
         assert!(!supported);
         Ok(())

@@ -63,7 +63,7 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_none() {
+        let paged_attn_config = if paged_attn_config.is_some() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
         } else {
@@ -97,7 +97,7 @@ impl Loader for AnyMoeLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -106,7 +106,7 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_none() {
+        let paged_attn_config = if paged_attn_config.is_some() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
         } else {
@@ -211,6 +211,21 @@ impl IsqPipelineMixin for AnyMoePipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)
     }
+
+    fn begin_calibration(&mut self) -> anyhow::Result<()> {
+        get_mut_arcmutex!(self.target).begin_calibration()
+    }
+
+    fn calibration_status(&self) -> anyhow::Result<super::isq_flow::CalibrationStatus> {
+        get_mut_arcmutex!(self.target).calibration_status()
+    }
+
+    fn apply_calibration(
+        &mut self,
+        save_cimatrix: Option<std::path::PathBuf>,
+    ) -> anyhow::Result<super::isq_flow::CalibrationStatus> {
+        get_mut_arcmutex!(self.target).apply_calibration(save_cimatrix)
+    }
 }
 
 impl PreProcessingMixin for AnyMoePipeline {
@@ -238,6 +253,12 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
+    fn cleanup_cuda_graphs(&self) {
+        get_mut_arcmutex!(self.target).cleanup_cuda_graphs()
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        get_mut_arcmutex!(self.target).generation_defaults()
+    }
     fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
@@ -264,12 +285,48 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).supports_batched_cuda_sampling()
     }
 
+    fn supports_packed_prefill(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_packed_prefill()
+    }
+
+    fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
+        get_mut_arcmutex!(self.target).adapter_runtime()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-        _return_raw_logits: bool,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
-        get_mut_arcmutex!(self.target).forward_inputs(inputs, false)
+        get_mut_arcmutex!(self.target).forward_inputs(inputs, return_raw_logits)
+    }
+
+    fn attach_speculative(
+        &mut self,
+        config: crate::SpeculativeConfig,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).attach_speculative(config)
+    }
+
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        input_seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+    ) -> Result<bool, candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .try_sample_speculative_causal_gen(
+                input_seqs,
+                logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                metadata,
+            )
+            .await
     }
 
     async fn sample_causal_gen(
@@ -610,6 +667,7 @@ fn new_dummy_seq(
         None,
         None,
         None,
+        false,
         false,
         eos_toks,
     )

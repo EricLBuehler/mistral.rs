@@ -292,7 +292,7 @@ impl Loader for SpeechLoader {
             }
         };
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -305,7 +305,7 @@ impl Loader for SpeechLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -314,8 +314,7 @@ impl Loader for SpeechLoader {
         _paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths = &paths
-            .as_ref()
+        let paths = paths
             .as_any()
             .downcast_ref::<SpeechModelPaths>()
             .expect("Path downcast failed.");

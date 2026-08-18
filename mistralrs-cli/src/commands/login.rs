@@ -1,4 +1,4 @@
-//! HuggingFace authentication command
+//! Hugging Face authentication command
 
 use anyhow::Result;
 use std::io::Write;
@@ -9,7 +9,7 @@ pub fn run_login(token: Option<String>) -> Result<()> {
         Some(t) => t,
         None => {
             // Interactive: prompt for token
-            print!("Enter your HuggingFace token: ");
+            print!("Enter your Hugging Face token: ");
             std::io::stdout().flush()?;
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
@@ -23,7 +23,7 @@ pub fn run_login(token: Option<String>) -> Result<()> {
 
     // Validate token format (starts with hf_)
     if !token.starts_with("hf_") {
-        anyhow::bail!("Invalid token format. HuggingFace tokens start with 'hf_'");
+        anyhow::bail!("Invalid token format. Hugging Face tokens start with 'hf_'");
     }
 
     // Write to cache

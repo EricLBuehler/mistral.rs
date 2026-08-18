@@ -489,6 +489,7 @@ pub fn prepare_recurrence_inputs_cuda(
     num_v_heads: usize,
     head_k_dim: usize,
     head_v_dim: usize,
+    tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -508,6 +509,7 @@ pub fn prepare_recurrence_inputs_cuda(
         num_v_heads: usize,
         head_k_dim: usize,
         head_v_dim: usize,
+        tiled_v_heads: bool,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
         let dev = mixed_qkv.device().as_cuda_device()?;
@@ -574,6 +576,7 @@ pub fn prepare_recurrence_inputs_cuda(
                 num_v_heads as i32,
                 head_k_dim as i32,
                 head_v_dim as i32,
+                i32::from(tiled_v_heads),
                 dtype_code,
                 stream,
             );
@@ -616,6 +619,7 @@ pub fn prepare_recurrence_inputs_cuda(
             num_v_heads,
             head_k_dim,
             head_v_dim,
+            tiled_v_heads,
             0,
         ),
         DType::BF16 => cuda_fwd::<half::bf16>(
@@ -630,6 +634,7 @@ pub fn prepare_recurrence_inputs_cuda(
             num_v_heads,
             head_k_dim,
             head_v_dim,
+            tiled_v_heads,
             1,
         ),
         other => candle_core::bail!(
@@ -653,6 +658,7 @@ pub fn prepare_recurrence_inputs_cuda(
     _num_v_heads: usize,
     _head_k_dim: usize,
     _head_v_dim: usize,
+    _tiled_v_heads: bool,
 ) -> Result<(Tensor, Tensor, Tensor, Tensor, Tensor)> {
     candle_core::bail!("prepare_recurrence_inputs_cuda requires the cuda feature")
 }
@@ -671,6 +677,7 @@ pub fn fused_decode_recurrence_cuda(
     num_v_heads: usize,
     head_k_dim: usize,
     head_v_dim: usize,
+    tiled_v_heads: bool,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -690,6 +697,7 @@ pub fn fused_decode_recurrence_cuda(
         num_v_heads: usize,
         head_k_dim: usize,
         head_v_dim: usize,
+        tiled_v_heads: bool,
         dtype_code: i32,
     ) -> Result<Tensor> {
         let dev = mixed_qkv.device().as_cuda_device()?;
@@ -754,6 +762,7 @@ pub fn fused_decode_recurrence_cuda(
                 num_v_heads as i32,
                 head_k_dim as i32,
                 head_v_dim as i32,
+                i32::from(tiled_v_heads),
                 dtype_code,
                 stream,
             );
@@ -781,6 +790,7 @@ pub fn fused_decode_recurrence_cuda(
             num_v_heads,
             head_k_dim,
             head_v_dim,
+            tiled_v_heads,
             0,
         ),
         DType::BF16 => cuda_fwd::<half::bf16>(
@@ -795,6 +805,7 @@ pub fn fused_decode_recurrence_cuda(
             num_v_heads,
             head_k_dim,
             head_v_dim,
+            tiled_v_heads,
             1,
         ),
         other => candle_core::bail!(
@@ -818,6 +829,7 @@ pub fn fused_decode_recurrence_cuda(
     _num_v_heads: usize,
     _head_k_dim: usize,
     _head_v_dim: usize,
+    _tiled_v_heads: bool,
 ) -> Result<Tensor> {
     candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }

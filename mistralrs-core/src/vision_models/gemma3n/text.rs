@@ -4,7 +4,9 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    apply_dynamic_lora_delta, is_dynamic_lora_site_active, register_dynamic_lora_site, softcap,
+    ColumnParallelLayer, LoraLinearSpec, LoraSiteHandle, QuantMethod, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -13,8 +15,8 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, dense_embedding, embedding_with_legacy_tied_uqff, Activation, CausalMasker,
-        Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
+        self, dense_embedding, embedding, embedding_with_legacy_tied_uqff, Activation,
+        CausalMasker, Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{
@@ -587,21 +589,37 @@ impl Attention {
 struct TextAltUp {
     correct_output_scale: Tensor,
     correction_coefs: Linear,
+    correction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     prediction_coefs: Linear,
+    prediction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     modality_router: Linear,
+    modality_router_lora: Option<Arc<LoraSiteHandle>>,
     router_norm: RmsNorm,
     router_input_scale: f64,
     altup_active_idx: usize,
     altup_num_inputs: usize,
 }
 
+fn forward_raw_lora(
+    linear: &Linear,
+    site: Option<&LoraSiteHandle>,
+    input: &Tensor,
+) -> Result<Tensor> {
+    let output = linear.forward(input)?;
+    match site {
+        Some(site) => apply_dynamic_lora_delta(site, input, output),
+        None => Ok(output),
+    }
+}
+
 impl TextAltUp {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let correct_output_scale = vb.get(cfg.hidden_size, "correct_output_scale")?;
+        let correction_coefs_vb = vb.pp("correction_coefs");
         let mut correction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs,
-            vb.pp("correction_coefs"),
+            correction_coefs_vb.clone(),
         )?;
         if let Some(altup_coef_clip) = cfg.altup_coef_clip {
             correction_coefs = Linear::new(
@@ -611,15 +629,29 @@ impl TextAltUp {
                 None,
             );
         }
+        let correction_coefs_lora = register_dynamic_lora_site(
+            &correction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs),
+        )?;
+        let prediction_coefs_vb = vb.pp("prediction_coefs");
         let prediction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs.pow(2),
-            vb.pp("prediction_coefs"),
+            prediction_coefs_vb.clone(),
         )?;
+        let prediction_coefs_lora = register_dynamic_lora_site(
+            &prediction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs.pow(2)),
+        )?;
+        let modality_router_vb = vb.pp("modality_router");
         let modality_router = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.altup_num_inputs,
-            vb.pp("modality_router"),
+            modality_router_vb.clone(),
+        )?;
+        let modality_router_lora = register_dynamic_lora_site(
+            &modality_router_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.altup_num_inputs),
         )?;
         let router_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -631,8 +663,11 @@ impl TextAltUp {
         Ok(Self {
             correct_output_scale,
             correction_coefs,
+            correction_coefs_lora,
             prediction_coefs,
+            prediction_coefs_lora,
             modality_router,
+            modality_router_lora,
             router_norm,
             router_input_scale: 1. / (cfg.hidden_size as f64),
             altup_active_idx: cfg.altup_active_idx,
@@ -645,7 +680,11 @@ impl TextAltUp {
         let router_inputs_normed = self.router_norm.forward(xs)?;
         let router_inputs_f32 = router_inputs_normed.to_dtype(DType::F32)?;
         let router_inputs = (router_inputs_f32 * self.router_input_scale)?.to_dtype(xs.dtype())?;
-        let routed = self.modality_router.forward(&router_inputs)?;
+        let routed = forward_raw_lora(
+            &self.modality_router,
+            self.modality_router_lora.as_deref(),
+            &router_inputs,
+        )?;
         routed.to_dtype(DType::F32)?.tanh()?.to_dtype(xs.dtype())
     }
 
@@ -658,11 +697,13 @@ impl TextAltUp {
             vec![self.altup_num_inputs, self.altup_num_inputs],
         ]
         .concat();
-        let all_coefs = self
-            .prediction_coefs
-            .forward(&modalities)?
-            .reshape(shape)?
-            .permute((0, 1, 3, 2))?;
+        let all_coefs = forward_raw_lora(
+            &self.prediction_coefs,
+            self.prediction_coefs_lora.as_deref(),
+            &modalities,
+        )?
+        .reshape(shape)?
+        .permute((0, 1, 3, 2))?;
 
         // permute hidden_states to [batch_size, num_tokens, hidden_size, altup_num_inputs]
         let mut predictions = xs
@@ -689,7 +730,11 @@ impl TextAltUp {
                 .repeat((self.altup_num_inputs, 1, 1, 1))?;
 
         // Perform coefficient computation in float32
-        let coefs = self.correction_coefs.forward(&modalities)?;
+        let coefs = forward_raw_lora(
+            &self.correction_coefs,
+            self.correction_coefs_lora.as_deref(),
+            &modalities,
+        )?;
         let coefs_f32 = coefs.to_dtype(DType::F32)?;
         let all_coefs = (coefs_f32 + 1.)?
             .to_dtype(coefs.dtype())?
@@ -707,19 +752,42 @@ impl TextAltUp {
             .broadcast_mul(&self.correct_output_scale)?
             .to_dtype(xs.dtype())
     }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [
+            &self.correction_coefs_lora,
+            &self.prediction_coefs_lora,
+            &self.modality_router_lora,
+        ]
+        .into_iter()
+        .filter_map(|site| site.as_deref())
+        .any(is_dynamic_lora_site_active)
+    }
 }
 
 struct TextLaurelBlock {
     left: Linear,
+    left_lora: Option<Arc<LoraSiteHandle>>,
     right: Linear,
+    right_lora: Option<Arc<LoraSiteHandle>>,
     post_norm: RmsNorm,
 }
 
 impl TextLaurelBlock {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let left_vb = vb.pp("linear_left");
+        let right_vb = vb.pp("linear_right");
         Ok(Self {
-            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, vb.pp("linear_left"))?,
-            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, vb.pp("linear_right"))?,
+            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, left_vb.clone())?,
+            left_lora: register_dynamic_lora_site(
+                &left_vb,
+                LoraLinearSpec::replicated(cfg.hidden_size, cfg.laurel_rank),
+            )?,
+            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, right_vb.clone())?,
+            right_lora: register_dynamic_lora_site(
+                &right_vb,
+                LoraLinearSpec::replicated(cfg.laurel_rank, cfg.hidden_size),
+            )?,
             post_norm: RmsNorm::new_gemma_3n(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -730,13 +798,20 @@ impl TextLaurelBlock {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut laurel_xs = self.left.forward(xs)?;
-        laurel_xs = self.right.forward(&laurel_xs)?;
+        let mut laurel_xs = forward_raw_lora(&self.left, self.left_lora.as_deref(), xs)?;
+        laurel_xs = forward_raw_lora(&self.right, self.right_lora.as_deref(), &laurel_xs)?;
         laurel_xs = self.post_norm.forward(&laurel_xs)?;
         // Perform addition in float32 for precision
         let xs_f32 = xs.to_dtype(DType::F32)?;
         let laurel_xs_f32 = laurel_xs.to_dtype(DType::F32)?;
         (xs_f32 + laurel_xs_f32)?.to_dtype(xs.dtype())
+    }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [&self.left_lora, &self.right_lora]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
     }
 }
 
@@ -750,7 +825,9 @@ struct DecoderLayer {
     altup: TextAltUp,
     laurel: TextLaurelBlock,
     per_layer_input_gate: Linear,
+    per_layer_input_gate_lora: Option<Arc<LoraSiteHandle>>,
     per_layer_projection: Linear,
+    per_layer_projection_lora: Option<Arc<LoraSiteHandle>>,
     post_per_layer_input_norm: RmsNorm,
     altup_active_idx: usize,
     altup_correct_scale: bool,
@@ -814,15 +891,27 @@ impl DecoderLayer {
         let altup = TextAltUp::new(cfg, mapper.set_device(layer_idx, vb.pp("altup"), false))?;
         let laurel =
             TextLaurelBlock::new(cfg, mapper.set_device(layer_idx, vb.pp("laurel"), false))?;
+        let per_layer_input_gate_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false);
         let per_layer_input_gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.hidden_size_per_layer_input,
-            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false),
+            per_layer_input_gate_vb.clone(),
         )?;
+        let per_layer_input_gate_lora = register_dynamic_lora_site(
+            &per_layer_input_gate_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.hidden_size_per_layer_input),
+        )?;
+        let per_layer_projection_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false);
         let per_layer_projection = layers::linear_no_bias(
             cfg.hidden_size_per_layer_input,
             cfg.hidden_size,
-            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false),
+            per_layer_projection_vb.clone(),
+        )?;
+        let per_layer_projection_lora = register_dynamic_lora_site(
+            &per_layer_projection_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size_per_layer_input, cfg.hidden_size),
         )?;
         let post_per_layer_input_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -840,7 +929,9 @@ impl DecoderLayer {
             altup,
             laurel,
             per_layer_input_gate,
+            per_layer_input_gate_lora,
             per_layer_projection,
+            per_layer_projection_lora,
             post_per_layer_input_norm,
             altup_active_idx: cfg.altup_active_idx,
             altup_correct_scale: cfg.altup_correct_scale,
@@ -860,6 +951,15 @@ impl DecoderLayer {
         ]
         .into_iter()
         .any(|layer| layer.is_dynamic_lora_active())
+            || self.altup.has_active_dynamic_lora()
+            || self.laurel.has_active_dynamic_lora()
+            || [
+                &self.per_layer_input_gate_lora,
+                &self.per_layer_projection_lora,
+            ]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
     }
 
     fn forward(
@@ -901,7 +1001,11 @@ impl DecoderLayer {
         if self.altup_correct_scale {
             first_prediction = self.altup.scale_corrected_output(&first_prediction)?;
         }
-        first_prediction = self.per_layer_input_gate.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_input_gate,
+            self.per_layer_input_gate_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.act.forward(&first_prediction)?;
         // Perform multiplication in float32
         let first_pred_f32 = first_prediction.to_dtype(DType::F32)?;
@@ -909,7 +1013,11 @@ impl DecoderLayer {
         first_prediction =
             (first_pred_f32 * per_layer_input_f32)?.to_dtype(first_prediction.dtype())?;
 
-        first_prediction = self.per_layer_projection.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_projection,
+            self.per_layer_projection_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
 
         // Perform broadcast add in float32 for precision
@@ -1040,11 +1148,83 @@ pub(crate) fn handle_matformer_slicing(
     }
 }
 
+enum PerLayerTokenEmbedding {
+    Method(Arc<dyn QuantMethod>),
+    Dense(ScaledEmbedding),
+}
+
+impl PerLayerTokenEmbedding {
+    fn forward(&self, input_ids: &Tensor, dtype: DType, scale: f64) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.embedding_forward(input_ids, dtype)? * scale,
+            Self::Dense(embedding) => embedding.forward(input_ids),
+        }
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.dequantize_w(),
+            Self::Dense(embedding) => Ok(embedding.embedding.clone()),
+        }
+    }
+}
+
+fn load_per_layer_token_embedding(
+    vocab_size: usize,
+    hidden_size_per_layer: usize,
+    orig_num_hidden_layers: usize,
+    kept_layers_indices: Option<&Tensor>,
+    scale: f64,
+    vb: ShardedVarBuilder,
+    quantization_config: &Option<mistralrs_quant::QuantizedConfig>,
+) -> Result<(PerLayerTokenEmbedding, bool)> {
+    if let Some(kept_layers_indices) = kept_layers_indices {
+        let mut embedding = ScaledEmbedding::new(
+            scale,
+            dense_embedding(
+                vocab_size,
+                hidden_size_per_layer * orig_num_hidden_layers,
+                vb,
+                quantization_config,
+            )?,
+        );
+        let weight = embedding.embedding.clone();
+        let weight = weight.reshape((
+            weight.dim(0)?,
+            orig_num_hidden_layers,
+            weight.dim(1)? / orig_num_hidden_layers,
+        ))?;
+        embedding.embedding = weight
+            .index_select(&kept_layers_indices.to_device(weight.device())?, 1)?
+            .reshape((weight.dim(0)?, ()))?
+            .contiguous()?;
+        return Ok((PerLayerTokenEmbedding::Dense(embedding), true));
+    }
+
+    let weight_name = format!("{}.weight", vb.prefix());
+    let source_has_weight = vb
+        .weight_source()
+        .is_some_and(|source| source.contains(&weight_name));
+    let tracked = mistralrs_quant::should_apply_immediate_isq(&vb);
+    let embedding = embedding(
+        vocab_size,
+        hidden_size_per_layer * orig_num_hidden_layers,
+        vb,
+        quantization_config,
+    )?;
+    Ok((
+        PerLayerTokenEmbedding::Method(embedding),
+        !source_has_weight && !tracked,
+    ))
+}
+
 pub struct TextModel {
     embed_tokens: Arc<dyn QuantMethod>,
     embed_tokens_scale: f64,
     dtype: DType,
-    embed_tokens_per_layer: ScaledEmbedding,
+    embed_tokens_per_layer: PerLayerTokenEmbedding,
+    embed_tokens_per_layer_scale: f64,
+    embed_tokens_per_layer_in_residual: bool,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -1170,28 +1350,16 @@ impl TextModel {
         } else {
             vb.pp("embed_tokens_per_layer").set_device(Device::Cpu)
         };
-        let mut embed_tokens_per_layer = ScaledEmbedding::new(
-            per_layer_embed_scale,
-            dense_embedding(
+        let (embed_tokens_per_layer, embed_tokens_per_layer_in_residual) =
+            load_per_layer_token_embedding(
                 cfg.vocab_size_per_layer_input,
-                cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
+                cfg.hidden_size_per_layer_input,
+                orig_num_hidden_layers,
+                kept_layers_indices.as_ref(),
+                per_layer_embed_scale,
                 embed_tokens_per_layer_vb,
                 &cfg.quantization_config,
-            )?,
-        );
-        if let Some(kept_layers_indices) = &kept_layers_indices {
-            let embedding = embed_tokens_per_layer.embedding.clone();
-            let embedding_reshaped = embedding.reshape((
-                embedding.dim(0)?,
-                orig_num_hidden_layers,
-                embedding.dim(1)? / orig_num_hidden_layers,
-            ))?;
-
-            embed_tokens_per_layer.embedding = embedding_reshaped
-                .index_select(kept_layers_indices, 1)?
-                .reshape((embedding_reshaped.dim(0)?, ()))?
-                .contiguous()?;
-        }
+            )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..orig_num_hidden_layers {
@@ -1397,6 +1565,8 @@ impl TextModel {
             embed_tokens_scale: embed_scale,
             dtype,
             embed_tokens_per_layer,
+            embed_tokens_per_layer_scale: per_layer_embed_scale,
+            embed_tokens_per_layer_in_residual,
             layers,
             norm,
             lm_head,
@@ -1439,11 +1609,19 @@ impl TextModel {
         // Only cast to CPU if not using Metal
         let per_layer_embeds = if input_ids_device.is_metal() {
             // On Metal, use input_ids directly
-            self.embed_tokens_per_layer.forward(input_ids)?
+            self.embed_tokens_per_layer.forward(
+                input_ids,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         } else {
             // On non-Metal devices, cast input to CPU for embedding computation
             let input_ids_cpu = input_ids.to_device(&Device::Cpu)?;
-            self.embed_tokens_per_layer.forward(&input_ids_cpu)?
+            self.embed_tokens_per_layer.forward(
+                &input_ids_cpu,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         };
 
         let original_dtype = per_layer_embeds.dtype();
@@ -1757,8 +1935,14 @@ impl IsqModel for TextModel {
 
         // Embeddings
         uvb.pp("embed_tokens").add(&self.embed_tokens);
-        uvb.pp("embed_tokens_per_layer")
-            .add(&self.embed_tokens_per_layer);
+        if self.embed_tokens_per_layer_in_residual {
+            let weight = self
+                .embed_tokens_per_layer
+                .dequantize_w()
+                .expect("dense Gemma3n PLE embedding missing");
+            uvb.pp("embed_tokens_per_layer")
+                .add_tensor("weight", weight);
+        }
 
         // Layer components
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1868,14 +2052,224 @@ impl AnyMoeBaseModelMixin for TextModel {}
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        io::Write,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
-    use candle_core::{DType, Device, Tensor};
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        DType, Device, Tensor,
+    };
+    use candle_nn::Linear;
+    use mistralrs_quant::{
+        create_isq_executor, GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource,
+        ImmediateIsqConfig, IsqCaptureMode, IsqExecutorConfig, QuantMethod, QuantMethodConfig,
+        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
+    };
+    use tempfile::NamedTempFile;
 
     use super::{
-        is_paged_decode_forward, kv_shared_layer_index_for_layout, sliding_decode_kv_window,
-        KvCacheTopology, PagedAttentionInputMetadata, PrefillQuerySelection,
+        is_paged_decode_forward, kv_shared_layer_index_for_layout, load_per_layer_token_embedding,
+        sliding_decode_kv_window, KvCacheTopology, PagedAttentionInputMetadata,
+        PerLayerTokenEmbedding, PrefillQuerySelection,
     };
+
+    #[derive(Debug)]
+    struct PerLayerEmbeddingSource {
+        weight: Tensor,
+        available: bool,
+        loads: Arc<AtomicUsize>,
+    }
+
+    impl QuantizedWeightSource for PerLayerEmbeddingSource {
+        fn contains(&self, name: &str) -> bool {
+            self.available && name == "model.language_model.embed_tokens_per_layer.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            if !self.available || key != "model.language_model.embed_tokens_per_layer" {
+                return Ok(None);
+            }
+            self.loads.fetch_add(1, Ordering::Relaxed);
+            let layer = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                self.weight.to_device(device)?,
+                None,
+            )))?;
+            Ok(Some(Arc::new(layer)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(if self.available { 2 } else { 1 })
+        }
+
+        fn pack_factor_for(&self, key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(self.contains(key).then_some(2))
+        }
+    }
+
+    fn per_layer_weight(rows: usize, cols: usize) -> candle_core::Result<Tensor> {
+        Tensor::from_vec(
+            (0..rows * cols).map(|value| value as f32).collect(),
+            (rows, cols),
+            &Device::Cpu,
+        )
+    }
+
+    #[test]
+    fn default_per_layer_embedding_uses_weight_source_gather() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let weight = per_layer_weight(4, 32)?;
+        let q_weight = QTensor::quantize(&weight, GgmlDType::Q4_0)?;
+        let expected_weight = q_weight.dequantize(&Device::Cpu)?.narrow(0, 0, 3)?;
+        let mut file = NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &[("per_layer_token_embd.weight", &q_weight)],
+        )?;
+        file.as_file_mut()
+            .flush()
+            .map_err(candle_core::Error::wrap)?;
+
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let bindings = GgufBindingMap::new().with_binding(
+            "model.language_model.embed_tokens_per_layer.weight",
+            GgufTensorBinding::tensor("per_layer_token_embd.weight").slice(0, 0, 3),
+        );
+        let source = Arc::new(GgufWeightSource::new(archive, &bindings, DType::F32)?);
+        let vb = source
+            .sharded_var_builder(Device::Cpu)
+            .pp("model.language_model.embed_tokens_per_layer");
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 16, 2, None, 2.0, vb, &None)?;
+
+        let PerLayerTokenEmbedding::Method(method) = &embedding else {
+            panic!("default Gemma3n PLE embedding was materialized dense");
+        };
+        assert!(!in_residual);
+        assert_eq!(method.name(), "gguf");
+        let packed = method
+            .get_qtensor()
+            .expect("GGUF PLE embedding lost its packed QTensor");
+        assert_eq!(packed.dtype(), GgmlDType::Q4_0);
+        assert_eq!(packed.shape().dims(), &[3, 32]);
+        let ids = Tensor::new(&[2u32, 0], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 2.0)?.to_vec2::<f32>()?,
+            expected_weight
+                .index_select(&ids, 0)?
+                .affine(2.0, 0.0)?
+                .to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matformer_per_layer_embedding_selects_dense_layer_groups() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 6)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let kept = Tensor::new(&[0u32, 2], &Device::Cpu)?;
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 3, Some(&kept), 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Dense(_)));
+        assert!(in_residual);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![6.0, 7.0, 10.0, 11.0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_uqff_per_layer_embedding_stays_in_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let weight = per_layer_weight(3, 4)?;
+        let source = Arc::new(PerLayerEmbeddingSource {
+            weight: weight.clone(),
+            available: false,
+            loads: Arc::new(AtomicUsize::new(0)),
+        });
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), weight.clone())]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .with_weight_source(source)
+        .pp(prefix);
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Method(_)));
+        assert!(in_residual);
+        assert_eq!(
+            embedding.dequantize_w()?.to_vec2::<f32>()?,
+            weight.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_capture_tracks_per_layer_embedding_without_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 4)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let tracker = vb.tracker().clone();
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(None));
+        mistralrs_quant::set_immediate_isq_config(
+            ImmediateIsqConfig::new(None, Vec::new(), IsqCaptureMode::CaptureAll),
+            executor,
+        );
+        let result = load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None);
+        mistralrs_quant::clear_immediate_isq();
+        let (embedding, in_residual) = result?;
+
+        assert!(!in_residual);
+        let tracked = tracker.get();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].key, prefix);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![4.0, 5.0, 6.0, 7.0]]
+        );
+        Ok(())
+    }
 
     fn layer_types(types: &[&str]) -> Vec<String> {
         types.iter().map(|ty| (*ty).to_string()).collect()

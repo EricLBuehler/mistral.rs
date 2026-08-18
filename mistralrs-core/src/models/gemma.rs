@@ -5,7 +5,8 @@ use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, RowParallelLayer, ShardedVarBuilder,
+    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ShardedVarBuilder,
 };
 
 use crate::{
@@ -52,7 +53,6 @@ pub struct Config {
     pub max_position_embeddings: usize,
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default = "word_emb_default")]
-    #[allow(dead_code)]
     pub tie_word_embeddings: bool,
 }
 
@@ -416,7 +416,17 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = embed_tokens.clone();
+        let lm_head = if cfg.tie_word_embeddings {
+            embed_tokens.clone()
+        } else {
+            ReplicatedLayer::new(
+                cfg.hidden_size,
+                cfg.vocab_size,
+                &cfg.quantization_config,
+                false,
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+            )?
+        };
         Ok(Self {
             embed_tokens,
             layers,

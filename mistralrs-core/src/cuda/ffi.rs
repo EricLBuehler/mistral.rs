@@ -720,6 +720,7 @@ extern "C" {
         num_v_heads: i32,
         head_k_dim: i32,
         head_v_dim: i32,
+        tiled_v_heads: i32,
         dtype: i32,
         stream: i64,
     );
@@ -737,6 +738,7 @@ extern "C" {
         num_v_heads: i32,
         head_k_dim: i32,
         head_v_dim: i32,
+        tiled_v_heads: i32,
         dtype: i32,
         stream: i64,
     );

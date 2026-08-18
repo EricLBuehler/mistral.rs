@@ -20,7 +20,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -35,10 +35,14 @@ rust-version = "1.94"
 # candle-nn = { version = "0.11.0" }
 # candle-flash-attn-v3 = { version = "0.11.0" }
 # candle-metal-kernels = { version = "0.11.0" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "27f20fea993c81ea6d32ce44018f42b68466525e" }
+# candle-core = { path = "../candle/candle-core", version = "0.11.0" }
+# candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
+# candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
+# candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.11.0" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "35d7ae7ca5c93e17c77359c3617376b8a72e96a4" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "35d7ae7ca5c93e17c77359c3617376b8a72e96a4" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "35d7ae7ca5c93e17c77359c3617376b8a72e96a4" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "35d7ae7ca5c93e17c77359c3617376b8a72e96a4" }
 
 axum = "0.8.8"
 mimalloc = "0.1"
@@ -173,6 +177,7 @@ axum_static = "1.8.6"
 mime_guess = "2.0.5"
 include_dir = "0.7.4"
 http = "1.4.0"
+http-body = "1.0.1"
 hyper = "1.8.1"
 rust-mcp-schema = { version = "0.9.5", default-features = false, features = ["schema_utils", "latest"] }
 cudaforge = "0.1.2"
@@ -192,19 +197,19 @@ cuda-core = "=0.1.0"
 cuda-async = "=0.1.0"
 cuda-bindings = "=0.1.0"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.9.0" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.0" }
-mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.0" }
-mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.0" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.9.0" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.9.0" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.0" }
-mistralrs = { path = "mistralrs", version = "0.9.0" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.9.0" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.9.0" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.9.0" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.0" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.0" }
+mistralrs-core = { path = "mistralrs-core", version = "0.9.1" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.1" }
+mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.1" }
+mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.1" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.9.1" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.9.1" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.1" }
+mistralrs = { path = "mistralrs", version = "0.9.1" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.9.1" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.9.1" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.9.1" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.1" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.1" }
 
 [profile.release-with-debug]
 inherits = "release"

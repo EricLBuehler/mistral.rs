@@ -24,6 +24,7 @@ use crate::{
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
+    utils::unvarbuilder::UnVarBuilder,
     vision_models::multimodal_layout::{
         gather_packed_mrope_positions, MropePositionSource, MultimodalEncoderOutputs,
         PackedMultimodalLayout,
@@ -42,6 +43,7 @@ pub(crate) use inputs_processor::Qwen2_5VLProcessor;
 pub struct Qwen2_5VLModel {
     text: Qwen2_5VLTextModel,
     vision: Qwen2_5VLVisionModel,
+    vision_prefix: &'static str,
     spatial_merge_size: usize,
     image_token_id: u32,
     video_token_id: u32,
@@ -56,11 +58,13 @@ impl Qwen2_5VLModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
-        let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
-            vb.pp("vision_tower")
-        } else {
-            vb.pp("visual")
-        };
+        let (vision_vb, vision_prefix) =
+            if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
+                (vb.pp("vision_tower"), "vision_tower")
+            } else {
+                (vb.pp("visual"), "visual")
+            };
+        let vision_vb = vision_vb.without_lora_registry();
         let vision = Qwen2_5VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
@@ -76,6 +80,7 @@ impl Qwen2_5VLModel {
         Ok(Self {
             text,
             vision,
+            vision_prefix,
             spatial_merge_size: cfg.vision_config.spatial_merge_size,
             image_token_id: cfg.image_token_id,
             video_token_id: cfg.video_token_id,
@@ -491,7 +496,11 @@ impl MultimodalModel for Qwen2_5VLModel {
 
 impl IsqModel for Qwen2_5VLModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        self.text.residual_tensors()
+        let uvb = UnVarBuilder::new();
+        uvb.extend(self.text.residual_tensors());
+        uvb.pp(self.vision_prefix)
+            .extend(self.vision.residual_tensors());
+        uvb.to_safetensors()
     }
 }
 

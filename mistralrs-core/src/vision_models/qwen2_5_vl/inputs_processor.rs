@@ -807,8 +807,11 @@ impl InputsProcessor for Qwen2_5VLImageProcessor {
             let query_ranges = input_seqs
                 .iter()
                 .map(|seq| {
-                    seq.active_prompt_query_range()
-                        .unwrap_or(0..seq.prompt_position_source_toks().len())
+                    seq.active_prompt_query_range().unwrap_or_else(|| {
+                        // Paged prefix-cache hits trim the input to the tail without a prefill view.
+                        let len = seq.prompt_position_source_toks().len();
+                        seq.prefix_cache_len().min(len)..len
+                    })
                 })
                 .collect::<Vec<_>>();
             Some(prompt_mrope(

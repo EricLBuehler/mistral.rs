@@ -46,6 +46,8 @@ pub struct Config {
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<PhiRopeScalingConfig>,
+    #[serde(default)]
+    pub rope_scaling_attn_factor: Option<f64>,
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
@@ -59,6 +61,7 @@ impl From<Config> for PhiRopeConfig {
     fn from(val: Config) -> Self {
         PhiRopeConfig {
             rope_scaling: val.rope_scaling,
+            scaling_attn_factor: val.rope_scaling_attn_factor,
             max_position_embeddings: val.max_position_embeddings,
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
@@ -428,9 +431,30 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
+            let location = device.location();
+            if ropes.contains_key(&location) {
+                continue;
+            }
+            let rope_vb = vb_m.clone().set_device(device.clone());
+            let short_factor = if rope_vb.contains_tensor("rope_factors_short.weight") {
+                Some(rope_vb.get_unchecked_dtype("rope_factors_short.weight", DType::F32)?)
+            } else {
+                None
+            };
+            let long_factor = if rope_vb.contains_tensor("rope_factors_long.weight") {
+                Some(rope_vb.get_unchecked_dtype("rope_factors_long.weight", DType::F32)?)
+            } else {
+                None
+            };
             ropes.insert(
-                device.location(),
-                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+                location,
+                Arc::new(PhiRotaryEmbedding::new_with_factors(
+                    vb.dtype(),
+                    cfg.clone(),
+                    device,
+                    short_factor.as_ref(),
+                    long_factor.as_ref(),
+                )?),
             );
         }
         let vb_l = vb_m.pp("layers");

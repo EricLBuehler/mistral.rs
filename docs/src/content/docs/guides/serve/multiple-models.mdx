@@ -32,7 +32,10 @@ model_id = "google/gemma-4-E4B-it"
 quant = "4"
 ```
 
-`quant = "4"` is the front door (same as `--quant 4`): it prefers a prebuilt UQFF and falls back to 4-bit [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) at load time. Use `isq = "4"` (same as `--isq 4`) for explicit ISQ; drop both to load full precision.
+`quant = "4"` has the same behavior as `--quant 4`: it selects a matching artifact for a GGUF
+repository. For other repositories, it prefers a prebuilt UQFF and falls back to 4-bit
+[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) during loading. Use
+`isq = "4"` to force ISQ, or omit both settings to load at the source precision.
 
 Start with `from-config`:
 

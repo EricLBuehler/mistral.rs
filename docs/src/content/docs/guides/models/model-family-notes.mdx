@@ -5,11 +5,17 @@ description: Per-family behavior that differs from the defaults - thinking tags,
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Most models need nothing beyond `mistralrs run -m <id>` (see [Run any model](/mistral.rs/guides/models/run-any-model/)). This page collects the per-family exceptions. The full architecture inventory is in the [supported models reference](/mistral.rs/reference/supported-models/).
+Most models need nothing beyond `mistralrs run -m <id>` (see [Run models](/mistral.rs/guides/models/run-any-model/)). This page collects the per-family exceptions. The full architecture inventory is in the [supported models reference](/mistral.rs/reference/supported-models/).
+
+## Reasoning controls
+
+`reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none` is an alias for `off`. If no effort is set, mistral.rs leaves it unspecified and enables thinking. An explicit positive effort enables thinking, while `off` disables it. The legacy `enable_thinking` boolean remains supported, but contradictory explicit values return an error.
+
+These controls are template inputs, not sampling parameters. mistral.rs passes an explicit effort under both `reasoning_effort` and the template compatibility name `reasoning_strength`. Each model's template decides whether it distinguishes every positive tier.
 
 ## Thinking models (Qwen3, SmolLM3)
 
-Qwen3 and SmolLM3 are hybrid reasoning models; their chat templates enable thinking by default. Toggle it per request. Inline `/think` and `/no_think` prompt tags work everywhere; the `--thinking` flag and the `enable_thinking` field do the same without editing user text (`true` forces on, `false` forces off, omit/`None` for the template default).
+Qwen3 and SmolLM3 are hybrid reasoning models; their chat templates enable thinking by default. Toggle it per request. Inline `/think` and `/no_think` prompt tags work everywhere; the `--thinking` flag and the `enable_thinking` field do the same without editing user text (`true` forces on and `false` forces off).
 
 <Tabs>
 <TabItem label="CLI">
@@ -18,7 +24,7 @@ Qwen3 and SmolLM3 are hybrid reasoning models; their chat templates enable think
 mistralrs run --thinking false -m Qwen/Qwen3-4B
 ```
 
-`--thinking` applies to both one-shot and interactive use. Prompt tags also work inline:
+`--thinking` and `--reasoning-effort` apply to both one-shot and interactive use. Prompt tags also work inline:
 
 ```text
 How many rs are in blueberry? /no_think
@@ -58,11 +64,13 @@ Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID direct
 
 ## MoE models and MoQE
 
-MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it with `--isq-organization moqe`; it composes with either `--isq <level>` or `--quant <level>`:
+MoE (Mixture of Experts) families (DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE) support MoQE (Mixture of Quantized Experts): quantizing only the routed experts, which dominate memory, while leaving the rest of the model alone. Enable it when applying ISQ with `--isq-organization moqe`:
 
 ```bash
 mistralrs run --isq 4 --isq-organization moqe -m Qwen/Qwen3-30B-A3B
 ```
+
+MoQE also applies when generating UQFF with `mistralrs quantize`. It does not rewrite an already-quantized GGUF or UQFF selected by `--quant`; those weights load as published.
 
 In the Python SDK, pass `organization=IsqOrganization.MoQE` inside `Which.Plain(...)` or `Which.MultimodalPlain(...)`. Expect small output differences between quantization levels: router decisions are sensitive to numerical noise.
 
@@ -113,6 +121,20 @@ The official repos ship `chat_template.jinja`, including the Liquid tool-call fo
 Gemma repos are gated: accept the license on the Hugging Face model page, then authenticate with `mistralrs login`.
 
 Gemma 4 accepts image, audio, and video parts mixed in one message, and enforces its tool-call format through constrained decoding by default; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+
+## Muse Glimmer
+
+Muse Glimmer loads through normal model auto-detection:
+
+```bash
+mistralrs run -m meta-models/Muse-Glimmer-30B
+```
+
+The native safetensors checkpoint accepts text, images, and video; it does not accept audio. Video is represented as timestamped frame groups, and the model card notes that the model was trained primarily for image rather than video understanding.
+
+The model's ATEM chat template is detected automatically. Tool calling supports automatic, required, named, and parallel calls through the same HTTP, Python, Rust, and agent APIs as other tool-capable models. Muse reads the `reasoning_strength` template variable, so mistral.rs maps the public `reasoning_effort` control to it. The published Muse tiers are `low`, `medium`, `high`, and `xhigh`; omission uses the template's `high` default.
+
+ISQ, UQFF, paged attention, prefix caching, tensor parallelism, and text-backbone LoRA use the standard multimodal model paths. For GGUF-specific requirements and its image-only projector limitation, see [GGUF compatibility](/mistral.rs/reference/gguf-support/).
 
 ## MatFormer
 

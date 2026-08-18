@@ -1,11 +1,13 @@
 ---
-title: Run any model
+title: Run models
 description: Load models from Hugging Face IDs, local directories, or GGUF files, with optional quantization on the way in.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Point mistral.rs at a model and it figures out the rest: text, multimodal, embedding, speech, and diffusion models are detected automatically from the checkpoint, so one command shape covers all of them.
+mistral.rs detects text, multimodal, embedding, speech, and diffusion pipelines from supported
+checkpoints. The same `run` and `serve` commands accept Hugging Face model IDs and local model
+directories.
 
 <Tabs>
 <TabItem label="CLI">
@@ -60,15 +62,31 @@ async fn main() -> Result<()> {
 </TabItem>
 </Tabs>
 
-## Quantize on the way in with `--quant`
+## Select a quantization with `--quant`
 
-`--quant <level>` is the quantization front door. With a numeric level (`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) name (`q4k`, `afq8`, ...), it first looks for a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) at `mistralrs-community/<model-name>-UQFF` and downloads the matching file; if no UQFF repo or matching shard exists (or the model is a local path), it falls back to ISQ at that level.
+Use `--quant <level>` to request a quantization level. Numeric levels (`2`, `3`, `4`, `5`, `6`, `8`)
+can be used with standard and GGUF model sources. Standard model repositories also accept
+[ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) names such as `q4k` and
+`afq8`; GGUF repositories accept supported Q/K artifact names such as `q4k`. See
+[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the available storage formats. For a
+GGUF repository, `--quant` selects a matching file already present in the repository. Other Hugging
+Face repositories load a matching prebuilt
+[UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) from
+`mistralrs-community/<model-name>-UQFF` when available and otherwise apply ISQ.
 
 ```bash
 mistralrs run --quant 4 -m Qwen/Qwen3-4B
+
+# Select a published 4-bit GGUF without naming the file.
+mistralrs run -m unsloth/Qwen3.5-4B-GGUF --quant 4
 ```
 
-`--quant auto` probes your hardware (the same analysis as `mistralrs tune`) and picks a level, or runs at full precision if the model fits. `--quant` conflicts with the explicit knobs `--isq` and `--from-uqff`; use those when you want to force ISQ or a specific UQFF file. Choosing a level and the full set of quantization options are covered in the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+For standard model repositories, `--quant auto` probes your hardware (the same analysis as
+`mistralrs tune`) and picks a level, or runs at full precision if the model fits. Choose an explicit
+supported bit width or artifact name for a GGUF repository. `--quant` conflicts with the explicit knobs `--isq`
+and `--from-uqff`; use those when you want to force ISQ or a specific UQFF file. Choosing a level
+and the full set of quantization options are covered in the
+[quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
 
 ## Local model directories
 
@@ -78,60 +96,33 @@ mistralrs run --quant 4 -m Qwen/Qwen3-4B
 mistralrs run -m /path/to/model-dir
 ```
 
-Local paths are read straight from disk and never touch the network. Note that `--quant` skips the prebuilt-UQFF probe for local paths and goes directly to ISQ.
+Local model directories are read straight from disk. For safetensors and Mistral-native directories,
+`--quant` goes directly to ISQ. A GGUF-only directory instead selects a matching GGUF. If one
+directory mixes GGUF with safetensors, UQFF, or other model weights, add `--format gguf` to select
+from its GGUF files. A local multimodal GGUF may fetch missing configuration or processor assets
+from its original model repository; set `HF_HUB_OFFLINE=1` to require cache-only loading.
 
-## GGUF files
+## Run GGUF models
 
-GGUF is not auto-detected; select it with `--format gguf` and name the file with `-f`. The model ID can be a Hugging Face repo or a local directory containing the file:
-
-<Tabs>
-<TabItem label="CLI">
+GGUF files can be used with interactive chat and the OpenAI-compatible server:
 
 ```bash
-# from the Hub
-mistralrs run --format gguf -m bartowski/Meta-Llama-3.1-8B-Instruct-GGUF \
-  -f Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
+# Run an exact local file.
+mistralrs run -f /path/to/model.gguf
 
-# from a local directory
-mistralrs run --format gguf -m /path/to/dir -f model-q4k.gguf
+# Select and serve a published 4-bit GGUF.
+mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 ```
 
-Multi-file models pass semicolon-separated names to `-f`. The tokenizer and chat template are read from the GGUF metadata; pass `--tok-model-id <hf-id>` to source them from the original repo instead.
+The `.gguf` filename selects the format. mistral.rs uses embedded tokenizer and chat-template
+metadata when present, and discovers external configuration and projector files when the repository
+identifies them unambiguously. Use `--tok-model-id` and `--mmproj` to override those selections. The
+same model flags work with `run`, `serve`, and `bench`.
 
-</TabItem>
-<TabItem label="Python">
-
-```python
-from mistralrs import Runner, Which
-
-runner = Runner(
-    which=Which.GGUF(
-        quantized_model_id="bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-        quantized_filename="Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-    )
-)
-```
-
-[Full example](/mistral.rs/examples/python/gguf/).
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-use mistralrs::GgufModelBuilder;
-
-let model = GgufModelBuilder::new(
-    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-    vec!["Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"],
-)
-.build()
-.await?;
-```
-
-[Full example](/mistral.rs/examples/rust/getting-started/gguf/), or [from a local file](/mistral.rs/examples/rust/getting-started/gguf-locally/).
-
-</TabItem>
-</Tabs>
+See [Run GGUF models](/mistral.rs/guides/models/run-gguf/) for exact Hub files, automatic
+quantization selection, multimodal input, LoRA, ISQ, offline loading, and Python and Rust examples.
+The [GGUF support reference](/mistral.rs/reference/gguf-support/) lists compatible architectures,
+quantization formats, and feature combinations.
 
 ## Forcing an architecture
 
@@ -153,7 +144,13 @@ mistralrs run -m Qwen/Qwen3-4B
 HF_HUB_OFFLINE=1 mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-Pre-download with `huggingface-cli download <repo>` or by running mistral.rs once online; `mistralrs cache list` shows what is cached. Files resolve from `$HF_HUB_CACHE`, falling back to `$HF_HOME/hub`, falling back to `~/.cache/huggingface/hub`. A local model path (`-m /path/to/dir`) always reads from disk, so it works offline without any cache lookup. Related variables (`HF_HOME`, `HF_TOKEN`, ...) are in the [environment variables reference](/mistral.rs/reference/environment-variables/).
+Pre-download with `huggingface-cli download <repo>` or by running mistral.rs once online;
+`mistralrs cache list` shows what is cached. Files resolve from `$HF_HUB_CACHE`, falling back to
+`$HF_HOME/hub`, then `~/.cache/huggingface/hub`. A complete local model directory reads from disk.
+For a local multimodal GGUF whose supporting assets are not stored beside it, cache those assets or
+point `--tok-model-id` at a local asset directory before running offline. Related variables
+(`HF_HOME`, `HF_TOKEN`, ...) are in the
+[environment variables reference](/mistral.rs/reference/environment-variables/).
 
 ## Model-specific behavior
 

@@ -157,7 +157,7 @@ pub struct ReIsqRequest {
   tag = "Mistral.rs",
   path = "/re_isq",
   request_body = ReIsqRequest,
-  responses((status = 200, description = "Reapply ISQ to a non GGUF or GGML model."))
+  responses((status = 200, description = "Reapply ISQ to a model that was loaded with ISQ."))
 )]
 pub async fn re_isq(
     State(state): ExtractedMistralRsState,

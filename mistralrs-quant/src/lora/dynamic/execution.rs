@@ -662,6 +662,10 @@ pub(crate) fn current_lora_execution(runtime_id: LoraRuntimeId) -> Option<Arc<Lo
     })
 }
 
+pub fn has_active_lora_execution() -> bool {
+    LORA_EXECUTIONS.with(|executions| !executions.borrow().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -732,15 +736,20 @@ mod tests {
         let first = Arc::new(LoraExecution::new(first_id, vec![Some(1)]));
         let second = Arc::new(LoraExecution::new(second_id, vec![Some(2)]));
 
+        assert!(!has_active_lora_execution());
         with_lora_execution(Some(first), || {
+            assert!(has_active_lora_execution());
             assert!(current_lora_execution(first_id).is_some());
             with_lora_execution(Some(second), || {
+                assert!(has_active_lora_execution());
                 assert!(current_lora_execution(first_id).is_some());
                 assert!(current_lora_execution(second_id).is_some());
             });
+            assert!(has_active_lora_execution());
             assert!(current_lora_execution(first_id).is_some());
             assert!(current_lora_execution(second_id).is_none());
         });
+        assert!(!has_active_lora_execution());
         assert!(current_lora_execution(first_id).is_none());
     }
 

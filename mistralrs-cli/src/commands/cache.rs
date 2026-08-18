@@ -1,10 +1,10 @@
-//! HuggingFace cache management commands
+//! Hugging Face cache management commands
 
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, ContentArrangement, Table};
 use std::path::{Path, PathBuf};
 
-/// Get the HuggingFace hub directory
+/// Get the Hugging Face Hub directory
 fn hf_hub_dir() -> Result<PathBuf> {
     mistralrs_core::hf_hub_cache_dir()
         .ok_or_else(|| anyhow::anyhow!("Cannot determine Hugging Face hub cache directory"))
@@ -15,7 +15,7 @@ pub fn run_cache_list() -> Result<()> {
     let hub_dir = hf_hub_dir()?;
 
     println!();
-    println!("HuggingFace Model Cache");
+    println!("Hugging Face model cache");
     println!("-----------------------");
     println!();
 

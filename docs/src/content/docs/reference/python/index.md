@@ -7,10 +7,6 @@ sidebar:
 
 The `mistralrs` Python package exposes the same engine that powers the `mistralrs` CLI.
 
-:::note[Release and current-source APIs]
-This reference is generated from the current source tree. Dynamic LoRA lifecycle entries are newer than the published v0.9.0 package; use a [current source build](/mistral.rs/developer/from-source/) until the next release.
-:::
-
 ## Install
 
 `pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.
@@ -18,8 +14,8 @@ This reference is generated from the current source tree. Dynamic LoRA lifecycle
 ```bash
 pip install mistralrs                                   # CPU / Metal (PyPI)
 # NVIDIA (replace version, CUDA level, and SM)
-pip install "mistralrs==0.9.0+cuda128.sm89" \
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.0
+pip install "mistralrs==0.9.1+cuda128.sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.1
 ```
 
 ## Pages

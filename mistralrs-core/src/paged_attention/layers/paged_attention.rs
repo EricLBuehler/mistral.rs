@@ -1005,6 +1005,59 @@ impl PagedAttention {
             tensors.query.dtype(),
         )?;
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        // Pure-causal prefix prefills run flash varlen over the gathered KV: fa2 aligns causal
+        // bottom-right when kv_len > q_len, so no O(q*kv) mask or score materialization is needed.
+        let pure_causal_varlen = prefix_causal
+            && causality_known
+            && mm_prefix_ranges.is_none()
+            && ctx.sdpa_params.sliding_window.is_none()
+            && !tensors.attention_mask.is_custom()
+            && query_layout_is_dense
+            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params);
+        if pure_causal_varlen {
+            let cu_q = if let Some(fp) = ctx.flash_params {
+                if !fp.cumulative_seqlens_q.is_empty() {
+                    resolve_tensor_for_device(
+                        &fp.cumulative_seqlens_q,
+                        device,
+                        "cumulative_seqlens_q",
+                    )?
+                } else {
+                    cumulative_seqlens_from_lengths(&query_lens, device)?
+                }
+            } else {
+                cumulative_seqlens_from_lengths(&query_lens, device)?
+            };
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let mut cu_q_map = HashMap::new();
+            cu_q_map.insert(device.location(), cu_q);
+            let mut cu_kv_map = HashMap::new();
+            cu_kv_map.insert(device.location(), cu_kv);
+            let prefix_flash_params = FlashParams {
+                max_q: u32::try_from(query_lens.iter().copied().max().unwrap_or(0))
+                    .map_err(candle_core::Error::wrap)?,
+                cumulative_seqlens_q: cu_q_map,
+                logical_k: FlashKMeta {
+                    max: u32::try_from(kv_lens.iter().copied().max().unwrap_or(0))
+                        .map_err(candle_core::Error::wrap)?,
+                    cumulative_seqlens: cu_kv_map,
+                },
+                sliding_k: None,
+                causal: true,
+                packed: ctx.flash_params.is_some_and(|params| params.packed),
+                varlen_segment_lens: None,
+            };
+            let output = Sdpa.run_attention(
+                tensors.query,
+                &k_4d,
+                &v_4d,
+                &AttentionMask::CausalFlash,
+                Some(&prefix_flash_params),
+                ctx.sdpa_params,
+            )?;
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
         let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
         let has_padding_or_window = query_lens.iter().any(|&len| len != ctx.dims.seq_len)
             || kv_lens.iter().any(|&len| len != max_kv)

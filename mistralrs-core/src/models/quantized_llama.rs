@@ -1,20 +1,17 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use candle_core::quantized::ggml_file;
-use candle_core::quantized::QTensor;
 use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::{Embedding, Module};
 use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig};
 
 use crate::attention::{AttentionMask, SdpaParams};
 use crate::device_map::{DeviceMappedMask, DeviceMapper};
-use crate::gguf::Content;
 use crate::layers::{CausalMaskConfig, CausalMasker, QRmsNorm, RotaryEmbedding, Sdpa};
 use crate::layers_masker::PastKvLenCache;
-use crate::paged_attention::{AttentionImplementation, PagedAttention};
+use crate::paged_attention::PagedAttention;
 use crate::pipeline::extract_logits;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
 use crate::pipeline::EitherCache;
@@ -41,93 +38,13 @@ impl Mlp {
     }
 }
 
-enum MlpOrMoe {
-    Mlp(Mlp),
-    MoE {
-        n_expert_used: usize,
-        feed_forward_gate_inp: Arc<dyn QuantMethod>,
-        experts: Vec<Mlp>,
-    },
-}
-
-impl MlpOrMoe {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        match self {
-            Self::MoE {
-                feed_forward_gate_inp,
-                experts,
-                n_expert_used,
-            } => {
-                let (b_size, seq_len, hidden_dim) = xs.dims3()?;
-                let xs = xs.reshape(((), hidden_dim))?;
-                let router_logits = feed_forward_gate_inp.forward(&xs)?;
-                let topk = crate::ops::moe_router_topk(
-                    &router_logits,
-                    crate::ops::MoeRouterTopKConfig {
-                        top_k: *n_expert_used,
-                        score_function: crate::ops::MoeRouterScoreFunction::Softmax,
-                        selected_weight: crate::ops::MoeRouterSelectedWeight::Score,
-                        renormalize: true,
-                        norm_min: 0.0,
-                        output_scale: 1.0,
-                        logit_clip: None,
-                    },
-                    None,
-                    None,
-                )?;
-                let selected_experts = topk.indices.to_vec2::<u32>()?;
-                let routing_weights = topk.values.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-
-                let mut top_x = vec![vec![]; experts.len()];
-                let mut selected_rws = vec![vec![]; experts.len()];
-                for (row_idx, (experts, weights)) in selected_experts
-                    .iter()
-                    .zip(routing_weights.iter())
-                    .enumerate()
-                {
-                    for (&expert_idx, &routing_weight) in experts.iter().zip(weights.iter()) {
-                        let expert_idx = expert_idx as usize;
-                        top_x[expert_idx].push(row_idx as u32);
-                        selected_rws[expert_idx].push(routing_weight)
-                    }
-                }
-
-                let mut ys = xs.zeros_like()?;
-                for (expert_idx, expert_layer) in experts.iter().enumerate() {
-                    let top_x = &top_x[expert_idx];
-                    if top_x.is_empty() {
-                        continue;
-                    }
-                    let top_x = Tensor::new(top_x.as_slice(), xs.device())?;
-                    let selected_rws =
-                        Tensor::new(selected_rws[expert_idx].as_slice(), xs.device())?
-                            .reshape(((), 1))?;
-                    // Index the correct hidden states and compute the expert hidden state for
-                    // the current expert. We need to make sure to multiply the output hidden
-                    // states by `routing_weights` on the corresponding tokens (top-1 and top-2)
-                    let current_state = xs.index_select(&top_x, 0)?.reshape(((), hidden_dim))?;
-                    // current_hidden_states = expert_layer(current_state, routing_weights[top_x_list, idx_list, None])
-                    let current_hidden_states = expert_layer.forward(&current_state)?;
-                    let current_hidden_states =
-                        current_hidden_states.broadcast_mul(&selected_rws)?;
-                    ys = ys.index_add(&top_x, &current_hidden_states, 0)?;
-                }
-
-                let ys = ys.reshape((b_size, seq_len, hidden_dim))?;
-                Ok(ys)
-            }
-            Self::Mlp(mlp) => mlp.forward(xs),
-        }
-    }
-}
-
 struct LayerWeights {
     attention_wq: Arc<dyn QuantMethod>,
     attention_wk: Arc<dyn QuantMethod>,
     attention_wv: Arc<dyn QuantMethod>,
     attention_wo: Arc<dyn QuantMethod>,
     attention_norm: QRmsNorm,
-    mlp_or_moe: MlpOrMoe,
+    mlp: Mlp,
     ffn_norm: QRmsNorm,
     n_head: usize,
     n_kv_head: usize,
@@ -246,11 +163,11 @@ impl ModelConfig::FromGGML for ModelWeights {
             let attention_wk = ct.remove(&format!("{prefix}.attention.wk.weight"))?;
             let attention_wv = ct.remove(&format!("{prefix}.attention.wv.weight"))?;
             let attention_wo = ct.remove(&format!("{prefix}.attention.wo.weight"))?;
-            let mlp_or_moe = {
+            let mlp = {
                 let feed_forward_w1 = ct.remove(&format!("{prefix}.feed_forward.w1.weight"))?;
                 let feed_forward_w2 = ct.remove(&format!("{prefix}.feed_forward.w2.weight"))?;
                 let feed_forward_w3 = ct.remove(&format!("{prefix}.feed_forward.w3.weight"))?;
-                MlpOrMoe::Mlp(Mlp {
+                Mlp {
                     feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
                         q_weight: Arc::new(feed_forward_w1),
                         b: None,
@@ -263,7 +180,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                         q_weight: Arc::new(feed_forward_w3),
                         b: None,
                     })?),
-                })
+                }
             };
             let attention_norm = ct.remove(&format!("{prefix}.attention_norm.weight"))?;
             let ffn_norm = ct.remove(&format!("{prefix}.ffn_norm.weight"))?;
@@ -286,7 +203,7 @@ impl ModelConfig::FromGGML for ModelWeights {
                     b: None,
                 })?),
                 attention_norm: QRmsNorm::new(attention_norm, 1e-5)?,
-                mlp_or_moe,
+                mlp,
                 ffn_norm: QRmsNorm::new(ffn_norm, 1e-5)?,
                 n_head: ct.hparams.n_head as usize,
                 n_kv_head: ct.hparams.n_head as usize / gqa,
@@ -393,267 +310,6 @@ impl TryFrom<ContentMetadata<'_>> for PropsGGUF {
     }
 }
 
-impl ModelConfig::FromGGUF for ModelWeights {
-    fn from_gguf<R: std::io::Seek + std::io::Read>(
-        mut ct: Content<'_, R>,
-        device: &Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
-        attention_mechanism: AttentionImplementation,
-        dtype: DType,
-    ) -> Result<Self> {
-        // Choose GGUF path prefix based on architecture so tensor names resolve.
-        let actual_arch: String = ct
-            .get_metadata()
-            .get("general.architecture")
-            .and_then(|v| v.to_string().ok().cloned())
-            .unwrap_or_else(|| "llama".to_string());
-        let path_prefix = if actual_arch == "mistral3" {
-            "mistral3"
-        } else {
-            "llama"
-        };
-
-        let metadata = ContentMetadata {
-            path_prefix,
-            metadata: ct.get_metadata(),
-        };
-        let PropsGGUF {
-            n_expert,
-            n_expert_used,
-            head_count,
-            head_count_kv,
-            block_count,
-            embedding_length,
-            rope_dim,
-            rms_norm_eps,
-            max_seq_len,
-            rope_freq_base,
-            key_length,
-            value_length,
-        } = PropsGGUF::try_from(metadata).or_else(|err| candle_core::bail!("{err}"))?;
-
-        let qtok_embeddings = ct.tensor("token_embd.weight", device)?;
-        let tok_embeddings = qtok_embeddings.dequantize(device)?;
-        let norm = QRmsNorm::new(ct.tensor("output_norm.weight", device)?, rms_norm_eps)?;
-        let output = if !ct.has_tensor("output.weight") {
-            ct.tensor("token_embd.weight", device)?
-        } else {
-            ct.tensor("output.weight", device)?
-        };
-        let mut layers = Vec::with_capacity(block_count);
-
-        let head_dim = key_length;
-        if key_length != value_length {
-            candle_core::bail!(
-                "Expected key_length == value_length, got {key_length} != {value_length}"
-            );
-        }
-
-        let mut ropes = HashMap::new();
-        for layer_idx in 0..block_count {
-            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            ropes.insert(
-                device.location(),
-                Arc::new(RotaryEmbedding::new(
-                    rope_freq_base,
-                    rope_dim,
-                    max_seq_len,
-                    device,
-                    false,
-                    dtype,
-                )?),
-            );
-        }
-
-        for layer_idx in NiceProgressBar::<_, 'b'>(
-            0..block_count,
-            "Loading repeating layers",
-            &new_multi_progress(),
-        ) {
-            let prefix = format!("blk.{layer_idx}");
-            let device = mapper.device_for(layer_idx, false).unwrap_or(device);
-            let rotary = ropes
-                .get(&device.location())
-                .expect("No RoPE for device location!")
-                .clone();
-
-            let attention_wq = ct.tensor(&format!("{prefix}.attn_q.weight"), device)?;
-            let attention_wk = ct.tensor(&format!("{prefix}.attn_k.weight"), device)?;
-            let attention_wv = ct.tensor(&format!("{prefix}.attn_v.weight"), device)?;
-            let attention_wo = ct.tensor(&format!("{prefix}.attn_output.weight"), device)?;
-            let mlp_or_moe = if n_expert <= 1 {
-                let feed_forward_w1 = ct.tensor(&format!("{prefix}.ffn_gate.weight"), device)?;
-                let feed_forward_w2 = ct.tensor(&format!("{prefix}.ffn_down.weight"), device)?;
-                let feed_forward_w3 = ct.tensor(&format!("{prefix}.ffn_up.weight"), device)?;
-                MlpOrMoe::Mlp(Mlp {
-                    feed_forward_w1: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w1),
-                        b: None,
-                    })?),
-                    feed_forward_w2: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w2),
-                        b: None,
-                    })?),
-                    feed_forward_w3: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_w3),
-                        b: None,
-                    })?),
-                })
-            } else {
-                let feed_forward_gate_inp =
-                    ct.tensor(&format!("{prefix}.ffn_gate_inp.weight"), device)?;
-                let mut experts = Vec::with_capacity(n_expert);
-                match ct.tensor(&format!("{prefix}.ffn_gate_exps.weight"), device) {
-                    Ok(feed_forward_gate_exps) => {
-                        let feed_forward_down_exps =
-                            ct.tensor(&format!("{prefix}.ffn_down_exps.weight"), device)?;
-                        let feed_forward_up_exps =
-                            ct.tensor(&format!("{prefix}.ffn_up_exps.weight"), device)?;
-
-                        let dequant_ffn_gate = feed_forward_gate_exps
-                            .dequantize(device)?
-                            .chunk(n_expert, 0)?;
-                        let dequant_ffn_down = feed_forward_down_exps
-                            .dequantize(device)?
-                            .chunk(n_expert, 0)?;
-                        let dequant_ffn_up = feed_forward_up_exps
-                            .dequantize(device)?
-                            .chunk(n_expert, 0)?;
-
-                        assert_eq!(dequant_ffn_up.len(), dequant_ffn_down.len());
-                        assert_eq!(dequant_ffn_gate.len(), dequant_ffn_down.len());
-                        assert_eq!(dequant_ffn_gate.len(), n_expert);
-
-                        let gate_type = feed_forward_gate_exps.dtype();
-                        let down_type = feed_forward_down_exps.dtype();
-                        let up_type = feed_forward_up_exps.dtype();
-
-                        for (ff_w1, (ff_w2, ff_w3)) in dequant_ffn_gate
-                            .into_iter()
-                            .zip(dequant_ffn_down.into_iter().zip(dequant_ffn_up))
-                        {
-                            experts.push(Mlp {
-                                feed_forward_w1: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(QTensor::quantize(&ff_w1, gate_type)?),
-                                        b: None,
-                                    },
-                                )?),
-                                feed_forward_w2: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(QTensor::quantize(&ff_w2, down_type)?),
-                                        b: None,
-                                    },
-                                )?),
-                                feed_forward_w3: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(QTensor::quantize(&ff_w3, up_type)?),
-                                        b: None,
-                                    },
-                                )?),
-                            })
-                        }
-                    }
-                    Err(_) => {
-                        for i in 0..n_expert {
-                            let feed_forward_w1 =
-                                ct.tensor(&format!("{prefix}.ffn_gate.{i}.weight"), device)?;
-                            let feed_forward_w2 =
-                                ct.tensor(&format!("{prefix}.ffn_down.{i}.weight"), device)?;
-                            let feed_forward_w3 =
-                                ct.tensor(&format!("{prefix}.ffn_up.{i}.weight"), device)?;
-                            experts.push(Mlp {
-                                feed_forward_w1: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(feed_forward_w1),
-                                        b: None,
-                                    },
-                                )?),
-                                feed_forward_w2: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(feed_forward_w2),
-                                        b: None,
-                                    },
-                                )?),
-                                feed_forward_w3: Arc::new(GgufMatMul::new(
-                                    QuantMethodConfig::Gguf {
-                                        q_weight: Arc::new(feed_forward_w3),
-                                        b: None,
-                                    },
-                                )?),
-                            })
-                        }
-                    }
-                }
-                MlpOrMoe::MoE {
-                    n_expert_used,
-                    feed_forward_gate_inp: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                        q_weight: Arc::new(feed_forward_gate_inp),
-                        b: None,
-                    })?),
-                    experts,
-                }
-            };
-            let attention_norm = ct.tensor(&format!("{prefix}.attn_norm.weight"), device)?;
-            let ffn_norm = ct.tensor(&format!("{prefix}.ffn_norm.weight"), device)?;
-            let paged_attn = match &attention_mechanism {
-                AttentionImplementation::Eager => None,
-                AttentionImplementation::PagedAttention => {
-                    Some(PagedAttention::new(head_dim, device, None)?)
-                }
-            };
-            layers.push(LayerWeights {
-                attention_wq: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wq),
-                    b: None,
-                })?),
-                attention_wk: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wk),
-                    b: None,
-                })?),
-                attention_wv: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wv),
-                    b: None,
-                })?),
-                attention_wo: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(attention_wo),
-                    b: None,
-                })?),
-                attention_norm: QRmsNorm::new(attention_norm, rms_norm_eps)?,
-                mlp_or_moe,
-                ffn_norm: QRmsNorm::new(ffn_norm, rms_norm_eps)?,
-                n_head: head_count,
-                n_kv_head: head_count_kv,
-                head_dim,
-                rotary: rotary.clone(),
-                paged_attn,
-                sdpa_params: SdpaParams {
-                    n_kv_groups: head_count / head_count_kv,
-                    softcap: None,
-                    softmax_scale: 1.0 / (head_dim as f32).sqrt(),
-                    sliding_window: None,
-                    sinks: None,
-                },
-                dtype,
-            })
-        }
-        Ok(Self {
-            tok_embeddings: Embedding::new(tok_embeddings, embedding_length),
-            layers,
-            norm,
-            output: Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                q_weight: Arc::new(output),
-                b: None,
-            })?),
-            device: device.clone(),
-            cache: EitherCache::Normal(NormalCache::new(block_count, max_seq_len)),
-            max_seq_len,
-            mapper: Some(mapper),
-            dtype,
-        })
-    }
-}
-
 impl ModelWeights {
     pub fn forward(
         &self,
@@ -709,7 +365,7 @@ impl ModelWeights {
             // MLP
             let residual = &x;
             let x = layer.ffn_norm.forward(&x)?;
-            let x = layer.mlp_or_moe.forward(&x)?;
+            let x = layer.mlp.forward(&x)?;
             let x = (x + residual)?;
             layer_in = x;
         }

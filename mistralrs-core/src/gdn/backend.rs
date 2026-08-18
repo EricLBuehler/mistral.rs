@@ -2,7 +2,7 @@ use candle_core::{DType, Result, Storage, Tensor, D};
 use rayon::prelude::*;
 
 use super::cache::GdnLayerCache;
-use super::config::GdnDims;
+use super::config::{GdnDims, GdnVHeadLayout};
 use crate::pipeline::RecurrentBatchKind;
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -189,6 +189,17 @@ fn compute_beta_g_cpu(
     Ok((beta, g))
 }
 
+fn expand_k_heads(x: &Tensor, dims: &GdnDims, batch_size: usize, seq_len: usize) -> Result<Tensor> {
+    if dims.v_per_group == 1 {
+        return Ok(x.clone());
+    }
+    let expanded = match dims.v_head_layout {
+        GdnVHeadLayout::Grouped => x.unsqueeze(3)?.repeat((1, 1, 1, dims.v_per_group, 1))?,
+        GdnVHeadLayout::Tiled => x.unsqueeze(2)?.repeat((1, 1, dims.v_per_group, 1, 1))?,
+    };
+    expanded.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_recurrence_from_convolved(
     mixed_qkv: &Tensor,
@@ -221,19 +232,8 @@ pub fn apply_recurrence_from_convolved(
     let q = q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
     let k = k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
     let v = v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?;
-    let (q, k) = if dims.v_per_group > 1 {
-        let q = q
-            .unsqueeze(3)?
-            .repeat((1, 1, 1, dims.v_per_group, 1))?
-            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-        let k = k
-            .unsqueeze(3)?
-            .repeat((1, 1, 1, dims.v_per_group, 1))?
-            .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-        (q, k)
-    } else {
-        (q, k)
-    };
+    let q = expand_k_heads(&q, dims, batch_size, seq_len)?;
+    let k = expand_k_heads(&k, dims, batch_size, seq_len)?;
     let (beta, g) = compute_beta_g(b, a, a_log, dt_bias, dtype)?;
     let q = l2_norm(&q, QK_NORM_EPS)?;
     let k = l2_norm(&k, QK_NORM_EPS)?;
@@ -289,7 +289,7 @@ fn decode_recurrence_cpu_from_convolved(
         .for_each(|(gate_idx, (state_head, out_head))| {
             let bidx = gate_idx / dims.num_v_heads;
             let hv = gate_idx % dims.num_v_heads;
-            let hk = hv / dims.v_per_group;
+            let hk = dims.k_head_for_v_head(hv);
             let row = bidx * dims.conv_dim;
             let q_base = row + hk * dims.head_k_dim;
             let k_base = row + dims.key_dim + hk * dims.head_k_dim;
@@ -429,6 +429,7 @@ fn recurrence_cuda_from_convolved(
             dims.num_v_heads,
             dims.head_k_dim,
             dims.head_v_dim,
+            dims.v_head_layout == GdnVHeadLayout::Tiled,
         )?
     } else {
         let (q_bh, k_bh, v_bh, g_bh, beta_bh) = crate::cuda::gdn::prepare_recurrence_inputs_cuda(
@@ -443,6 +444,7 @@ fn recurrence_cuda_from_convolved(
             dims.num_v_heads,
             dims.head_k_dim,
             dims.head_v_dim,
+            dims.v_head_layout == GdnVHeadLayout::Tiled,
         )?;
         if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
             crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(
@@ -954,6 +956,7 @@ mod tests {
     use candle_core::{Device, Result as CandleResult};
 
     const ASSERT_EPS: f32 = 5e-5;
+    const TEST_RMS_NORM_EPS: f64 = 1e-6;
 
     fn patterned(len: usize, salt: usize, scale: f32, offset: f32) -> Vec<f32> {
         (0..len)
@@ -964,11 +967,12 @@ mod tests {
             .collect()
     }
 
-    fn dims(
+    fn dims_with_layout(
         num_k_heads: usize,
         num_v_heads: usize,
         head_k_dim: usize,
         head_v_dim: usize,
+        v_head_layout: GdnVHeadLayout,
     ) -> GdnDims {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
@@ -983,10 +987,27 @@ mod tests {
             value_dim,
             conv_dim: key_dim * 2 + value_dim,
             v_per_group: num_v_heads / num_k_heads,
+            v_head_layout,
         }
     }
 
+    fn dims(
+        num_k_heads: usize,
+        num_v_heads: usize,
+        head_k_dim: usize,
+        head_v_dim: usize,
+    ) -> GdnDims {
+        dims_with_layout(
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            GdnVHeadLayout::Grouped,
+        )
+    }
+
     fn assert_close(lhs: &Tensor, rhs: &Tensor) -> CandleResult<()> {
+        assert_eq!(lhs.shape(), rhs.shape());
         let lhs = lhs.flatten_all()?.to_vec1::<f32>()?;
         let rhs = rhs.flatten_all()?.to_vec1::<f32>()?;
         assert_eq!(lhs.len(), rhs.len());
@@ -998,6 +1019,145 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    fn converter_tiled_heads(dims: &GdnDims) -> Vec<usize> {
+        (0..dims.v_per_group)
+            .flat_map(|within_group| {
+                (0..dims.num_k_heads)
+                    .map(move |key_head| key_head * dims.v_per_group + within_group)
+            })
+            .collect()
+    }
+
+    fn expand_head_map(heads: &[usize], head_dim: usize) -> Vec<usize> {
+        heads
+            .iter()
+            .flat_map(|head| (0..head_dim).map(move |feature| head * head_dim + feature))
+            .collect()
+    }
+
+    fn runtime_from_grouped(
+        tensor: &Tensor,
+        dim: usize,
+        runtime_to_grouped: &[usize],
+    ) -> CandleResult<Tensor> {
+        let indices = runtime_to_grouped
+            .iter()
+            .map(|&index| index as u32)
+            .collect::<Vec<_>>();
+        tensor
+            .contiguous()?
+            .index_select(
+                &Tensor::from_vec(indices, (runtime_to_grouped.len(),), tensor.device())?,
+                dim,
+            )?
+            .contiguous()
+    }
+
+    fn grouped_from_runtime(
+        tensor: &Tensor,
+        dim: usize,
+        runtime_to_grouped: &[usize],
+    ) -> CandleResult<Tensor> {
+        let mut grouped_to_runtime = vec![0; runtime_to_grouped.len()];
+        for (runtime, &grouped) in runtime_to_grouped.iter().enumerate() {
+            grouped_to_runtime[grouped] = runtime;
+        }
+        runtime_from_grouped(tensor, dim, &grouped_to_runtime)
+    }
+
+    struct BackendStep<'a> {
+        mixed_qkv: &'a Tensor,
+        b: &'a Tensor,
+        a: &'a Tensor,
+        a_log: &'a Tensor,
+        dt_bias: &'a Tensor,
+        conv_weight: &'a Tensor,
+        dims: &'a GdnDims,
+    }
+
+    fn run_backend_step(
+        step: BackendStep<'_>,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+    ) -> CandleResult<(Tensor, Tensor)> {
+        let (batch_size, seq_len, _) = step.mixed_qkv.dims3()?;
+        let convolved = causal_conv1d(
+            step.mixed_qkv,
+            step.conv_weight,
+            step.dims,
+            cache,
+            batch_kind,
+        )?;
+        let recurrent = apply_recurrence_from_convolved(
+            &convolved,
+            step.b,
+            step.a,
+            step.a_log,
+            step.dt_bias,
+            step.dims,
+            batch_size,
+            seq_len,
+            cache,
+            DType::F32,
+        )?;
+        Ok((convolved, recurrent))
+    }
+
+    fn finish_backend_step(
+        recurrent: &Tensor,
+        z: &Tensor,
+        norm_weight: &Tensor,
+        out_weight: &Tensor,
+        dims: &GdnDims,
+    ) -> CandleResult<Tensor> {
+        let (batch_size, seq_len, num_v_heads, head_v_dim) = z.dims4()?;
+        assert_eq!(num_v_heads, dims.num_v_heads);
+        assert_eq!(head_v_dim, dims.head_v_dim);
+        let recurrent = recurrent.reshape(((), dims.head_v_dim))?;
+        let gate = candle_nn::ops::silu(&z.reshape(((), dims.head_v_dim))?)?;
+        let variance = recurrent.sqr()?.mean_keepdim(D::Minus1)?;
+        let normalized = recurrent.broadcast_div(&(variance + TEST_RMS_NORM_EPS)?.sqrt()?)?;
+        let normalized = normalized
+            .broadcast_mul(norm_weight)?
+            .broadcast_mul(&gate)?
+            .reshape((batch_size * seq_len, dims.value_dim))?;
+        normalized
+            .matmul(&out_weight.t()?)?
+            .reshape((batch_size, seq_len, dims.hidden_size))
+    }
+
+    fn assert_layout_equivalent(
+        grouped: &Tensor,
+        tiled: &Tensor,
+        dim: usize,
+        runtime_to_grouped: &[usize],
+    ) -> CandleResult<()> {
+        assert_close(
+            grouped,
+            &grouped_from_runtime(tiled, dim, runtime_to_grouped)?,
+        )
+    }
+
+    fn assert_cache_layout_equivalent(
+        grouped: &GdnLayerCache,
+        tiled: &GdnLayerCache,
+        conv_runtime_to_grouped: &[usize],
+        head_runtime_to_grouped: &[usize],
+    ) -> CandleResult<()> {
+        assert_layout_equivalent(
+            &grouped.conv_state,
+            &tiled.conv_state,
+            1,
+            conv_runtime_to_grouped,
+        )?;
+        assert_layout_equivalent(
+            &grouped.recurrent_state,
+            &tiled.recurrent_state,
+            1,
+            head_runtime_to_grouped,
+        )
     }
 
     fn run_decode_case(dims: GdnDims, batch_size: usize) -> CandleResult<()> {
@@ -1070,19 +1230,8 @@ mod tests {
         let q = q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
         let k = k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?;
         let v = v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?;
-        let (q, k) = if dims.v_per_group > 1 {
-            let q = q
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            let k = k
-                .unsqueeze(3)?
-                .repeat((1, 1, 1, dims.v_per_group, 1))?
-                .reshape((batch_size, seq_len, dims.num_v_heads, dims.head_k_dim))?;
-            (q, k)
-        } else {
-            (q, k)
-        };
+        let q = expand_k_heads(&q, &dims, batch_size, seq_len)?;
+        let k = expand_k_heads(&k, &dims, batch_size, seq_len)?;
         let (beta, g) = compute_beta_g(&b, &a, &a_log, &dt_bias, DType::F32)?;
         let q = l2_norm(&q, QK_NORM_EPS)?;
         let k = l2_norm(&k, QK_NORM_EPS)?;
@@ -1131,6 +1280,379 @@ mod tests {
             conv_outputs.push(out);
         }
         candle_nn::ops::silu(&Tensor::stack(&conv_outputs, 2)?)?.transpose(1, 2)
+    }
+
+    #[test]
+    fn key_heads_expand_in_grouped_and_tiled_order() -> CandleResult<()> {
+        let dev = Device::Cpu;
+        let keys = Tensor::from_vec(vec![10.0f32, 20.0], (1, 1, 2, 1), &dev)?;
+        let grouped = dims_with_layout(2, 4, 1, 1, GdnVHeadLayout::Grouped);
+        let tiled = dims_with_layout(2, 4, 1, 1, GdnVHeadLayout::Tiled);
+
+        assert_eq!(
+            expand_k_heads(&keys, &grouped, 1, 1)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            [10.0, 10.0, 20.0, 20.0]
+        );
+        assert_eq!(
+            expand_k_heads(&keys, &tiled, 1, 1)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            [10.0, 20.0, 10.0, 20.0]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn converter_tiled_backend_matches_grouped_prefill_and_decode() -> CandleResult<()> {
+        let dev = Device::Cpu;
+        let batch_size = 2;
+        let prefill_len = 5;
+        let mut grouped_dims = dims_with_layout(2, 6, 3, 2, GdnVHeadLayout::Grouped);
+        grouped_dims.hidden_size = 7;
+        let mut tiled_dims = grouped_dims;
+        tiled_dims.v_head_layout = GdnVHeadLayout::Tiled;
+
+        let head_runtime_to_grouped = converter_tiled_heads(&grouped_dims);
+        let value_runtime_to_grouped =
+            expand_head_map(&head_runtime_to_grouped, grouped_dims.head_v_dim);
+        let mut conv_runtime_to_grouped = (0..2 * grouped_dims.key_dim).collect::<Vec<_>>();
+        conv_runtime_to_grouped.extend(
+            value_runtime_to_grouped
+                .iter()
+                .map(|&index| 2 * grouped_dims.key_dim + index),
+        );
+        assert_eq!(head_runtime_to_grouped, [0, 3, 1, 4, 2, 5]);
+        assert_eq!(
+            value_runtime_to_grouped,
+            [0, 1, 6, 7, 2, 3, 8, 9, 4, 5, 10, 11]
+        );
+        assert_eq!(conv_runtime_to_grouped.len(), grouped_dims.conv_dim);
+
+        let conv_weight_grouped = Tensor::from_vec(
+            patterned(
+                grouped_dims.conv_dim * grouped_dims.conv_kernel_size,
+                31,
+                0.09,
+                -0.01,
+            ),
+            (grouped_dims.conv_dim, 1, grouped_dims.conv_kernel_size),
+            &dev,
+        )?;
+        let conv_weight_tiled =
+            runtime_from_grouped(&conv_weight_grouped, 0, &conv_runtime_to_grouped)?;
+        let a_log_grouped = Tensor::from_vec(
+            patterned(grouped_dims.num_v_heads, 32, 0.08, -0.2),
+            (grouped_dims.num_v_heads,),
+            &dev,
+        )?;
+        let a_log_tiled = runtime_from_grouped(&a_log_grouped, 0, &head_runtime_to_grouped)?;
+        let dt_bias_grouped = Tensor::from_vec(
+            patterned(grouped_dims.num_v_heads, 33, 0.12, 0.3),
+            (grouped_dims.num_v_heads,),
+            &dev,
+        )?;
+        let dt_bias_tiled = runtime_from_grouped(&dt_bias_grouped, 0, &head_runtime_to_grouped)?;
+        let norm_weight = Tensor::from_vec(
+            patterned(grouped_dims.head_v_dim, 34, 0.15, 1.0),
+            (grouped_dims.head_v_dim,),
+            &dev,
+        )?;
+        let out_weight_grouped = Tensor::from_vec(
+            patterned(
+                grouped_dims.hidden_size * grouped_dims.value_dim,
+                35,
+                0.1,
+                0.01,
+            ),
+            (grouped_dims.hidden_size, grouped_dims.value_dim),
+            &dev,
+        )?;
+        let out_weight_tiled =
+            runtime_from_grouped(&out_weight_grouped, 1, &value_runtime_to_grouped)?;
+
+        let conv_state_grouped = Tensor::from_vec(
+            patterned(
+                batch_size * grouped_dims.conv_dim * grouped_dims.conv_kernel_size,
+                36,
+                0.03,
+                0.0,
+            ),
+            (
+                batch_size,
+                grouped_dims.conv_dim,
+                grouped_dims.conv_kernel_size,
+            ),
+            &dev,
+        )?;
+        let recurrent_state_grouped = Tensor::from_vec(
+            patterned(
+                batch_size
+                    * grouped_dims.num_v_heads
+                    * grouped_dims.head_k_dim
+                    * grouped_dims.head_v_dim,
+                37,
+                0.025,
+                0.0,
+            ),
+            (
+                batch_size,
+                grouped_dims.num_v_heads,
+                grouped_dims.head_k_dim,
+                grouped_dims.head_v_dim,
+            ),
+            &dev,
+        )?;
+        let mut grouped_cache = GdnLayerCache {
+            conv_state: conv_state_grouped.clone(),
+            recurrent_state: recurrent_state_grouped.clone(),
+        };
+        let mut tiled_cache = GdnLayerCache {
+            conv_state: runtime_from_grouped(&conv_state_grouped, 1, &conv_runtime_to_grouped)?,
+            recurrent_state: runtime_from_grouped(
+                &recurrent_state_grouped,
+                1,
+                &head_runtime_to_grouped,
+            )?,
+        };
+
+        let prefill_mixed_grouped = Tensor::from_vec(
+            patterned(
+                batch_size * prefill_len * grouped_dims.conv_dim,
+                38,
+                0.08,
+                0.01,
+            ),
+            (batch_size, prefill_len, grouped_dims.conv_dim),
+            &dev,
+        )?;
+        let prefill_mixed_tiled =
+            runtime_from_grouped(&prefill_mixed_grouped, 2, &conv_runtime_to_grouped)?;
+        let prefill_b_grouped = Tensor::from_vec(
+            patterned(
+                batch_size * prefill_len * grouped_dims.num_v_heads,
+                39,
+                0.2,
+                0.1,
+            ),
+            (batch_size, prefill_len, grouped_dims.num_v_heads),
+            &dev,
+        )?;
+        let prefill_b_tiled =
+            runtime_from_grouped(&prefill_b_grouped, 2, &head_runtime_to_grouped)?;
+        let prefill_a_grouped = Tensor::from_vec(
+            patterned(
+                batch_size * prefill_len * grouped_dims.num_v_heads,
+                40,
+                0.18,
+                -0.04,
+            ),
+            (batch_size, prefill_len, grouped_dims.num_v_heads),
+            &dev,
+        )?;
+        let prefill_a_tiled =
+            runtime_from_grouped(&prefill_a_grouped, 2, &head_runtime_to_grouped)?;
+        let prefill_z_grouped = Tensor::from_vec(
+            patterned(
+                batch_size * prefill_len * grouped_dims.value_dim,
+                41,
+                0.14,
+                0.02,
+            ),
+            (
+                batch_size,
+                prefill_len,
+                grouped_dims.num_v_heads,
+                grouped_dims.head_v_dim,
+            ),
+            &dev,
+        )?;
+        let prefill_z_tiled =
+            runtime_from_grouped(&prefill_z_grouped, 2, &head_runtime_to_grouped)?;
+
+        let (grouped_beta, grouped_g) = compute_beta_g(
+            &prefill_b_grouped,
+            &prefill_a_grouped,
+            &a_log_grouped,
+            &dt_bias_grouped,
+            DType::F32,
+        )?;
+        let (tiled_beta, tiled_g) = compute_beta_g(
+            &prefill_b_tiled,
+            &prefill_a_tiled,
+            &a_log_tiled,
+            &dt_bias_tiled,
+            DType::F32,
+        )?;
+        assert_layout_equivalent(&grouped_beta, &tiled_beta, 2, &head_runtime_to_grouped)?;
+        assert_layout_equivalent(&grouped_g, &tiled_g, 2, &head_runtime_to_grouped)?;
+
+        let (grouped_conv, grouped_recurrent) = run_backend_step(
+            BackendStep {
+                mixed_qkv: &prefill_mixed_grouped,
+                b: &prefill_b_grouped,
+                a: &prefill_a_grouped,
+                a_log: &a_log_grouped,
+                dt_bias: &dt_bias_grouped,
+                conv_weight: &conv_weight_grouped,
+                dims: &grouped_dims,
+            },
+            &mut grouped_cache,
+            RecurrentBatchKind::Prefill,
+        )?;
+        let (tiled_conv, tiled_recurrent) = run_backend_step(
+            BackendStep {
+                mixed_qkv: &prefill_mixed_tiled,
+                b: &prefill_b_tiled,
+                a: &prefill_a_tiled,
+                a_log: &a_log_tiled,
+                dt_bias: &dt_bias_tiled,
+                conv_weight: &conv_weight_tiled,
+                dims: &tiled_dims,
+            },
+            &mut tiled_cache,
+            RecurrentBatchKind::Prefill,
+        )?;
+        assert_layout_equivalent(&grouped_conv, &tiled_conv, 2, &conv_runtime_to_grouped)?;
+        for offset in [0, grouped_dims.key_dim] {
+            let grouped_keys = grouped_conv
+                .narrow(2, offset, grouped_dims.key_dim)?
+                .reshape((
+                    batch_size,
+                    prefill_len,
+                    grouped_dims.num_k_heads,
+                    grouped_dims.head_k_dim,
+                ))?;
+            let tiled_keys = tiled_conv.narrow(2, offset, tiled_dims.key_dim)?.reshape((
+                batch_size,
+                prefill_len,
+                tiled_dims.num_k_heads,
+                tiled_dims.head_k_dim,
+            ))?;
+            let grouped_expanded =
+                expand_k_heads(&grouped_keys, &grouped_dims, batch_size, prefill_len)?;
+            let tiled_expanded = expand_k_heads(&tiled_keys, &tiled_dims, batch_size, prefill_len)?;
+            assert_layout_equivalent(
+                &grouped_expanded,
+                &tiled_expanded,
+                2,
+                &head_runtime_to_grouped,
+            )?;
+        }
+        assert_layout_equivalent(
+            &grouped_recurrent,
+            &tiled_recurrent,
+            2,
+            &head_runtime_to_grouped,
+        )?;
+        let grouped_prefill_output = finish_backend_step(
+            &grouped_recurrent,
+            &prefill_z_grouped,
+            &norm_weight,
+            &out_weight_grouped,
+            &grouped_dims,
+        )?;
+        let tiled_prefill_output = finish_backend_step(
+            &tiled_recurrent,
+            &prefill_z_tiled,
+            &norm_weight,
+            &out_weight_tiled,
+            &tiled_dims,
+        )?;
+        assert_close(&grouped_prefill_output, &tiled_prefill_output)?;
+        assert_cache_layout_equivalent(
+            &grouped_cache,
+            &tiled_cache,
+            &conv_runtime_to_grouped,
+            &head_runtime_to_grouped,
+        )?;
+
+        let decode_mixed_grouped = Tensor::from_vec(
+            patterned(batch_size * grouped_dims.conv_dim, 42, 0.08, 0.01),
+            (batch_size, 1, grouped_dims.conv_dim),
+            &dev,
+        )?;
+        let decode_mixed_tiled =
+            runtime_from_grouped(&decode_mixed_grouped, 2, &conv_runtime_to_grouped)?;
+        let decode_b_grouped = Tensor::from_vec(
+            patterned(batch_size * grouped_dims.num_v_heads, 43, 0.2, 0.1),
+            (batch_size, 1, grouped_dims.num_v_heads),
+            &dev,
+        )?;
+        let decode_b_tiled = runtime_from_grouped(&decode_b_grouped, 2, &head_runtime_to_grouped)?;
+        let decode_a_grouped = Tensor::from_vec(
+            patterned(batch_size * grouped_dims.num_v_heads, 44, 0.18, -0.04),
+            (batch_size, 1, grouped_dims.num_v_heads),
+            &dev,
+        )?;
+        let decode_a_tiled = runtime_from_grouped(&decode_a_grouped, 2, &head_runtime_to_grouped)?;
+        let decode_z_grouped = Tensor::from_vec(
+            patterned(batch_size * grouped_dims.value_dim, 45, 0.14, 0.02),
+            (
+                batch_size,
+                1,
+                grouped_dims.num_v_heads,
+                grouped_dims.head_v_dim,
+            ),
+            &dev,
+        )?;
+        let decode_z_tiled = runtime_from_grouped(&decode_z_grouped, 2, &head_runtime_to_grouped)?;
+
+        let (grouped_conv, grouped_recurrent) = run_backend_step(
+            BackendStep {
+                mixed_qkv: &decode_mixed_grouped,
+                b: &decode_b_grouped,
+                a: &decode_a_grouped,
+                a_log: &a_log_grouped,
+                dt_bias: &dt_bias_grouped,
+                conv_weight: &conv_weight_grouped,
+                dims: &grouped_dims,
+            },
+            &mut grouped_cache,
+            RecurrentBatchKind::Decode,
+        )?;
+        let (tiled_conv, tiled_recurrent) = run_backend_step(
+            BackendStep {
+                mixed_qkv: &decode_mixed_tiled,
+                b: &decode_b_tiled,
+                a: &decode_a_tiled,
+                a_log: &a_log_tiled,
+                dt_bias: &dt_bias_tiled,
+                conv_weight: &conv_weight_tiled,
+                dims: &tiled_dims,
+            },
+            &mut tiled_cache,
+            RecurrentBatchKind::Decode,
+        )?;
+        assert_layout_equivalent(&grouped_conv, &tiled_conv, 2, &conv_runtime_to_grouped)?;
+        assert_layout_equivalent(
+            &grouped_recurrent,
+            &tiled_recurrent,
+            2,
+            &head_runtime_to_grouped,
+        )?;
+        let grouped_decode_output = finish_backend_step(
+            &grouped_recurrent,
+            &decode_z_grouped,
+            &norm_weight,
+            &out_weight_grouped,
+            &grouped_dims,
+        )?;
+        let tiled_decode_output = finish_backend_step(
+            &tiled_recurrent,
+            &decode_z_tiled,
+            &norm_weight,
+            &out_weight_tiled,
+            &tiled_dims,
+        )?;
+        assert_close(&grouped_decode_output, &tiled_decode_output)?;
+        assert_cache_layout_equivalent(
+            &grouped_cache,
+            &tiled_cache,
+            &conv_runtime_to_grouped,
+            &head_runtime_to_grouped,
+        )
     }
 
     #[test]
@@ -1247,6 +1769,7 @@ mod tests {
     #[test]
     fn decode_recurrence_cpu_matches_tensor_path() -> CandleResult<()> {
         run_decode_case(dims(2, 4, 5, 3), 2)?;
-        run_decode_case(dims(3, 3, 4, 2), 1)
+        run_decode_case(dims(3, 3, 4, 2), 1)?;
+        run_decode_case(dims_with_layout(2, 4, 5, 3, GdnVHeadLayout::Tiled), 2)
     }
 }

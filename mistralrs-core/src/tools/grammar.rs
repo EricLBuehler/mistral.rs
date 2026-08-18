@@ -131,6 +131,29 @@ mod tests {
         ]
     }
 
+    fn tool_control_token_trie() -> toktrie::TokTrie {
+        let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
+        let eos = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        for token in [
+            "<eos>",
+            "<tool_call>",
+            "</tool_call>",
+            "<|python_tag|>",
+            "[TOOL_CALLS]",
+            "<tool_calls>",
+            "</tool_calls>",
+            "<|message|>",
+            "<|eom|>",
+            "<|start|>",
+        ] {
+            let mut bytes = vec![toktrie::TokTrie::SPECIAL_TOKEN_MARKER];
+            bytes.extend_from_slice(token.as_bytes());
+            tokens.push(bytes);
+        }
+        let vocab_size = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        toktrie::TokTrie::from(&toktrie::TokRxInfo::new(vocab_size, eos), &tokens)
+    }
+
     #[test]
     fn qwen_grammar_has_two_grammars() {
         let grm =
@@ -178,11 +201,41 @@ mod tests {
                 parsers::ToolCallFormat::Harmony,
                 "start: harmony_tool_0 | harmony_tool_1",
             ),
+            (
+                parsers::ToolCallFormat::Atem,
+                r#"start: required_0 | required_1"#,
+            ),
         ];
 
         for (format, expected) in cases {
             let grm = parsers::build_required_tool_call_grammar(Some(format), &sample_tools());
             let lark = grm.grammars[0].lark_grammar.as_ref().unwrap();
+            assert!(
+                lark.contains(expected),
+                "missing `{expected}` in grammar for {format:?}: {lark}"
+            );
+        }
+    }
+
+    #[test]
+    fn required_tool_call_grammar_uses_available_control_tokens() {
+        let cases = [
+            (parsers::ToolCallFormat::Qwen, "start: <tool_call>"),
+            (parsers::ToolCallFormat::Llama, "start: <|python_tag|>"),
+            (parsers::ToolCallFormat::MistralNemo, "start: [TOOL_CALLS]"),
+            (parsers::ToolCallFormat::Hunyuan, "start: <tool_calls>"),
+            (
+                parsers::ToolCallFormat::Atem,
+                "<|message|> \"<atem:function_calls>\"",
+            ),
+        ];
+        let trie = tool_control_token_trie();
+
+        for (format, expected) in cases {
+            let mut grammar =
+                parsers::build_required_tool_call_grammar(Some(format), &sample_tools());
+            parsers::specialize_required_tool_call_grammar(&mut grammar, &trie);
+            let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
             assert!(
                 lark.contains(expected),
                 "missing `{expected}` in grammar for {format:?}: {lark}"

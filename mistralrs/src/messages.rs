@@ -163,6 +163,7 @@ impl From<InputFile> for File {
 pub struct TextMessages {
     messages: Vec<IndexMap<String, MessageContent>>,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl From<TextMessages> for Vec<IndexMap<String, MessageContent>> {
@@ -210,6 +211,7 @@ impl TextMessages {
         Self {
             messages: Vec::new(),
             enable_thinking: None,
+            reasoning_effort: None,
         }
     }
 
@@ -233,6 +235,12 @@ impl TextMessages {
         self.enable_thinking = Some(enable_thinking);
         self
     }
+
+    /// Set the reasoning effort for models that support it.
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
+        self
+    }
 }
 
 impl RequestLike for TextMessages {
@@ -248,7 +256,7 @@ impl RequestLike for TextMessages {
         RequestMessage::Chat {
             messages: other,
             enable_thinking: self.enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort: self.reasoning_effort,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -285,6 +293,7 @@ impl From<TextMessages> for MultimodalMessages {
             audios: Vec::new(),
             videos: Vec::new(),
             enable_thinking: text.enable_thinking,
+            reasoning_effort: text.reasoning_effort,
             pending_prefixes: Vec::new(),
         }
     }
@@ -316,6 +325,7 @@ pub struct MultimodalMessages {
     audios: Vec<AudioInput>,
     videos: Vec<VideoInput>,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     pending_prefixes: Vec<PendingMediaPrefix>,
 }
 
@@ -334,6 +344,7 @@ impl MultimodalMessages {
             audios: Vec::new(),
             videos: Vec::new(),
             enable_thinking: None,
+            reasoning_effort: None,
             pending_prefixes: Vec::new(),
         }
     }
@@ -482,6 +493,12 @@ impl MultimodalMessages {
         self.enable_thinking = Some(enable_thinking);
         self
     }
+
+    /// Set the reasoning effort for models that support it.
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
+        self
+    }
 }
 
 impl RequestLike for MultimodalMessages {
@@ -509,7 +526,7 @@ impl RequestLike for MultimodalMessages {
             audios: other_audios,
             videos: other_videos,
             enable_thinking: self.enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort: self.reasoning_effort,
         }
     }
     fn enable_search(&self) -> Option<bool> {
@@ -571,6 +588,7 @@ pub struct RequestBuilder {
     max_tool_rounds: Option<usize>,
     tool_dispatch_url: Option<String>,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
     truncate_sequence: bool,
     files: Option<Vec<RequestedFile>>,
     input_files: Vec<File>,
@@ -607,7 +625,8 @@ impl From<TextMessages> for RequestBuilder {
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
-            enable_thinking: None,
+            enable_thinking: value.enable_thinking,
+            reasoning_effort: value.reasoning_effort,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -640,7 +659,8 @@ impl From<MultimodalMessages> for RequestBuilder {
             session_id: None,
             max_tool_rounds: None,
             tool_dispatch_url: None,
-            enable_thinking: None,
+            enable_thinking: value.enable_thinking,
+            reasoning_effort: value.reasoning_effort,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -675,6 +695,7 @@ impl RequestBuilder {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             enable_thinking: None,
+            reasoning_effort: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1075,6 +1096,12 @@ impl RequestBuilder {
         self
     }
 
+    /// Keep generating past the model's EOS tokens; explicit stops and the token limit still apply.
+    pub fn set_sampler_ignore_eos(mut self, ignore_eos: bool) -> Self {
+        self.sampling_params.ignore_eos = ignore_eos;
+        self
+    }
+
     /// Apply a bias to specific token IDs during sampling.
     pub fn set_sampler_logits_bias(mut self, logits_bias: HashMap<u32, f32>) -> Self {
         self.sampling_params.logits_bias = Some(logits_bias);
@@ -1096,6 +1123,12 @@ impl RequestBuilder {
     /// Enable extended thinking (chain-of-thought) for models that support it.
     pub fn enable_thinking(mut self, enable_thinking: bool) -> Self {
         self.enable_thinking = Some(enable_thinking);
+        self
+    }
+
+    /// Set the reasoning effort for models that support it.
+    pub fn with_reasoning_effort(mut self, reasoning_effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(reasoning_effort);
         self
     }
 
@@ -1167,7 +1200,7 @@ impl RequestLike for RequestBuilder {
             RequestMessage::Chat {
                 messages: other,
                 enable_thinking: self.enable_thinking,
-                reasoning_effort: None,
+                reasoning_effort: self.reasoning_effort,
             }
         } else {
             let mut other_messages = Vec::new();
@@ -1184,7 +1217,7 @@ impl RequestLike for RequestBuilder {
                 audios: other_audios,
                 videos: other_videos,
                 enable_thinking: self.enable_thinking,
-                reasoning_effort: None,
+                reasoning_effort: self.reasoning_effort,
             }
         }
     }
@@ -1297,7 +1330,7 @@ fn resolve_pending(
     pending: &mut Vec<PendingMediaPrefix>,
 ) {
     let prefixer = match category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+        ModelCategory::Multimodal { prefixer, .. } => prefixer,
         _ => {
             // Not a multimodal model, nothing to prefix.
             pending.clear();
@@ -1445,6 +1478,28 @@ impl EmbeddingRequestBuilder {
 mod tests {
     use super::*;
 
+    fn assert_reasoning_controls(
+        message: RequestMessage,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) {
+        let (actual_enable_thinking, actual_reasoning_effort) = match message {
+            RequestMessage::Chat {
+                enable_thinking,
+                reasoning_effort,
+                ..
+            }
+            | RequestMessage::MultimodalChat {
+                enable_thinking,
+                reasoning_effort,
+                ..
+            } => (enable_thinking, reasoning_effort),
+            _ => panic!("expected a chat request"),
+        };
+        assert_eq!(actual_enable_thinking, enable_thinking);
+        assert_eq!(actual_reasoning_effort, reasoning_effort);
+    }
+
     #[test]
     fn request_builder_accepts_alias_and_exact_generation() {
         let mut alias = RequestBuilder::new().set_adapter("production");
@@ -1458,6 +1513,42 @@ mod tests {
         assert_eq!(
             exact.take_adapter().unwrap().resolved_generation(),
             Some(generation)
+        );
+    }
+
+    #[test]
+    fn reasoning_controls_survive_message_builder_conversions() {
+        let text = TextMessages::new()
+            .add_message(TextMessageRole::User, "hello")
+            .enable_thinking(true)
+            .with_reasoning_effort(ReasoningEffort::XHigh);
+
+        let mut direct_text = text.clone();
+        assert_reasoning_controls(
+            direct_text.take_messages(),
+            Some(true),
+            Some(ReasoningEffort::XHigh),
+        );
+
+        let mut multimodal: MultimodalMessages = text.clone().into();
+        assert_reasoning_controls(
+            multimodal.take_messages(),
+            Some(true),
+            Some(ReasoningEffort::XHigh),
+        );
+
+        let request: RequestBuilder = text.into();
+        let mut nonstream = request.clone();
+        assert_reasoning_controls(
+            nonstream.take_messages(),
+            Some(true),
+            Some(ReasoningEffort::XHigh),
+        );
+        let mut stream = request;
+        assert_reasoning_controls(
+            stream.take_messages(),
+            Some(true),
+            Some(ReasoningEffort::XHigh),
         );
     }
 }

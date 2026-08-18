@@ -89,6 +89,7 @@ impl Glm4MoeConfig {
 struct RotaryEmbedding {
     cos: Tensor,
     sin: Tensor,
+    is_gpt_neox: bool,
 }
 
 impl RotaryEmbedding {
@@ -99,6 +100,7 @@ impl RotaryEmbedding {
         max_seq_len: usize,
         dev: &Device,
         dtype: DType,
+        is_gpt_neox: bool,
     ) -> Result<Self> {
         let rotary_dim = (partial_rotary_factor * head_dim as f32) as usize;
 
@@ -115,11 +117,12 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: freqs.sin()?.to_dtype(dtype)?,
             cos: freqs.cos()?.to_dtype(dtype)?,
+            is_gpt_neox,
         })
     }
 
     fn apply_rotary_emb_positions(&self, xs: &Tensor, positions: &Tensor) -> Result<Tensor> {
-        apply_rotary_q(xs, &self.cos, &self.sin, positions, false)
+        apply_rotary_q(xs, &self.cos, &self.sin, positions, self.is_gpt_neox)
     }
 
     fn forward_qk_norm(
@@ -139,7 +142,7 @@ impl RotaryEmbedding {
             k_norm.eps(),
             &self.cos,
             &self.sin,
-            false,
+            self.is_gpt_neox,
             positions,
         )
     }
@@ -705,7 +708,7 @@ impl Glm4Moe {
     pub fn new(
         cfg: &Glm4MoeConfig,
         vb: ShardedVarBuilder,
-        _is_gptx: bool,
+        is_gptx: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
@@ -755,6 +758,7 @@ impl Glm4Moe {
                     cfg.max_position_embeddings,
                     device,
                     vb.dtype(),
+                    is_gptx,
                 )?),
             );
         }

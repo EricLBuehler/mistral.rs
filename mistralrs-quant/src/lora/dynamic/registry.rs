@@ -84,6 +84,8 @@ pub struct LoraLinearSpec {
     in_features: usize,
     out_features: usize,
     parallelism: LoraParallelism,
+    input_runtime_to_canonical: Option<Arc<[usize]>>,
+    output_runtime_to_canonical: Option<Arc<[usize]>>,
 }
 
 impl LoraLinearSpec {
@@ -92,6 +94,8 @@ impl LoraLinearSpec {
             in_features,
             out_features,
             parallelism: LoraParallelism::Replicated,
+            input_runtime_to_canonical: None,
+            output_runtime_to_canonical: None,
         }
     }
 
@@ -100,6 +104,8 @@ impl LoraLinearSpec {
             in_features,
             out_features,
             parallelism: LoraParallelism::Column { output_shard },
+            input_runtime_to_canonical: None,
+            output_runtime_to_canonical: None,
         }
     }
 
@@ -108,7 +114,29 @@ impl LoraLinearSpec {
             in_features,
             out_features,
             parallelism: LoraParallelism::Row { input_shard },
+            input_runtime_to_canonical: None,
+            output_runtime_to_canonical: None,
         }
+    }
+
+    pub fn with_input_runtime_to_canonical(
+        mut self,
+        runtime_to_canonical: impl Into<Arc<[usize]>>,
+    ) -> Result<Self> {
+        let runtime_to_canonical = runtime_to_canonical.into();
+        validate_feature_permutation("input", &runtime_to_canonical, self.in_features)?;
+        self.input_runtime_to_canonical = Some(runtime_to_canonical);
+        Ok(self)
+    }
+
+    pub fn with_output_runtime_to_canonical(
+        mut self,
+        runtime_to_canonical: impl Into<Arc<[usize]>>,
+    ) -> Result<Self> {
+        let runtime_to_canonical = runtime_to_canonical.into();
+        validate_feature_permutation("output", &runtime_to_canonical, self.out_features)?;
+        self.output_runtime_to_canonical = Some(runtime_to_canonical);
+        Ok(self)
     }
 
     pub fn in_features(&self) -> usize {
@@ -122,6 +150,62 @@ impl LoraLinearSpec {
     pub(crate) fn parallelism(&self) -> LoraParallelism {
         self.parallelism
     }
+
+    pub(crate) fn is_replicated(&self) -> bool {
+        self.parallelism == LoraParallelism::Replicated
+    }
+
+    pub(crate) fn row_input_shard(&self) -> Option<Shard> {
+        match self.parallelism {
+            LoraParallelism::Row { input_shard } => Some(input_shard),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn input_runtime_to_canonical(&self) -> Option<&[usize]> {
+        self.input_runtime_to_canonical.as_deref()
+    }
+
+    pub(crate) fn output_runtime_to_canonical(&self) -> Option<&[usize]> {
+        self.output_runtime_to_canonical.as_deref()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(runtime_to_canonical) = &self.input_runtime_to_canonical {
+            validate_feature_permutation("input", runtime_to_canonical, self.in_features)?;
+        }
+        if let Some(runtime_to_canonical) = &self.output_runtime_to_canonical {
+            validate_feature_permutation("output", runtime_to_canonical, self.out_features)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_feature_permutation(
+    axis: &str,
+    runtime_to_canonical: &[usize],
+    features: usize,
+) -> Result<()> {
+    if runtime_to_canonical.len() != features {
+        candle_core::bail!(
+            "LoRA {axis} runtime-to-canonical map has length {}, expected {features}",
+            runtime_to_canonical.len()
+        );
+    }
+    let mut seen = vec![false; features];
+    for (runtime, &canonical) in runtime_to_canonical.iter().enumerate() {
+        let Some(seen) = seen.get_mut(canonical) else {
+            candle_core::bail!(
+                "LoRA {axis} runtime-to-canonical map index {runtime} references out-of-range feature {canonical}"
+            );
+        };
+        if std::mem::replace(seen, true) {
+            candle_core::bail!(
+                "LoRA {axis} runtime-to-canonical map references canonical feature {canonical} more than once"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -171,9 +255,16 @@ struct RegistryState {
 }
 
 #[derive(Debug)]
+struct LoraSitePrefixAlias {
+    source: Arc<str>,
+    target: Arc<str>,
+}
+
+#[derive(Debug)]
 pub struct LoraLayerRegistry {
     runtime_id: LoraRuntimeId,
     state: Mutex<RegistryState>,
+    site_prefix_alias: Option<LoraSitePrefixAlias>,
 }
 
 impl Default for LoraLayerRegistry {
@@ -197,7 +288,31 @@ impl LoraLayerRegistry {
         Self {
             runtime_id: LoraRuntimeId::next(),
             state: Mutex::new(RegistryState::default()),
+            site_prefix_alias: None,
         }
+    }
+
+    pub fn new_with_site_prefix_alias(
+        source: impl Into<Arc<str>>,
+        target: impl Into<Arc<str>>,
+    ) -> Result<Self> {
+        let source = source.into();
+        let target = target.into();
+        if source.is_empty() || target.is_empty() {
+            candle_core::bail!("LoRA site prefix aliases must not be empty");
+        }
+        if source.starts_with('.')
+            || source.ends_with('.')
+            || target.starts_with('.')
+            || target.ends_with('.')
+        {
+            candle_core::bail!("LoRA site prefix aliases must not start or end with `.`");
+        }
+        Ok(Self {
+            runtime_id: LoraRuntimeId::next(),
+            state: Mutex::new(RegistryState::default()),
+            site_prefix_alias: Some(LoraSitePrefixAlias { source, target }),
+        })
     }
 
     pub fn runtime_id(&self) -> LoraRuntimeId {
@@ -211,6 +326,8 @@ impl LoraLayerRegistry {
         activation_dtype: DType,
         device: Device,
     ) -> Result<Arc<LoraSiteHandle>> {
+        spec.validate()?;
+        let key = self.canonical_site_key(key);
         let mut state = self.state.lock().expect("LoRA layer registry poisoned");
         if state.expert_sites.contains_key(&key) {
             candle_core::bail!(
@@ -256,6 +373,7 @@ impl LoraLayerRegistry {
         activation_dtype: DType,
         device: Device,
     ) -> Result<Arc<LoraExpertSiteHandle>> {
+        let key = self.canonical_site_key(key);
         if key.slice().is_some() {
             candle_core::bail!("expert LoRA group sites cannot be sliced");
         }
@@ -334,6 +452,31 @@ impl LoraLayerRegistry {
             .values()
             .cloned()
             .collect()
+    }
+
+    fn canonical_site_key(&self, key: LoraSiteKey) -> LoraSiteKey {
+        let Some(alias) = &self.site_prefix_alias else {
+            return key;
+        };
+        let path = key.path();
+        let suffix = if path == alias.source.as_ref() {
+            Some("")
+        } else {
+            path.strip_prefix(alias.source.as_ref())
+                .and_then(|suffix| suffix.strip_prefix('.'))
+        };
+        let Some(suffix) = suffix else {
+            return key;
+        };
+        let path = if suffix.is_empty() {
+            alias.target.clone()
+        } else {
+            Arc::from(format!("{}.{suffix}", alias.target))
+        };
+        LoraSiteKey {
+            path,
+            slice: key.slice,
+        }
     }
 }
 
@@ -431,6 +574,80 @@ mod tests {
                 DType::F32,
                 Device::Cpu,
             )
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn site_prefix_aliases_apply_to_linear_and_expert_sites() -> Result<()> {
+        let registry =
+            LoraLayerRegistry::new_with_site_prefix_alias("model", "model.language_model")?;
+        let linear = registry.register(
+            LoraSiteKey::with_slice("model.layers.0.self_attn.q_proj", 0, 2)?,
+            LoraLinearSpec::replicated(4, 8),
+            DType::F32,
+            Device::Cpu,
+        )?;
+        let expert = registry.register_expert(
+            LoraSiteKey::new("model.layers.0.mlp.experts"),
+            expert_spec()?,
+            DType::F32,
+            Device::Cpu,
+        )?;
+        let unrelated = registry.register(
+            LoraSiteKey::new("model_extra.proj"),
+            LoraLinearSpec::replicated(4, 8),
+            DType::F32,
+            Device::Cpu,
+        )?;
+
+        assert_eq!(
+            linear.key().path(),
+            "model.language_model.layers.0.self_attn.q_proj"
+        );
+        assert_eq!(
+            linear.key().slice(),
+            Some(LoraSiteSlice { index: 0, count: 2 })
+        );
+        assert_eq!(
+            expert.key().path(),
+            "model.language_model.layers.0.mlp.experts"
+        );
+        assert_eq!(unrelated.key().path(), "model_extra.proj");
+        Ok(())
+    }
+
+    #[test]
+    fn linear_feature_maps_must_be_permutations() -> Result<()> {
+        let spec = LoraLinearSpec::replicated(4, 3)
+            .with_input_runtime_to_canonical(vec![0, 2, 1, 3])?
+            .with_output_runtime_to_canonical(vec![2, 0, 1])?;
+        assert_eq!(spec.input_runtime_to_canonical(), Some(&[0, 2, 1, 3][..]));
+        assert_eq!(spec.output_runtime_to_canonical(), Some(&[2, 0, 1][..]));
+
+        assert!(LoraLinearSpec::replicated(4, 3)
+            .with_input_runtime_to_canonical(vec![0, 1, 2])
+            .is_err());
+        assert!(LoraLinearSpec::replicated(4, 3)
+            .with_input_runtime_to_canonical(vec![0, 1, 2, 4])
+            .is_err());
+        assert!(LoraLinearSpec::replicated(4, 3)
+            .with_input_runtime_to_canonical(vec![0, 1, 1, 3])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn duplicate_sites_must_have_the_same_feature_maps() -> Result<()> {
+        let registry = LoraLayerRegistry::new();
+        let key = LoraSiteKey::new("linear");
+        let first =
+            LoraLinearSpec::replicated(4, 4).with_output_runtime_to_canonical(vec![0, 2, 1, 3])?;
+        registry.register(key.clone(), first, DType::F32, Device::Cpu)?;
+        let second =
+            LoraLinearSpec::replicated(4, 4).with_output_runtime_to_canonical(vec![0, 1, 2, 3])?;
+        assert!(registry
+            .register(key, second, DType::F32, Device::Cpu)
             .is_err());
         Ok(())
     }
