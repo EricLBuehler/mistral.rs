@@ -33,6 +33,7 @@ struct CudaDecodeGraphForwardInput<'a> {
     paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &'a PagedAttentionInputMetadata)>,
     flash_meta: &'a FlashParams,
     model_specific_args: &'a dyn Any,
+    recurrent_batch_kind: RecurrentBatchKind,
 }
 use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
 use crate::pipeline::chat_template::{
@@ -48,7 +49,6 @@ use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
-#[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -85,7 +85,6 @@ use regex_automata::meta::Regex;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-#[cfg(feature = "cuda")]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::{env, fs};
@@ -107,6 +106,8 @@ pub struct MultimodalPipeline {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     #[cfg(feature = "cuda")]
     cuda_decode_graph: StdMutex<CudaDecodeGraphState>,
+    // Attention inputs of the last prompt-chunk forward, so a built-in drafter can prefill with them
+    last_prompt_attention: StdMutex<Option<(PagedAttentionInputMetadata, FlashParams)>>,
 
     generation_defaults: Option<crate::ModelGenerationDefaults>,
     tracked_modules: Vec<mistralrs_quant::TrackedModule>,
@@ -1305,6 +1306,7 @@ impl Loader for MultimodalLoader {
             preprocessor_config: Arc::new(preprocessor_config),
             #[cfg(feature = "cuda")]
             cuda_decode_graph: StdMutex::new(CudaDecodeGraphState::default()),
+            last_prompt_attention: StdMutex::new(None),
             generation_defaults,
             tracked_modules,
             source_weight_files,
@@ -1626,6 +1628,7 @@ impl MultimodalPipeline {
             paged_attn_meta,
             flash_meta,
             model_specific_args,
+            recurrent_batch_kind,
         } = input;
         if !cuda_decode_graphs_enabled()
             || !self
@@ -1637,7 +1640,10 @@ impl MultimodalPipeline {
         if !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref()) {
             return Ok(None);
         }
-        if self.model.has_speculative_proposer() {
+        // With a proposer attached every step is a fixed-width verify; the model must expose the
+        // outputs the proposer reads so a replay can refresh them
+        let speculative = self.model.has_speculative_proposer();
+        if speculative && self.model.take_speculative_graph_state().is_none() {
             return Ok(None);
         }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
@@ -1647,7 +1653,7 @@ impl MultimodalPipeline {
             return Ok(None);
         }
         let (batch, q_len) = input_ids.dims2()?;
-        if q_len != 1
+        if (q_len != 1 && !speculative)
             || seqlen_offsets.len() != batch
             || context_lens.len() != batch
             || position_ids.len() != batch
@@ -1658,6 +1664,9 @@ impl MultimodalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
+        // The captured forward runs on a Var copy with canonical strides; kernels bake dims/strides into
+        // their parameter vectors, so the warmup must see the exact same layout
+        let input_ids = &input_ids.force_contiguous()?;
         let hybrid_state_indices = self.hybrid_state_indices_host();
         let key = CudaDecodeGraphKey::new(input_ids, metadata, cache_config.block_size)?
             .with_state_key(hybrid_state_indices.clone());
@@ -1669,8 +1678,11 @@ impl MultimodalPipeline {
         if state.disabled() {
             return Ok(None);
         }
-        if let Some(logits) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
-            return Ok(Some(logits));
+        if let Some(replay) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
+            if let Some(spec_state) = replay.spec_state.as_deref() {
+                self.model.install_speculative_graph_state(spec_state)?;
+            }
+            return Ok(Some(replay.logits));
         }
 
         let Device::Cuda(cuda_device) = input_ids.device() else {
@@ -1687,8 +1699,8 @@ impl MultimodalPipeline {
             Some((kv_cache.as_slice(), metadata)),
             flash_meta,
         )
-        .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
-        .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
+        .with_recurrent_batch_kind(recurrent_batch_kind)
+        .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
         let warmup_logits = self.model.forward(
             input_ids,
             None,
@@ -1699,6 +1711,23 @@ impl MultimodalPipeline {
         let warmup_recurrent_snapshots = self.snapshot_hybrid_recurrent_state()?;
         self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
         input_ids.device().synchronize()?;
+        // The warmup forward is the one that really ran this step, so its proposer outputs are the
+        // live ones; the captured forward's outputs are copied into persistent buffers for replays
+        let warm_spec_state = speculative
+            .then(|| self.model.take_speculative_graph_state())
+            .flatten();
+        let persistent_spec_tensors = warm_spec_state
+            .as_ref()
+            .map(|warm| {
+                warm.tensors()
+                    .iter()
+                    .map(|tensor| unsafe {
+                        Tensor::empty(tensor.shape(), tensor.dtype(), tensor.device())
+                    })
+                    .collect::<candle_core::Result<Vec<_>>>()
+            })
+            .transpose()?;
+        let mut graph_spec_state = None;
 
         let retained_tensors = self.hybrid_state_index_tensors();
         let capture_result = capture_cuda_decode_graph(
@@ -1721,20 +1750,43 @@ impl MultimodalPipeline {
                     Some((kv_cache.as_slice(), graph_metadata)),
                     flash_meta,
                 )
-                .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
-                .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
-                self.model.forward(
+                .with_recurrent_batch_kind(recurrent_batch_kind)
+                .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+                let logits = self.model.forward(
                     graph_input_ids,
                     None,
                     self.model.default_model_specific_args(graph_input_ids),
                     &mut ctx,
-                )
+                )?;
+                if let Some(persistent) = persistent_spec_tensors.as_ref() {
+                    let captured = self.model.take_speculative_graph_state().ok_or_else(|| {
+                        candle_core::Error::msg("captured forward left no speculative state")
+                    })?;
+                    let produced = captured.tensors();
+                    if produced.len() != persistent.len() {
+                        candle_core::bail!(
+                            "speculative graph state changed shape between warmup and capture"
+                        );
+                    }
+                    for (src, dst) in produced.iter().zip(persistent) {
+                        crate::cuda::graph::copy_tensor(src, dst)?;
+                    }
+                    graph_spec_state = Some(captured.with_tensors(persistent.clone())?);
+                }
+                Ok(logits)
             },
         );
+        if let Some(warm) = warm_spec_state.as_deref() {
+            self.model.install_speculative_graph_state(warm)?;
+        }
         match capture_result {
             Ok(entry) => {
                 self.restore_hybrid_recurrent_state(warmup_recurrent_snapshots.as_deref())?;
-                state.insert(entry);
+                tracing::debug!(
+                    "Captured CUDA decode graph for input shape {:?}",
+                    input_ids.dims()
+                );
+                state.insert(entry.with_spec_state(graph_spec_state));
             }
             Err(err) => {
                 self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
@@ -1750,7 +1802,7 @@ impl MultimodalPipeline {
             .lock()
             .expect("CUDA graph mutex poisoned");
         if !state.disabled() {
-            warn!("CUDA decode graphs disabled after capture/replay error: {err}");
+            warn!("CUDA decode graphs disabled after capture/replay error: {err:?}");
         }
         state.disable();
     }
@@ -1835,6 +1887,15 @@ impl Pipeline for MultimodalPipeline {
             paged_attn_meta.as_ref().map(|(_, meta)| *meta),
             recurrent_batch_kind,
         )?;
+        if self.model.has_speculative_proposer() {
+            *self
+                .last_prompt_attention
+                .lock()
+                .expect("prompt attention mutex poisoned") = paged_attn_meta
+                .as_ref()
+                .filter(|(_, meta)| meta.is_first_prompt_chunk || meta.num_cached_tokens.is_some())
+                .map(|(_, meta)| ((*meta).clone(), flash_meta.clone()));
+        }
         #[cfg(feature = "cuda")]
         if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
             match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
@@ -1845,6 +1906,7 @@ impl Pipeline for MultimodalPipeline {
                 paged_attn_meta: paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), *b)),
                 flash_meta: &flash_meta,
                 model_specific_args: &*model_specific_args,
+                recurrent_batch_kind,
             }) {
                 Ok(Some(logits)) => return Ok(ForwardInputsResult::CausalGeneration { logits }),
                 Ok(None) => {}
@@ -1925,6 +1987,11 @@ impl Pipeline for MultimodalPipeline {
             .map(|row| row.tokens.as_slice())
             .collect::<Vec<_>>();
         let chunk_ranges = chunk.rows.iter().map(|row| row.range).collect::<Vec<_>>();
+        let target_attention = self
+            .last_prompt_attention
+            .lock()
+            .expect("prompt attention mutex poisoned")
+            .take();
         self.model
             .speculative_prefill(crate::speculative::SpeculativePrefillCtx {
                 seq_ids: &seq_ids,
@@ -1936,6 +2003,12 @@ impl Pipeline for MultimodalPipeline {
                     metadata,
                     kv_cache: &kv_cache,
                 },
+                target_attention: target_attention.as_ref().map(|(metadata, flash_params)| {
+                    crate::speculative::TargetAttentionInputs {
+                        metadata,
+                        flash_params,
+                    }
+                }),
             })
     }
 

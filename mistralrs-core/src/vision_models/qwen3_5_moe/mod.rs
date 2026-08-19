@@ -112,18 +112,17 @@ impl Qwen3_5MoeModel {
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let seqlen_offsets = ctx.seqlen_offsets();
-        let mut attention_mask = CausalMasker.make_causal_mask(
-            input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
-            self.text.dtype,
-            &CausalMaskConfig {
-                sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
-            },
-        )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
-        attention_mask = if is_first_chunk {
-            attention_mask
+        // Later chunks and decode rows attend through the paged cache, so only the first chunk needs a mask
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &seqlen_offsets as &dyn PastKvLenCache,
+                self.text.dtype,
+                &CausalMaskConfig {
+                    sliding_window: self.text.cfg.sliding_window,
+                    ..Default::default()
+                },
+            )?
         } else {
             AttentionMask::None
         };

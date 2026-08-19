@@ -12,6 +12,7 @@ pub use config::{MtpConfig, SpeculativeConfig};
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
 pub use proposer::{
     SpeculativeCommitRow, SpeculativeKvCache, SpeculativePrefillCtx, SpeculativeProposal,
-    SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer, TargetTokenEmbedder,
+    SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
+    TargetAttentionInputs, TargetTokenEmbedder,
 };
-pub use target::SpeculativeTargetMixin;
+pub use target::{SpeculativeGraphState, SpeculativeTargetMixin};

@@ -17,7 +17,7 @@ use crate::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     speculative::{
-        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeProposalBatch,
+        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeGraphState, SpeculativeProposalBatch,
         SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
@@ -1053,7 +1053,54 @@ impl MultimodalModel for Gemma4Model {
     }
 }
 
+/// The only proposer-facing output of a Gemma 4 target forward is the captured hidden state.
+struct Gemma4SpecGraphState {
+    hidden: Option<Tensor>,
+}
+
+impl SpeculativeGraphState for Gemma4SpecGraphState {
+    fn tensors(&self) -> Vec<Tensor> {
+        self.hidden.iter().cloned().collect()
+    }
+
+    fn with_tensors(
+        &self,
+        tensors: Vec<Tensor>,
+    ) -> candle_core::Result<Box<dyn SpeculativeGraphState>> {
+        if tensors.len() != usize::from(self.hidden.is_some()) {
+            candle_core::bail!("Gemma 4 speculative graph state expects one hidden tensor");
+        }
+        Ok(Box::new(Gemma4SpecGraphState {
+            hidden: tensors.into_iter().next(),
+        }))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
+    fn take_speculative_graph_state(&self) -> Option<Box<dyn SpeculativeGraphState>> {
+        self.language_model.take_spec_hidden().map(|hidden| {
+            Box::new(Gemma4SpecGraphState { hidden }) as Box<dyn SpeculativeGraphState>
+        })
+    }
+
+    fn install_speculative_graph_state(
+        &self,
+        state: &dyn SpeculativeGraphState,
+    ) -> candle_core::Result<()> {
+        let state = state
+            .as_any()
+            .downcast_ref::<Gemma4SpecGraphState>()
+            .ok_or_else(|| {
+                candle_core::Error::msg("foreign speculative graph state for Gemma 4")
+            })?;
+        self.language_model.set_spec_hidden(state.hidden.clone());
+        Ok(())
+    }
+
     fn attach_speculative(
         &mut self,
         config: SpeculativeConfig,

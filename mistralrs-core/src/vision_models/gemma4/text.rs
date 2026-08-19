@@ -1871,6 +1871,19 @@ impl TextModel {
         self.last_spec_hidden.lock().ok().and_then(|h| h.clone())
     }
 
+    /// `None` unless a proposer is attached; otherwise the captured hidden state, detached.
+    pub fn take_spec_hidden(&self) -> Option<Option<Tensor>> {
+        self.store_spec_hidden
+            .load(Ordering::Relaxed)
+            .then(|| self.last_spec_hidden.lock().ok().and_then(|mut h| h.take()))
+    }
+
+    pub fn set_spec_hidden(&self, hidden: Option<Tensor>) {
+        if let Ok(mut slot) = self.last_spec_hidden.lock() {
+            *slot = hidden;
+        }
+    }
+
     pub fn set_store_spec_hidden(&self, store: bool) {
         self.store_spec_hidden.store(store, Ordering::Relaxed);
         if !store {

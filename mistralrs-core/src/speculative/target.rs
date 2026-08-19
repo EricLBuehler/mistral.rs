@@ -5,6 +5,16 @@ use super::{
     SpeculativePrefillCtx, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
 };
 
+/// Everything a target forward leaves behind for the proposer/commit (captured hidden states, rollback
+/// stashes). A CUDA graph replay never runs the forward, so the pipeline copies these into persistent
+/// buffers at capture time and re-installs them after every replay.
+pub trait SpeculativeGraphState: Send + Sync {
+    /// Device tensors in a fixed order; `with_tensors` rebuilds the same structure around replacements.
+    fn tensors(&self) -> Vec<Tensor>;
+    fn with_tensors(&self, tensors: Vec<Tensor>) -> Result<Box<dyn SpeculativeGraphState>>;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
 pub trait SpeculativeTargetMixin {
     fn attach_speculative(
         &mut self,
@@ -51,6 +61,16 @@ pub trait SpeculativeTargetMixin {
     /// Called once verification decided which rows of the last multi-token step survive, so models
     /// with state that is not a paged KV cache (recurrent layers) can roll rejected rows back.
     fn speculative_commit(&mut self, _rows: &[SpeculativeCommitRow]) -> Result<()> {
+        Ok(())
+    }
+
+    /// Detach what the last forward left for the proposer. `None` means the model cannot be replayed
+    /// through a CUDA graph while a proposer is attached.
+    fn take_speculative_graph_state(&self) -> Option<Box<dyn SpeculativeGraphState>> {
+        None
+    }
+
+    fn install_speculative_graph_state(&self, _state: &dyn SpeculativeGraphState) -> Result<()> {
         Ok(())
     }
 }

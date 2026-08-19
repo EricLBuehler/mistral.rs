@@ -16,6 +16,7 @@ use crate::{
 use crate::pipeline::{
     text_models_inputs_processor::PagedAttentionInputMetadata, text_positions_tensor,
 };
+use crate::speculative::SpeculativeGraphState;
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
@@ -597,6 +598,23 @@ pub(crate) struct CudaDecodeGraphEntry {
     _metadata: PagedAttentionInputMetadata,
     _retained_tensors: Vec<Tensor>,
     logits: Tensor,
+    // Proposer-facing outputs living in persistent buffers the replay refreshes
+    spec_state: Option<Arc<dyn SpeculativeGraphState>>,
+}
+
+impl CudaDecodeGraphEntry {
+    pub(crate) fn with_spec_state(
+        mut self,
+        spec_state: Option<Box<dyn SpeculativeGraphState>>,
+    ) -> Self {
+        self.spec_state = spec_state.map(Arc::from);
+        self
+    }
+}
+
+pub(crate) struct CudaDecodeGraphReplay {
+    pub(crate) logits: Tensor,
+    pub(crate) spec_state: Option<Arc<dyn SpeculativeGraphState>>,
 }
 
 #[derive(Default)]
@@ -636,7 +654,7 @@ impl CudaDecodeGraphState {
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
-    ) -> candle_core::Result<Option<Tensor>> {
+    ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
             return Ok(None);
         };
@@ -650,9 +668,12 @@ impl CudaDecodeGraphState {
             .graph
             .launch()
             .map_err(|err| err.context("CUDA graph replay launch failed"))?;
-        let logits = entry.logits.clone();
+        let replay = CudaDecodeGraphReplay {
+            logits: entry.logits.clone(),
+            spec_state: entry.spec_state.clone(),
+        };
         self.entries.push(entry);
-        Ok(Some(logits))
+        Ok(Some(replay))
     }
 
     pub(crate) fn insert(&mut self, entry: CudaDecodeGraphEntry) {
@@ -755,6 +776,7 @@ where
         _metadata: metadata,
         _retained_tensors: retained_tensors,
         logits: graph_logits,
+        spec_state: None,
     })
 }
 

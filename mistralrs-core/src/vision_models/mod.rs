@@ -153,13 +153,10 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
     ctx: &crate::pipeline::ModelForwardContext<'_>,
 ) -> Result<Option<Tensor>> {
     let (batch, seq_len) = input_ids.dims2()?;
-    if seq_len != 1 {
-        return Ok(None);
-    }
     let Some(rope_positions) = ctx.cache().rope_positions(input_ids.device()) else {
         return Ok(None);
     };
-    if rope_positions.dim(0)? != batch {
+    if rope_positions.dim(0)? != batch * seq_len {
         candle_core::bail!(
             "rope positions shape {:?} is incompatible with input shape {:?}",
             rope_positions.shape(),
@@ -167,6 +164,9 @@ pub(crate) fn text_decode_mrope_position_ids_from_context(
         );
     }
     Ok(Some(
-        rope_positions.reshape((1, batch, 1))?.repeat((3, 1, 1))?,
+        rope_positions
+            .to_dtype(candle_core::DType::I64)?
+            .reshape((1, batch, seq_len))?
+            .repeat((3, 1, 1))?,
     ))
 }

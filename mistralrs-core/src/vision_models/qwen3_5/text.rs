@@ -491,16 +491,79 @@ pub(super) struct SpecCapture {
 
 /// Per-GDN-layer inputs and pre-forward states of the last multi-token decode, so a rejected tail
 /// can be undone by replaying only the accepted prefix.
+#[derive(Clone)]
 pub(super) struct GdnReplayStash {
     pub(super) slots: Vec<u32>,
     pub(super) layers: Vec<GdnLayerStash>,
 }
 
+#[derive(Clone)]
 pub(super) struct GdnLayerStash {
     pub(super) layer_idx: usize,
     pub(super) input: Tensor,
     pub(super) conv_state: Tensor,
     pub(super) recurrent_state: Tensor,
+}
+
+/// Snapshot of the proposer-facing outputs of one target forward (see `SpeculativeGraphState`).
+#[derive(Clone)]
+pub(super) struct SpecGraphState {
+    spec_capture: Option<SpecCapture>,
+    full_capture: Option<SpecCapture>,
+    gdn_stash: Option<GdnReplayStash>,
+}
+
+impl crate::speculative::SpeculativeGraphState for SpecGraphState {
+    fn tensors(&self) -> Vec<Tensor> {
+        let mut out = Vec::new();
+        for capture in [&self.spec_capture, &self.full_capture]
+            .into_iter()
+            .flatten()
+        {
+            out.push(capture.hidden.clone());
+            out.push(capture.positions.clone());
+        }
+        if let Some(stash) = &self.gdn_stash {
+            for layer in &stash.layers {
+                out.push(layer.input.clone());
+                out.push(layer.conv_state.clone());
+                out.push(layer.recurrent_state.clone());
+            }
+        }
+        out
+    }
+
+    fn with_tensors(
+        &self,
+        tensors: Vec<Tensor>,
+    ) -> Result<Box<dyn crate::speculative::SpeculativeGraphState>> {
+        let mut tensors = tensors.into_iter();
+        let mut next = || {
+            tensors.next().ok_or_else(|| {
+                candle_core::Error::msg("speculative graph state tensor list is short")
+            })
+        };
+        let mut state = self.clone();
+        for capture in [&mut state.spec_capture, &mut state.full_capture]
+            .into_iter()
+            .flatten()
+        {
+            capture.hidden = next()?;
+            capture.positions = next()?;
+        }
+        if let Some(stash) = state.gdn_stash.as_mut() {
+            for layer in stash.layers.iter_mut() {
+                layer.input = next()?;
+                layer.conv_state = next()?;
+                layer.recurrent_state = next()?;
+            }
+        }
+        Ok(Box::new(state))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 pub struct Qwen3_5TextModel {
@@ -829,6 +892,41 @@ impl Qwen3_5TextModel {
 
     pub(super) fn clear_gdn_replay_stash(&self) {
         *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+    }
+
+    pub(super) fn take_spec_graph_state(&self) -> Option<SpecGraphState> {
+        if !self.store_spec_hidden.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(SpecGraphState {
+            spec_capture: self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            full_capture: self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            gdn_stash: self
+                .gdn_replay_stash
+                .lock()
+                .expect("gdn stash poisoned")
+                .take(),
+        })
+    }
+
+    pub(super) fn install_spec_graph_state(&self, state: &SpecGraphState) {
+        *self
+            .last_spec_capture
+            .lock()
+            .expect("spec capture poisoned") = state.spec_capture.clone();
+        *self
+            .last_full_capture
+            .lock()
+            .expect("spec capture poisoned") = state.full_capture.clone();
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = state.gdn_stash.clone();
     }
 
     pub(super) fn last_spec_capture(&self) -> Option<SpecCapture> {
