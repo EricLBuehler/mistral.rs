@@ -411,6 +411,14 @@ impl HybridCache {
         })
     }
 
+    /// Slot capacity of the recurrent pools; changes whenever the pool storage is reallocated.
+    pub fn recurrent_capacity(&self) -> usize {
+        self.caches
+            .iter()
+            .find_map(|cache| cache.as_recurrent_pool().map(RecurrentStatePool::capacity))
+            .unwrap_or(0)
+    }
+
     /// Allocate state slots for a new sequence across all recurrent layers.
     /// Returns the slot index (same for all layers).
     pub fn allocate_seq(&mut self) -> Option<usize> {
@@ -505,6 +513,24 @@ impl HybridCache {
         self.state_indices = None;
         self.state_indices_host = None;
         self.device_state_indices.clear();
+    }
+
+    /// Reset the attention caches and only the given recurrent slots; other sequences keep their state.
+    pub fn reset_attention_and_slots(&mut self, slots: &[usize]) -> Result<()> {
+        for cache in &mut self.caches {
+            match cache {
+                HybridLayerCache::Attention(kv) => kv.reset(),
+                HybridLayerCache::Recurrent(pool) => {
+                    for slot in slots {
+                        pool.reset_slot(*slot)?;
+                    }
+                }
+            }
+        }
+        self.state_indices = None;
+        self.state_indices_host = None;
+        self.device_state_indices.clear();
+        Ok(())
     }
 
     pub fn num_layers(&self) -> usize {

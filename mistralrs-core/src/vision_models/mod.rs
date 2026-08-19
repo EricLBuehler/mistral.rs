@@ -129,6 +129,25 @@ pub(crate) fn mrope_position_ids_for_input(
     position_ids.broadcast_add(&mrope_position_deltas)
 }
 
+/// Positions `offset..offset+seq_len` per row, repeated on the three MRoPE planes: `[3, batch, seq_len]` i64.
+pub(crate) fn text_mrope_position_ids(
+    input_ids: &Tensor,
+    seqlen_offsets: &[usize],
+) -> Result<Tensor> {
+    let (batch, seq_len) = input_ids.dims2()?;
+    if seqlen_offsets.len() != batch {
+        candle_core::bail!(
+            "MRoPE offsets ({}) do not match batch size {batch}",
+            seqlen_offsets.len()
+        );
+    }
+    let mut positions = Vec::with_capacity(batch * seq_len);
+    for offset in seqlen_offsets {
+        positions.extend((*offset..*offset + seq_len).map(|pos| pos as i64));
+    }
+    Tensor::from_vec(positions, (1, batch, seq_len), input_ids.device())?.repeat((3, 1, 1))
+}
+
 pub(crate) fn text_decode_mrope_position_ids_from_context(
     input_ids: &Tensor,
     ctx: &crate::pipeline::ModelForwardContext<'_>,

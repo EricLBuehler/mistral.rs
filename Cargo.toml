@@ -115,7 +115,7 @@ tokenizers = { version = "0.21.4", default-features = false }
 tokio-tungstenite = "0.28.0"
 tqdm = "0.8.0"
 chrono = "0.4.43"
-minijinja = { version = "2.14.0", features = ["builtins", "json"] }
+minijinja = { version = "2.14.0", features = ["builtins", "json", "preserve_order"] }
 minijinja-contrib = { version = "2.14.0", features = ["pycompat"] }
 regex-automata = { version = "0.4.13", features = ["meta"] }
 rustc-hash = "2.1.1"

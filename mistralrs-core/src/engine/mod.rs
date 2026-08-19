@@ -865,10 +865,13 @@ impl Engine {
                         // `snapshot_paged_recurrent_prefix`.
                         {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
-                            if is_prompt && pipeline.cache().is_hybrid() {
+                            let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
+                            if is_prompt
+                                && pipeline.cache().is_hybrid()
+                                && prefix_cacher.accepts_paged_recurrent_prefix()
+                            {
                                 let block_size = scheduler.block_size().unwrap();
                                 let hybrid_cache = pipeline.cache().hybrid();
-                                let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
 
                                 for seq in guards_mut.iter() {
                                     let encoded_len = seq.num_computed_tokens();

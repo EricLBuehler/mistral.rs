@@ -1922,6 +1922,7 @@ async fn parse_openresponses_request(
         enable_thinking,
         truncate_sequence,
         reasoning_effort,
+        chat_template_kwargs: None,
         files: oairequest.files,
     };
 

@@ -737,7 +737,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
         if let [_, value] = parts.as_slice() {
             match value.trim().parse::<f64>() {
                 Ok(v) if (0.0..=2.0).contains(&v) => {
-                    sampling_params.temperature = if v == 0.0 { None } else { Some(v) };
+                    sampling_params.temperature = Some(v);
                     info!("Set temperature to {v}");
                 }
                 Ok(_) => {
@@ -1035,11 +1035,7 @@ async fn text_interactive_mode(
             }
             println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
-            IndexMap::new();
-        assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        assistant_message.insert("content".to_string(), Either::Left(assistant_output));
-        messages.push(assistant_message);
+        messages.push(assistant_output.into_message());
         println!();
     }
 
@@ -1382,11 +1378,33 @@ pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCall
     })
 }
 
+struct AssistantTurn {
+    content: String,
+    reasoning: String,
+}
+
+impl AssistantTurn {
+    fn into_message(self) -> IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> {
+        let mut message = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert("content".to_string(), Either::Left(self.content));
+        // Thinking models expect their own reasoning back in history (Qwen3.5 preserve_thinking)
+        if !self.reasoning.is_empty() {
+            message.insert(
+                "reasoning_content".to_string(),
+                Either::Left(self.reasoning),
+            );
+        }
+        message
+    }
+}
+
 async fn stream_assistant_response(
     rx: &mut Receiver<Response>,
     start_ttft: Instant,
-) -> Result<(String, Option<std::time::Duration>, Option<Usage>), String> {
+) -> Result<(AssistantTurn, Option<std::time::Duration>, Option<Usage>), String> {
     let mut assistant_output = String::new();
+    let mut assistant_reasoning = String::new();
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
@@ -1410,6 +1428,7 @@ async fn stream_assistant_response(
                 }
 
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
+                    assistant_reasoning.push_str(reasoning);
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
                     was_reasoning = true;
@@ -1483,7 +1502,14 @@ async fn stream_assistant_response(
     }
     denoising_progress.clear();
 
-    Ok((assistant_output, first_token_duration, last_usage))
+    Ok((
+        AssistantTurn {
+            content: assistant_output,
+            reasoning: assistant_reasoning,
+        },
+        first_token_duration,
+        last_usage,
+    ))
 }
 
 async fn multimodal_interactive_mode(
@@ -1802,11 +1828,7 @@ async fn multimodal_interactive_mode(
             }
             println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
-            IndexMap::new();
-        assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        assistant_message.insert("content".to_string(), Either::Left(assistant_output));
-        messages.push(assistant_message);
+        messages.push(assistant_output.into_message());
         println!();
     }
 

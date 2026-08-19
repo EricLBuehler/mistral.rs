@@ -12,7 +12,8 @@ serde_default_fn!(usize, default_conv_kernel, 4);
 serde_default_fn!(f64, default_partial_rotary_factor, 0.25);
 serde_default_fn!(f64, default_rope_theta, 10_000_000.0);
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LayerType {
     FullAttention,
     LinearAttention,
@@ -46,6 +47,8 @@ pub struct TextConfig {
     // Hybrid attention fields
     #[serde(default = "default_full_attn_interval")]
     pub full_attention_interval: usize,
+    #[serde(default)]
+    pub layer_types: Option<Vec<LayerType>>,
     #[serde(default = "default_conv_kernel")]
     pub linear_conv_kernel_dim: usize,
     pub linear_key_head_dim: usize,
@@ -88,6 +91,16 @@ impl TextConfig {
                 self.full_attention_interval,
                 self.num_hidden_layers
             );
+        }
+        if let Some(layer_types) = &self.layer_types {
+            if layer_types.len() != self.num_hidden_layers
+                || !layer_types.contains(&LayerType::FullAttention)
+            {
+                candle_core::bail!(
+                    "Qwen3.5 layer_types must list {} layers with at least one full_attention entry",
+                    self.num_hidden_layers
+                );
+            }
         }
         if self.num_attention_heads == 0
             || self.num_key_value_heads == 0
@@ -156,6 +169,9 @@ impl TextConfig {
     }
 
     pub fn layer_types(&self) -> Vec<LayerType> {
+        if let Some(layer_types) = &self.layer_types {
+            return layer_types.clone();
+        }
         (0..self.num_hidden_layers)
             .map(|i| {
                 if (i + 1) % self.full_attention_interval == 0 {

@@ -1401,9 +1401,15 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                 kv.reset();
             }
         }
-        // Reset the hybrid cache (including recurrent state pools)
+        // Other sequences may be mid-decode with their state only in the pool, so reset just these slots
         let mut hybrid_cache = pipeline.cache().hybrid();
-        hybrid_cache.reset();
+        let slots = seqs
+            .iter()
+            .filter_map(|seq| seq.recurrent_state_idx())
+            .collect::<Vec<_>>();
+        if let Err(e) = hybrid_cache.reset_attention_and_slots(&slots) {
+            tracing::warn!("Failed to reset hybrid cache slots {slots:?}: {e}");
+        }
 
         // Build state_indices so the forward pass can access recurrent pool states.
         // Sequences already have slots allocated from add_request.

@@ -180,10 +180,16 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         let target_row = logit_row(&verify_logits, idx)?;
         let candidate_row = logit_row(&proposal_logits, idx)?;
         let sampler = seq.sampler();
-        let target_probs =
-            sampler.speculative_target_probs(flat_logits(target_row.clone())?, seq.get_toks())?;
-        let candidate_probs =
-            sampler.speculative_candidate_probs(flat_logits(candidate_row)?, seq.get_toks())?;
+        let target_probs = sampler.speculative_target_probs(
+            flat_logits(target_row.clone())?,
+            seq.get_toks(),
+            seq.prompt_tokens(),
+        )?;
+        let candidate_probs = sampler.speculative_candidate_probs(
+            flat_logits(candidate_row)?,
+            seq.get_toks(),
+            seq.prompt_tokens(),
+        )?;
         if target_probs.sampling.len() != candidate_probs.len() {
             candle_core::bail!(
                 "speculative target/candidate vocab mismatch: target={}, candidate={}",
@@ -263,8 +269,11 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
 
     let row = logit_row(&verify_logits, accepted)?;
     let sampler = seq.sampler();
-    let target_probs =
-        sampler.speculative_target_probs(flat_logits(row.clone())?, seq.get_toks())?;
+    let target_probs = sampler.speculative_target_probs(
+        flat_logits(row.clone())?,
+        seq.get_toks(),
+        seq.prompt_tokens(),
+    )?;
     let continuation = sampler.sample_from_probs(
         &target_probs.sampling,
         &target_probs.reporting,

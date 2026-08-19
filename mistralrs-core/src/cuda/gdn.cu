@@ -43,13 +43,13 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
     return;
 
   // Pointers for this (batch, head)
-  const float *q_bh = q + bh * seq_len * BK;
-  const float *k_bh = k + bh * seq_len * BK;
-  const float *v_bh = v + bh * seq_len * v_dim;
-  const float *g_bh = g + bh * seq_len;
-  const float *beta_bh = beta + bh * seq_len;
+  const float *q_bh = q + (size_t)bh * seq_len * BK;
+  const float *k_bh = k + (size_t)bh * seq_len * BK;
+  const float *v_bh = v + (size_t)bh * seq_len * v_dim;
+  const float *g_bh = g + (size_t)bh * seq_len;
+  const float *beta_bh = beta + (size_t)bh * seq_len;
   float *state_bh = state + bh * BK * v_dim;
-  float *out_bh = output + bh * seq_len * v_dim;
+  float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   // Shared memory: k_buf[BK] + q_buf[BK]
   __shared__ float k_buf[BK];
@@ -131,13 +131,13 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
   if (v_idx >= v_dim)
     return;
 
-  const float *q_bh = q + bh * seq_len * k_dim;
-  const float *k_bh = k + bh * seq_len * k_dim;
-  const float *v_bh = v + bh * seq_len * v_dim;
-  const float *g_bh = g + bh * seq_len;
-  const float *beta_bh = beta + bh * seq_len;
+  const float *q_bh = q + (size_t)bh * seq_len * k_dim;
+  const float *k_bh = k + (size_t)bh * seq_len * k_dim;
+  const float *v_bh = v + (size_t)bh * seq_len * v_dim;
+  const float *g_bh = g + (size_t)bh * seq_len;
+  const float *beta_bh = beta + (size_t)bh * seq_len;
   float *state_bh = state + bh * k_dim * v_dim;
-  float *out_bh = output + bh * seq_len * v_dim;
+  float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   extern __shared__ float shared[];
   float *k_buf = shared;
@@ -262,13 +262,13 @@ __global__ __launch_bounds__(
     return;
   }
 
-  const float *q_bh = q + bh * seq_len * BK;
-  const float *k_bh = k + bh * seq_len * BK;
-  const float *v_bh = v + bh * seq_len * v_dim;
-  const float *g_bh = g + bh * seq_len;
-  const float *beta_bh = beta + bh * seq_len;
+  const float *q_bh = q + (size_t)bh * seq_len * BK;
+  const float *k_bh = k + (size_t)bh * seq_len * BK;
+  const float *v_bh = v + (size_t)bh * seq_len * v_dim;
+  const float *g_bh = g + (size_t)bh * seq_len;
+  const float *beta_bh = beta + (size_t)bh * seq_len;
   float *state_bh = state + bh * BK * v_dim;
-  float *out_bh = output + bh * seq_len * v_dim;
+  float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   float s[ROWS_PER_LANE];
 #pragma unroll
@@ -387,13 +387,13 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   const int num_chunks = (seq_len + BT - 1) / BT;
 
   // Pointers for this (batch, head)
-  const float *q_bh = q + bh * seq_len * BK;
-  const float *k_bh = k + bh * seq_len * BK;
-  const float *v_bh = v + bh * seq_len * v_dim;
-  const float *g_bh = g + bh * seq_len;
-  const float *beta_bh = beta + bh * seq_len;
+  const float *q_bh = q + (size_t)bh * seq_len * BK;
+  const float *k_bh = k + (size_t)bh * seq_len * BK;
+  const float *v_bh = v + (size_t)bh * seq_len * v_dim;
+  const float *g_bh = g + (size_t)bh * seq_len;
+  const float *beta_bh = beta + (size_t)bh * seq_len;
   float *state_bh = state + bh * BK * v_dim;
-  float *out_bh = output + bh * seq_len * v_dim;
+  float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   // Dynamic shared memory layout
   extern __shared__ float smem[];
@@ -665,16 +665,20 @@ __global__ void causal_conv1d_full_kernel(
     T *__restrict__ output, // [B, conv_dim, S]
     int batch_size, int conv_dim, int seq_len, int kernel_size) {
 
-  const int ch = blockIdx.x * blockDim.x + threadIdx.x;
-  const int pos = blockIdx.y;
-  const int b = blockIdx.z;
+  // Flat (channel, position) index: keeps long prompts inside grid limits and coalesces along S
+  const size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+  const int b = blockIdx.y;
+  const size_t plane = (size_t)conv_dim * seq_len;
 
-  if (ch >= conv_dim || pos >= seq_len || b >= batch_size)
+  if (idx >= plane || b >= batch_size)
     return;
 
-  const T *x_bch = x + (b * conv_dim + ch) * seq_len;
-  const T *w = weight + ch * kernel_size;
-  const T *cs = conv_state + (b * conv_dim + ch) * kernel_size;
+  const int ch = (int)(idx / seq_len);
+  const int pos = (int)(idx % seq_len);
+
+  const T *x_bch = x + ((size_t)b * conv_dim + ch) * seq_len;
+  const T *w = weight + (size_t)ch * kernel_size;
+  const T *cs = conv_state + ((size_t)b * conv_dim + ch) * kernel_size;
 
   float acc = 0.0f;
   for (int i = 0; i < kernel_size; i++) {
@@ -688,7 +692,7 @@ __global__ void causal_conv1d_full_kernel(
   float sig = 1.0f / (1.0f + expf(-acc));
   float result = acc * sig;
 
-  output[(b * conv_dim + ch) * seq_len + pos] = (T)result;
+  output[((size_t)b * conv_dim + ch) * seq_len + pos] = (T)result;
 }
 
 template <typename T>
@@ -704,7 +708,7 @@ __global__ void save_conv_state_kernel(
   if (ch >= conv_dim || b >= batch_size)
     return;
 
-  const T *x_bch = x + (b * conv_dim + ch) * seq_len;
+  const T *x_bch = x + ((size_t)b * conv_dim + ch) * seq_len;
   const T *prior = conv_state_in + (b * conv_dim + ch) * kernel_size;
   T *cs = conv_state_out + (b * conv_dim + ch) * kernel_size;
 
@@ -727,7 +731,8 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
 
   // Main convolution kernel
   dim3 block(256);
-  dim3 grid((conv_dim + 255) / 256, seq_len, batch_size);
+  const size_t plane = (size_t)conv_dim * seq_len;
+  dim3 grid((unsigned int)((plane + 255) / 256), batch_size);
 
   if (dtype == 0) {
     causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
@@ -777,9 +782,10 @@ __global__ void gdn_prepare_recurrence_kernel(
   const int conv_dim = 2 * key_dim + value_dim;
   const int bh = bidx * num_v_heads + hv;
 
-  const T *row = mixed_qkv + (bidx * seq_len + t) * conv_dim;
-  const T *b_row = b + (bidx * seq_len + t) * num_v_heads;
-  const T *a_row = a + (bidx * seq_len + t) * num_v_heads;
+  const size_t token_idx = (size_t)bidx * seq_len + t;
+  const T *row = mixed_qkv + token_idx * conv_dim;
+  const T *b_row = b + token_idx * num_v_heads;
+  const T *a_row = a + token_idx * num_v_heads;
 
   __shared__ float red_q[256];
   __shared__ float red_k[256];
@@ -817,14 +823,14 @@ __global__ void gdn_prepare_recurrence_kernel(
                              ? a_val
                              : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
                                              : log1pf(expf(a_val)));
-    beta_out[bh * seq_len + t] = 1.0f / (1.0f + expf(-b_val));
-    g_out[bh * seq_len + t] = -expf(a_log[hv]) * softplus_val;
+    beta_out[(size_t)bh * seq_len + t] = 1.0f / (1.0f + expf(-b_val));
+    g_out[(size_t)bh * seq_len + t] = -expf(a_log[hv]) * softplus_val;
   }
   __syncthreads();
 
-  float *q_dst = q_out + (bh * seq_len + t) * head_k_dim;
-  float *k_dst = k_out + (bh * seq_len + t) * head_k_dim;
-  float *v_dst = v_out + (bh * seq_len + t) * head_v_dim;
+  float *q_dst = q_out + ((size_t)bh * seq_len + t) * head_k_dim;
+  float *k_dst = k_out + ((size_t)bh * seq_len + t) * head_k_dim;
+  float *v_dst = v_out + ((size_t)bh * seq_len + t) * head_v_dim;
 
   for (int d = tid; d < head_k_dim; d += blockDim.x) {
     float q_val = (float)row[hk * head_k_dim + d];
@@ -1165,9 +1171,9 @@ gdn_rmsnorm_gated_kernel(const T *__restrict__ x, const T *__restrict__ gate,
     return;
   }
 
-  const T *x_row = x + row * hidden_dim;
-  const T *gate_row = gate + row * hidden_dim;
-  T *out_row = output + row * hidden_dim;
+  const T *x_row = x + (size_t)row * hidden_dim;
+  const T *gate_row = gate + (size_t)row * hidden_dim;
+  T *out_row = output + (size_t)row * hidden_dim;
 
   float sum = 0.0f;
   for (int i = tid; i < hidden_dim; i += blockDim.x) {
