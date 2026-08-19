@@ -316,6 +316,7 @@ impl Pipeline for AnyMoePipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+        logger: &crate::IntervalLogger,
     ) -> Result<bool, candle_core::Error> {
         get_mut_arcmutex!(self.target)
             .try_sample_speculative_causal_gen(
@@ -325,6 +326,7 @@ impl Pipeline for AnyMoePipeline {
                 disable_eos_stop,
                 rng,
                 metadata,
+                logger,
             )
             .await
     }

@@ -62,6 +62,18 @@ const HTTP_REQUEST_BODY_BYTE_BUCKETS: [f64; 12] = [
     52_428_800.0,
     104_857_600.0,
 ];
+// Bucket lists taken from vLLM's Prometheus exporter
+const TTFT_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
+];
+const ITL_BUCKETS: [f64; 19] = [
+    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
+    40.0, 80.0,
+];
+const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
+const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
+const SSE_COMMENT_PREFIX: u8 = b':';
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -142,6 +154,10 @@ pub fn install_prometheus_recorder() {
             &HTTP_REQUEST_BODY_BYTE_BUCKETS,
         )
         .expect("valid HTTP request body byte buckets")
+        .set_buckets_for_metric(Matcher::Full(TTFT_METRIC.to_string()), &TTFT_BUCKETS)
+        .expect("valid TTFT buckets")
+        .set_buckets_for_metric(Matcher::Full(ITL_METRIC.to_string()), &ITL_BUCKETS)
+        .expect("valid ITL buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);
@@ -274,9 +290,22 @@ pub async fn observe_http(
     if is_sse(&response) {
         completion.log_stream_accepted();
         let (parts, body) = response.into_parts();
+        let metrics_enabled = completion.config.metrics;
+        let start = completion.start;
+        let labels = [
+            ("method", completion.method.clone()),
+            ("path", completion.route.clone()),
+            ("model", completion.model.clone()),
+            ("status", completion.status.clone()),
+        ];
         let body = Body::new(ObservedBody {
             inner: body,
             completion: Some(completion),
+            metrics_enabled,
+            start,
+            labels,
+            ttft_recorded: false,
+            last_content_frame: None,
             outcome: outcome_handle,
             ended: false,
         });
@@ -429,9 +458,39 @@ struct ObservedBody {
     completion: Option<RequestCompletion>,
     outcome: StreamOutcomeHandle,
     ended: bool,
+    metrics_enabled: bool,
+    start: Instant,
+    labels: [(&'static str, String); 4],
+    ttft_recorded: bool,
+    last_content_frame: Option<Instant>,
 }
 
 impl ObservedBody {
+    /// Record TTFT on the first content frame and ITL on gaps between content frames.
+    fn observe_sse_frame(&mut self, frame: &Frame<axum::body::Bytes>) {
+        if !self.metrics_enabled {
+            return;
+        }
+        let Some(data) = frame.data_ref() else {
+            return;
+        };
+        // axum's SSE keepalive ping is a bare comment and carries no token
+        if data.first() == Some(&SSE_COMMENT_PREFIX) {
+            return;
+        }
+        let now = Instant::now();
+        if !self.ttft_recorded {
+            metrics::histogram!(TTFT_METRIC, &self.labels)
+                .record(now.duration_since(self.start).as_secs_f64());
+            self.ttft_recorded = true;
+        }
+        if let Some(last) = self.last_content_frame {
+            metrics::histogram!(ITL_METRIC, &self.labels)
+                .record(now.duration_since(last).as_secs_f64());
+        }
+        self.last_content_frame = Some(now);
+    }
+
     fn finish(&mut self, end: StreamEnd) {
         if let Some(completion) = self.completion.take() {
             let outcome = self.outcome.snapshot();
@@ -464,6 +523,10 @@ impl HttpBody for ObservedBody {
                 this.ended = true;
                 this.finish(StreamEnd::Error);
                 Poll::Ready(Some(Err(err)))
+            }
+            Poll::Ready(Some(Ok(frame))) => {
+                this.observe_sse_frame(&frame);
+                Poll::Ready(Some(Ok(frame)))
             }
             other => other,
         }

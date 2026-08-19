@@ -318,6 +318,9 @@ impl PrefixCacheManagerV2 {
 
         self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
 
+        if n_evicted > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(n_evicted as u64);
+        }
         Ok(n_evicted)
     }
 
@@ -327,6 +330,9 @@ impl PrefixCacheManagerV2 {
         self.caches.clear();
         self.paged_recurrent_caches.clear();
         self.paged_recurrent_bytes = 0;
+        if len > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(len as u64);
+        }
         Ok(len)
     }
 

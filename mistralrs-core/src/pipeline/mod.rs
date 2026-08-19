@@ -30,6 +30,7 @@ use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::IntervalLogger;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
 pub use auto::{AutoLoader, AutoLoaderBuilder};
@@ -1334,6 +1335,7 @@ pub trait Pipeline:
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         _metadata: Option<PagedAttentionMeta>,
+        _logger: &IntervalLogger,
     ) -> Result<bool, candle_core::Error> {
         Ok(false)
     }
@@ -1385,6 +1387,7 @@ pub trait Pipeline:
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         backend_metadata: CacheBackendMetadata,
+        logger: &IntervalLogger,
     ) -> Result<Duration, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
@@ -1546,6 +1549,7 @@ pub trait Pipeline:
                                     disable_eos_stop,
                                     rng.clone(),
                                     None,
+                                    logger,
                                 )
                                 .await?
                         {
@@ -2011,6 +2015,7 @@ pub trait Pipeline:
                                     disable_eos_stop,
                                     rng.clone(),
                                     Some(speculative_metadata),
+                                    logger,
                                 )
                                 .await?
                         {

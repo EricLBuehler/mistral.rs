@@ -21,6 +21,9 @@ pub struct IntervalLogger {
     num_waiting: Arc<AtomicUsize>,
     encoder_cache_hits: Option<Arc<AtomicUsize>>,
     encoder_cache_misses: Option<Arc<AtomicUsize>>,
+    spec_drafts: Arc<AtomicUsize>,
+    spec_draft_tokens: Arc<AtomicUsize>,
+    spec_accepted_tokens: Arc<AtomicUsize>,
 }
 
 impl IntervalLogger {
@@ -34,12 +37,18 @@ impl IntervalLogger {
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
+        let spec_drafts = Arc::new(AtomicUsize::new(0));
+        let spec_draft_tokens = Arc::new(AtomicUsize::new(0));
+        let spec_accepted_tokens = Arc::new(AtomicUsize::new(0));
 
         let t_prefix_cache_stats = prefix_cache_stats.clone();
         let t_tokens_processed = tokens_processed.clone();
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
+        let t_spec_drafts = spec_drafts.clone();
+        let t_spec_draft_tokens = spec_draft_tokens.clone();
+        let t_spec_accepted_tokens = spec_accepted_tokens.clone();
         let (encoder_cache_hits, encoder_cache_misses) = match encoder_cache_counters {
             Some((h, m)) => (Some(h), Some(m)),
             None => (None, None),
@@ -67,6 +76,9 @@ impl IntervalLogger {
                 let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
                 let num_running = t_num_running.load(Ordering::Relaxed);
                 let num_waiting = t_num_waiting.load(Ordering::Relaxed);
+                let spec_drafts = t_spec_drafts.swap(0, Ordering::Relaxed);
+                let spec_draft_tokens = t_spec_draft_tokens.swap(0, Ordering::Relaxed);
+                let spec_accepted_tokens = t_spec_accepted_tokens.swap(0, Ordering::Relaxed);
 
                 if total_new_seqs != 0 && tokens_processed != 0 {
                     let enc_cache_info =
@@ -85,13 +97,23 @@ impl IntervalLogger {
                         } else {
                             String::new()
                         };
+                    let spec_info = if spec_draft_tokens > 0 {
+                        // vLLM-style rates: accept rate over proposed draft tokens,
+                        // mean acceptance length includes the bonus token.
+                        let accept_rate =
+                            100. * spec_accepted_tokens as f64 / spec_draft_tokens as f64;
+                        let mean_len = 1. + spec_accepted_tokens as f64 / spec_drafts.max(1) as f64;
+                        format!(", MTP accept {accept_rate:.1}% (len {mean_len:.2})")
+                    } else {
+                        String::new()
+                    };
 
                     // Throughput = tokens processed during this interval / interval duration.
                     // Combines both prefill and decode tokens. The counter is atomically
                     // swapped to 0 each interval, so the metric reflects only the current
                     // window and is not cumulative.
                     info!(
-                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}, {num_running} running, {num_waiting} waiting",
+                        "Throughput (T/s) {:.2}, Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
                         tokens_processed as f64 / interval.as_secs_f64(),
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
@@ -107,6 +129,9 @@ impl IntervalLogger {
             num_waiting,
             encoder_cache_hits,
             encoder_cache_misses,
+            spec_drafts,
+            spec_draft_tokens,
+            spec_accepted_tokens,
         }
     }
 
@@ -126,12 +151,47 @@ impl IntervalLogger {
         if let Some(ref misses) = self.encoder_cache_misses {
             misses.store(0, Ordering::Relaxed);
         }
+        self.spec_drafts.store(0, Ordering::Relaxed);
+        self.spec_draft_tokens.store(0, Ordering::Relaxed);
+        self.spec_accepted_tokens.store(0, Ordering::Relaxed);
     }
 
     pub fn add_tokens_processed(&self, num_tokens: usize) {
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
+    }
+
+    /// Record one speculative verification batch (across all its sequences).
+    pub fn add_speculative_stats(
+        &self,
+        num_drafts: usize,
+        num_draft_tokens: usize,
+        num_accepted_tokens: usize,
+        accepted_per_pos: &[usize],
+    ) {
+        if num_drafts == 0 {
+            return;
+        }
+        self.spec_drafts.fetch_add(num_drafts, Ordering::Relaxed);
+        self.spec_draft_tokens
+            .fetch_add(num_draft_tokens, Ordering::Relaxed);
+        self.spec_accepted_tokens
+            .fetch_add(num_accepted_tokens, Ordering::Relaxed);
+        metrics::counter!("mistralrs_speculative_drafts_total").increment(num_drafts as u64);
+        metrics::counter!("mistralrs_speculative_draft_tokens_proposed_total")
+            .increment(num_draft_tokens as u64);
+        metrics::counter!("mistralrs_speculative_draft_tokens_accepted_total")
+            .increment(num_accepted_tokens as u64);
+        for (position, count) in accepted_per_pos.iter().enumerate() {
+            if *count > 0 {
+                metrics::counter!(
+                    "mistralrs_speculative_draft_tokens_accepted_per_pos_total",
+                    "position" => position.to_string()
+                )
+                .increment(*count as u64);
+            }
+        }
     }
 
     pub fn add_new_sequence(&self) {

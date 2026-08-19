@@ -691,6 +691,10 @@ impl PagedAttentionScheduler {
         if seq_guard.is_finished_paged_attn() {
             return;
         }
+        metrics::counter!("mistralrs_paged_preemptions_total").increment(1);
+        if seq_guard.active_staged_speculative_len() > 0 {
+            metrics::counter!("mistralrs_speculative_staged_drops_total").increment(1);
+        }
         seq_guard.set_state(SequenceState::Waiting);
         seq_guard.set_prefix_cache_len(0);
         seq_guard.clear_staged_speculative_tokens();
