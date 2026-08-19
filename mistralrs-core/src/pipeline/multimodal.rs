@@ -49,7 +49,6 @@ use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
-#[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -86,7 +85,6 @@ use regex_automata::meta::Regex;
 use std::any::Any;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-#[cfg(feature = "cuda")]
 use std::sync::Mutex as StdMutex;
 use std::sync::{Arc, RwLock};
 use std::{env, fs};
