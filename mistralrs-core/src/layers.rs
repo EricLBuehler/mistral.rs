@@ -1708,9 +1708,11 @@ impl Qwen3VLRotaryEmbedding {
         for (idx_tensor, dim_idx) in &self.interleave_indices {
             let freqs_dim = freqs.i(*dim_idx)?.contiguous()?;
             let num_indices = idx_tensor.dim(0)?;
+            // broadcast + one copy; repeat() would launch one copy kernel per (batch, position)
             let idx_expanded = idx_tensor
                 .reshape((1, 1, num_indices))?
-                .repeat((batch, seq_len, 1))?;
+                .broadcast_as((batch, seq_len, num_indices))?
+                .contiguous()?;
             let src_vals = freqs_dim.gather(&idx_expanded, D::Minus1)?;
             freqs_t = freqs_t.scatter(&idx_expanded, &src_vals, D::Minus1)?;
         }
