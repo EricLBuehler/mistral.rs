@@ -28,7 +28,7 @@ pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
-use crate::paged_attention::{CacheConfig, CacheEngine, ModelConfigLike};
+use crate::paged_attention::{AttentionBackendKind, CacheConfig, CacheEngine, ModelConfigLike};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -1009,6 +1009,9 @@ pub trait MetadataMixin {
     fn reset_non_granular_state(&self);
     /// Destroy decode graphs at teardown, while the engine thread's cuTile modules are still loaded.
     fn cleanup_cuda_graphs(&self) {}
+    /// Capture the decode graphs for the common batch sizes up front, so live requests never pay for
+    /// an eager step plus a capture when the batch composition changes.
+    fn precapture_cuda_decode_graphs(&self, _ctx: &DecodeGraphPrecaptureCtx) {}
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         None
@@ -1136,6 +1139,15 @@ pub trait MultimodalPromptPrefixer: Send + Sync {
     fn prefix_video(&self, _video_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_string()
     }
+}
+
+/// Paged-attention facts the engine knows once the KV cache exists, needed to fabricate a decode step.
+#[derive(Clone, Debug)]
+pub struct DecodeGraphPrecaptureCtx {
+    pub block_size: usize,
+    pub max_paged_context_len: usize,
+    pub attention_backend: AttentionBackendKind,
+    pub sliding_window: Option<usize>,
 }
 
 #[derive(Clone)]

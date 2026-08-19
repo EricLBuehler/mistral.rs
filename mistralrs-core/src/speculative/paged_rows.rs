@@ -201,6 +201,7 @@ pub(crate) fn make_paged_rows_metadata(
         query_lens: None,
         cu_seqlens_q: None,
         cu_seqlens_kv: None,
+        decode_rows: None,
     })
 }
 

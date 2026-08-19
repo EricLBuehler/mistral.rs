@@ -287,6 +287,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 query_lens: None,
                 cu_seqlens_q: None,
                 cu_seqlens_kv: None,
+                decode_rows: None,
             }),
             flash_meta: FlashParams::empty(true),
         };

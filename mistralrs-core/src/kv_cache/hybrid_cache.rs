@@ -40,8 +40,9 @@ pub struct RecurrentStatePool {
     device: Device,
 }
 
-/// Initial pool capacity before dynamic growth.
-const INITIAL_POOL_CAPACITY: usize = 4;
+/// Initial pool capacity before dynamic growth: the pre-captured CUDA graph batch range plus the
+/// graph pad slot, so growth (which invalidates captured graphs) only happens past that.
+const INITIAL_POOL_CAPACITY: usize = 9;
 
 impl RecurrentStatePool {
     /// Create a new recurrent state pool.
@@ -364,6 +365,8 @@ pub struct HybridCache {
     state_indices: Option<Tensor>,
     state_indices_host: Option<Vec<u32>>,
     device_state_indices: Vec<(Device, Tensor)>,
+    // Scratch slot CUDA graph pad rows write into; allocated on first use, dropped on reset
+    graph_pad_slot: Option<usize>,
 }
 
 impl HybridCache {
@@ -408,7 +411,39 @@ impl HybridCache {
             state_indices: None,
             state_indices_host: None,
             device_state_indices: Vec::new(),
+            graph_pad_slot: None,
         })
+    }
+
+    /// Slot reserved for CUDA graph pad rows; never handed to a sequence while it lives.
+    pub fn graph_pad_slot(&mut self) -> Option<usize> {
+        if self.graph_pad_slot.is_none() {
+            self.graph_pad_slot = self.allocate_seq();
+        }
+        self.graph_pad_slot
+    }
+
+    pub fn recurrent_devices(&self) -> Vec<Device> {
+        self.caches
+            .iter()
+            .filter_map(|cache| cache.as_recurrent_pool().map(|pool| pool.device().clone()))
+            .fold(Vec::new(), |mut devices, device| {
+                if !devices.iter().any(|d: &Device| d.same_device(&device)) {
+                    devices.push(device);
+                }
+                devices
+            })
+    }
+
+    /// Install caller-owned per-device index tensors (e.g. CUDA graph buffers) as the batch's state indices.
+    pub fn set_state_indices_tensors(
+        &mut self,
+        host: Vec<u32>,
+        mut tensors: Vec<(Device, Tensor)>,
+    ) {
+        self.state_indices = (!tensors.is_empty()).then(|| tensors.remove(0).1);
+        self.device_state_indices = tensors;
+        self.state_indices_host = Some(host);
     }
 
     /// Slot capacity of the recurrent pools; changes whenever the pool storage is reallocated.
@@ -513,6 +548,7 @@ impl HybridCache {
         self.state_indices = None;
         self.state_indices_host = None;
         self.device_state_indices.clear();
+        self.graph_pad_slot = None;
     }
 
     /// Reset the attention caches and only the given recurrent slots; other sequences keep their state.
@@ -620,14 +656,6 @@ impl HybridCache {
 
     pub fn state_indices_host(&self) -> Option<&[u32]> {
         self.state_indices_host.as_deref()
-    }
-
-    pub fn state_index_tensors(&self) -> Vec<Tensor> {
-        self.state_indices
-            .iter()
-            .chain(self.device_state_indices.iter().map(|(_, indices)| indices))
-            .cloned()
-            .collect()
     }
 
     pub fn state_indices_for_layer(&mut self, layer: usize) -> Result<Option<Tensor>> {

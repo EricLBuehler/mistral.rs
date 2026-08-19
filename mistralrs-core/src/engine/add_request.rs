@@ -834,6 +834,9 @@ impl Engine {
                     drop(hybrid_cache);
                     if pool_grew {
                         pipeline.cleanup_cuda_graphs();
+                        if let Some(ctx) = &self.graph_precapture_ctx {
+                            pipeline.precapture_cuda_decode_graphs(ctx);
+                        }
                     }
                     if let Some(slot_idx) = slot {
                         seq.set_recurrent_state_idx(Some(slot_idx));
