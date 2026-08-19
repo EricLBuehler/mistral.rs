@@ -126,6 +126,23 @@ impl SamplingParams {
         }
     }
 
+    /// Fills the sampling fields a request left unset from the model's generation defaults.
+    pub fn fill_model_defaults(&mut self, defaults: &ModelGenerationDefaults) {
+        let mut filled = SamplingParams::neutral();
+        filled.apply_model_defaults(defaults);
+        self.temperature = self.temperature.or(filled.temperature);
+        self.top_k = self.top_k.or(filled.top_k);
+        self.top_p = self.top_p.or(filled.top_p);
+        self.min_p = self.min_p.or(filled.min_p);
+        self.repetition_penalty = self.repetition_penalty.or(filled.repetition_penalty);
+        if let Some(defaults_bias) = filled.logits_bias {
+            let logits_bias = self.logits_bias.get_or_insert_with(HashMap::new);
+            for (token, bias) in defaults_bias {
+                logits_bias.entry(token).or_insert(bias);
+            }
+        }
+    }
+
     /// Applies model-level generation defaults onto this request-local sampler config.
     ///
     /// This is opt-in and only updates fields that the model default explicitly provides.
@@ -137,11 +154,7 @@ impl SamplingParams {
             self.min_p = None;
         } else {
             if let Some(temperature) = defaults.temperature {
-                self.temperature = if temperature == 0.0 {
-                    None
-                } else {
-                    Some(temperature)
-                };
+                self.temperature = Some(temperature);
             }
             if let Some(top_k) = defaults.top_k {
                 self.top_k = if top_k == 0 { None } else { Some(top_k) };
@@ -410,6 +423,35 @@ fn argmax_f32(values: &[f32]) -> Result<u32> {
     Ok(best_index.expect("finite argmax value exists") as u32)
 }
 
+/// Nucleus mass measured on the distribution renormalized over the surviving top-k set (HF, vLLM, llama.cpp).
+fn top_p_cutoff(top_p: f32, kept_probs: impl Iterator<Item = f32>) -> f32 {
+    top_p * kept_probs.sum::<f32>()
+}
+
+#[cfg(any(feature = "cuda", feature = "metal"))]
+fn sparse_token_counts(
+    context: &[u32],
+    vocab_size: usize,
+    device: &Device,
+) -> Result<Option<(Tensor, Tensor)>> {
+    let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
+    for &token_id in context {
+        if token_id as usize >= vocab_size {
+            continue;
+        }
+        *counts.entry(token_id).or_insert(0.0) += 1.0;
+    }
+    if counts.is_empty() {
+        return Ok(None);
+    }
+    let n_tokens = counts.len();
+    let (token_ids, token_counts): (Vec<u32>, Vec<f32>) = counts.into_iter().unzip();
+    Ok(Some((
+        Tensor::from_vec(token_ids, n_tokens, device)?,
+        Tensor::from_vec(token_counts, n_tokens, device)?,
+    )))
+}
+
 impl Sampler {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -557,9 +599,10 @@ impl Sampler {
         } else {
             let mut sampling_probs = reporting_probs.clone();
             if self.top_p > 0.0 && self.top_p < 1.0 {
+                let cutoff = top_p_cutoff(self.top_p as f32, sampling_probs.iter().copied());
                 let mut cumsum = 0.0f32;
                 for prob in &mut sampling_probs {
-                    if cumsum >= self.top_p as f32 {
+                    if cumsum >= cutoff {
                         *prob = 0.0;
                     } else {
                         cumsum += *prob;
@@ -723,9 +766,10 @@ impl Sampler {
         // have very low probabilities and are less likely to go "off the rails".
 
         // Clamp smaller probabilities to zero.
+        let cutoff = top_p_cutoff(top_p, idx_probs.iter().map(|(_, p)| *p));
         let mut cumsum = 0.;
         for (index, prob) in &idx_probs {
-            if cumsum >= top_p {
+            if cumsum >= cutoff {
                 probs[*index as usize] = 0.0;
             } else {
                 cumsum += prob;
@@ -890,6 +934,7 @@ impl Sampler {
         &self,
         logits: Tensor,
         context: &[u32],
+        prompt_len: usize,
     ) -> Result<Tensor> {
         let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
         let presence_penalty = self.presence_penalty.unwrap_or(0.0);
@@ -905,37 +950,38 @@ impl Sampler {
         }
 
         let vocab_size = logits.elem_count();
-        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
-        for &token_id in context {
-            if token_id as usize >= vocab_size {
-                continue;
+        let mut logits = logits;
+        if frequency_penalty != 0.0 || presence_penalty != 0.0 {
+            if let Some((token_ids, token_counts)) = sparse_token_counts(
+                &context[prompt_len.min(context.len())..],
+                vocab_size,
+                logits.device(),
+            )? {
+                logits = crate::ops::cuda_apply_sparse_penalties_f32(
+                    &logits,
+                    &token_ids,
+                    &token_counts,
+                    frequency_penalty,
+                    presence_penalty,
+                    1.0,
+                )?;
             }
-            *counts.entry(token_id).or_insert(0.0) += 1.0;
         }
-
-        if counts.is_empty() {
-            return Ok(logits);
+        if repetition_penalty != 1.0 {
+            if let Some((token_ids, token_counts)) =
+                sparse_token_counts(context, vocab_size, logits.device())?
+            {
+                logits = crate::ops::cuda_apply_sparse_penalties_f32(
+                    &logits,
+                    &token_ids,
+                    &token_counts,
+                    0.0,
+                    0.0,
+                    repetition_penalty,
+                )?;
+            }
         }
-
-        let n_tokens = counts.len();
-        let mut token_ids = Vec::with_capacity(n_tokens);
-        let mut token_counts = Vec::with_capacity(n_tokens);
-        for (token_id, count) in counts {
-            token_ids.push(token_id);
-            token_counts.push(count);
-        }
-
-        let device = logits.device();
-        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
-        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
-        crate::ops::cuda_apply_sparse_penalties_f32(
-            &logits,
-            &token_ids,
-            &token_counts,
-            frequency_penalty,
-            presence_penalty,
-            repetition_penalty,
-        )
+        Ok(logits)
     }
 
     #[cfg(feature = "cuda")]
@@ -1012,9 +1058,10 @@ impl Sampler {
         let mut probs = reporting_probs.clone();
 
         if self.top_p > 0.0 && self.top_p < 1.0 {
+            let cutoff = top_p_cutoff(self.top_p as f32, probs.iter().copied());
             let mut cumsum = 0.0f32;
             for prob in &mut probs {
-                if cumsum >= self.top_p as f32 {
+                if cumsum >= cutoff {
                     *prob = 0.0;
                 } else {
                     cumsum += *prob;
@@ -1093,6 +1140,7 @@ impl Sampler {
         &self,
         logits: Tensor,
         context: &[u32],
+        prompt_len: usize,
     ) -> Result<Tensor> {
         let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
         let presence_penalty = self.presence_penalty.unwrap_or(0.0);
@@ -1104,34 +1152,38 @@ impl Sampler {
             return Ok(logits);
         }
         let vocab_size = logits.elem_count();
-        let mut counts = HashMap::<u32, f32>::with_capacity(context.len().min(vocab_size));
-        for &tid in context {
-            if (tid as usize) >= vocab_size {
-                continue;
+        let mut logits = logits;
+        if frequency_penalty.abs() > f32::EPSILON || presence_penalty.abs() > f32::EPSILON {
+            if let Some((token_ids, token_counts)) = sparse_token_counts(
+                &context[prompt_len.min(context.len())..],
+                vocab_size,
+                logits.device(),
+            )? {
+                logits = crate::ops::metal_apply_sparse_penalties(
+                    &logits,
+                    &token_ids,
+                    &token_counts,
+                    frequency_penalty,
+                    presence_penalty,
+                    1.0,
+                )?;
             }
-            *counts.entry(tid).or_insert(0.0) += 1.0;
         }
-        if counts.is_empty() {
-            return Ok(logits);
+        if (repetition_penalty - 1.0).abs() > f32::EPSILON {
+            if let Some((token_ids, token_counts)) =
+                sparse_token_counts(context, vocab_size, logits.device())?
+            {
+                logits = crate::ops::metal_apply_sparse_penalties(
+                    &logits,
+                    &token_ids,
+                    &token_counts,
+                    0.0,
+                    0.0,
+                    repetition_penalty,
+                )?;
+            }
         }
-        let n_tokens = counts.len();
-        let mut token_ids = Vec::with_capacity(n_tokens);
-        let mut token_counts = Vec::with_capacity(n_tokens);
-        for (tid, c) in counts {
-            token_ids.push(tid);
-            token_counts.push(c);
-        }
-        let device = logits.device();
-        let token_ids = Tensor::from_vec(token_ids, n_tokens, device)?;
-        let token_counts = Tensor::from_vec(token_counts, n_tokens, device)?;
-        crate::ops::metal_apply_sparse_penalties(
-            &logits,
-            &token_ids,
-            &token_counts,
-            frequency_penalty,
-            presence_penalty,
-            repetition_penalty,
-        )
+        Ok(logits)
     }
 
     #[cfg(feature = "metal")]
@@ -1170,9 +1222,10 @@ impl Sampler {
             .collect::<Vec<_>>();
 
         if self.top_p > 0.0 && self.top_p < 1.0 {
+            let cutoff = top_p_cutoff(self.top_p as f32, probs.iter().copied());
             let mut cumsum = 0.0f32;
             for prob in &mut probs {
-                if cumsum >= self.top_p as f32 {
+                if cumsum >= cutoff {
                     *prob = 0.0;
                 } else {
                     cumsum += *prob;
@@ -1241,9 +1294,10 @@ impl Sampler {
         let idx_probs = partial_sort_top_k(probs, k, true);
 
         if self.top_p > 0.0 && self.top_p < 1.0 {
+            let cutoff = top_p_cutoff(self.top_p as f32, idx_probs.iter().map(|(_, p)| *p));
             let mut cumsum = 0.0f32;
             for (index, prob) in &idx_probs {
-                if cumsum >= self.top_p as f32 {
+                if cumsum >= cutoff {
                     probs[*index as usize] = 0.0;
                 } else {
                     cumsum += prob;
@@ -1287,21 +1341,30 @@ impl Sampler {
         &self,
         logits: Tensor,
         context: &[u32],
+        prompt_len: usize,
     ) -> Result<SpeculativeProbs> {
-        self.speculative_probs(logits, context)
+        self.speculative_probs(logits, context, prompt_len)
     }
 
     pub(crate) fn speculative_candidate_probs(
         &self,
         logits: Tensor,
         context: &[u32],
+        prompt_len: usize,
     ) -> Result<Vec<f32>> {
-        Ok(self.speculative_probs(logits, context)?.sampling)
+        Ok(self
+            .speculative_probs(logits, context, prompt_len)?
+            .sampling)
     }
 
-    fn speculative_probs(&self, logits: Tensor, context: &[u32]) -> Result<SpeculativeProbs> {
+    fn speculative_probs(
+        &self,
+        logits: Tensor,
+        context: &[u32],
+        prompt_len: usize,
+    ) -> Result<SpeculativeProbs> {
         let logits = logits.to_vec1()?;
-        let mut logits = self.apply_penalties(logits, context)?;
+        let mut logits = self.apply_penalties(logits, context, prompt_len)?;
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
@@ -1402,9 +1465,10 @@ impl Sampler {
         let idx_probs = partial_sort_top_k(&mut sampling_probs, k, true);
 
         if top_p > 0.0 && top_p < 1.0 {
+            let cutoff = top_p_cutoff(top_p, idx_probs.iter().map(|(_, p)| *p));
             let mut cumsum = 0.;
             for (index, prob) in &idx_probs {
-                if cumsum >= top_p {
+                if cumsum >= cutoff {
                     sampling_probs[*index as usize] = 0.0;
                 } else {
                     cumsum += prob;
@@ -1436,13 +1500,18 @@ impl Sampler {
         self.sample_multinomial(&sampling_probs, reporting_probs, return_logprobs, rng)
     }
 
-    fn apply_penalties(&self, mut logits: Vec<f32>, context: &[u32]) -> Result<Tensor> {
+    fn apply_penalties(
+        &self,
+        mut logits: Vec<f32>,
+        context: &[u32],
+        prompt_len: usize,
+    ) -> Result<Tensor> {
         if context.is_empty() {
             candle_core::bail!("Penalty context is empty, this should not happen.");
         }
 
         self.apply_dry_penalty(&mut logits, context)?;
-        self.apply_freq_pres_rep_penalty(&mut logits, context)?;
+        self.apply_freq_pres_rep_penalty(&mut logits, context, prompt_len)?;
         self.apply_logits_bias(&mut logits);
 
         let vocab_size = logits.len();
@@ -1457,7 +1526,13 @@ impl Sampler {
         }
     }
 
-    fn apply_freq_pres_rep_penalty(&self, logits: &mut [f32], context: &[u32]) -> Result<()> {
+    // Frequency/presence penalties count sampled tokens only (OpenAI, vLLM); repetition penalty spans the prompt too (HF)
+    fn apply_freq_pres_rep_penalty(
+        &self,
+        logits: &mut [f32],
+        context: &[u32],
+        prompt_len: usize,
+    ) -> Result<()> {
         if self.frequency_penalty.is_some()
             || self.presence_penalty.is_some()
             || self.repetition_penalty.is_some()
@@ -1468,22 +1543,26 @@ impl Sampler {
 
             //mu[j] -> mu[j] - c[j] * alpha_frequency - float(c[j] > 0) * alpha_presence
 
-            let mut counts = vec![0.0f32; logits.len()];
-            for ctx in context.iter() {
+            let mut generated_counts = vec![0.0f32; logits.len()];
+            let mut seen = vec![false; logits.len()];
+            for (idx, ctx) in context.iter().enumerate() {
                 // Llama 3.2 uses a hack triggering this error... we wouldn't want a weight on it anyway
                 if *ctx as usize >= logits.len() {
                     continue;
                 }
-                counts[*ctx as usize] += 1.0;
+                seen[*ctx as usize] = true;
+                if idx >= prompt_len {
+                    generated_counts[*ctx as usize] += 1.0;
+                }
             }
 
             for (token_id, logit) in logits.iter_mut().enumerate() {
-                let count = counts[token_id];
+                let count = generated_counts[token_id];
                 *logit = *logit
                     - count * frequency_penalty
                     - if count > 0.0 { 1. } else { 0. } * presence_penalty;
 
-                if repetition_penalty != 1.0 && count > 0.0 {
+                if repetition_penalty != 1.0 && seen[token_id] {
                     if *logit > 0.0 {
                         *logit /= repetition_penalty;
                     } else {
@@ -1589,10 +1668,13 @@ impl Sampler {
     ///
     /// If the temperature is `None`, argmax sampling is used. Otherwise, the selected sampling is used.
     /// With `top-p` sampling, if the `top-p` value is `<= 0.0` or `>= 1.0`, multinomial sampling is used.
+    /// `context` is the full token history (prompt + generated); `prompt_len` marks where sampling started.
+    #[allow(clippy::too_many_arguments)]
     pub fn sample(
         &self,
         logits: Tensor,
         context: &[u32],
+        prompt_len: usize,
         return_logprobs: bool,
         rng: Arc<Mutex<Isaac64Rng>>,
         sample_speculative: bool,
@@ -1606,7 +1688,8 @@ impl Sampler {
                 multiple_sequences,
             )
         {
-            let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
+            let logits =
+                self.apply_device_sparse_penalties_if_needed(logits, context, prompt_len)?;
             let logits = self.apply_device_logits_bias_if_needed(logits)?;
             return self.sample_greedy_on_device(logits);
         }
@@ -1621,7 +1704,8 @@ impl Sampler {
             )
         {
             if let Some(temperature) = self.temperature {
-                let logits = self.apply_device_sparse_penalties_if_needed(logits, context)?;
+                let logits =
+                    self.apply_device_sparse_penalties_if_needed(logits, context, prompt_len)?;
                 let logits = self.apply_device_logits_bias_if_needed(logits)?;
                 return self.sample_topk_on_device(logits, temperature, rng);
             }
@@ -1637,13 +1721,14 @@ impl Sampler {
             )
         {
             if let Some(temperature) = self.temperature {
-                let logits = self.apply_device_sparse_penalties_if_needed_metal(logits, context)?;
+                let logits = self
+                    .apply_device_sparse_penalties_if_needed_metal(logits, context, prompt_len)?;
                 return self.sample_topk_on_device_metal(logits, temperature, rng);
             }
         }
 
         let logits = logits.to_vec1()?;
-        let mut logits = self.apply_penalties(logits, context)?;
+        let mut logits = self.apply_penalties(logits, context, prompt_len)?;
         for processor in &self.logits_processors {
             logits = processor.apply(&logits, context)?;
         }
@@ -1724,7 +1809,7 @@ mod tests {
         let logits = Tensor::from_vec(vec![-3.0f32, -1.0, -2.0], 3, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &[0, 1, 2], true, rng, false, false)
+            .sample(logits, &[0, 1, 2], 0, true, rng, false, false)
             .unwrap();
         assert_eq!(res.token, 1);
         let expected = -1.0f32 - ((-3.0f32).exp() + (-1.0f32).exp() + (-2.0f32).exp()).ln();
@@ -1775,7 +1860,7 @@ mod tests {
         let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &[0, 1, 2], false, rng, true, false)
+            .sample(logits, &[0, 1, 2], 0, false, rng, true, false)
             .unwrap();
         assert_eq!(res.token, 2);
         assert_eq!(res.top_logprobs, None);
@@ -1806,10 +1891,10 @@ mod tests {
         let logits = Tensor::from_vec(vec![0.0f32, 1.0, 2.0], 3, &Device::Cpu).unwrap();
         let context = [0u32];
         let target_probs = sampler
-            .speculative_target_probs(logits.clone(), &context)
+            .speculative_target_probs(logits.clone(), &context, 0)
             .unwrap();
         let candidate_probs = sampler
-            .speculative_candidate_probs(logits, &context)
+            .speculative_candidate_probs(logits, &context, 0)
             .unwrap();
 
         assert_eq!(candidate_probs, target_probs.sampling);
@@ -1846,7 +1931,9 @@ mod tests {
         .unwrap();
         let logits =
             Tensor::from_vec(vec![0.0f32, 2.0f32.ln(), 4.0f32.ln()], 3, &Device::Cpu).unwrap();
-        let probs = sampler.speculative_candidate_probs(logits, &[0]).unwrap();
+        let probs = sampler
+            .speculative_candidate_probs(logits, &[0], 0)
+            .unwrap();
 
         assert!((probs[0] - 0.0).abs() < 1e-6);
         assert!((probs[1] - 1.0 / 3.0).abs() < 1e-6);
@@ -1881,7 +1968,7 @@ mod tests {
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
 
         let result = sampler
-            .sample(logits, &[0], true, rng, false, false)
+            .sample(logits, &[0], 0, true, rng, false, false)
             .unwrap();
 
         assert_eq!(result.token, 2);
@@ -1920,7 +2007,7 @@ mod tests {
         let logits = Tensor::from_vec(vec![0.0f32, 1.0, 10.0], 3, &Device::Cpu).unwrap();
         let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42)));
         let res = sampler
-            .sample(logits, &[0], false, rng, false, false)
+            .sample(logits, &[0], 0, false, rng, false, false)
             .unwrap();
 
         assert_eq!(res.token, 1);

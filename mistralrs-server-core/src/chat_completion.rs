@@ -586,10 +586,24 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
-    let (enable_thinking, reasoning_effort) = parse_reasoning_controls(
-        oairequest.enable_thinking,
-        oairequest.reasoning_effort.as_deref(),
-    )?;
+    let mut enable_thinking = oairequest.enable_thinking;
+    let mut reasoning_effort = oairequest.reasoning_effort.clone();
+    if let Some(kwargs) = &oairequest.chat_template_kwargs {
+        for (key, value) in kwargs {
+            match (key.as_str(), value) {
+                ("enable_thinking", Value::Bool(flag)) if enable_thinking.is_none() => {
+                    enable_thinking = Some(*flag);
+                }
+                ("reasoning_effort", Value::String(effort)) if reasoning_effort.is_none() => {
+                    reasoning_effort = Some(effort.clone());
+                }
+                ("enable_thinking" | "reasoning_effort", _) => {}
+                _ => tracing::warn!("Ignoring unsupported chat_template_kwargs entry `{key}`"),
+            }
+        }
+    }
+    let (enable_thinking, reasoning_effort) =
+        parse_reasoning_controls(enable_thinking, reasoning_effort.as_deref())?;
 
     let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
@@ -624,18 +638,11 @@ pub async fn parse_request(
                 let content = match message.content.as_deref() {
                     Some(content) => content.clone(),
                     None => {
-                        // Handle tool call
-                        let calls = message
-                            .tool_calls
-                            .as_ref()
-                            .context(
-                                "No content was provided, expected tool calls to be provided.",
-                            )?
-                            .iter()
-                            .map(|call| &call.function)
-                            .collect::<Vec<_>>();
-
-                        Either::Left(serde_json::to_string(&calls)?)
+                        // Templates render tool_calls themselves; HF treats a missing content as empty text
+                        message.tool_calls.as_ref().context(
+                            "No content was provided, expected tool calls to be provided.",
+                        )?;
+                        Either::Left(String::new())
                     }
                 };
 

@@ -16,7 +16,7 @@ curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/jso
 }'
 ```
 
-If a request sets no `temperature`, decoding is greedy: the most likely token is always picked and the probability filters below never run.
+Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
 
 ## Application order
 

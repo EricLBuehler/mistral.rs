@@ -289,6 +289,7 @@ fn sample_draft_tokens(
         let sampled = seq.sampler().sample(
             row_logits,
             &contexts[row],
+            seq.prompt_tokens(),
             false,
             rng.clone(),
             false,

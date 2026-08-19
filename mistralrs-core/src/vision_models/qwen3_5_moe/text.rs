@@ -196,6 +196,10 @@ impl FullAttention {
             (q, k, v)
         };
 
+        let cos_sin = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
         (q, k) = self.rotary_emb.forward_qk_norm(
             cos_sin,
             &q,

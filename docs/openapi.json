@@ -2747,6 +2747,18 @@
             "description": "Permission policy for agentic tools.",
             "example": null
           },
+          "chat_template_kwargs": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
+            "example": null
+          },
           "code_execution_permission": {
             "type": [
               "string",
@@ -4468,7 +4480,7 @@
               "string",
               "null"
             ],
-            "description": "Reasoning emitted with an assistant message."
+            "description": "Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias)."
           },
           "role": {
             "type": "string",
