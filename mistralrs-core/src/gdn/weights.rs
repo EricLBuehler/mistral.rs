@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::{
     Comm, LoraLinearSpec, QuantMethod, ReplicatedLayer, RowParallelLayer, Shard, ShardedVarBuilder,
 };
@@ -272,12 +272,14 @@ impl GdnWeights {
             vb_la.get((dims.conv_dim, 1, dims.conv_kernel_size), "conv1d.weight")?,
             isq_target_device.as_ref(),
         )?;
+        // The recurrence consumes these in f32 every step; A_log is f32 in the checkpoint anyway
+        let vb_f32 = vb_la.clone().set_dtype(DType::F32);
         let dt_bias = move_to_target(
-            vb_la.get(dims.num_v_heads, "dt_bias")?,
+            vb_f32.get(dims.num_v_heads, "dt_bias")?,
             isq_target_device.as_ref(),
         )?;
         let a_log = move_to_target(
-            vb_la.get(dims.num_v_heads, "A_log")?,
+            vb_f32.get(dims.num_v_heads, "A_log")?,
             isq_target_device.as_ref(),
         )?;
 

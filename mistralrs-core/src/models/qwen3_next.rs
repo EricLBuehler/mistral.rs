@@ -659,6 +659,7 @@ impl DecoderLayer {
                 let mut segment_cache = GdnLayerCache {
                     conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
                     recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
+                    slots: None,
                 };
                 outputs.push(mistralrs_quant::with_lora_execution_row_range(
                     segment.token_range.clone(),
@@ -1058,12 +1059,14 @@ impl Model {
                         })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(layer_idx)
                     {
-                        let conv_state = pool.gather_conv_state(&indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_query_lens.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
                         };
 
                         x = layer.forward_linear(
@@ -1073,15 +1076,10 @@ impl Model {
                             packed_query_lens.as_deref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
+                        gdn_cache.commit(
+                            pool,
                             &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            &indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(

@@ -5,95 +5,132 @@ use candle_core::{Result, Tensor};
 #[cfg(feature = "cuda")]
 use candle_core::DType;
 
-/// CUDA-accelerated gated delta rule recurrence.
-///
-/// Inputs (all contiguous, f32):
-///   q, k: [BH, S, K]  v: [BH, S, V]  g, beta: [BH, S]
-///   state: [BH, K, V] (mutated in place)
-///
-/// Returns: output [BH, S, V]
+/// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
+/// `[B*H, ...]` copy addressed by batch row; `Pooled` addresses the whole pool `[cap, H, ...]`
+/// through a `[B]` u32 slot table, so the kernels update it in place without gather/scatter copies.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[derive(Clone, Copy)]
+pub enum GdnStateSlots<'a> {
+    Gathered,
+    Pooled(&'a Tensor),
+}
+
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+impl<'a> GdnStateSlots<'a> {
+    pub fn from_option(slots: Option<&'a Tensor>) -> Self {
+        match slots {
+            Some(slots) => Self::Pooled(slots),
+            None => Self::Gathered,
+        }
+    }
+}
+
 #[cfg(feature = "cuda")]
-pub fn gated_delta_rule_recurrence_cuda(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    g: &Tensor,
-    beta: &Tensor,
+fn with_slot_indices<T>(
+    slots: GdnStateSlots<'_>,
+    f: impl FnOnce(*const i32, usize) -> Result<T>,
+) -> Result<T> {
+    use candle_core::cuda_backend::cudarc::driver::DevicePtr;
+    match slots {
+        GdnStateSlots::Gathered => f(std::ptr::null(), 0),
+        GdnStateSlots::Pooled(slots) => {
+            let batch = slots.dim(0)?;
+            let (s, l) = slots.storage_and_layout();
+            let s = match &*s {
+                candle_core::Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+                _ => candle_core::bail!("slot indices must be a cuda tensor"),
+            };
+            let ptr = s.slice(l.start_offset()..).device_ptr(s.stream()).0 as *const i32;
+            f(ptr, batch)
+        }
+    }
+}
+
+/// Contiguous f32 recurrence inputs: q, k `[BH, S, K]`, v `[BH, S, V]`, g, beta `[BH, S]`.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[derive(Clone, Copy)]
+pub struct RecurrenceInputs<'a> {
+    pub q: &'a Tensor,
+    pub k: &'a Tensor,
+    pub v: &'a Tensor,
+    pub g: &'a Tensor,
+    pub beta: &'a Tensor,
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+enum RecurrenceKernel {
+    Scalar,
+    Warp,
+    Chunked,
+}
+
+/// `state` is `[BH, K, V]` (gathered) or the `[cap, H, K, V]` pool (pooled), mutated in place.
+/// Returns output `[BH, S, V]`.
+#[cfg(feature = "cuda")]
+fn launch_recurrence(
+    kernel: RecurrenceKernel,
+    inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
 
+    let RecurrenceInputs { q, k, v, g, beta } = inputs;
     let (bh, seq_len, k_dim) = q.dims3()?;
     let v_dim = v.dim(2)?;
-
     let dev = q.device().as_cuda_device()?;
 
-    let (q_s, q_l) = q.storage_and_layout();
-    let q_s = match &*q_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("q must be a cuda tensor"),
-    };
-    let q_offset = q_l.start_offset();
-
-    let (k_s, k_l) = k.storage_and_layout();
-    let k_s = match &*k_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("k must be a cuda tensor"),
-    };
-    let k_offset = k_l.start_offset();
-
-    let (v_s, v_l) = v.storage_and_layout();
-    let v_s = match &*v_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("v must be a cuda tensor"),
-    };
-    let v_offset = v_l.start_offset();
-
-    let (g_s, g_l) = g.storage_and_layout();
-    let g_s = match &*g_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("g must be a cuda tensor"),
-    };
-    let g_offset = g_l.start_offset();
-
-    let (beta_s, beta_l) = beta.storage_and_layout();
-    let beta_s = match &*beta_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("beta must be a cuda tensor"),
-    };
-    let beta_offset = beta_l.start_offset();
-
-    let (state_s, state_l) = state.storage_and_layout();
-    let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("state must be a cuda tensor"),
-    };
-    let state_offset = state_l.start_offset();
+    macro_rules! f32_ptr {
+        ($t:expr, $name:literal) => {{
+            let (s, l) = $t.storage_and_layout();
+            let offset = l.start_offset();
+            let s = match &*s {
+                candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+                _ => candle::bail!(concat!($name, " must be a cuda tensor")),
+            };
+            let ptr = s.slice(offset..).device_ptr(s.stream()).0 as *mut f32;
+            ptr
+        }};
+    }
+    let q_ptr = f32_ptr!(q, "q");
+    let k_ptr = f32_ptr!(k, "k");
+    let v_ptr = f32_ptr!(v, "v");
+    let g_ptr = f32_ptr!(g, "g");
+    let beta_ptr = f32_ptr!(beta, "beta");
+    let state_ptr = f32_ptr!(state, "state");
 
     let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
-
     let stream = dev.cuda_stream().cu_stream() as i64;
 
-    unsafe {
-        crate::cuda::ffi::gated_delta_rule_recurrence(
-            q_s.slice(q_offset..).device_ptr(q_s.stream()).0 as *const f32,
-            k_s.slice(k_offset..).device_ptr(k_s.stream()).0 as *const f32,
-            v_s.slice(v_offset..).device_ptr(v_s.stream()).0 as *const f32,
-            g_s.slice(g_offset..).device_ptr(g_s.stream()).0 as *const f32,
-            beta_s.slice(beta_offset..).device_ptr(beta_s.stream()).0 as *const f32,
-            state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
-            output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
-            bh as i32,
-            seq_len as i32,
-            k_dim as i32,
-            v_dim as i32,
-            stream,
-        );
-    }
-
-    // The kernel wrote state in-place via the raw pointer; rewrap
-    // (state tensor's underlying CudaSlice was modified directly)
+    with_slot_indices(slots, |slot_ptr, batch| {
+        let num_heads = bh.checked_div(batch).unwrap_or(1);
+        let launcher = match kernel {
+            RecurrenceKernel::Scalar => crate::cuda::ffi::gated_delta_rule_recurrence,
+            RecurrenceKernel::Warp => crate::cuda::ffi::warp_gated_delta_rule_recurrence,
+            RecurrenceKernel::Chunked => crate::cuda::ffi::chunked_gated_delta_rule_recurrence,
+        };
+        unsafe {
+            launcher(
+                q_ptr,
+                k_ptr,
+                v_ptr,
+                g_ptr,
+                beta_ptr,
+                state_ptr,
+                output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
+                bh as i32,
+                seq_len as i32,
+                k_dim as i32,
+                v_dim as i32,
+                slot_ptr,
+                num_heads as i32,
+                stream,
+            );
+        }
+        Ok(())
+    })?;
 
     let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
     Ok(Tensor::from((
@@ -102,238 +139,72 @@ pub fn gated_delta_rule_recurrence_cuda(
     )))
 }
 
+/// Sequential (one token at a time) gated delta rule recurrence; see `launch_recurrence`.
+#[cfg(feature = "cuda")]
+pub fn gated_delta_rule_recurrence_cuda(
+    inputs: RecurrenceInputs<'_>,
+    state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    launch_recurrence(RecurrenceKernel::Scalar, inputs, state, slots)
+}
+
+/// Prefill recurrence in 64-token chunks; see `launch_recurrence`.
+#[cfg(feature = "cuda")]
+pub fn chunked_gated_delta_rule_recurrence_cuda(
+    inputs: RecurrenceInputs<'_>,
+    state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    launch_recurrence(RecurrenceKernel::Chunked, inputs, state, slots)
+}
+
+/// Warp-per-value-column prefill recurrence; see `launch_recurrence`.
+#[cfg(feature = "cuda")]
+pub fn warp_gated_delta_rule_recurrence_cuda(
+    inputs: RecurrenceInputs<'_>,
+    state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    launch_recurrence(RecurrenceKernel::Warp, inputs, state, slots)
+}
+
 #[cfg(not(feature = "cuda"))]
 #[allow(unused)]
 pub fn gated_delta_rule_recurrence_cuda(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _g: &Tensor,
-    _beta: &Tensor,
+    _inputs: RecurrenceInputs<'_>,
     _state: &mut Tensor,
+    _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-/// CUDA-accelerated chunked gated delta rule recurrence (prefill optimization).
-///
-/// Processes prefill tokens in 64-token chunks instead of one at a time.
-/// Same interface as `gated_delta_rule_recurrence_cuda`.
-///
-/// Inputs (all contiguous, f32):
-///   q, k: [BH, S, K]  v: [BH, S, V]  g, beta: [BH, S]
-///   state: [BH, K, V] (mutated in place)
-///
-/// Returns: output [BH, S, V]
-#[cfg(feature = "cuda")]
-pub fn chunked_gated_delta_rule_recurrence_cuda(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    g: &Tensor,
-    beta: &Tensor,
-    state: &mut Tensor,
-) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
-
-    let (bh, seq_len, k_dim) = q.dims3()?;
-    let v_dim = v.dim(2)?;
-
-    let dev = q.device().as_cuda_device()?;
-
-    let (q_s, q_l) = q.storage_and_layout();
-    let q_s = match &*q_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("q must be a cuda tensor"),
-    };
-    let q_offset = q_l.start_offset();
-
-    let (k_s, k_l) = k.storage_and_layout();
-    let k_s = match &*k_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("k must be a cuda tensor"),
-    };
-    let k_offset = k_l.start_offset();
-
-    let (v_s, v_l) = v.storage_and_layout();
-    let v_s = match &*v_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("v must be a cuda tensor"),
-    };
-    let v_offset = v_l.start_offset();
-
-    let (g_s, g_l) = g.storage_and_layout();
-    let g_s = match &*g_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("g must be a cuda tensor"),
-    };
-    let g_offset = g_l.start_offset();
-
-    let (beta_s, beta_l) = beta.storage_and_layout();
-    let beta_s = match &*beta_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("beta must be a cuda tensor"),
-    };
-    let beta_offset = beta_l.start_offset();
-
-    let (state_s, state_l) = state.storage_and_layout();
-    let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("state must be a cuda tensor"),
-    };
-    let state_offset = state_l.start_offset();
-
-    let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
-
-    let stream = dev.cuda_stream().cu_stream() as i64;
-
-    unsafe {
-        crate::cuda::ffi::chunked_gated_delta_rule_recurrence(
-            q_s.slice(q_offset..).device_ptr(q_s.stream()).0 as *const f32,
-            k_s.slice(k_offset..).device_ptr(k_s.stream()).0 as *const f32,
-            v_s.slice(v_offset..).device_ptr(v_s.stream()).0 as *const f32,
-            g_s.slice(g_offset..).device_ptr(g_s.stream()).0 as *const f32,
-            beta_s.slice(beta_offset..).device_ptr(beta_s.stream()).0 as *const f32,
-            state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
-            output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
-            bh as i32,
-            seq_len as i32,
-            k_dim as i32,
-            v_dim as i32,
-            stream,
-        );
-    }
-
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-    Ok(Tensor::from((
-        candle::Storage::Cuda(output_storage),
-        (bh, seq_len, v_dim),
-    )))
-}
-
 #[cfg(not(feature = "cuda"))]
 #[allow(unused)]
 pub fn chunked_gated_delta_rule_recurrence_cuda(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _g: &Tensor,
-    _beta: &Tensor,
+    _inputs: RecurrenceInputs<'_>,
     _state: &mut Tensor,
+    _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
-#[cfg(feature = "cuda")]
-pub fn warp_gated_delta_rule_recurrence_cuda(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    g: &Tensor,
-    beta: &Tensor,
-    state: &mut Tensor,
-) -> Result<Tensor> {
-    use candle::cuda_backend::cudarc::driver::DevicePtr;
-    use candle_core as candle;
-
-    let (bh, seq_len, k_dim) = q.dims3()?;
-    let v_dim = v.dim(2)?;
-
-    let dev = q.device().as_cuda_device()?;
-
-    let (q_s, q_l) = q.storage_and_layout();
-    let q_s = match &*q_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("q must be a cuda tensor"),
-    };
-    let q_offset = q_l.start_offset();
-
-    let (k_s, k_l) = k.storage_and_layout();
-    let k_s = match &*k_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("k must be a cuda tensor"),
-    };
-    let k_offset = k_l.start_offset();
-
-    let (v_s, v_l) = v.storage_and_layout();
-    let v_s = match &*v_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("v must be a cuda tensor"),
-    };
-    let v_offset = v_l.start_offset();
-
-    let (g_s, g_l) = g.storage_and_layout();
-    let g_s = match &*g_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("g must be a cuda tensor"),
-    };
-    let g_offset = g_l.start_offset();
-
-    let (beta_s, beta_l) = beta.storage_and_layout();
-    let beta_s = match &*beta_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("beta must be a cuda tensor"),
-    };
-    let beta_offset = beta_l.start_offset();
-
-    let (state_s, state_l) = state.storage_and_layout();
-    let state_s = match &*state_s {
-        candle::Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle::bail!("state must be a cuda tensor"),
-    };
-    let state_offset = state_l.start_offset();
-
-    let output_buf = unsafe { dev.alloc::<f32>(bh * seq_len * v_dim) }?;
-    let stream = dev.cuda_stream().cu_stream() as i64;
-
-    unsafe {
-        crate::cuda::ffi::warp_gated_delta_rule_recurrence(
-            q_s.slice(q_offset..).device_ptr(q_s.stream()).0 as *const f32,
-            k_s.slice(k_offset..).device_ptr(k_s.stream()).0 as *const f32,
-            v_s.slice(v_offset..).device_ptr(v_s.stream()).0 as *const f32,
-            g_s.slice(g_offset..).device_ptr(g_s.stream()).0 as *const f32,
-            beta_s.slice(beta_offset..).device_ptr(beta_s.stream()).0 as *const f32,
-            state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
-            output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
-            bh as i32,
-            seq_len as i32,
-            k_dim as i32,
-            v_dim as i32,
-            stream,
-        );
-    }
-
-    let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-    Ok(Tensor::from((
-        candle::Storage::Cuda(output_storage),
-        (bh, seq_len, v_dim),
-    )))
-}
-
 #[cfg(not(feature = "cuda"))]
 #[allow(unused)]
 pub fn warp_gated_delta_rule_recurrence_cuda(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _g: &Tensor,
-    _beta: &Tensor,
+    _inputs: RecurrenceInputs<'_>,
     _state: &mut Tensor,
+    _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
 ///
-/// For update (is_update=true):
-///   x: [B, conv_dim, 1]  weight: [conv_dim, kernel_size]
-///   conv_state: [B, conv_dim, kernel_size] (mutated in place for update)
-///   Returns: (output [B, conv_dim, 1], updated conv_state)
-///
-/// For full (is_update=false):
-///   x: [B, conv_dim, S]  weight: [conv_dim, kernel_size]
-///   Returns: (output [B, conv_dim, S], new conv_state [B, conv_dim, kernel_size])
+/// x: [B, conv_dim, S] (S=1 for update)  weight: [conv_dim, kernel_size]
+/// conv_state: [B, conv_dim, kernel_size], or the [cap, conv_dim, kernel_size] pool with `Pooled` slots.
+/// Update mutates `conv_state` in place; full writes a fresh state (gathered) or the pool rows (pooled).
+/// Returns (output [B, conv_dim, S], conv_state after the step).
 #[cfg(feature = "cuda")]
 pub fn causal_conv1d_cuda(
     x: &Tensor,
@@ -341,6 +212,7 @@ pub fn causal_conv1d_cuda(
     conv_state: &Tensor,
     kernel_size: usize,
     is_update: bool,
+    slots: GdnStateSlots<'_>,
 ) -> Result<(Tensor, Tensor)> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -353,10 +225,12 @@ pub fn causal_conv1d_cuda(
         conv_state: &Tensor,
         kernel_size: usize,
         is_update: bool,
+        slots: GdnStateSlots<'_>,
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor)> {
         let dev = x.device().as_cuda_device()?;
         let (batch_size, conv_dim, seq_len) = x.dims3()?;
+        let pooled = matches!(slots, GdnStateSlots::Pooled(_));
 
         let (x_s, x_l) = x.storage_and_layout();
         let x_s = match &*x_s {
@@ -389,19 +263,23 @@ pub fn causal_conv1d_cuda(
                 };
                 let cs_offset = cs_l.start_offset();
 
-                unsafe {
-                    crate::cuda::ffi::causal_conv1d_update(
-                        x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
-                        w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
-                        cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *mut c_void,
-                        output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
-                        batch_size as i32,
-                        conv_dim as i32,
-                        kernel_size as i32,
-                        dtype_code,
-                        stream,
-                    );
-                }
+                with_slot_indices(slots, |slot_ptr, _| {
+                    unsafe {
+                        crate::cuda::ffi::causal_conv1d_update(
+                            x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
+                            w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                            cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *mut c_void,
+                            output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
+                            batch_size as i32,
+                            conv_dim as i32,
+                            kernel_size as i32,
+                            slot_ptr,
+                            dtype_code,
+                            stream,
+                        );
+                    }
+                    Ok(())
+                })?;
             }
 
             let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
@@ -413,29 +291,43 @@ pub fn causal_conv1d_cuda(
             Ok((output, conv_state_new))
         } else {
             let output_buf = unsafe { dev.alloc::<T>(batch_size * conv_dim * seq_len) }?;
-            let cs_buf = unsafe { dev.alloc::<T>(batch_size * conv_dim * kernel_size) }?;
+            // Pooled: the save kernel rewrites the pool rows in place (it reads ahead of every write)
+            let cs_buf = if pooled {
+                None
+            } else {
+                Some(unsafe { dev.alloc::<T>(batch_size * conv_dim * kernel_size) }?)
+            };
             let (cs_s, cs_l) = conv_state.storage_and_layout();
             let cs_s = match &*cs_s {
                 candle::Storage::Cuda(c) => c.as_cuda_slice::<T>()?,
                 _ => candle::bail!("conv_state must be a cuda tensor"),
             };
             let cs_offset = cs_l.start_offset();
+            let cs_in_ptr = cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0;
+            let cs_out_ptr = match &cs_buf {
+                Some(buf) => buf.device_ptr(buf.stream()).0,
+                None => cs_in_ptr,
+            };
 
-            unsafe {
-                crate::cuda::ffi::causal_conv1d_full(
-                    x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
-                    w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
-                    cs_s.slice(cs_offset..).device_ptr(cs_s.stream()).0 as *const c_void,
-                    cs_buf.device_ptr(cs_buf.stream()).0 as *mut c_void,
-                    output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
-                    batch_size as i32,
-                    conv_dim as i32,
-                    seq_len as i32,
-                    kernel_size as i32,
-                    dtype_code,
-                    stream,
-                );
-            }
+            with_slot_indices(slots, |slot_ptr, _| {
+                unsafe {
+                    crate::cuda::ffi::causal_conv1d_full(
+                        x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
+                        w_s.slice(w_offset..).device_ptr(w_s.stream()).0 as *const c_void,
+                        cs_in_ptr as *const c_void,
+                        cs_out_ptr as *mut c_void,
+                        output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
+                        batch_size as i32,
+                        conv_dim as i32,
+                        seq_len as i32,
+                        kernel_size as i32,
+                        slot_ptr,
+                        dtype_code,
+                        stream,
+                    );
+                }
+                Ok(())
+            })?;
 
             let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
@@ -443,11 +335,16 @@ pub fn causal_conv1d_cuda(
                 (batch_size, conv_dim, seq_len),
             ));
 
-            let cs_storage = candle::CudaStorage::wrap_cuda_slice(cs_buf, dev.clone());
-            let new_conv_state = Tensor::from((
-                candle::Storage::Cuda(cs_storage),
-                (batch_size, conv_dim, kernel_size),
-            ));
+            let new_conv_state = match cs_buf {
+                Some(cs_buf) => Tensor::from((
+                    candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
+                        cs_buf,
+                        dev.clone(),
+                    )),
+                    (batch_size, conv_dim, kernel_size),
+                )),
+                None => conv_state.clone(),
+            };
 
             Ok((output, new_conv_state))
         }
@@ -455,10 +352,17 @@ pub fn causal_conv1d_cuda(
 
     let x = x.contiguous()?;
     let weight = weight.contiguous()?;
+    if matches!(slots, GdnStateSlots::Pooled(_)) && !conv_state.is_contiguous() {
+        candle_core::bail!("pooled conv state must be contiguous");
+    }
     let conv_state = conv_state.contiguous()?;
     match x.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(&x, &weight, &conv_state, kernel_size, is_update, 0),
-        DType::BF16 => cuda_fwd::<half::bf16>(&x, &weight, &conv_state, kernel_size, is_update, 1),
+        DType::F16 => {
+            cuda_fwd::<half::f16>(&x, &weight, &conv_state, kernel_size, is_update, slots, 0)
+        }
+        DType::BF16 => {
+            cuda_fwd::<half::bf16>(&x, &weight, &conv_state, kernel_size, is_update, slots, 1)
+        }
         other => candle_core::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
     }
 }
@@ -471,6 +375,7 @@ pub fn causal_conv1d_cuda(
     _conv_state: &Tensor,
     _kernel_size: usize,
     _is_update: bool,
+    _slots: GdnStateSlots<'_>,
 ) -> Result<(Tensor, Tensor)> {
     candle_core::bail!("causal_conv1d_cuda requires the cuda feature")
 }
@@ -678,6 +583,7 @@ pub fn fused_decode_recurrence_cuda(
     head_k_dim: usize,
     head_v_dim: usize,
     tiled_v_heads: bool,
+    slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
@@ -698,6 +604,7 @@ pub fn fused_decode_recurrence_cuda(
         head_k_dim: usize,
         head_v_dim: usize,
         tiled_v_heads: bool,
+        slots: GdnStateSlots<'_>,
         dtype_code: i32,
     ) -> Result<Tensor> {
         let dev = mixed_qkv.device().as_cuda_device()?;
@@ -745,28 +652,32 @@ pub fn fused_decode_recurrence_cuda(
         let state_offset = state_l.start_offset();
 
         let bh = batch_size * num_v_heads;
-        let output_buf = unsafe { dev.alloc::<f32>(bh * head_v_dim) }?;
+        let output_buf = unsafe { dev.alloc::<T>(bh * head_v_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
-        unsafe {
-            crate::cuda::ffi::gdn_decode_recurrence(
-                mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0 as *const c_void,
-                b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
-                a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
-                alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
-                dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
-                state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
-                output_buf.device_ptr(output_buf.stream()).0 as *mut f32,
-                batch_size as i32,
-                num_k_heads as i32,
-                num_v_heads as i32,
-                head_k_dim as i32,
-                head_v_dim as i32,
-                i32::from(tiled_v_heads),
-                dtype_code,
-                stream,
-            );
-        }
+        with_slot_indices(slots, |slot_ptr, _| {
+            unsafe {
+                crate::cuda::ffi::gdn_decode_recurrence(
+                    mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0 as *const c_void,
+                    b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
+                    a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
+                    alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
+                    dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
+                    state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
+                    output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
+                    batch_size as i32,
+                    num_k_heads as i32,
+                    num_v_heads as i32,
+                    head_k_dim as i32,
+                    head_v_dim as i32,
+                    i32::from(tiled_v_heads),
+                    slot_ptr,
+                    dtype_code,
+                    stream,
+                );
+            }
+            Ok(())
+        })?;
 
         Ok(Tensor::from((
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
@@ -791,6 +702,7 @@ pub fn fused_decode_recurrence_cuda(
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
+            slots,
             0,
         ),
         DType::BF16 => cuda_fwd::<half::bf16>(
@@ -806,6 +718,7 @@ pub fn fused_decode_recurrence_cuda(
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
+            slots,
             1,
         ),
         other => candle_core::bail!(
@@ -830,6 +743,7 @@ pub fn fused_decode_recurrence_cuda(
     _head_k_dim: usize,
     _head_v_dim: usize,
     _tiled_v_heads: bool,
+    _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }
@@ -1124,12 +1038,41 @@ mod tests {
         let state = patterned(case.bh * case.k_dim * case.v_dim, 6, 0.01, 0.0);
 
         let mut state_scalar = tensor3(state.clone(), (case.bh, case.k_dim, case.v_dim), dev)?;
-        let scalar = gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_scalar)?;
+        let scalar = gated_delta_rule_recurrence_cuda(
+            RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            },
+            &mut state_scalar,
+            GdnStateSlots::Gathered,
+        )?;
         let mut state_chunked = tensor3(state.clone(), (case.bh, case.k_dim, case.v_dim), dev)?;
-        let chunked =
-            chunked_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_chunked)?;
+        let chunked = chunked_gated_delta_rule_recurrence_cuda(
+            RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            },
+            &mut state_chunked,
+            GdnStateSlots::Gathered,
+        )?;
         let mut state_warp = tensor3(state, (case.bh, case.k_dim, case.v_dim), dev)?;
-        let warp = warp_gated_delta_rule_recurrence_cuda(&q, &k, &v, &g, &beta, &mut state_warp)?;
+        let warp = warp_gated_delta_rule_recurrence_cuda(
+            RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            },
+            &mut state_warp,
+            GdnStateSlots::Gathered,
+        )?;
 
         let scalar_flat = flat(&scalar)?;
         let scalar_state_flat = flat(&state_scalar)?;
@@ -1238,14 +1181,21 @@ mod tests {
         )?
         .to_dtype(DType::F16)?;
 
-        let (one_shot, one_shot_state) =
-            causal_conv1d_cuda(&x, &weight, &initial_state, kernel_size, false)?;
+        let (one_shot, one_shot_state) = causal_conv1d_cuda(
+            &x,
+            &weight,
+            &initial_state,
+            kernel_size,
+            false,
+            GdnStateSlots::Gathered,
+        )?;
         let (first, first_state) = causal_conv1d_cuda(
             &x.narrow(2, 0, split)?,
             &weight,
             &initial_state,
             kernel_size,
             false,
+            GdnStateSlots::Gathered,
         )?;
         let (second, chunked_state) = causal_conv1d_cuda(
             &x.narrow(2, split, seq_len - split)?,
@@ -1253,6 +1203,7 @@ mod tests {
             &first_state,
             kernel_size,
             false,
+            GdnStateSlots::Gathered,
         )?;
         let chunked = Tensor::cat(&[first, second], 2)?;
 
@@ -1268,6 +1219,147 @@ mod tests {
             &flat(&chunked_state.to_dtype(DType::F32)?)?,
             2.0e-3,
         );
+        Ok(())
+    }
+
+    // Pooled kernels addressed through a permuted slot table must match the gathered kernels on
+    // the same rows and leave every other pool row untouched.
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn pooled_state_kernels_match_gathered_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let capacity = 6usize;
+        let batch = 3usize;
+        let slots_host: Vec<u32> = vec![4, 1, 5];
+        let slots = Tensor::from_vec(slots_host.clone(), (batch,), &dev)?;
+        let num_heads = 4usize;
+        let k_dim = 128usize;
+        let v_dim = 64usize;
+        let conv_dim = 3 * num_heads * k_dim;
+        let kernel_size = 4usize;
+
+        let pool_rec_host = patterned(capacity * num_heads * k_dim * v_dim, 30, 0.01, 0.0);
+        let pool_rec = Tensor::from_vec(
+            pool_rec_host.clone(),
+            (capacity, num_heads, k_dim, v_dim),
+            &dev,
+        )?;
+        let pool_conv_host = patterned(capacity * conv_dim * kernel_size, 31, 0.03, 0.0);
+        let pool_conv = Tensor::from_vec(pool_conv_host, (capacity, conv_dim, kernel_size), &dev)?
+            .to_dtype(DType::BF16)?;
+        let gathered_rec = pool_rec.index_select(&slots, 0)?.contiguous()?;
+        let gathered_conv = pool_conv.index_select(&slots, 0)?.contiguous()?;
+
+        for seq_len in [1usize, 3, 70] {
+            let bh = batch * num_heads;
+            let q = tensor3(
+                patterned(bh * seq_len * k_dim, 1, 0.02, 0.0),
+                (bh, seq_len, k_dim),
+                &dev,
+            )?;
+            let k = tensor3(
+                patterned(bh * seq_len * k_dim, 2, 0.02, 0.0),
+                (bh, seq_len, k_dim),
+                &dev,
+            )?;
+            let v = tensor3(
+                patterned(bh * seq_len * v_dim, 3, 0.05, 0.0),
+                (bh, seq_len, v_dim),
+                &dev,
+            )?;
+            let g = tensor2(patterned(bh * seq_len, 4, 0.03, -0.08), (bh, seq_len), &dev)?;
+            let beta = tensor2(patterned(bh * seq_len, 5, 0.15, 0.5), (bh, seq_len), &dev)?;
+
+            let inputs = RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            };
+            let mut state_gathered = gathered_rec.reshape((bh, k_dim, v_dim))?.copy()?;
+            let mut state_pooled = pool_rec.copy()?;
+            for kernel in [
+                RecurrenceKernel::Scalar,
+                RecurrenceKernel::Warp,
+                RecurrenceKernel::Chunked,
+            ] {
+                let mut sg = state_gathered.copy()?;
+                let mut sp = state_pooled.copy()?;
+                let out_g = launch_recurrence(kernel, inputs, &mut sg, GdnStateSlots::Gathered)?;
+                let out_p =
+                    launch_recurrence(kernel, inputs, &mut sp, GdnStateSlots::Pooled(&slots))?;
+                assert_close(
+                    "pooled recurrence output",
+                    &flat(&out_g)?,
+                    &flat(&out_p)?,
+                    1.0e-6,
+                );
+                let sp_rows = sp.index_select(&slots, 0)?.reshape((bh, k_dim, v_dim))?;
+                assert_close(
+                    "pooled recurrence state",
+                    &flat(&sg)?,
+                    &flat(&sp_rows)?,
+                    1.0e-6,
+                );
+                let untouched = flat(&sp)?;
+                for row in (0..capacity).filter(|r| !slots_host.contains(&(*r as u32))) {
+                    let span = num_heads * k_dim * v_dim;
+                    assert_close(
+                        "pooled recurrence untouched row",
+                        &untouched[row * span..(row + 1) * span],
+                        &pool_rec_host[row * span..(row + 1) * span],
+                        0.0,
+                    );
+                }
+                state_gathered = sg;
+                state_pooled = sp;
+            }
+
+            let x = tensor3(
+                patterned(batch * conv_dim * seq_len, 20, 0.08, 0.01),
+                (batch, conv_dim, seq_len),
+                &dev,
+            )?
+            .to_dtype(DType::BF16)?;
+            let weight = tensor2(
+                patterned(conv_dim * kernel_size, 21, 0.05, -0.01),
+                (conv_dim, kernel_size),
+                &dev,
+            )?
+            .to_dtype(DType::BF16)?;
+            let is_update = seq_len == 1;
+            let (out_g, cs_g) = causal_conv1d_cuda(
+                &x,
+                &weight,
+                &gathered_conv.copy()?,
+                kernel_size,
+                is_update,
+                GdnStateSlots::Gathered,
+            )?;
+            let pool_copy = pool_conv.copy()?;
+            let (out_p, cs_p) = causal_conv1d_cuda(
+                &x,
+                &weight,
+                &pool_copy,
+                kernel_size,
+                is_update,
+                GdnStateSlots::Pooled(&slots),
+            )?;
+            assert_close(
+                "pooled conv output",
+                &flat(&out_g.to_dtype(DType::F32)?)?,
+                &flat(&out_p.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+            let cs_p_rows = cs_p.index_select(&slots, 0)?;
+            assert_close(
+                "pooled conv state",
+                &flat(&cs_g.to_dtype(DType::F32)?)?,
+                &flat(&cs_p_rows.to_dtype(DType::F32)?)?,
+                0.0,
+            );
+        }
         Ok(())
     }
 }

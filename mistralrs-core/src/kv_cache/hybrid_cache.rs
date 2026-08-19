@@ -16,9 +16,9 @@ use crate::layers_masker::PastKvLenCache;
 ///
 /// Works for both Mamba SSM and GDN (Gated Delta Net) recurrent layers.
 /// Instead of dynamically sized state tensors, we maintain a pool of
-/// state slots that grows dynamically. Each sequence is assigned a slot index,
-/// and the forward pass uses `index_select` (gather) and index assignment (scatter)
-/// to access the correct states.
+/// state slots that grows dynamically. Each sequence is assigned a slot index; CUDA GDN kernels
+/// address the pool rows in place through the batch's slot table, other backends gather the rows
+/// with `index_select` and scatter them back after the layer.
 #[derive(Debug)]
 pub struct RecurrentStatePool {
     /// Convolution state pool: (capacity, conv_dim, conv_width)

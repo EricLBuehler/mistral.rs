@@ -4,6 +4,14 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
+// (batch, head) -> row of the state buffer: identity on a gathered [B*H, ...] copy, or through the
+// per-batch slot table when a kernel updates the recurrent state pool in place
+__device__ __forceinline__ size_t gdn_state_row(const int32_t *__restrict__ slot_indices,
+                                                int bidx, int h, int num_heads) {
+  const size_t slot = slot_indices ? (size_t)slot_indices[bidx] : (size_t)bidx;
+  return slot * num_heads + h;
+}
+
 // ============================================================================
 // Kernel 1: gated_delta_rule_recurrence (optimized)
 //
@@ -30,9 +38,10 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
     const float *__restrict__ v,    // [BH, S, V]
     const float *__restrict__ g,    // [BH, S]
     const float *__restrict__ beta, // [BH, S]
-    float *__restrict__ state,      // [BH, K, V]
+    float *__restrict__ state,      // [BH, K, V] or the pool with slot_indices
     float *__restrict__ output,     // [BH, S, V]
-    int seq_len, int v_dim) {
+    int seq_len, int v_dim, const int32_t *__restrict__ slot_indices,
+    int num_heads) {
 
   const int v_tile = blockIdx.x;       // which V-tile
   const int bh = blockIdx.y;           // batch*head index
@@ -48,7 +57,8 @@ __global__ void gated_delta_rule_recurrence_kernel_tiled(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh = state + bh * BK * v_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
   float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   // Shared memory: k_buf[BK] + q_buf[BK]
@@ -121,7 +131,8 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
     const float *__restrict__ q, const float *__restrict__ k,
     const float *__restrict__ v, const float *__restrict__ g,
     const float *__restrict__ beta, float *__restrict__ state,
-    float *__restrict__ output, int seq_len, int k_dim, int v_dim) {
+    float *__restrict__ output, int seq_len, int k_dim, int v_dim,
+    const int32_t *__restrict__ slot_indices, int num_heads) {
 
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
@@ -136,7 +147,8 @@ __global__ void gated_delta_rule_recurrence_kernel_fallback(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh = state + bh * k_dim * v_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * k_dim * v_dim;
   float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   extern __shared__ float shared[];
@@ -192,7 +204,8 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
                                             const float *beta, float *state,
                                             float *output, int bh, int seq_len,
                                             int k_dim, int v_dim,
-                                            int64_t stream) {
+                                            const int32_t *slot_indices,
+                                            int num_heads, int64_t stream) {
 
   const cudaStream_t custream = (cudaStream_t)stream;
 
@@ -204,7 +217,7 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
     dim3 block(BV);
     gated_delta_rule_recurrence_kernel_tiled<BK, BV>
         <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim);
+                                       v_dim, slot_indices, num_heads);
   } else if (k_dim == 64) {
     // Fast path for models with k_dim=64
     constexpr int BK = 64;
@@ -213,7 +226,7 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
     dim3 block(BV);
     gated_delta_rule_recurrence_kernel_tiled<BK, BV>
         <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim);
+                                       v_dim, slot_indices, num_heads);
   } else {
     // Fallback for other k_dim values (runtime loop, still V-tiled)
     constexpr int BV = 64;
@@ -223,7 +236,8 @@ extern "C" void gated_delta_rule_recurrence(const float *q, const float *k,
     size_t smem = 2 * k_dim * sizeof(float);
     gated_delta_rule_recurrence_kernel_fallback<BV, MAX_K>
         <<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                          seq_len, k_dim, v_dim);
+                                          seq_len, k_dim, v_dim, slot_indices,
+                                          num_heads);
   }
 }
 
@@ -247,7 +261,9 @@ __global__ __launch_bounds__(
                                                         *__restrict__ beta,
                                                     float *__restrict__ state,
                                                     float *__restrict__ output,
-                                                    int seq_len, int v_dim) {
+                                                    int seq_len, int v_dim,
+                                                    const int32_t *__restrict__ slot_indices,
+                                                    int num_heads) {
 
   constexpr int WARP_SIZE = 32;
   static_assert(BK % WARP_SIZE == 0, "BK must be a multiple of warp size");
@@ -267,7 +283,8 @@ __global__ __launch_bounds__(
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh = state + bh * BK * v_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
   float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   float s[ROWS_PER_LANE];
@@ -322,7 +339,9 @@ extern "C" void warp_gated_delta_rule_recurrence(const float *q, const float *k,
                                                  const float *beta,
                                                  float *state, float *output,
                                                  int bh, int seq_len, int k_dim,
-                                                 int v_dim, int64_t stream) {
+                                                 int v_dim,
+                                                 const int32_t *slot_indices,
+                                                 int num_heads, int64_t stream) {
 
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int NUM_WARPS = 4;
@@ -332,14 +351,14 @@ extern "C" void warp_gated_delta_rule_recurrence(const float *q, const float *k,
   if (k_dim == 128) {
     gated_delta_rule_recurrence_kernel_warp<128, NUM_WARPS>
         <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim);
+                                       v_dim, slot_indices, num_heads);
   } else if (k_dim == 64) {
     gated_delta_rule_recurrence_kernel_warp<64, NUM_WARPS>
         <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
-                                       v_dim);
+                                       v_dim, slot_indices, num_heads);
   } else {
     gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
-                                k_dim, v_dim, stream);
+                                k_dim, v_dim, slot_indices, num_heads, stream);
   }
 }
 
@@ -372,9 +391,11 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
                                 const float *__restrict__ v,    // [BH, S, V]
                                 const float *__restrict__ g,    // [BH, S]
                                 const float *__restrict__ beta, // [BH, S]
-                                float *__restrict__ state,      // [BH, K, V]
+                                float *__restrict__ state,      // [BH, K, V] or pool
                                 float *__restrict__ output,     // [BH, S, V]
-                                int seq_len, int v_dim) {
+                                int seq_len, int v_dim,
+                                const int32_t *__restrict__ slot_indices,
+                                int num_heads) {
 
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
@@ -392,7 +413,8 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
   const float *v_bh = v + (size_t)bh * seq_len * v_dim;
   const float *g_bh = g + (size_t)bh * seq_len;
   const float *beta_bh = beta + (size_t)bh * seq_len;
-  float *state_bh = state + bh * BK * v_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bh / num_heads, bh % num_heads, num_heads) * BK * v_dim;
   float *out_bh = output + (size_t)bh * seq_len * v_dim;
 
   // Dynamic shared memory layout
@@ -534,7 +556,8 @@ chunked_gated_delta_rule_kernel(const float *__restrict__ q,    // [BH, S, K]
 extern "C" void chunked_gated_delta_rule_recurrence(
     const float *q, const float *k, const float *v, const float *g,
     const float *beta, float *state, float *output, int bh, int seq_len,
-    int k_dim, int v_dim, int64_t stream) {
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int64_t stream) {
 
   const cudaStream_t custream = (cudaStream_t)stream;
 
@@ -553,7 +576,8 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
     kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim);
+                                            seq_len, v_dim, slot_indices,
+                                            num_heads);
   } else if (k_dim == 64) {
     constexpr int BT = 64;
     constexpr int BK = 64;
@@ -567,11 +591,12 @@ extern "C" void chunked_gated_delta_rule_recurrence(
     dim3 grid((v_dim + BV - 1) / BV, bh);
     dim3 block(BV);
     kernel<<<grid, block, smem, custream>>>(q, k, v, g, beta, state, output,
-                                            seq_len, v_dim);
+                                            seq_len, v_dim, slot_indices,
+                                            num_heads);
   } else {
     // Fallback: use the sequential kernel for unsupported k_dim
     gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
-                                k_dim, v_dim, stream);
+                                k_dim, v_dim, slot_indices, num_heads, stream);
   }
 }
 
@@ -592,7 +617,8 @@ __global__ void causal_conv1d_update_kernel(
     const T *__restrict__ weight, // [conv_dim, kernel_size]
     T *__restrict__ conv_state,   // [B, conv_dim, kernel_size]
     T *__restrict__ output,       // [B, conv_dim, 1]
-    int batch_size, int conv_dim, int kernel_size) {
+    int batch_size, int conv_dim, int kernel_size,
+    const int32_t *__restrict__ slot_indices) {
 
   const int ch = blockIdx.x * blockDim.x + threadIdx.x;
   const int b = blockIdx.y;
@@ -601,7 +627,7 @@ __global__ void causal_conv1d_update_kernel(
     return;
 
   // Pointer to this batch/channel's conv state
-  T *cs = conv_state + (b * conv_dim + ch) * kernel_size;
+  T *cs = conv_state + (gdn_state_row(slot_indices, b, 0, 1) * conv_dim + ch) * kernel_size;
   const T *w = weight + ch * kernel_size;
 
   // Shift state left by 1
@@ -627,7 +653,8 @@ __global__ void causal_conv1d_update_kernel(
 extern "C" void causal_conv1d_update(const void *x, const void *weight,
                                      void *conv_state, void *output,
                                      int batch_size, int conv_dim,
-                                     int kernel_size, int dtype,
+                                     int kernel_size,
+                                     const int32_t *slot_indices, int dtype,
                                      int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   dim3 block(256);
@@ -637,13 +664,13 @@ extern "C" void causal_conv1d_update(const void *x, const void *weight,
     // f16
     causal_conv1d_update_kernel<__half><<<grid, block, 0, custream>>>(
         (const __half *)x, (const __half *)weight, (__half *)conv_state,
-        (__half *)output, batch_size, conv_dim, kernel_size);
+        (__half *)output, batch_size, conv_dim, kernel_size, slot_indices);
   } else {
     // bf16
     causal_conv1d_update_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (__nv_bfloat16 *)conv_state, (__nv_bfloat16 *)output, batch_size,
-        conv_dim, kernel_size);
+        conv_dim, kernel_size, slot_indices);
   }
 }
 
@@ -663,7 +690,8 @@ __global__ void causal_conv1d_full_kernel(
     const T *__restrict__ weight, // [conv_dim, kernel_size]
     const T *__restrict__ conv_state,
     T *__restrict__ output, // [B, conv_dim, S]
-    int batch_size, int conv_dim, int seq_len, int kernel_size) {
+    int batch_size, int conv_dim, int seq_len, int kernel_size,
+    const int32_t *__restrict__ slot_indices) {
 
   // Flat (channel, position) index: keeps long prompts inside grid limits and coalesces along S
   const size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
@@ -678,7 +706,8 @@ __global__ void causal_conv1d_full_kernel(
 
   const T *x_bch = x + ((size_t)b * conv_dim + ch) * seq_len;
   const T *w = weight + (size_t)ch * kernel_size;
-  const T *cs = conv_state + ((size_t)b * conv_dim + ch) * kernel_size;
+  const T *cs =
+      conv_state + (gdn_state_row(slot_indices, b, 0, 1) * conv_dim + ch) * kernel_size;
 
   float acc = 0.0f;
   for (int i = 0; i < kernel_size; i++) {
@@ -698,9 +727,11 @@ __global__ void causal_conv1d_full_kernel(
 template <typename T>
 __global__ void save_conv_state_kernel(
     const T *__restrict__ x, // [B, conv_dim, S]
-    const T *__restrict__ conv_state_in,
-    T *__restrict__ conv_state_out, // [B, conv_dim, kernel_size]
-    int batch_size, int conv_dim, int seq_len, int kernel_size) {
+    // May alias conv_state_out (pooled in-place update): every read is ahead of the write position
+    const T *conv_state_in,
+    T *conv_state_out, // [B, conv_dim, kernel_size]
+    int batch_size, int conv_dim, int seq_len, int kernel_size,
+    const int32_t *__restrict__ slot_indices) {
 
   const int ch = blockIdx.x * blockDim.x + threadIdx.x;
   const int b = blockIdx.y;
@@ -709,8 +740,9 @@ __global__ void save_conv_state_kernel(
     return;
 
   const T *x_bch = x + ((size_t)b * conv_dim + ch) * seq_len;
-  const T *prior = conv_state_in + (b * conv_dim + ch) * kernel_size;
-  T *cs = conv_state_out + (b * conv_dim + ch) * kernel_size;
+  const size_t row = gdn_state_row(slot_indices, b, 0, 1);
+  const T *prior = conv_state_in + (row * conv_dim + ch) * kernel_size;
+  T *cs = conv_state_out + (row * conv_dim + ch) * kernel_size;
 
   int pad = kernel_size - seq_len;
   for (int i = 0; i < kernel_size; i++) {
@@ -726,7 +758,8 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
                                    const void *conv_state_in,
                                    void *conv_state_out, void *output,
                                    int batch_size, int conv_dim, int seq_len,
-                                   int kernel_size, int dtype, int64_t stream) {
+                                   int kernel_size, const int32_t *slot_indices,
+                                   int dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
 
   // Main convolution kernel
@@ -738,21 +771,22 @@ extern "C" void causal_conv1d_full(const void *x, const void *weight,
     causal_conv1d_full_kernel<__half><<<grid, block, 0, custream>>>(
         (const __half *)x, (const __half *)weight,
         (const __half *)conv_state_in, (__half *)output, batch_size, conv_dim,
-        seq_len, kernel_size);
+        seq_len, kernel_size, slot_indices);
     dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__half><<<grid2, block, 0, custream>>>(
         (const __half *)x, (const __half *)conv_state_in,
-        (__half *)conv_state_out, batch_size, conv_dim, seq_len, kernel_size);
+        (__half *)conv_state_out, batch_size, conv_dim, seq_len, kernel_size,
+        slot_indices);
   } else {
     causal_conv1d_full_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (const __nv_bfloat16 *)conv_state_in, (__nv_bfloat16 *)output,
-        batch_size, conv_dim, seq_len, kernel_size);
+        batch_size, conv_dim, seq_len, kernel_size, slot_indices);
     dim3 grid2((conv_dim + 255) / 256, batch_size);
     save_conv_state_kernel<__nv_bfloat16><<<grid2, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)conv_state_in,
         (__nv_bfloat16 *)conv_state_out, batch_size, conv_dim, seq_len,
-        kernel_size);
+        kernel_size, slot_indices);
   }
 }
 
@@ -873,8 +907,9 @@ __global__ void gdn_decode_recurrence_kernel(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
     const float *__restrict__ dt_bias, float *__restrict__ state,
-    float *__restrict__ output, int batch_size, int num_k_heads,
-    int num_v_heads, int head_v_dim, int tiled_v_heads) {
+    T *__restrict__ output, int batch_size, int num_k_heads,
+    int num_v_heads, int head_v_dim, int tiled_v_heads,
+    const int32_t *__restrict__ slot_indices) {
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
   const int tid = threadIdx.x;
@@ -894,8 +929,8 @@ __global__ void gdn_decode_recurrence_kernel(
   const T *row = mixed_qkv + bidx * conv_dim;
   const T *b_row = b + bidx * num_v_heads;
   const T *a_row = a + bidx * num_v_heads;
-  float *state_bh = state + bh * BK * head_v_dim;
-  float *out_bh = output + bh * head_v_dim;
+  float *state_bh = state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
+  T *out_bh = output + bh * head_v_dim;
 
   __shared__ float red_q[BV];
   __shared__ float red_k[BV];
@@ -975,7 +1010,7 @@ __global__ void gdn_decode_recurrence_kernel(
   for (int j = 0; j < BK; j++) {
     state_bh[j * head_v_dim + v_idx] = s[j];
   }
-  out_bh[v_idx] = y_t;
+  out_bh[v_idx] = (T)y_t;
 }
 
 template <typename T, int BV, int MAX_K>
@@ -983,8 +1018,9 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
     const T *__restrict__ mixed_qkv, const T *__restrict__ b,
     const T *__restrict__ a, const float *__restrict__ a_log,
     const float *__restrict__ dt_bias, float *__restrict__ state,
-    float *__restrict__ output, int batch_size, int num_k_heads,
-    int num_v_heads, int head_k_dim, int head_v_dim, int tiled_v_heads) {
+    T *__restrict__ output, int batch_size, int num_k_heads,
+    int num_v_heads, int head_k_dim, int head_v_dim, int tiled_v_heads,
+    const int32_t *__restrict__ slot_indices) {
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
   const int tid = threadIdx.x;
@@ -1004,8 +1040,9 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   const T *row = mixed_qkv + bidx * conv_dim;
   const T *b_row = b + bidx * num_v_heads;
   const T *a_row = a + bidx * num_v_heads;
-  float *state_bh = state + bh * head_k_dim * head_v_dim;
-  float *out_bh = output + bh * head_v_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * head_k_dim * head_v_dim;
+  T *out_bh = output + bh * head_v_dim;
 
   extern __shared__ float shared[];
   float *red_q = shared;
@@ -1083,15 +1120,16 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   for (int j = 0; j < head_k_dim; j++) {
     state_bh[j * head_v_dim + v_idx] = s[j];
   }
-  out_bh[v_idx] = y_t;
+  out_bh[v_idx] = (T)y_t;
 }
 
 extern "C" void
 gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
                       const float *a_log, const float *dt_bias, float *state,
-                      float *output, int batch_size, int num_k_heads,
+                      void *output, int batch_size, int num_k_heads,
                       int num_v_heads, int head_k_dim, int head_v_dim,
-                      int tiled_v_heads, int dtype, int64_t stream) {
+                      int tiled_v_heads, const int32_t *slot_indices, int dtype,
+                      int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int BV = 64;
   dim3 grid((head_v_dim + BV - 1) / BV, batch_size * num_v_heads);
@@ -1102,28 +1140,30 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
       gdn_decode_recurrence_kernel<__half, 128, BV>
           <<<grid, block, 0, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads);
+              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
+              num_v_heads, head_v_dim, tiled_v_heads, slot_indices);
     } else {
       gdn_decode_recurrence_kernel<__nv_bfloat16, 128, BV>
           <<<grid, block, 0, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
-              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads);
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
+              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+              slot_indices);
     }
   } else if (head_k_dim == 64) {
     if (dtype == 0) {
       gdn_decode_recurrence_kernel<__half, 64, BV>
           <<<grid, block, 0, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads);
+              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
+              num_v_heads, head_v_dim, tiled_v_heads, slot_indices);
     } else {
       gdn_decode_recurrence_kernel<__nv_bfloat16, 64, BV>
           <<<grid, block, 0, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
-              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads);
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
+              batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+              slot_indices);
     }
   } else {
     constexpr int MAX_K = 256;
@@ -1132,15 +1172,15 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
       gdn_decode_recurrence_kernel_fallback<__half, BV, MAX_K>
           <<<grid, block, smem, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-              a_log, dt_bias, state, output, batch_size, num_k_heads,
-              num_v_heads, head_k_dim, head_v_dim, tiled_v_heads);
+              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
+              num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, slot_indices);
     } else {
       gdn_decode_recurrence_kernel_fallback<__nv_bfloat16, BV, MAX_K>
           <<<grid, block, smem, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-              (const __nv_bfloat16 *)a, a_log, dt_bias, state, output,
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
               batch_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
-              tiled_v_heads);
+              tiled_v_heads, slot_indices);
     }
   }
 }
