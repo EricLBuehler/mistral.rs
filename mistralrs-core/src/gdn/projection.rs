@@ -77,6 +77,8 @@ pub struct GdnProjection {
     pub z: Tensor,
     pub b: Tensor,
     pub a: Tensor,
+    // Set when the projection already produced `[q | k | v]` contiguously, so the conv needs no copy
+    conv_src: Option<Tensor>,
 }
 
 impl GdnProjection {
@@ -112,6 +114,7 @@ impl GdnProjection {
             z: z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
             b: b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: a.reshape((batch_size, seq_len, dims.num_v_heads))?,
+            conv_src: None,
         })
     }
 
@@ -127,6 +130,10 @@ impl GdnProjection {
         let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
         let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
         let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
+        let conv_src = mixed_qkv
+            .is_contiguous()
+            .then(|| mixed_qkv.reshape((batch_size, seq_len, dims.conv_dim)))
+            .transpose()?;
 
         Ok(Self {
             q: q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
@@ -135,6 +142,7 @@ impl GdnProjection {
             z: mixed_z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
             b: mixed_b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: mixed_a.reshape((batch_size, seq_len, dims.num_v_heads))?,
+            conv_src,
         })
     }
 
@@ -160,6 +168,9 @@ impl GdnProjection {
     }
 
     pub fn conv_input(&self, dims: &GdnDims, batch_size: usize, seq_len: usize) -> Result<Tensor> {
+        if let Some(src) = &self.conv_src {
+            return Ok(src.clone());
+        }
         let q = self.q.reshape((batch_size, seq_len, dims.key_dim))?;
         let k = self.k.reshape((batch_size, seq_len, dims.key_dim))?;
         let v = self.v.reshape((batch_size, seq_len, dims.value_dim))?;

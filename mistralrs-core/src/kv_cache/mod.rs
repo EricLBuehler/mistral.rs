@@ -17,7 +17,7 @@ mod single_cache;
 pub use full_cache::{EitherCache, LayerCaches};
 pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
-    RecurrentStateSnapshot,
+    RecurrentStatePool, RecurrentStateSnapshot,
 };
 pub use rotating_cache::{RotatingCache, RotatingCacheSnapshot};
 pub use single_cache::{SingleCache, SingleCacheSnapshot};

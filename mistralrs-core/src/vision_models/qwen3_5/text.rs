@@ -27,7 +27,7 @@ use crate::{
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, CausalMasker, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
+    layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa},
     layers_masker::{CausalMaskConfig, PastKvLenCache},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -285,66 +285,6 @@ impl FullAttention {
         y = y.broadcast_mul(&gate)?;
 
         let res = self.o_proj.forward(&y)?;
-        Ok(res)
-    }
-}
-
-// ====================== Dense MLP ======================
-
-#[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quant_config: &Option<mistralrs_quant::QuantizedConfig>,
-        act_fn: crate::layers::Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let gate_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = RowParallelLayer::new(
-            intermediate_size,
-            hidden_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?;
-        let up = self.up_proj.forward(xs)?;
-        let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let res = self.down_proj.forward(&activated)?;
         Ok(res)
     }
 }
@@ -871,6 +811,7 @@ impl Qwen3_5TextModel {
                     .recurrent_state
                     .narrow(0, batch_idx, 1)?
                     .contiguous()?,
+                slots: None,
             };
             let x = layer
                 .input
@@ -1075,21 +1016,24 @@ impl Qwen3_5TextModel {
                         ))
                     })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let conv_state = pool.gather_conv_state(&indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(&indices)?;
                         if let Some(stash) = gdn_stash.as_mut() {
-                            // The recurrence kernels update the state buffers in place, so keep real copies
+                            // Gathers are fresh copies, untouched by the in-place state kernels
                             stash.layers.push(GdnLayerStash {
                                 layer_idx: i,
                                 input: xs.clone(),
-                                conv_state: conv_state.copy()?,
-                                recurrent_state: recurrent_state.copy()?,
+                                conv_state: pool.gather_conv_state(&indices)?,
+                                recurrent_state: pool.gather_recurrent_state(&indices)?,
                             });
                         }
 
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_query_lens.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                            )
+                        } else {
+                            GdnLayerCache::checkout(pool, &indices)?
                         };
 
                         xs = layer.forward_linear(
@@ -1099,15 +1043,10 @@ impl Qwen3_5TextModel {
                             packed_query_lens.as_deref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
+                        gdn_cache.commit(
+                            pool,
                             &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            &indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(

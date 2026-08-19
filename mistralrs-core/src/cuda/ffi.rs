@@ -625,6 +625,8 @@ extern "C" {
         seq_len: i32,
         k_dim: i32,
         v_dim: i32,
+        slot_indices: *const i32,
+        num_heads: i32,
         stream: i64,
     );
     pub(crate) fn warp_gated_delta_rule_recurrence(
@@ -639,6 +641,8 @@ extern "C" {
         seq_len: i32,
         k_dim: i32,
         v_dim: i32,
+        slot_indices: *const i32,
+        num_heads: i32,
         stream: i64,
     );
     // Chunked GDN recurrence for prefill (processes tokens in BT=64 chunks)
@@ -654,6 +658,8 @@ extern "C" {
         seq_len: i32,
         k_dim: i32,
         v_dim: i32,
+        slot_indices: *const i32,
+        num_heads: i32,
         stream: i64,
     );
     pub(crate) fn causal_conv1d_update(
@@ -664,6 +670,7 @@ extern "C" {
         batch_size: i32,
         conv_dim: i32,
         kernel_size: i32,
+        slot_indices: *const i32,
         dtype: i32,
         stream: i64,
     );
@@ -677,6 +684,7 @@ extern "C" {
         conv_dim: i32,
         seq_len: i32,
         kernel_size: i32,
+        slot_indices: *const i32,
         dtype: i32,
         stream: i64,
     );
@@ -732,13 +740,14 @@ extern "C" {
         a_log: *const f32,
         dt_bias: *const f32,
         state: *mut f32,
-        output: *mut f32,
+        output: *mut c_void,
         batch_size: i32,
         num_k_heads: i32,
         num_v_heads: i32,
         head_k_dim: i32,
         head_v_dim: i32,
         tiled_v_heads: i32,
+        slot_indices: *const i32,
         dtype: i32,
         stream: i64,
     );
