@@ -197,6 +197,11 @@ impl PrefixCacheManagerV2 {
         }
     }
 
+    /// Whether recurrent prefix snapshots would be kept; callers skip the device copy otherwise.
+    pub fn accepts_paged_recurrent_prefix(&self) -> bool {
+        !self.no_prefix_cache && self.has_paged_attention && self.paged_recurrent_capacity() > 0
+    }
+
     fn paged_recurrent_capacity(&self) -> usize {
         self.n_on_device.max(1)
     }

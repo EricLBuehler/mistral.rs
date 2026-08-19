@@ -214,6 +214,10 @@ impl FullAttention {
             (q, k, v)
         };
 
+        let cos_sin = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
         (q, k) = self.rotary_emb.forward_qk_norm(
             cos_sin,
             &q,
@@ -976,11 +980,12 @@ impl Qwen3_5TextModel {
                         let conv_state = pool.gather_conv_state(&indices)?;
                         let recurrent_state = pool.gather_recurrent_state(&indices)?;
                         if let Some(stash) = gdn_stash.as_mut() {
+                            // The recurrence kernels update the state buffers in place, so keep real copies
                             stash.layers.push(GdnLayerStash {
                                 layer_idx: i,
                                 input: xs.clone(),
-                                conv_state: conv_state.clone(),
-                                recurrent_state: recurrent_state.clone(),
+                                conv_state: conv_state.copy()?,
+                                recurrent_state: recurrent_state.copy()?,
                             });
                         }
 

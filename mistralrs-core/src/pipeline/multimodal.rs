@@ -1076,6 +1076,7 @@ impl Loader for MultimodalLoader {
                 .get_gen_conf_filename()
                 .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap()),
         };
+        let gen_conf = gen_conf.or_else(|| GenerationConfig::from_model_config(&config));
         if model.is_block_diffusion() {
             if let Some(raw) = paths
                 .get_gen_conf_filename()

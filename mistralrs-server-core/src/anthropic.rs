@@ -514,6 +514,7 @@ impl AnthropicMessagesRequest {
             dry_sequence_breakers: self.dry_sequence_breakers,
             enable_thinking,
             reasoning_effort: self.reasoning_effort,
+            chat_template_kwargs: None,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
         })

@@ -1348,6 +1348,7 @@ pub trait Pipeline:
         if cached_tokens == 0
             || !cached_tokens.is_multiple_of(block_size)
             || !self.cache().is_hybrid()
+            || !prefix_cacher.accepts_paged_recurrent_prefix()
         {
             return Ok(());
         }

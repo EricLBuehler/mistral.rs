@@ -100,6 +100,15 @@ fn activate_required_tool_call_grammar(
     }
 }
 
+// Text a tool call is detected in: with a think-tag parser only the content outside the think block counts
+fn tool_detection_text(seq: &Sequence) -> Option<String> {
+    if seq.reasoning_mode().is_some() {
+        seq.get_response_content()
+    } else {
+        seq.peek_delta().ok().flatten()
+    }
+}
+
 pub(crate) async fn finish_or_add_toks_to_seq(
     this: &dyn Pipeline,
     prefix_cacher: &mut PrefixCacheManagerV2,
@@ -124,7 +133,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
     // If we can have a tool and we got a tool, stop the sequence early.
     // Doesn't conflict with the logic below because it does the same thing anyway.
-    if let Ok(Some(d)) = seq.peek_delta() {
+    if let Some(d) = tool_detection_text(seq) {
         if let Some(ref mut state) = seq.tool_call_state {
             let (_tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
 
@@ -147,7 +156,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     // the tool call prefix from earlier generation, which would spuriously
     // re-activate the grammar on a completed sequence.
     if matches!(seq.recognizer, SequenceRecognizer::None) && is_done.is_none() {
-        let text = seq.peek_delta().ok().flatten();
+        let text = tool_detection_text(seq);
         let grm = seq
             .tool_call_state
             .as_mut()
@@ -178,7 +187,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     if seq.get_mut_group().is_streaming {
         let mut tool_use_still_possible = false;
         let mut tool_use_is_done = false;
-        if let Ok(Some(d)) = seq.peek_delta() {
+        if let Some(d) = tool_detection_text(seq) {
             if let Some(ref state) = seq.tool_call_state {
                 (tool_use_still_possible, tool_use_is_done) = state.prefix_status(d.as_str())?;
             }
@@ -380,8 +389,9 @@ pub(crate) async fn finish_or_add_toks_to_seq(
 
             if seq.get_mut_group().is_chat {
                 let has_reasoning_state = seq.has_reasoning_state();
+                // An unclosed think block leaves no content; never fall back to the raw text
                 let parsed_content = if has_reasoning_state {
-                    seq.get_response_content()
+                    seq.get_response_content().or_else(|| Some(String::new()))
                 } else {
                     None
                 };
@@ -779,6 +789,7 @@ pub async fn sample_sequence(
 
     let sampler = seq.sampler();
     let ctx_clone = seq.get_toks().to_vec();
+    let prompt_len = seq.prompt_tokens();
     let rng_clone = rng.clone();
     let logits_clone = logits.clone();
     let first_lobprobs_response = if use_async_pool {
@@ -786,6 +797,7 @@ pub async fn sample_sequence(
             sampler.sample(
                 logits_clone,
                 &ctx_clone,
+                prompt_len,
                 return_logprobs,
                 rng_clone,
                 sample_speculative,
@@ -797,6 +809,7 @@ pub async fn sample_sequence(
         sampler.sample(
             logits_clone,
             &ctx_clone,
+            prompt_len,
             return_logprobs,
             rng_clone,
             sample_speculative,
@@ -813,12 +826,17 @@ pub async fn sample_sequence(
 
     let bias_if_not_allowed = match &mut seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            if !llg.is_stopped()
-                && llg
-                    .validate_tokens(&[first_lobprobs_response.token])
-                    .unwrap_or(0)
-                    == 1
-                && !stop_token_requires_tool
+            // llguidance's EOS is <|endoftext|>-style; turn enders like <|im_end|> must pass once the grammar could stop
+            let grammar_can_stop =
+                llg.is_stopped() || llg.is_accepting().map_err(candle_core::Error::msg)?;
+            let is_model_eos = |token: u32| eos_tok.is_some_and(|eos| eos.contains(&token));
+            if !stop_token_requires_tool
+                && (grammar_can_stop && is_model_eos(first_lobprobs_response.token)
+                    || !llg.is_stopped()
+                        && llg
+                            .validate_tokens(&[first_lobprobs_response.token])
+                            .unwrap_or(0)
+                            == 1)
             {
                 None
             } else {
@@ -833,6 +851,13 @@ pub async fn sample_sequence(
                             acc[idx] = 0.0;
                         }
                     });
+                    if grammar_can_stop && !stop_token_requires_tool {
+                        for token in eos_tok.unwrap_or_default() {
+                            if let Some(slot) = acc.get_mut(*token as usize) {
+                                *slot = 0.0;
+                            }
+                        }
+                    }
 
                     Some(acc)
                 }
@@ -852,6 +877,7 @@ pub async fn sample_sequence(
                     sampler.sample(
                         new_logits,
                         &ctx_clone,
+                        prompt_len,
                         return_logprobs,
                         rng_clone,
                         sample_speculative,
@@ -863,6 +889,7 @@ pub async fn sample_sequence(
                 sampler.sample(
                     new_logits,
                     &ctx_clone,
+                    prompt_len,
                     return_logprobs,
                     rng_clone,
                     sample_speculative,
@@ -875,7 +902,10 @@ pub async fn sample_sequence(
 
     match seq.recognizer {
         SequenceRecognizer::Llguidance(ref mut llg) => {
-            if !llg.is_stopped() {
+            let ends_turn = eos_tok
+                .is_some_and(|eos| eos.contains(&second_logprobs_response.token))
+                && llg.is_accepting().map_err(candle_core::Error::msg)?;
+            if !llg.is_stopped() && !ends_turn {
                 llg.consume_token(second_logprobs_response.token)
                     .map_err(candle_core::Error::msg)?;
             }

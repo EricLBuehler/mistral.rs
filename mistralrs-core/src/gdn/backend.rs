@@ -168,14 +168,15 @@ pub fn compute_beta_g(
     compute_beta_g_cpu(b, a, a_log, dt_bias, dtype)
 }
 
+// The gate and decay stay f32 like HF's fla path; the recurrence upcasts anyway
 fn compute_beta_g_cpu(
     b: &Tensor,
     a: &Tensor,
     a_log: &Tensor,
     dt_bias: &Tensor,
-    dtype: DType,
+    _dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
-    let beta = candle_nn::ops::sigmoid(b)?;
+    let beta = candle_nn::ops::sigmoid(&b.to_dtype(DType::F32)?)?;
     let a_f = a.to_dtype(DType::F32)?;
     let dt_bias_expanded = dt_bias.to_dtype(DType::F32)?.unsqueeze(0)?.unsqueeze(0)?;
     let g = a_log
@@ -184,8 +185,7 @@ fn compute_beta_g_cpu(
         .neg()?
         .unsqueeze(0)?
         .unsqueeze(0)?
-        .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?
-        .to_dtype(dtype)?;
+        .broadcast_mul(&softplus(&a_f.broadcast_add(&dt_bias_expanded)?)?)?;
     Ok((beta, g))
 }
 

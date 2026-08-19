@@ -1209,6 +1209,7 @@ impl Loader for NormalLoader {
                 }
             }),
         };
+        let gen_conf = gen_conf.or_else(|| GenerationConfig::from_model_config(&config));
 
         let chat_template_explicit = paths
             .get_chat_template_explicit()

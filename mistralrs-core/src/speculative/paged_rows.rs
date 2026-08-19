@@ -68,12 +68,17 @@ pub(crate) fn make_paged_rows_metadata(
         context_lens_windowed.push(context_len_windowed);
 
         let block_pos = context_len.saturating_sub(1);
-        let slot = full_table
+        let block_number = full_table
             .get(block_pos / paged_meta.block_size)
             .copied()
-            .unwrap_or(0)
-            * paged_meta.block_size
-            + block_pos % paged_meta.block_size;
+            .ok_or_else(|| {
+                candle_core::Error::Msg(format!(
+                    "paged rows block table is too small: position={block_pos}, block_size={}, table_len={}",
+                    paged_meta.block_size,
+                    full_table.len()
+                ))
+            })?;
+        let slot = block_number * paged_meta.block_size + block_pos % paged_meta.block_size;
         slot_mappings.push(slot as i64);
     }
 
@@ -223,18 +228,26 @@ fn paged_kv_tensors(
     indptr.push(0i32);
     let mut nnz = 0i32;
     for (table, context_len) in tables.iter().zip(context_lens.iter().copied()) {
+        // FlashInfer derives kv_len from the page count, so blocks reserved past the row's context must not be listed
+        let num_blocks = context_len.div_ceil(block_size);
+        if num_blocks > table.len() {
+            candle_core::bail!(
+                "paged rows block table is too small: context_len={context_len}, block_size={block_size}, table_len={}",
+                table.len()
+            );
+        }
         nnz = nnz
-            .checked_add(usize_to_i32(table.len(), "paged table length")?)
+            .checked_add(usize_to_i32(num_blocks, "paged table length")?)
             .ok_or_else(|| candle_core::Error::Msg("paged table nnz overflowed".to_string()))?;
         indptr.push(nnz);
-        for value in table {
+        for value in table.iter().take(num_blocks) {
             indices.push(usize_to_i32(*value, "paged block index")?);
         }
-        let len = if table.is_empty() {
+        let len = if num_blocks == 0 {
             0
         } else {
             usize_to_i32(
-                context_len.saturating_sub((table.len() - 1) * block_size),
+                context_len - (num_blocks - 1) * block_size,
                 "paged last page length",
             )?
         };

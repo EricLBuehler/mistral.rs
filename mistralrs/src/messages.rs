@@ -848,7 +848,7 @@ impl RequestBuilder {
         self.messages.push(IndexMap::from([
             ("role".to_string(), Either::Left(role.to_string())),
             ("content".to_string(), Either::Left(text.to_string())),
-            ("function".to_string(), Either::Right(tool_messages)),
+            ("tool_calls".to_string(), Either::Right(tool_messages)),
         ]));
         self
     }

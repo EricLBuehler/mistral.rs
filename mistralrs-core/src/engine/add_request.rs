@@ -116,7 +116,7 @@ impl Engine {
         }
     }
 
-    pub(super) async fn add_request(&self, request: NormalRequest) {
+    pub(super) async fn add_request(&self, mut request: NormalRequest) {
         let adapter_lease = match request.adapter.as_ref() {
             Some(selection) => match selection.lease() {
                 Some(lease) => Some(lease.clone()),
@@ -423,6 +423,9 @@ impl Engine {
             }
         }
 
+        if let Some(defaults) = get_mut_arcmutex!(self.pipeline).generation_defaults() {
+            request.sampling_params.fill_model_defaults(&defaults);
+        }
         let topk = request
             .sampling_params
             .top_k
@@ -824,7 +827,15 @@ impl Engine {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
-                    if let Some(slot_idx) = hybrid_cache.allocate_seq() {
+                    let capacity_before = hybrid_cache.recurrent_capacity();
+                    let slot = hybrid_cache.allocate_seq();
+                    // Captured decode graphs hold the old pool buffers; growth reallocates them
+                    let pool_grew = hybrid_cache.recurrent_capacity() != capacity_before;
+                    drop(hybrid_cache);
+                    if pool_grew {
+                        pipeline.cleanup_cuda_graphs();
+                    }
+                    if let Some(slot_idx) = slot {
                         seq.set_recurrent_state_idx(Some(slot_idx));
                         false
                     } else {

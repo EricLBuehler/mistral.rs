@@ -327,8 +327,8 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
-    /// Reasoning emitted with an assistant message.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias).
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
 }
 
@@ -1248,6 +1248,9 @@ pub struct ChatCompletionRequest {
     #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
+    /// vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.
+    #[schema(example = json!(Option::None::<HashMap<String, Value>>))]
+    pub chat_template_kwargs: Option<HashMap<String, Value>>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,

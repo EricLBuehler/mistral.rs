@@ -309,7 +309,8 @@ pub(crate) fn get_rope_index(
                 position_ids_data[2][batch_idx][seq_idx] = p2;
             }
 
-            let seq_total_len = input_row.len() as i64;
+            // HF measures the delta against the unpadded row length
+            let seq_total_len = valid_indices.len() as i64;
             let max_position_value = max_position_value.unwrap_or(0);
             mrope_position_deltas.push(max_position_value + 1 - seq_total_len);
         }
@@ -344,7 +345,7 @@ pub(crate) fn get_rope_index(
                 max_position = max_position.max(position);
                 flat_positions[batch_idx * seq_len + seq_idx] = position;
             }
-            mrope_position_deltas.push(max_position + 1 - seq_len as i64);
+            mrope_position_deltas.push(max_position + 1 - count);
         }
         let device = attention_mask.device();
         let position_ids =

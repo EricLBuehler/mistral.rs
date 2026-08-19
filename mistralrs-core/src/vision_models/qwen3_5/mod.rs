@@ -452,7 +452,15 @@ impl Qwen3_5Model {
         };
 
         let position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
-            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+            // Text-only rows use plain positions on all three MRoPE planes; no host round trip needed
+            match crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+            {
+                Some(position_ids) => Some(position_ids),
+                None => Some(crate::vision_models::text_mrope_position_ids(
+                    input_ids,
+                    seqlen_offsets,
+                )?),
+            }
         } else {
             None
         };
