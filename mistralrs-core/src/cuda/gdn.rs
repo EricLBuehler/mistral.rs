@@ -8,12 +8,14 @@ use candle_core::DType;
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
 /// `[B*H, ...]` copy addressed by batch row; `Pooled` addresses the whole pool `[cap, H, ...]`
 /// through a `[B]` u32 slot table, so the kernels update it in place without gather/scatter copies.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub enum GdnStateSlots<'a> {
     Gathered,
     Pooled(&'a Tensor),
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 impl<'a> GdnStateSlots<'a> {
     pub fn from_option(slots: Option<&'a Tensor>) -> Self {
         match slots {
@@ -45,6 +47,7 @@ fn with_slot_indices<T>(
 }
 
 /// Contiguous f32 recurrence inputs: q, k `[BH, S, K]`, v `[BH, S, V]`, g, beta `[BH, S]`.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub struct RecurrenceInputs<'a> {
     pub q: &'a Tensor,
