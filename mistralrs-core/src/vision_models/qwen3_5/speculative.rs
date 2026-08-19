@@ -10,20 +10,30 @@ use std::sync::atomic::Ordering;
 use candle_core::{IndexOp, Result, Tensor};
 
 use crate::{
+    attention::AttentionMask,
     get_mut_arcmutex,
+    layers::CausalMasker,
+    layers_masker::CausalMaskConfig,
+    pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
         paged_rows::make_paged_rows_metadata, proposer::sample_draft_rows, SpeculativeAttachInfo,
-        SpeculativeCommitRow, SpeculativeConfig, SpeculativeKvCache, SpeculativePrefillCtx,
-        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-        SpeculativeTargetMixin,
+        SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphState, SpeculativeKvCache,
+        SpeculativePrefillCtx, SpeculativeProposal, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeTargetMixin, TargetAttentionInputs,
     },
 };
 
-use super::{mtp::Qwen3_5MtpHead, text::SpecCapture, Qwen3_5Model};
+use super::{
+    mtp::{MtpAttentionInputs, Qwen3_5MtpHead},
+    text::{SpecCapture, SpecGraphState},
+    Qwen3_5Model,
+};
 
 /// vLLM's documented setting for these single-layer MTP heads.
 pub const DEFAULT_MTP_N_PREDICT: usize = 2;
 const MROPE_DIMS: usize = 3;
+// Feeds prompt rows whose next token is not known yet; their KV is rewritten before it is ever attended to
+const PLACEHOLDER_TOKEN: u32 = 0;
 
 /// The last prompt position of a sequence: its next token is only known once sampled, so the
 /// drafter processes it during bootstrap instead of prefill.
@@ -84,9 +94,73 @@ impl Qwen3_5Model {
             &embeds,
             &target_hidden,
             &positions,
-            kv_cache.clone(),
-            &metadata,
+            MtpAttentionInputs {
+                kv_cache: kv_cache.clone(),
+                metadata: &metadata,
+                attention_mask: &AttentionMask::None,
+                flash_params: &FlashParams::empty(false),
+            },
         )
+    }
+
+    /// Catch the drafter up over a whole prompt chunk with the target's own attention inputs: one causal
+    /// prefill instead of one decode query per prompt row. Row p is fed token p+1; the last row of a
+    /// final chunk has no next token yet, so it gets a placeholder whose KV the bootstrap refresh rewrites.
+    fn drafter_prefill_chunk(
+        &self,
+        head: &Qwen3_5MtpHead,
+        ctx: &SpeculativePrefillCtx<'_>,
+        target: TargetAttentionInputs<'_>,
+        capture: &SpecCapture,
+        kv_cache: &(Tensor, Tensor),
+    ) -> Result<()> {
+        let device = head.device();
+        let (batch, seq_len, _) = capture.hidden.dims3()?;
+        if batch != ctx.chunk_ranges.len() {
+            candle_core::bail!(
+                "MTP prefill capture has {batch} rows for {} sequences",
+                ctx.chunk_ranges.len()
+            );
+        }
+        let mut shifted = Vec::with_capacity(batch * seq_len);
+        let mut offsets = Vec::with_capacity(batch);
+        for ((start, end), toks) in ctx.chunk_ranges.iter().zip(ctx.tokens.iter()) {
+            offsets.push(*start);
+            for row in 0..seq_len {
+                let position = start + row;
+                let token = (position + 1 < *end || !ctx.is_final_prompt_chunk)
+                    .then(|| toks.get(position + 1).copied())
+                    .flatten();
+                shifted.push(token.unwrap_or(PLACEHOLDER_TOKEN));
+            }
+        }
+        let tokens = Tensor::from_vec(shifted, (batch, seq_len), device)?;
+        let embeds = self.text.embed_tokens(&tokens)?.to_dtype(head.dtype())?;
+        let target_hidden = capture.hidden.to_device(device)?.to_dtype(head.dtype())?;
+        let positions = capture.positions.to_device(device)?;
+        // Same mask policy as the target's prompt forward: explicit causal mask on the first chunk only
+        let attention_mask = if target.metadata.is_first_prompt_chunk {
+            CausalMasker.make_causal_mask(
+                &tokens,
+                &offsets.as_slice(),
+                head.dtype(),
+                &CausalMaskConfig::default(),
+            )?
+        } else {
+            AttentionMask::None
+        };
+        head.forward(
+            &embeds,
+            &target_hidden,
+            &positions,
+            MtpAttentionInputs {
+                kv_cache: kv_cache.clone(),
+                metadata: target.metadata,
+                attention_mask: &attention_mask,
+                flash_params: target.flash_params,
+            },
+        )?;
+        Ok(())
     }
 
     fn draft_logits(&self, normed_hidden: &Tensor) -> Result<Tensor> {
@@ -289,6 +363,9 @@ impl Qwen3_5Model {
             } else {
                 end
             };
+            if ctx.target_attention.is_some() {
+                continue;
+            }
             let count = last - start;
             if count == 0 {
                 continue;
@@ -311,6 +388,9 @@ impl Qwen3_5Model {
             hidden_rows.push(hidden.narrow(0, batch_idx, 1)?.narrow(1, 0, count)?);
         }
         drop(pending_tails);
+        if let Some(target) = ctx.target_attention {
+            return self.drafter_prefill_chunk(head, &ctx, target, &capture, &kv_cache);
+        }
         if rows.is_empty() {
             return Ok(());
         }
@@ -429,6 +509,23 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
                 .replay_recurrent_prefix(row.batch_idx, row.keep_rows)?;
         }
         self.text.clear_gdn_replay_stash();
+        Ok(())
+    }
+
+    fn take_speculative_graph_state(&self) -> Option<Box<dyn SpeculativeGraphState>> {
+        self.text
+            .take_spec_graph_state()
+            .map(|state| Box::new(state) as Box<dyn SpeculativeGraphState>)
+    }
+
+    fn install_speculative_graph_state(&self, state: &dyn SpeculativeGraphState) -> Result<()> {
+        let state = state
+            .as_any()
+            .downcast_ref::<SpecGraphState>()
+            .ok_or_else(|| {
+                candle_core::Error::msg("foreign speculative graph state for Qwen3.5")
+            })?;
+        self.text.install_spec_graph_state(state);
         Ok(())
     }
 }

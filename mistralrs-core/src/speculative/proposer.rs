@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use candle_core::{Result, Tensor};
 use rand_isaac::Isaac64Rng;
 
-use crate::pipeline::text_models_inputs_processor::PagedAttentionMeta;
+use crate::pipeline::text_models_inputs_processor::{
+    FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
+};
 use crate::sequence::Sequence;
 
 pub type TargetTokenEmbedder<'a> = dyn Fn(&Tensor) -> Result<Tensor> + 'a;
@@ -47,6 +49,14 @@ pub struct SpeculativePrefillCtx<'a> {
     pub chunk_ranges: &'a [(usize, usize)],
     pub is_final_prompt_chunk: bool,
     pub cache: SpeculativeKvCache<'a>,
+    /// The target's own attention inputs for this chunk; a drafter sharing the block table can run one prefill with them.
+    pub target_attention: Option<TargetAttentionInputs<'a>>,
+}
+
+#[derive(Clone, Copy)]
+pub struct TargetAttentionInputs<'a> {
+    pub metadata: &'a PagedAttentionInputMetadata,
+    pub flash_params: &'a FlashParams,
 }
 
 #[derive(Clone, Debug)]

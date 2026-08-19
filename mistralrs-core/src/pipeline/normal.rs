@@ -1617,6 +1617,8 @@ impl NormalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
+        // Kernels bake dims/strides into parameter vectors: warm up on the same canonical layout the Var copy has
+        let input_ids = &input_ids.force_contiguous()?;
         let hybrid_state_key = if self.model.cache().is_hybrid() {
             self.model
                 .cache()
@@ -1636,8 +1638,8 @@ impl NormalPipeline {
         if state.disabled() {
             return Ok(None);
         }
-        if let Some(logits) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
-            return Ok(Some(logits));
+        if let Some(replay) = state.replay(&key, input_ids, metadata, seqlen_offsets)? {
+            return Ok(Some(replay.logits));
         }
 
         let Device::Cuda(cuda_device) = input_ids.device() else {
