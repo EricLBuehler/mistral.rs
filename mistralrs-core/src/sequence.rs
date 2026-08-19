@@ -1402,6 +1402,11 @@ impl Sequence {
         if matches!(state, SequenceState::Error) {
             let mut group = get_mut_group!(self);
             group.n_choices = group.n_choices.saturating_sub(1);
+            // Count the transition into Error once, not every re-set.
+            if !matches!(self.getstate(), SequenceState::Error) {
+                metrics::counter!("mistralrs_sequences_completed_total", "reason" => "error")
+                    .increment(1);
+            }
         }
         if let SequenceState::Done(reason) = &state {
             // Count the transition into Done once, not every re-set.

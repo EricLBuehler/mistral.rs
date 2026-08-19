@@ -58,10 +58,10 @@ For streaming (`text/event-stream`) responses, the middleware also records per-s
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `mistralrs_time_to_first_token_seconds` | histogram | `method`, `path`, `model`, `status` | Time from request start to the first SSE content frame. Includes queueing and prefill. |
-| `mistralrs_inter_token_latency_seconds` | histogram | `method`, `path`, `model`, `status` | Gaps between consecutive SSE content frames. One sample per frame after the first. |
+| `mistralrs_time_to_first_token_seconds` | histogram | `method`, `path`, `model`, `status` | Time from request start to the first engine token step. Includes queueing and prefill. |
+| `mistralrs_inter_token_latency_seconds` | histogram | `method`, `path`, `model`, `status` | Gaps between consecutive engine token steps. One sample per step after the first. |
 
-SSE keep-alive ping frames carry no tokens and are excluded from both. Long decode stalls show up as high ITL quantiles, which a per-request average would hide. Both histograms use the same bucket boundaries as vLLM's exporter; the existing `http_request_*` histograms keep their own bucket lists.
+Timing is measured at the engine's token steps, not at SSE frames, so keep-alive pings (axum comment frames and Anthropic `event: ping`) and protocol events (`[DONE]`, `message_start`/`message_stop`, and similar bookkeeping frames) never register as samples. Long decode stalls show up as high ITL quantiles, which a per-request average would hide. Both histograms use the same bucket boundaries as vLLM's exporter; the existing `http_request_*` histograms keep their own bucket lists.
 
 ### Engine metrics
 
@@ -70,12 +70,12 @@ SSE keep-alive ping frames carry no tokens and are excluded from both. Long deco
 | `mistralrs_tokens_processed_total` | counter | - | Tokens processed (prefill plus decode). |
 | `mistralrs_prefix_cache_lookups_total` | counter | - | New sequences that requested a prefix cache lookup. |
 | `mistralrs_prefix_cache_hits_total` | counter | - | New sequences that found a cached KV prefix. |
-| `mistralrs_prefix_cache_evictions_total` | counter | - | Cached KV prefix entries evicted to free memory. |
+| `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries evicted to free memory: cache entries in non-paged mode, KV prefix blocks (plus recurrent prefix entries on a full cache reset) with paged attention. |
 | `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
 | `mistralrs_sequences_running` | gauge | - | Sequences currently running. |
 | `mistralrs_sequences_waiting` | gauge | - | Sequences in the waiting queue. |
-| `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`. |
+| `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`, `error`. |
 | `mistralrs_kv_cache_blocks_used` | gauge | - | KV cache blocks currently in use (paged attention). |
 | `mistralrs_kv_cache_blocks_total` | gauge | - | Total KV cache blocks (paged attention). |
 
@@ -111,8 +111,7 @@ histogram_quantile(0.99,
 
 # P95 inter-token latency for one route/model
 histogram_quantile(0.95,
-  sum(rate(mistralrs_inter_token_latency_seconds_bucket[5m]
-    {path="/v1/chat/completions"})) by (le))
+  sum(rate(mistralrs_inter_token_latency_seconds_bucket{path="/v1/chat/completions"}[5m])) by (le))
 
 # KV cache pressure (sustained 1.0 with a growing waiting queue means preemptions are likely)
 mistralrs_kv_cache_blocks_used / mistralrs_kv_cache_blocks_total

@@ -73,7 +73,6 @@ const ITL_BUCKETS: [f64; 19] = [
 ];
 const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
 const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
-const SSE_COMMENT_PREFIX: u8 = b':';
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -290,22 +289,9 @@ pub async fn observe_http(
     if is_sse(&response) {
         completion.log_stream_accepted();
         let (parts, body) = response.into_parts();
-        let metrics_enabled = completion.config.metrics;
-        let start = completion.start;
-        let labels = [
-            ("method", completion.method.clone()),
-            ("path", completion.route.clone()),
-            ("model", completion.model.clone()),
-            ("status", completion.status.clone()),
-        ];
         let body = Body::new(ObservedBody {
             inner: body,
             completion: Some(completion),
-            metrics_enabled,
-            start,
-            labels,
-            ttft_recorded: false,
-            last_content_frame: None,
             outcome: outcome_handle,
             ended: false,
         });
@@ -458,42 +444,37 @@ struct ObservedBody {
     completion: Option<RequestCompletion>,
     outcome: StreamOutcomeHandle,
     ended: bool,
-    metrics_enabled: bool,
-    start: Instant,
-    labels: [(&'static str, String); 4],
-    ttft_recorded: bool,
-    last_content_frame: Option<Instant>,
 }
 
 impl ObservedBody {
-    /// Record TTFT on the first content frame and ITL on gaps between content frames.
-    fn observe_sse_frame(&mut self, frame: &Frame<axum::body::Bytes>) {
-        if !self.metrics_enabled {
+    /// TTFT and ITL are measured at engine token steps, collected by the stream outcome.
+    fn record_stream_latency(completion: &RequestCompletion, outcome: &StreamOutcome) {
+        if !completion.config.metrics {
             return;
         }
-        let Some(data) = frame.data_ref() else {
+        let Some(first_token_at) = outcome.first_token_at else {
             return;
         };
-        // axum's SSE keepalive ping is a bare comment and carries no token
-        if data.first() == Some(&SSE_COMMENT_PREFIX) {
-            return;
+        let labels = [
+            ("method", completion.method.clone()),
+            ("path", completion.route.clone()),
+            ("model", completion.model.clone()),
+            ("status", completion.status.clone()),
+        ];
+        metrics::histogram!(TTFT_METRIC, &labels).record(
+            first_token_at
+                .duration_since(completion.start)
+                .as_secs_f64(),
+        );
+        for gap in &outcome.token_gaps {
+            metrics::histogram!(ITL_METRIC, &labels).record(*gap);
         }
-        let now = Instant::now();
-        if !self.ttft_recorded {
-            metrics::histogram!(TTFT_METRIC, &self.labels)
-                .record(now.duration_since(self.start).as_secs_f64());
-            self.ttft_recorded = true;
-        }
-        if let Some(last) = self.last_content_frame {
-            metrics::histogram!(ITL_METRIC, &self.labels)
-                .record(now.duration_since(last).as_secs_f64());
-        }
-        self.last_content_frame = Some(now);
     }
 
     fn finish(&mut self, end: StreamEnd) {
         if let Some(completion) = self.completion.take() {
             let outcome = self.outcome.snapshot();
+            Self::record_stream_latency(&completion, &outcome);
             let end = if outcome.error.is_some() {
                 StreamEnd::Error
             } else {
@@ -523,10 +504,6 @@ impl HttpBody for ObservedBody {
                 this.ended = true;
                 this.finish(StreamEnd::Error);
                 Poll::Ready(Some(Err(err)))
-            }
-            Poll::Ready(Some(Ok(frame))) => {
-                this.observe_sse_frame(&frame);
-                Poll::Ready(Some(Ok(frame)))
             }
             other => other,
         }

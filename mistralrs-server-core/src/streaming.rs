@@ -3,6 +3,7 @@
 use std::{
     env,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use mistralrs_core::{Response, Usage};
@@ -16,35 +17,65 @@ pub struct StreamOutcome {
     pub usage: Option<Usage>,
     /// The error message sent to the client, if the request failed
     pub error: Option<String>,
+    /// When the engine's first token step arrived, if any tokens streamed.
+    pub first_token_at: Option<Instant>,
+    /// Durations between consecutive engine token steps.
+    pub token_gaps: Vec<f64>,
 }
 
 /// Shared between the observability middleware and the streamer that serves the request.
 #[derive(Debug, Clone, Default)]
-pub struct StreamOutcomeHandle(Arc<Mutex<StreamOutcome>>);
+pub struct StreamOutcomeHandle(Arc<Mutex<StreamOutcomeState>>);
+
+#[derive(Debug, Default)]
+struct StreamOutcomeState {
+    usage: Option<Usage>,
+    error: Option<String>,
+    first_token_at: Option<Instant>,
+    last_token_at: Option<Instant>,
+    token_gaps: Vec<f64>,
+}
 
 impl StreamOutcomeHandle {
     pub fn snapshot(&self) -> StreamOutcome {
-        self.0.lock().expect("stream outcome poisoned").clone()
+        let state = self.0.lock().expect("stream outcome poisoned");
+        StreamOutcome {
+            usage: state.usage.clone(),
+            error: state.error.clone(),
+            first_token_at: state.first_token_at,
+            token_gaps: state.token_gaps.clone(),
+        }
     }
 
-    /// Record usage or errors from any engine response as it flows through a streamer.
+    /// Record usage, errors, and token timing from any engine response as it flows through a streamer.
     pub fn observe(&self, response: &Response) {
-        let mut outcome = self.0.lock().expect("stream outcome poisoned");
+        let mut state = self.0.lock().expect("stream outcome poisoned");
         match response {
             Response::Chunk(chunk) => {
                 if let Some(usage) = &chunk.usage {
-                    outcome.usage = Some(usage.clone());
+                    state.usage = Some(usage.clone());
                 }
             }
-            Response::Done(done) => outcome.usage = Some(done.usage.clone()),
-            Response::CompletionDone(done) => outcome.usage = Some(done.usage.clone()),
+            Response::Done(done) => state.usage = Some(done.usage.clone()),
+            Response::CompletionDone(done) => state.usage = Some(done.usage.clone()),
             Response::ModelError(msg, _) | Response::CompletionModelError(msg, _) => {
-                outcome.error = Some(msg.clone())
+                state.error = Some(msg.clone())
             }
             Response::InternalError(e) | Response::ValidationError(e) => {
-                outcome.error = Some(sanitize_error_message(e.as_ref()))
+                state.error = Some(sanitize_error_message(e.as_ref()))
             }
             _ => {}
+        }
+        // Only token steps carry decoded output; agentic control events and done markers share the channel
+        if matches!(response, Response::Chunk(_) | Response::CompletionChunk(_)) {
+            let now = Instant::now();
+            if let Some(last) = state.last_token_at {
+                state
+                    .token_gaps
+                    .push(now.duration_since(last).as_secs_f64());
+            }
+            state.first_token_at.get_or_insert(now);
+            state.last_token_at = Some(now);
         }
     }
 }
