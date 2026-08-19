@@ -9,7 +9,11 @@ use std::{
 use mistralrs_core::{Response, Usage};
 use tokio::sync::mpsc::Receiver;
 
-use crate::{types::SharedMistralRsState, util::sanitize_error_message};
+use crate::{
+    metrics::{ITL_METRIC, TTFT_METRIC},
+    types::SharedMistralRsState,
+    util::sanitize_error_message,
+};
 
 /// What a streaming request produced, filled in by the streamer and read once the SSE body ends.
 #[derive(Debug, Clone, Default)]
@@ -17,10 +21,6 @@ pub struct StreamOutcome {
     pub usage: Option<Usage>,
     /// The error message sent to the client, if the request failed
     pub error: Option<String>,
-    /// When the engine's first token step arrived, if any tokens streamed.
-    pub first_token_at: Option<Instant>,
-    /// Durations between consecutive engine token steps.
-    pub token_gaps: Vec<f64>,
 }
 
 /// Shared between the observability middleware and the streamer that serves the request.
@@ -31,9 +31,15 @@ pub struct StreamOutcomeHandle(Arc<Mutex<StreamOutcomeState>>);
 struct StreamOutcomeState {
     usage: Option<Usage>,
     error: Option<String>,
-    first_token_at: Option<Instant>,
+    latency: Option<StreamLatency>,
     last_token_at: Option<Instant>,
-    token_gaps: Vec<f64>,
+}
+
+/// Set at body-wrap time, before any engine response can be observed.
+#[derive(Debug)]
+struct StreamLatency {
+    labels: [(&'static str, String); 4],
+    start: Instant,
 }
 
 impl StreamOutcomeHandle {
@@ -42,12 +48,16 @@ impl StreamOutcomeHandle {
         StreamOutcome {
             usage: state.usage.clone(),
             error: state.error.clone(),
-            first_token_at: state.first_token_at,
-            token_gaps: state.token_gaps.clone(),
         }
     }
 
-    /// Record usage, errors, and token timing from any engine response as it flows through a streamer.
+    /// Enable TTFT/ITL recording with the request's labels and arrival time.
+    pub fn set_latency_labels(&self, labels: [(&'static str, String); 4], start: Instant) {
+        let mut state = self.0.lock().expect("stream outcome poisoned");
+        state.latency = Some(StreamLatency { labels, start });
+    }
+
+    /// Record usage, errors, and streaming latency from any engine response as it flows through a streamer.
     pub fn observe(&self, response: &Response) {
         let mut state = self.0.lock().expect("stream outcome poisoned");
         match response {
@@ -68,13 +78,17 @@ impl StreamOutcomeHandle {
         }
         // Only token steps carry decoded output; agentic control events and done markers share the channel
         if matches!(response, Response::Chunk(_) | Response::CompletionChunk(_)) {
+            let Some(latency) = &state.latency else {
+                return;
+            };
             let now = Instant::now();
             if let Some(last) = state.last_token_at {
-                state
-                    .token_gaps
-                    .push(now.duration_since(last).as_secs_f64());
+                metrics::histogram!(ITL_METRIC, &latency.labels)
+                    .record(now.duration_since(last).as_secs_f64());
+            } else {
+                metrics::histogram!(TTFT_METRIC, &latency.labels)
+                    .record(now.duration_since(latency.start).as_secs_f64());
             }
-            state.first_token_at.get_or_insert(now);
             state.last_token_at = Some(now);
         }
     }

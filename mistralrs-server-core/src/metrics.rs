@@ -71,8 +71,8 @@ const ITL_BUCKETS: [f64; 19] = [
     0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
     40.0, 80.0,
 ];
-const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
-const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
+pub(crate) const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
+pub(crate) const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -288,6 +288,18 @@ pub async fn observe_http(
     // SSE bodies keep working long after the handler returns; finish accounting when the body ends
     if is_sse(&response) {
         completion.log_stream_accepted();
+        // Labels and start are fixed here; the streamer is only polled once this body is consumed
+        if completion.config.metrics {
+            outcome_handle.set_latency_labels(
+                [
+                    ("method", completion.method.clone()),
+                    ("path", completion.route.clone()),
+                    ("model", completion.model.clone()),
+                    ("status", completion.status.clone()),
+                ],
+                completion.start,
+            );
+        }
         let (parts, body) = response.into_parts();
         let body = Body::new(ObservedBody {
             inner: body,
@@ -447,34 +459,9 @@ struct ObservedBody {
 }
 
 impl ObservedBody {
-    /// TTFT and ITL are measured at engine token steps, collected by the stream outcome.
-    fn record_stream_latency(completion: &RequestCompletion, outcome: &StreamOutcome) {
-        if !completion.config.metrics {
-            return;
-        }
-        let Some(first_token_at) = outcome.first_token_at else {
-            return;
-        };
-        let labels = [
-            ("method", completion.method.clone()),
-            ("path", completion.route.clone()),
-            ("model", completion.model.clone()),
-            ("status", completion.status.clone()),
-        ];
-        metrics::histogram!(TTFT_METRIC, &labels).record(
-            first_token_at
-                .duration_since(completion.start)
-                .as_secs_f64(),
-        );
-        for gap in &outcome.token_gaps {
-            metrics::histogram!(ITL_METRIC, &labels).record(*gap);
-        }
-    }
-
     fn finish(&mut self, end: StreamEnd) {
         if let Some(completion) = self.completion.take() {
             let outcome = self.outcome.snapshot();
-            Self::record_stream_latency(&completion, &outcome);
             let end = if outcome.error.is_some() {
                 StreamEnd::Error
             } else {
