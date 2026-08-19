@@ -70,6 +70,7 @@ pub mod text_models_inputs_processor {
     use crate::{
         device_map::DeviceMapper,
         flashinfer::{
+            decode_split_capacity_pages as flashinfer_decode_split_capacity_pages,
             decode_split_pages as flashinfer_decode_split_pages, flashinfer_metadata,
             flashinfer_paged_kv, flashinfer_tile_plan, flashinfer_view,
             make_paged_kv_decode_tensors, make_paged_kv_decode_tensors_from_lens,
@@ -340,7 +341,12 @@ pub mod text_models_inputs_processor {
             ) = make_paged_kv_decode_tensors_from_lens(
                 paged_decode_context_lens,
                 block_size,
-                Some(flashinfer_decode_split_pages(block_size)),
+                Some(flashinfer_decode_split_pages(
+                    block_size,
+                    batch_size,
+                    self.prefill_key_value_heads,
+                    paged_decode_context_lens.iter().copied().max().unwrap_or(0),
+                )),
             )?;
             let (
                 full_decode_request_indices_cpu,
@@ -351,7 +357,12 @@ pub mod text_models_inputs_processor {
             ) = make_paged_kv_decode_tensors_from_lens(
                 full_decode_context_lens,
                 block_size,
-                Some(flashinfer_decode_split_pages(block_size)),
+                Some(flashinfer_decode_split_pages(
+                    block_size,
+                    batch_size,
+                    self.prefill_key_value_heads,
+                    full_decode_context_lens.iter().copied().max().unwrap_or(0),
+                )),
             )?;
 
             let mut slot_mappings = HashMap::new();
@@ -958,8 +969,15 @@ pub mod text_models_inputs_processor {
                     block_size,
                     block_tables.len() * max_block_table_len,
                 )?;
-            let decode_split_pages = flashinfer_decode_split_pages(block_size);
-            let tiles_per_row = max_block_table_len.max(1).div_ceil(decode_split_pages);
+            let decode_split_pages = flashinfer_decode_split_pages(
+                block_size,
+                block_tables.len(),
+                paged_attn_metadata.prefill_key_value_heads,
+                paged_context_lens_for_fi.iter().copied().max().unwrap_or(0),
+            );
+            let tiles_per_row = max_block_table_len
+                .max(1)
+                .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
             let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
                 make_paged_kv_decode_tensors(
                     &block_tables,
@@ -1049,10 +1067,15 @@ pub mod text_models_inputs_processor {
                     block_size,
                     full_block_tables.len() * full_max_block_table_len,
                 )?);
-                let full_decode_split_pages = flashinfer_decode_split_pages(block_size);
+                let full_decode_split_pages = flashinfer_decode_split_pages(
+                    block_size,
+                    full_block_tables.len(),
+                    paged_attn_metadata.prefill_key_value_heads,
+                    full_context_lens_for_fi.iter().copied().max().unwrap_or(0),
+                );
                 let full_tiles_per_row = full_max_block_table_len
                     .max(1)
-                    .div_ceil(full_decode_split_pages);
+                    .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
                 let full_decode_tensors = Some(make_paged_kv_decode_tensors(
                     &full_block_tables,
                     &full_paged_attn_context_lens,
@@ -1507,6 +1530,7 @@ pub mod text_models_inputs_processor {
                 sliding_window: paged_attn_input.sliding_window,
                 decode_window,
                 devices: mapper.unwrap().get_unique_devices(),
+                num_kv_heads: paged_attn_input.prefill_key_value_heads,
             });
             Some(rows.build()?)
         } else {
@@ -1540,6 +1564,7 @@ pub mod text_models_inputs_processor {
         pub sliding_window: Option<usize>,
         pub decode_window: usize,
         pub devices: Vec<Device>,
+        pub num_kv_heads: usize,
     }
 
     impl DecodePagedRows {
@@ -1618,9 +1643,16 @@ pub mod text_models_inputs_processor {
                     batch_size * max_block_table_len,
                 )?;
 
-            let decode_split_pages = flashinfer_decode_split_pages(block_size);
+            let decode_split_pages = flashinfer_decode_split_pages(
+                block_size,
+                batch_size,
+                self.num_kv_heads,
+                paged_attn_context_lens.iter().copied().max().unwrap_or(0),
+            );
             let split_pages = Some(decode_split_pages);
-            let tiles_per_row = max_block_table_len.max(1).div_ceil(decode_split_pages);
+            let tiles_per_row = max_block_table_len
+                .max(1)
+                .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
             let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
                 make_paged_kv_decode_tensors(
                     block_tables,
@@ -1685,11 +1717,20 @@ pub mod text_models_inputs_processor {
                     block_size,
                     full_block_tables.len() * full_max_block_table_len,
                 )?;
-            let full_decode_split_pages = flashinfer_decode_split_pages(block_size);
+            let full_decode_split_pages = flashinfer_decode_split_pages(
+                block_size,
+                batch_size,
+                self.num_kv_heads,
+                full_paged_attn_context_lens
+                    .iter()
+                    .copied()
+                    .max()
+                    .unwrap_or(0),
+            );
             let full_split_pages = Some(full_decode_split_pages);
             let full_tiles_per_row = full_max_block_table_len
                 .max(1)
-                .div_ceil(full_decode_split_pages);
+                .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
             let (
                 full_paged_kv_request_indices,
                 full_paged_kv_tile_indices,
@@ -2341,6 +2382,7 @@ pub mod text_models_inputs_processor {
                 sliding_window: None,
                 decode_window: 1,
                 devices: vec![Device::Cpu],
+                num_kv_heads: 4,
             };
             let padded = rows.padded(4);
             assert_eq!(padded.batch_size(), 4);

@@ -1148,6 +1148,7 @@ pub struct DecodeGraphPrecaptureCtx {
     pub max_paged_context_len: usize,
     pub attention_backend: AttentionBackendKind,
     pub sliding_window: Option<usize>,
+    pub num_kv_heads: usize,
 }
 
 #[derive(Clone)]

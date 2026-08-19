@@ -191,6 +191,7 @@ impl CudaGraphPrecaptureInputs {
             sliding_window: ctx.sliding_window,
             decode_window: 1,
             devices,
+            num_kv_heads: ctx.num_kv_heads,
         });
         let metadata = rows.build().map_err(candle_core::Error::msg)?;
         let q_len_u32 = u32::try_from(q_len).map_err(candle_core::Error::wrap)?;

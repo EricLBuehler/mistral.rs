@@ -358,6 +358,12 @@ impl Engine {
                                 .map(|metadata| metadata.attention_backend_kind())
                                 .unwrap_or(crate::paged_attention::AttentionBackendKind::Standard),
                             sliding_window: pipeline_metadata.sliding_window,
+                            num_kv_heads: pipeline_metadata
+                                .model_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.num_kv_heads())
+                                .unwrap_or(1)
+                                .max(1),
                         }
                     })
             };
