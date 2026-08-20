@@ -50,11 +50,11 @@ CUDA wheels are GitHub release assets because PyPI cannot select by GPU. Pick a 
 | CUDA 12.9+ on GB10 / `sm121` | `+cuda129.sm121` |
 | CUDA 12.8+ | `+cuda128.sm{cc}` |
 
-Install with `--find-links` pointed at the release. Replace `0.9.1` / `v0.9.1` with the release you want:
+Install with `--find-links` pointed at the release. Replace `0.9.2` / `v0.9.2` with the release you want:
 
 ```bash
-pip install "mistralrs==0.9.1+cuda128.sm89" \
-  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.1
+pip install "mistralrs==0.9.2+cuda128.sm89" \
+  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.2
 ```
 
 Look up your GPU's compute capability in [hardware support](/mistral.rs/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/mistral.rs/quickstart/) and follow [cuTile setup](/mistral.rs/developer/moe-backends/).

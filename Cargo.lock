@@ -3689,7 +3689,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3715,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-audio"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "apodize",
@@ -3725,7 +3725,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-cli"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -3766,7 +3766,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-code-exec"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3784,7 +3784,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "accelerate-src",
  "ahash",
@@ -3893,7 +3893,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-flash-attn"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3904,7 +3904,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-macros"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -3914,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-mcp"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3936,7 +3936,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-metal-compile"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "candle-metal-kernels",
  "objc2-metal",
@@ -3944,7 +3944,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-paged-attn"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3961,7 +3961,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-pyo3"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-quant"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -4031,7 +4031,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-sandbox"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "anyhow",
  "itoa",
@@ -4047,7 +4047,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-server-core"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "accelerate-src",
  "anyhow",
@@ -4082,7 +4082,7 @@ dependencies = [
 
 [[package]]
 name = "mistralrs-vision"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "candle-core",
  "image",

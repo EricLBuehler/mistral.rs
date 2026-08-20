@@ -91,16 +91,21 @@ mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 \
   --mtp-model incoai/Qwen3.8-27B-DFlash2
 ```
 
-`--mtp-n-predict` defaults to `min(block_size - 1, 7)` for DFlash drafters; the checkpoint's block
-size is the upper bound. The drafter's projection weights are requantized to the target's in-situ
-quantization type at load (override with the `MISTRALRS_DFLASH_ISQ` environment variable, e.g.
-`q6k` or `none` for bf16).
+By default the draft depth is adaptive: it starts at `min(block_size - 1, 7)` and settles per
+workload on a tier from `{3, 5, max}` driven by an EMA of the measured acceptance, so easy content
+(math, code) keeps deep drafts while hard content (thinking-mode reasoning) drops to shallow ones
+instead of paying for rejected verify rows. Adaptation applies at low concurrency (up to 2
+concurrent decodes); larger batches always draft at full depth, where the batched drafter makes
+deep drafts nearly free. Passing `--mtp-n-predict` pins a fixed depth;
+`MISTRALRS_DFLASH_ADAPTIVE=0` disables adaptation, `=1` forces it even with an explicit depth (the
+explicit value becomes the maximum). The drafter's projection weights are requantized to the
+target's in-situ quantization type at load (override with the `MISTRALRS_DFLASH_ISQ` environment
+variable, e.g. `q6k` or `none` for bf16).
 
 Acceptance is strongly content-dependent: [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
 accepts ~7 of 7 drafts on math/code and much less on thinking-mode reasoning traces, which are out
-of its training distribution. For thinking-heavy workloads the built-in `--mtp` head can be the
-better choice. As everywhere in this engine, drafts are verified by the target: greedy output is
-byte-identical to non-speculative decoding.
+of its training distribution. As everywhere in this engine, drafts are verified by the target:
+greedy output is byte-identical to non-speculative decoding.
 
 ## Gemma 4
 

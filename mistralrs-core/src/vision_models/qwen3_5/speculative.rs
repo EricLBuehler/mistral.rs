@@ -216,13 +216,25 @@ impl Qwen3_5Model {
             )?;
             *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
         }
+        // Explicit --mtp-n-predict pins the depth; the default adapts it to measured acceptance
+        let adaptive = match std::env::var("MISTRALRS_DFLASH_ADAPTIVE").ok().as_deref() {
+            Some("0" | "false") => false,
+            Some(_) => true,
+            None => config.n_predict.is_none(),
+        };
+        let adaptive = adaptive && drafter.enable_adaptive(n_predict);
         let kind = if drafter.has_selector() {
             "DFlash2"
         } else {
             "DFlash"
         };
+        let depth = if adaptive {
+            format!("adaptive depth <= {n_predict}")
+        } else {
+            format!("depth {n_predict}")
+        };
         let name = format!(
-            "{kind} `{}` (block {block}, taps {:?})",
+            "{kind} `{}` (block {block}, {depth}, taps {:?})",
             config.model.as_deref().unwrap_or("dflash"),
             drafter.target_layer_ids
         );
@@ -230,16 +242,20 @@ impl Qwen3_5Model {
         Ok(Some(SpeculativeAttachInfo::mtp(name, n_predict)))
     }
 
+    /// `[batch, n + 1, hidden]` noise rows `[anchor, mask * n]`, embedded in one call.
     fn dflash_noise_embedding(
         &self,
         drafter: &DFlashDraftModel,
-        anchor: u32,
+        anchors: &[u32],
         n: usize,
     ) -> Result<Tensor> {
-        let mut ids = vec![anchor];
-        ids.extend(std::iter::repeat_n(drafter.mask_token_id(), n));
-        let len = ids.len();
-        let ids = Tensor::from_vec(ids, (1, len), &self.text.device)?;
+        let block = n + 1;
+        let mut ids = Vec::with_capacity(anchors.len() * block);
+        for anchor in anchors {
+            ids.push(*anchor);
+            ids.extend(std::iter::repeat_n(drafter.mask_token_id(), n));
+        }
+        let ids = Tensor::from_vec(ids, (anchors.len(), block), &self.text.device)?;
         let mut emb = self.text.embed_tokens(&ids)?;
         let scale = drafter.input_embedding_scale();
         if (scale - 1.0).abs() > f64::EPSILON {
@@ -258,11 +274,14 @@ impl Qwen3_5Model {
             .expect("dflash poisoned")
             .clone()
             .ok_or_else(|| candle_core::Error::msg("DFlash propose without a drafter"))?;
-        let n_predict = self.mtp_n_predict();
+        let max_n = self.mtp_n_predict();
         let batch = ctx.seq_ids.len();
-        if batch == 0 || n_predict == 0 {
+        if batch == 0 || max_n == 0 {
             return Ok(None);
         }
+        // Must match what the driver just read via speculative_proposal_len; the adaptive update
+        // below only takes effect next step.
+        let n_predict = drafter.current_n(max_n);
         let Some(capture) = self.text.last_spec_capture() else {
             return Ok(None);
         };
@@ -274,13 +293,22 @@ impl Qwen3_5Model {
         let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
         let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
 
-        let mut proposals = Vec::with_capacity(batch);
+        let mut appends = Vec::with_capacity(batch);
+        let mut accepted = Vec::with_capacity(batch);
         for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
             let (batch_idx, count) = ctx.target_rows[i];
             let base_len = ctx.base_lens[i];
             let ctx_next = drafter.ctx_next_pos(*seq_id);
             let needed = match ctx_next {
-                Some(next) if next <= base_len => base_len - next,
+                Some(next) if next <= base_len => {
+                    // The committed rows since the last draft are the previous bonus token plus
+                    // however many drafts survived verification
+                    let stepped = base_len - next;
+                    if stepped > 0 {
+                        accepted.push(stepped - 1);
+                    }
+                    stepped
+                }
                 // Unknown or ahead (sequence restarted): resync from what this forward provides
                 _ => count.min(base_len),
             };
@@ -296,16 +324,24 @@ impl Qwen3_5Model {
                     .iter()
                     .map(|t| t.narrow(0, batch_idx, 1)?.narrow(1, start_row, needed))
                     .collect::<Result<Vec<_>>>()?;
-                let taps = Tensor::cat(&taps, candle_core::D::Minus1)?;
-                drafter.append_ctx(*seq_id, &taps, base_len - needed)?;
+                appends.push(crate::speculative::dflash::CtxAppend {
+                    seq_id: *seq_id,
+                    taps: Tensor::cat(&taps, candle_core::D::Minus1)?,
+                    start_pos: base_len - needed,
+                });
             }
-            let anchor = ctx.sampled_tokens[i];
-            let noise = self.dflash_noise_embedding(&drafter, anchor, n_predict)?;
-            let greedy = ctx.sequences[i].sampler().is_argmax();
-            let (tokens, logits) =
-                drafter.draft(*seq_id, &noise, base_len, lm_head, greedy, anchor)?;
-            proposals.push(SpeculativeProposal::with_logits(tokens, logits));
         }
+        drafter.append_ctx_batch(&appends)?;
+        let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
+        let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
+        // The lm_head weights are read once for the whole batch; drafts are chosen per sequence
+        let greedy = ctx.sequences.iter().all(|seq| seq.sampler().is_argmax());
+        let finished = drafter.finish_drafts(&hidden, ctx.sampled_tokens, lm_head, greedy)?;
+        drafter.adaptive_observe(&accepted, max_n, batch);
+        let proposals = finished
+            .into_iter()
+            .map(|(tokens, logits)| SpeculativeProposal::with_logits(tokens, logits))
+            .collect();
         Ok(Some(SpeculativeProposalBatch::new(proposals)))
     }
 
@@ -322,6 +358,7 @@ impl Qwen3_5Model {
         if capture.taps.len() != drafter.target_layer_ids.len() {
             return Ok(());
         }
+        let mut appends = Vec::with_capacity(ctx.seq_ids.len());
         for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
             let batch_idx = ctx.batch_indices[i];
             let (start, end) = ctx.chunk_ranges[i];
@@ -334,10 +371,13 @@ impl Qwen3_5Model {
                 .iter()
                 .map(|t| t.narrow(0, batch_idx, 1)?.narrow(1, 0, rows))
                 .collect::<Result<Vec<_>>>()?;
-            let taps = Tensor::cat(&taps, candle_core::D::Minus1)?;
-            drafter.append_ctx(*seq_id, &taps, start)?;
+            appends.push(crate::speculative::dflash::CtxAppend {
+                seq_id: *seq_id,
+                taps: Tensor::cat(&taps, candle_core::D::Minus1)?,
+                start_pos: start,
+            });
         }
-        Ok(())
+        drafter.append_ctx_batch(&appends)
     }
 
     fn mtp_propose(
@@ -665,7 +705,27 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
 
     fn speculative_proposal_len(&self) -> Option<usize> {
         let n = self.mtp_n_predict();
-        (n > 0).then_some(n)
+        if n == 0 {
+            return None;
+        }
+        if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            return Some(drafter.current_n(n));
+        }
+        Some(n)
+    }
+
+    fn speculative_proposal_len_options(&self) -> Vec<usize> {
+        let n = self.mtp_n_predict();
+        if n == 0 {
+            return Vec::new();
+        }
+        if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            let tiers = drafter.adaptive_depths(n);
+            if !tiers.is_empty() {
+                return tiers;
+            }
+        }
+        vec![n]
     }
 
     fn speculative_propose(

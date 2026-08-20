@@ -1747,10 +1747,23 @@ impl MultimodalPipeline {
             return Ok(());
         };
         let speculative = self.model.has_speculative_proposer();
-        let mut widths = vec![1];
-        if let Some(n) = self.model.speculative_proposal_len().filter(|n| *n > 0) {
-            widths.push(1 + n);
+        let options = self.model.speculative_proposal_len_options();
+        let max_option = options.iter().copied().max().unwrap_or(0);
+        // Non-max depths exist only for the adaptive controller, which is gated to small batches;
+        // capturing them for every bucket would multiply the decode-scratch footprint for nothing.
+        let mut widths = vec![(1usize, usize::MAX)];
+        for n in options {
+            if n > 0 {
+                let max_bucket = if n == max_option {
+                    usize::MAX
+                } else {
+                    crate::speculative::dflash::ADAPT_MAX_BATCH
+                };
+                widths.push((1 + n, max_bucket));
+            }
         }
+        widths.sort_unstable();
+        widths.dedup();
         let kv_cache = cache_engine.get_kv_cache().clone();
         let hybrid_slots = if self.model.cache().is_hybrid() {
             let mut cache = self.model.cache().hybrid();
@@ -1773,10 +1786,10 @@ impl MultimodalPipeline {
         }
         let start = std::time::Instant::now();
         let mut captured = 0usize;
-        for q_len in widths {
+        for (q_len, max_bucket) in widths {
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
             let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
-            for bucket in cuda_graph_precapture_batches() {
+            for bucket in cuda_graph_precapture_batches().filter(|b| *b <= max_bucket) {
                 let Some(step) = CudaGraphDecodeStep::padded(
                     inputs.step_inputs(live.as_deref(), hybrid_slots),
                     bucket,
