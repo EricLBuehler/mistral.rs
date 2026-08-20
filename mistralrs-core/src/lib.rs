@@ -2714,7 +2714,9 @@ impl MistralRs {
         if let Some(mtp_config) = loader_config.mtp_config.clone() {
             pipeline
                 .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
+                .attach_speculative(SpeculativeConfig::Mtp(
+                    mtp_config.with_draft_lm_head_isq(loader_config.isq),
+                ))
                 .map_err(|e| {
                     MistralRsError::ReloadFailed(format!(
                         "Failed to attach MTP speculative decoding: {e}"

@@ -164,8 +164,10 @@ impl Qwen3_5Model {
     }
 
     fn draft_logits(&self, normed_hidden: &Tensor) -> Result<Tensor> {
+        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
+        let head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
         // [1, rows, hidden] -> [rows, vocab]
-        self.text.lm_head().forward(normed_hidden)?.squeeze(0)
+        head.forward(normed_hidden)?.squeeze(0)
     }
 
     fn mtp_propose(
@@ -462,6 +464,20 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         }
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
         self.text.set_store_spec_hidden(true);
+        // The promoted (sensitive) lm_head is read once per draft; a base-type copy makes the
+        // drafter cheaper without touching what the target verifies with
+        if let Some(ty) = config.draft_lm_head_isq {
+            let head = self.text.lm_head().clone().apply_isq(
+                Some(ty),
+                self.text.device.clone(),
+                &std::sync::atomic::AtomicUsize::new(0),
+                None,
+                mistralrs_quant::QuantizeOntoGuard::new(),
+            )?;
+            *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
+        } else {
+            *self.draft_lm_head.lock().expect("draft lm_head poisoned") = None;
+        }
         Ok(Some(SpeculativeAttachInfo::mtp(
             "built-in".to_string(),
             n_predict,

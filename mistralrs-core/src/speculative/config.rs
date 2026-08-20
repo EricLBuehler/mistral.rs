@@ -18,6 +18,9 @@ pub enum SpeculativeConfig {
 pub struct MtpConfig {
     pub model: Option<String>,
     pub n_predict: Option<usize>,
+    /// ISQ type for a draft-only copy of `lm_head`, so drafting skips the promoted (wider)
+    /// sensitive-tensor type; the target still verifies with the promoted head.
+    pub draft_lm_head_isq: Option<crate::IsqType>,
 }
 
 impl MtpConfig {
@@ -25,6 +28,7 @@ impl MtpConfig {
         Self {
             model: Some(model.into()),
             n_predict,
+            draft_lm_head_isq: None,
         }
     }
 
@@ -32,7 +36,13 @@ impl MtpConfig {
         Self {
             model: None,
             n_predict,
+            draft_lm_head_isq: None,
         }
+    }
+
+    pub fn with_draft_lm_head_isq(mut self, isq: Option<crate::IsqType>) -> Self {
+        self.draft_lm_head_isq = isq;
+        self
     }
 
     pub fn is_builtin(&self) -> bool {
