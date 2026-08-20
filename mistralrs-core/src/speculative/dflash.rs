@@ -254,30 +254,44 @@ impl CandidateSelector {
 
     /// Greedy path walk over the per-position top-k candidates; scores couple each candidate to the
     /// chosen predecessor through the low-rank codebooks gated by the position's hidden state.
-    fn select_greedy(&self, hidden: &Tensor, logits: &Tensor, anchor_id: u32) -> Result<Vec<u32>> {
-        let (positions, _vocab) = logits.dims2()?;
+    /// Greedy path walk over the per-position top-k candidates for every sequence at once; scores
+    /// couple each candidate to the chosen predecessor through the low-rank codebooks gated by the
+    /// position's hidden state. `hidden` `[batch, n, hidden]`, `logits` `[batch, n, vocab]`; one
+    /// batched top-k kernel and one D2H cover the whole batch, the walks are host-side.
+    fn select_greedy_batch(
+        &self,
+        hidden: &Tensor,
+        logits: &Tensor,
+        anchors: &[u32],
+    ) -> Result<Vec<Vec<u32>>> {
+        let (batch, positions, vocab) = logits.dims3()?;
         let k = self.top_k;
-        let logits = logits.to_dtype(DType::F32)?.contiguous()?;
+        let rows = batch * positions;
+        let logits = logits
+            .reshape((rows, vocab))?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
         let (unary, candidates) = topk_rows(&logits, k)?;
-        // H(h): [positions, rank]
+        // H(h): [rows, rank]
         let hproj = hidden
+            .reshape((rows, ()))?
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.hidden_projection.t()?.to_dtype(DType::F32)?)?;
         let cand_flat = candidates.iter().flatten().copied().collect::<Vec<u32>>();
-        let cand_ids = Tensor::from_vec(cand_flat.clone(), (positions * k,), logits.device())?;
+        let cand_ids = Tensor::from_vec(cand_flat.clone(), (rows * k,), logits.device())?;
         let succ = self
             .successor_codebook
             .to_dtype(DType::F32)?
-            .index_select(&cand_ids, 0)?; // [positions*k, rank]
-                                          // Predecessors can only be the anchor or one of the candidates
-        let mut pred_ids = vec![anchor_id];
+            .index_select(&cand_ids, 0)?; // [rows*k, rank]
+                                          // Predecessors can only be an anchor or one of the candidates
+        let mut pred_ids = anchors.to_vec();
         pred_ids.extend_from_slice(&cand_flat);
         let pred_ids_t = Tensor::from_vec(pred_ids.clone(), (pred_ids.len(),), logits.device())?;
         let pred = self
             .predecessor_codebook
             .to_dtype(DType::F32)?
             .index_select(&pred_ids_t, 0)?;
-        // One D2H for everything; the walk itself is tiny and host-side
+        // One D2H for everything; the walks themselves are tiny and host-side
         let rank = hproj.dim(1)?;
         let packed = Tensor::cat(
             &[
@@ -288,34 +302,40 @@ impl CandidateSelector {
             0,
         )?
         .to_vec1::<f32>()?;
-        let (h_len, s_len) = (positions * rank, positions * k * rank);
+        let (h_len, s_len) = (rows * rank, rows * k * rank);
         let hproj: Vec<&[f32]> = packed[..h_len].chunks(rank).collect();
         let succ: Vec<&[f32]> = packed[h_len..h_len + s_len].chunks(rank).collect();
         let pred: Vec<&[f32]> = packed[h_len + s_len..].chunks(rank).collect();
 
-        let mut path = Vec::with_capacity(positions);
-        let mut pred_row = 0usize;
-        for pos in 0..positions {
-            let mut best = f32::NEG_INFINITY;
-            let mut best_idx = 0usize;
-            for cand in 0..k {
-                let mut dot = 0f32;
-                let s = &succ[pos * k + cand];
-                let p = &pred[pred_row];
-                let h = &hproj[pos];
-                for r in 0..rank {
-                    dot += p[r] * h[r] * s[r];
+        let mut paths = Vec::with_capacity(batch);
+        for b in 0..batch {
+            let mut path = Vec::with_capacity(positions);
+            // pred rows: the batch anchors first, then every candidate
+            let mut pred_row = b;
+            for pos in 0..positions {
+                let row = b * positions + pos;
+                let mut best = f32::NEG_INFINITY;
+                let mut best_idx = 0usize;
+                for cand in 0..k {
+                    let mut dot = 0f32;
+                    let sv = &succ[row * k + cand];
+                    let pv = &pred[pred_row];
+                    let hv = &hproj[row];
+                    for r in 0..rank {
+                        dot += pv[r] * hv[r] * sv[r];
+                    }
+                    let score = unary[row][cand] + dot;
+                    if score > best {
+                        best = score;
+                        best_idx = cand;
+                    }
                 }
-                let score = unary[pos][cand] + dot;
-                if score > best {
-                    best = score;
-                    best_idx = cand;
-                }
+                path.push(candidates[row][best_idx]);
+                pred_row = batch + row * k + best_idx;
             }
-            path.push(candidates[pos][best_idx]);
-            pred_row = 1 + pos * k + best_idx;
+            paths.push(path);
         }
-        Ok(path)
+        Ok(paths)
     }
 }
 
@@ -779,15 +799,12 @@ impl DFlashDraftModel {
     /// One block draft: noise `[anchor, mask * n_drafts]` at absolute positions `start_pos..`,
     /// attending to the accumulated context. Returns the drafted tokens and the full draft logits
     /// (`[n_drafts, vocab]`) for stochastic verification.
-    pub fn draft(
+    pub fn draft_hidden(
         &self,
         seq_id: usize,
         noise_embedding: &Tensor,
         start_pos: usize,
-        lm_head: &Arc<dyn QuantMethod>,
-        greedy: bool,
-        anchor_id: u32,
-    ) -> Result<(Vec<u32>, Tensor)> {
+    ) -> Result<Tensor> {
         let block = noise_embedding.dim(1)?;
         let cache = self.ctx_cache.lock().expect("dflash cache poisoned");
         let entry = cache.get(&seq_id).ok_or_else(|| {
@@ -884,20 +901,34 @@ impl DFlashDraftModel {
 
         let hs = self.norm.forward(&hs)?;
         // Positions 1.. predict the drafts; position 0 carries the anchor
-        let draft_hidden = hs.narrow(1, 1, block - 1)?;
-        let mut logits = lm_head.forward(&draft_hidden)?.squeeze(0)?;
+        hs.narrow(1, 1, block - 1)
+    }
+
+    /// One lm_head projection and one D2H finish every sequence's drafts: `hiddens` are the per-seq
+    /// `[1, n, hidden]` outputs of `draft_hidden` with identical `n`. Returns per-seq
+    /// (tokens, logits `[n, vocab]`).
+    pub fn finish_drafts(
+        &self,
+        hiddens: &[Tensor],
+        anchors: &[u32],
+        lm_head: &Arc<dyn QuantMethod>,
+        greedy: bool,
+    ) -> Result<Vec<(Vec<u32>, Tensor)>> {
+        let stacked = Tensor::cat(hiddens, 0)?; // [batch, n, hidden]
+        let mut logits = lm_head.forward(&stacked)?; // [batch, n, vocab]
         if (self.output_multiplier - 1.0).abs() > f64::EPSILON {
             logits = (logits * self.output_multiplier)?;
         }
-
         let use_selector = std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
-        let tokens = match (&self.selector, greedy && use_selector) {
-            (Some(selector), true) => {
-                selector.select_greedy(&draft_hidden.squeeze(0)?, &logits, anchor_id)?
-            }
-            _ => logits.argmax(D::Minus1)?.to_vec1::<u32>()?,
+        let tokens_per_seq = match (&self.selector, greedy && use_selector) {
+            (Some(selector), true) => selector.select_greedy_batch(&stacked, &logits, anchors)?,
+            _ => logits.argmax(D::Minus1)?.to_vec2::<u32>()?,
         };
-        Ok((tokens, logits))
+        tokens_per_seq
+            .into_iter()
+            .enumerate()
+            .map(|(i, tokens)| Ok((tokens, logits.i(i)?)))
+            .collect()
     }
 
     fn attention_mask(

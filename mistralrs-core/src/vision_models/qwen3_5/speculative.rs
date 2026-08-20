@@ -274,7 +274,7 @@ impl Qwen3_5Model {
         let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
         let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
 
-        let mut proposals = Vec::with_capacity(batch);
+        let mut hiddens = Vec::with_capacity(batch);
         for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
             let (batch_idx, count) = ctx.target_rows[i];
             let base_len = ctx.base_lens[i];
@@ -301,11 +301,15 @@ impl Qwen3_5Model {
             }
             let anchor = ctx.sampled_tokens[i];
             let noise = self.dflash_noise_embedding(&drafter, anchor, n_predict)?;
-            let greedy = ctx.sequences[i].sampler().is_argmax();
-            let (tokens, logits) =
-                drafter.draft(*seq_id, &noise, base_len, lm_head, greedy, anchor)?;
-            proposals.push(SpeculativeProposal::with_logits(tokens, logits));
+            hiddens.push(drafter.draft_hidden(*seq_id, &noise, base_len)?);
         }
+        // The lm_head weights are read once for the whole batch; drafts are chosen per sequence
+        let greedy = ctx.sequences.iter().all(|seq| seq.sampler().is_argmax());
+        let finished = drafter.finish_drafts(&hiddens, ctx.sampled_tokens, lm_head, greedy)?;
+        let proposals = finished
+            .into_iter()
+            .map(|(tokens, logits)| SpeculativeProposal::with_logits(tokens, logits))
+            .collect();
         Ok(Some(SpeculativeProposalBatch::new(proposals)))
     }
 
