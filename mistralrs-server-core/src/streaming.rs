@@ -101,6 +101,14 @@ pub(crate) fn observe_response(handle: &Option<StreamOutcomeHandle>, response: &
     }
 }
 
+/// OpenAI-style streaming error event; clients parse `data:` lines as JSON, so a raw text line is invisible to them.
+pub(crate) fn openai_error_event(message: String) -> axum::response::sse::Event {
+    let payload = serde_json::json!({
+        "error": { "message": message, "type": "server_error", "param": null, "code": null }
+    });
+    axum::response::sse::Event::default().data(payload.to_string())
+}
+
 /// Default keep-alive interval for Server-Sent Events (SSE) streams in milliseconds.
 pub const DEFAULT_KEEP_ALIVE_INTERVAL_MS: u64 = 10_000;
 

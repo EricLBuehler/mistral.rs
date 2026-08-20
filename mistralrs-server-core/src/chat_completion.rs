@@ -49,8 +49,8 @@ use crate::{
     },
     skills::SkillStore,
     streaming::{
-        base_create_streamer, get_keep_alive_interval, observe_response, BaseStreamer, DoneState,
-        StreamOutcomeHandle,
+        base_create_streamer, get_keep_alive_interval, observe_response, openai_error_event,
+        BaseStreamer, DoneState, StreamOutcomeHandle,
     },
     types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
     util::{
@@ -418,20 +418,20 @@ impl futures::Stream for ChatCompletionStreamer {
                         );
                         // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(Event::default().data(msg))))
+                        Poll::Ready(Some(Ok(openai_error_event(msg))))
                     }
                     Response::ValidationError(e) => {
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(
-                            Event::default().data(sanitize_error_message(e.as_ref()))
-                        )))
+                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                            e.as_ref(),
+                        )))))
                     }
                     Response::InternalError(e) => {
                         MistralRs::maybe_log_error(self.state.clone(), &*e);
                         self.done_state = DoneState::SendingDone;
-                        Poll::Ready(Some(Ok(
-                            Event::default().data(sanitize_error_message(e.as_ref()))
-                        )))
+                        Poll::Ready(Some(Ok(openai_error_event(sanitize_error_message(
+                            e.as_ref(),
+                        )))))
                     }
                     Response::Chunk(mut response) => {
                         if response.choices.iter().all(|x| x.finish_reason.is_some()) {

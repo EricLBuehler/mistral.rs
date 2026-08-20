@@ -19,7 +19,7 @@ typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict
 typedef void (*mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
     void * __restrict__ dst, ggml_type type_dst, const int stride, const int i_max, const int j_max);
 
-static __device__ __forceinline__ void mmq_store_dst(void * __restrict__ dst, const int idx, const float value, const ggml_type type_dst) {
+static __device__ __forceinline__ void mmq_store_dst(void * __restrict__ dst, const int64_t idx, const float value, const ggml_type type_dst) {
     switch (type_dst) {
         case GGML_TYPE_F32:
             ((float *) dst)[idx] = value;
@@ -35,7 +35,7 @@ static __device__ __forceinline__ void mmq_store_dst(void * __restrict__ dst, co
     }
 }
 
-static __device__ __forceinline__ float mmq_load_dst(const void * __restrict__ dst, const int idx, const ggml_type type_dst) {
+static __device__ __forceinline__ float mmq_load_dst(const void * __restrict__ dst, const int64_t idx, const ggml_type type_dst) {
     switch (type_dst) {
         case GGML_TYPE_F32:
             return ((const float *) dst)[idx];
@@ -3257,7 +3257,7 @@ static __device__ __forceinline__ void mmq_write_back_dp4a(
                 continue;
             }
 
-            mmq_store_dst(dst, ids_dst[j]*stride + i, sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size], type_dst);
+            mmq_store_dst(dst, (int64_t) ids_dst[j]*stride + i, sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size], type_dst);
         }
     }
 }
@@ -3305,7 +3305,7 @@ static __device__ __forceinline__ void mmq_write_back_mma(
                     continue;
                 }
 
-                mmq_store_dst(dst, ids_dst[j]*stride + i, sum[(j0/tile_C::J + n)*tile_C::ne + l], type_dst);
+                mmq_store_dst(dst, (int64_t) ids_dst[j]*stride + i, sum[(j0/tile_C::J + n)*tile_C::ne + l], type_dst);
             }
         }
     }
@@ -3628,7 +3628,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*mmq_x*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*mmq_x*stride_col_dst;
 
         if (ids_dst) {
             col_low  = expert_bounds[zt + 0];
@@ -3704,7 +3704,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*mmq_x*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*mmq_x*stride_col_dst;
 
         if (ids_dst) {
             col_low  = expert_bounds[zt + 0];
@@ -3778,7 +3778,7 @@ static __global__ void mul_mat_q(
     int col_high   = ncols_dst;
     int col_diff   = ncols_dst;
     int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-    int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*mmq_x*stride_col_dst;
+    int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*mmq_x*stride_col_dst;
 
     if (ids_dst) {
         col_low  = expert_bounds[zt + 0];
@@ -3904,7 +3904,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int it = tmp2.x;
 
     if (!ids_dst) {
-        const int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*mmq_x*stride_col_dst + it*mmq_y;
+        const int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*mmq_x*stride_col_dst + it*mmq_y;
 
         const int i_max = nrows_x   - it*mmq_y - 1;
         const int j_max = ncols_dst - jt*mmq_x - 1;
@@ -3920,7 +3920,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
                 return;
             }
 
-            const int idx = offset_dst + j*stride_col_dst + i;
+            const int64_t idx = offset_dst + (int64_t) j*stride_col_dst + i;
             mmq_store_dst(dst, idx, mmq_load_dst(dst, idx, type_dst) + sum[j0/nwarps], type_dst);
         }
         return;
@@ -3952,7 +3952,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
             return;
         }
 
-        const int idx = offset_dst + ids_dst_shared[j]*stride_col_dst + i;
+        const int64_t idx = offset_dst + (int64_t) ids_dst_shared[j]*stride_col_dst + i;
         mmq_store_dst(dst, idx, mmq_load_dst(dst, idx, type_dst) + sum[j0/nwarps], type_dst);
     }
 }

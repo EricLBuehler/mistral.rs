@@ -1233,6 +1233,11 @@ impl Loader for MultimodalLoader {
         while layer_devices.len() < model_metadata.num_layers() {
             layer_devices.push(Some(device.clone()));
         }
+        // Parallel weight loading leaves stream-ordered frees pending across loader streams;
+        // drain the whole context so the KV sizing and allocation see the real free VRAM.
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
+
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
@@ -1257,9 +1262,6 @@ impl Loader for MultimodalLoader {
         } else {
             (None, None)
         };
-
-        #[cfg(feature = "cuda")]
-        super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
         let max_seq_len = model.max_seq_len();
         let num_hidden_layers = match model.cache() {
