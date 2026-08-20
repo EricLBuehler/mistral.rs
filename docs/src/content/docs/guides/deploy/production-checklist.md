@@ -33,7 +33,7 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 
 - [ ] Liveness: `GET /health` returns 200 when the server is listening. It does not verify model load.
 - [ ] Readiness: `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Probe for the specific model id the caller needs, not just process liveness.
-- [ ] Scrape `GET /metrics`: Prometheus text format with per-request counters, latency histograms, in-flight request gauges, and request-body histograms. Details live in [observability](/mistral.rs/guides/deploy/observability/) and the [HTTP API reference](/mistral.rs/reference/http-api/).
+- [ ] Scrape `GET /metrics`: Prometheus text format with per-request counters, latency histograms, in-flight request gauges, request-body histograms, and unlabeled `mistralrs_*` engine metrics. Details live in [observability](/mistral.rs/guides/deploy/observability/) and the [HTTP API reference](/mistral.rs/reference/http-api/).
 - [ ] Give startup probes a generous window; first-run model loading can take minutes.
 
 ## Logging

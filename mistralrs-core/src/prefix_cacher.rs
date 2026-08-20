@@ -318,15 +318,22 @@ impl PrefixCacheManagerV2 {
 
         self.caches.retain(|_tokens, cache| !cache.cache.is_empty());
 
+        if n_evicted > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(n_evicted as u64);
+        }
         Ok(n_evicted)
     }
 
     /// Evict all the caches.
     pub fn evict_all_caches(&mut self) -> Result<usize> {
-        let len = self.caches.len();
+        // caches is empty under paged attention, where the prefix cache lives in the block pool
+        let len = self.caches.len() + self.paged_recurrent_caches.len();
         self.caches.clear();
         self.paged_recurrent_caches.clear();
         self.paged_recurrent_bytes = 0;
+        if len > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(len as u64);
+        }
         Ok(len)
     }
 

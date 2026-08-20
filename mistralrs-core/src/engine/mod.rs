@@ -628,6 +628,7 @@ impl Engine {
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                                    self.logger.as_ref(),
                                 )
                                 .await
                         };
@@ -696,6 +697,7 @@ impl Engine {
                                     self.disable_eos_stop,
                                     rng.clone(),
                                     CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                                    self.logger.as_ref(),
                                 )
                                 .await
                         };
@@ -865,6 +867,7 @@ impl Engine {
                                         self.disable_eos_stop,
                                         rng.clone(),
                                         CacheBackendMetadata::PagedAttention { metadata },
+                                        self.logger.as_ref(),
                                     )
                                     .await
                             }

@@ -62,6 +62,17 @@ const HTTP_REQUEST_BODY_BYTE_BUCKETS: [f64; 12] = [
     52_428_800.0,
     104_857_600.0,
 ];
+// Bucket lists taken from vLLM's Prometheus exporter
+const TTFT_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
+];
+const ITL_BUCKETS: [f64; 19] = [
+    0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
+    40.0, 80.0,
+];
+pub(crate) const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
+pub(crate) const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -142,6 +153,10 @@ pub fn install_prometheus_recorder() {
             &HTTP_REQUEST_BODY_BYTE_BUCKETS,
         )
         .expect("valid HTTP request body byte buckets")
+        .set_buckets_for_metric(Matcher::Full(TTFT_METRIC.to_string()), &TTFT_BUCKETS)
+        .expect("valid TTFT buckets")
+        .set_buckets_for_metric(Matcher::Full(ITL_METRIC.to_string()), &ITL_BUCKETS)
+        .expect("valid ITL buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);
@@ -273,6 +288,18 @@ pub async fn observe_http(
     // SSE bodies keep working long after the handler returns; finish accounting when the body ends
     if is_sse(&response) {
         completion.log_stream_accepted();
+        // Labels and start are fixed here; the streamer is only polled once this body is consumed
+        if completion.config.metrics {
+            outcome_handle.set_latency_labels(
+                [
+                    ("method", completion.method.clone()),
+                    ("path", completion.route.clone()),
+                    ("model", completion.model.clone()),
+                    ("status", completion.status.clone()),
+                ],
+                completion.start,
+            );
+        }
         let (parts, body) = response.into_parts();
         let body = Body::new(ObservedBody {
             inner: body,

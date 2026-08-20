@@ -167,6 +167,8 @@ Uploading skills does not require shell execution, but running a Responses reque
 - `http_requests_in_flight` (gauge): requests currently running, labeled by `method`, `path`, and `model`.
 - `http_request_body_bytes` (histogram): request body size when the body size is known, labeled by `method`, `path`, and `model`.
 
+Streaming responses additionally record `mistralrs_time_to_first_token_seconds` and `mistralrs_inter_token_latency_seconds` (histograms, same labels as the request-duration histogram). The endpoint also serves the unlabeled `mistralrs_*` engine metrics (throughput, queues, KV cache, prefix cache, speculative decoding). See the [observability guide](/mistral.rs/guides/deploy/observability/#prometheus-metrics) for the full table and PromQL examples.
+
 The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, reads the `model` query parameter for `GET /v1/lora_adapters`, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when a required request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
 
 ## Response headers

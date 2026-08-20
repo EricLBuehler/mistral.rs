@@ -2207,6 +2207,7 @@ impl Pipeline for MultimodalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
         metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+        logger: &crate::IntervalLogger,
     ) -> candle_core::Result<bool> {
         if !self.model.has_speculative_proposer() {
             crate::speculative::driver::clear_staged_speculative_tokens(seqs);
@@ -2231,6 +2232,7 @@ impl Pipeline for MultimodalPipeline {
                 disable_eos_stop,
                 rng,
                 &cache,
+                logger,
             )
             .await;
         }

@@ -9,6 +9,7 @@ use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::Pipeline;
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::{Sequence, SequenceState};
+use crate::IntervalLogger;
 
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
 use super::proposer::{SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
@@ -40,6 +41,9 @@ pub trait SpeculativePipelineExt: Pipeline {
 /// later step verify tokens against the wrong target state.
 pub(crate) fn clear_staged_speculative_tokens(seqs: &mut [&mut Sequence]) {
     for seq in seqs.iter_mut() {
+        if seq.active_staged_speculative_len() > 0 {
+            metrics::counter!("mistralrs_speculative_staged_drops_total").increment(1);
+        }
         seq.clear_staged_speculative_tokens();
     }
 }
@@ -53,6 +57,7 @@ pub async fn try_sample_speculative_causal_gen<P, C>(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
+    logger: &IntervalLogger,
 ) -> Result<bool>
 where
     P: SpeculativePipelineExt,
@@ -75,6 +80,7 @@ where
                 disable_eos_stop,
                 rng,
                 cache,
+                logger,
             )
             .await?;
             Ok(true)
@@ -199,6 +205,7 @@ async fn verify_staged_batch<P, C>(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
+    logger: &IntervalLogger,
 ) -> Result<()>
 where
     P: SpeculativePipelineExt,
@@ -217,6 +224,9 @@ where
         let proposal = seq.take_staged_speculative_tokens();
         let proposal_logits = seq.take_staged_speculative_logits();
         if proposal.len() != staged_len {
+            if !proposal.is_empty() {
+                metrics::counter!("mistralrs_speculative_staged_drops_total").increment(1);
+            }
             seq.clear_staged_speculative_tokens();
             cache_guards.push(None);
             cache_outcomes.push(None);
@@ -269,6 +279,28 @@ where
     let mut sampled_tokens = Vec::new();
     let mut base_lens = Vec::new();
     let mut hidden_rows = Vec::new();
+    let mut num_drafts = 0usize;
+    let mut num_draft_tokens = 0usize;
+    let mut num_accepted_tokens = 0usize;
+    let mut max_proposed = 0usize;
+    for outcome in outcomes.iter().flatten() {
+        num_drafts += 1;
+        num_draft_tokens += outcome.proposed_drafts;
+        num_accepted_tokens += outcome.accepted_drafts;
+        max_proposed = max_proposed.max(outcome.proposed_drafts);
+    }
+    let mut accepted_per_pos = vec![0usize; max_proposed];
+    for outcome in outcomes.iter().flatten() {
+        for count in accepted_per_pos.iter_mut().take(outcome.accepted_drafts) {
+            *count += 1;
+        }
+    }
+    logger.add_speculative_stats(
+        num_drafts,
+        num_draft_tokens,
+        num_accepted_tokens,
+        &accepted_per_pos,
+    );
     for (idx, outcome) in outcomes.iter().enumerate() {
         let Some(outcome) = outcome else {
             continue;

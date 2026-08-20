@@ -76,6 +76,20 @@ impl Display for StopReason {
     }
 }
 
+impl StopReason {
+    fn metric_label(self) -> &'static str {
+        match self {
+            StopReason::Eos => "stop",
+            StopReason::Length(_) | StopReason::ModelLength(_) => "length",
+            StopReason::StopTok(_) | StopReason::StopString { .. } => "stop",
+            StopReason::Canceled => "canceled",
+            StopReason::GeneratedImage => "generated_image",
+            StopReason::GeneratedSpeech => "generated_speech",
+            StopReason::ToolCalls => "tool_calls",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SequenceState {
     Done(StopReason),
@@ -1388,6 +1402,18 @@ impl Sequence {
         if matches!(state, SequenceState::Error) {
             let mut group = get_mut_group!(self);
             group.n_choices = group.n_choices.saturating_sub(1);
+            // Count the transition into Error once, not every re-set.
+            if !matches!(self.getstate(), SequenceState::Error) {
+                metrics::counter!("mistralrs_sequences_completed_total", "reason" => "error")
+                    .increment(1);
+            }
+        }
+        if let SequenceState::Done(reason) = &state {
+            // Count the transition into Done once, not every re-set.
+            if !matches!(self.getstate(), SequenceState::Done(_)) {
+                metrics::counter!("mistralrs_sequences_completed_total", "reason" => reason.metric_label())
+                    .increment(1);
+            }
         }
         *self.state.write().unwrap() = state;
     }

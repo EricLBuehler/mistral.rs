@@ -39,7 +39,11 @@ Use `--disable-request-id-header` to stop adding the response header. The reques
 
 ## Prometheus metrics
 
-`GET /metrics` exposes Prometheus text format by default. The HTTP middleware records:
+`GET /metrics` exposes Prometheus text format by default. Metrics come from two layers: the HTTP middleware (`http_*`) and the inference engine (`mistralrs_*`). The engine metrics are unlabeled because the engine is process-wide; use one server process per model for per-model dashboards, or add labels in your scrape/relabelling layer.
+
+### HTTP metrics
+
+The HTTP middleware records:
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
@@ -48,7 +52,82 @@ Use `--disable-request-id-header` to stop adding the response header. The reques
 | `http_requests_in_flight` | gauge | `method`, `path`, `model` | Requests currently running. |
 | `http_request_body_bytes` | histogram | `method`, `path`, `model` | Request body bytes when the body size is known. |
 
-Duration and body-size metrics are exported as Prometheus histograms with fixed buckets.
+### Streaming latency
+
+For streaming (`text/event-stream`) responses, the middleware also records per-stream latency:
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `mistralrs_time_to_first_token_seconds` | histogram | `method`, `path`, `model`, `status` | Time from request start to the first engine token step. Includes queueing and prefill. |
+| `mistralrs_inter_token_latency_seconds` | histogram | `method`, `path`, `model`, `status` | Gaps between consecutive engine token steps. One sample per step after the first. |
+
+Timing is measured at the engine's token steps, not at SSE frames, so keep-alive pings (axum comment frames and Anthropic `event: ping`) and protocol events (`[DONE]`, `message_start`/`message_stop`, and similar bookkeeping frames) never register as samples. Long decode stalls show up as high ITL quantiles, which a per-request average would hide. Both histograms use the same bucket boundaries as vLLM's exporter; the existing `http_request_*` histograms keep their own bucket lists.
+
+### Engine metrics
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `mistralrs_tokens_processed_total` | counter | - | Tokens processed (prefill plus decode). |
+| `mistralrs_prefix_cache_lookups_total` | counter | - | New sequences that requested a prefix cache lookup. |
+| `mistralrs_prefix_cache_hits_total` | counter | - | New sequences that found a cached KV prefix. |
+| `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries evicted to free memory: cache entries in non-paged mode, KV prefix blocks (plus recurrent prefix entries on a full cache reset) with paged attention. |
+| `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
+| `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
+| `mistralrs_sequences_running` | gauge | - | Sequences currently running. |
+| `mistralrs_sequences_waiting` | gauge | - | Sequences in the waiting queue. |
+| `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`, `error`. |
+| `mistralrs_kv_cache_blocks_used` | gauge | - | KV cache blocks currently in use (paged attention). |
+| `mistralrs_kv_cache_blocks_total` | gauge | - | Total KV cache blocks (paged attention). |
+
+### Speculative decoding (MTP)
+
+These metrics are only populated when a model with a speculative proposer (MTP) is attached. `position` is the 0-based draft position within a proposal.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `mistralrs_speculative_drafts_total` | counter | - | Verified sequences: one per sequence per step that used speculative verification. |
+| `mistralrs_speculative_draft_tokens_proposed_total` | counter | - | Draft tokens proposed for verification. |
+| `mistralrs_speculative_draft_tokens_accepted_total` | counter | - | Draft tokens the target model accepted. |
+| `mistralrs_speculative_draft_tokens_accepted_per_pos_total` | counter | `position` | Draft tokens accepted at each proposal position. The drop-off across positions shows where proposals start failing. |
+| `mistralrs_speculative_staged_drops_total` | counter | - | Staged proposals discarded without verification (preemption, batch-shape mismatch, or a step that cannot verify). |
+| `mistralrs_paged_preemptions_total` | counter | - | Running sequences preempted and returned to the waiting queue (paged attention). |
+
+### Useful PromQL
+
+Acceptance is a ratio of cumulative counters, so rates and quantiles belong in PromQL rather than extra gauges:
+
+```promql
+# Fraction of proposed draft tokens that were accepted
+rate(mistralrs_speculative_draft_tokens_accepted_total[5m])
+  / rate(mistralrs_speculative_draft_tokens_proposed_total[5m])
+
+# Mean tokens accepted per verification step (1.0 = speculation is not helping)
+1 + rate(mistralrs_speculative_draft_tokens_accepted_total[5m])
+  / rate(mistralrs_speculative_drafts_total[5m])
+
+# P99 time to first token, all models
+histogram_quantile(0.99,
+  sum(rate(mistralrs_time_to_first_token_seconds_bucket[5m])) by (le))
+
+# P95 inter-token latency for one route/model
+histogram_quantile(0.95,
+  sum(rate(mistralrs_inter_token_latency_seconds_bucket{path="/v1/chat/completions"}[5m])) by (le))
+
+# KV cache pressure (sustained 1.0 with a growing waiting queue means preemptions are likely)
+mistralrs_kv_cache_blocks_used / mistralrs_kv_cache_blocks_total
+```
+
+If you want gauge-like ergonomics for the acceptance rate, use a recording rule instead of a server-side percentile gauge:
+
+```yaml
+groups:
+  - name: mistralrs
+    rules:
+      - record: mistralrs:mtp_accept_rate:rate5m
+        expr: |
+          rate(mistralrs_speculative_draft_tokens_accepted_total[5m])
+            / rate(mistralrs_speculative_draft_tokens_proposed_total[5m])
+```
 
 The `path` label is the matched route pattern, such as `/v1/responses/{response_id}`, not the raw URI. The `model` label is the resolved model id for inference requests, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when the request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Housekeeping endpoints are excluded from HTTP metrics to keep scrape and probe traffic out of request dashboards.
 

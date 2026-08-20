@@ -499,6 +499,10 @@ impl BlockPool {
         for hash in &block_hashes {
             self.cached_block_hash_to_block.pop(hash, block_id);
         }
+        if !block_hashes.is_empty() {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total")
+                .increment(block_hashes.len() as u64);
+        }
     }
 
     /// Reset the entire prefix cache. Only succeeds if all blocks are free.
@@ -509,9 +513,13 @@ impl BlockPool {
             return false;
         }
 
+        let evicted = self.cached_block_hash_to_block.len();
         self.cached_block_hash_to_block.clear();
         for block in &mut self.blocks {
             block.reset_hash();
+        }
+        if evicted > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total").increment(evicted as u64);
         }
 
         true

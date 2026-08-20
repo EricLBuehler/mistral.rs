@@ -3,12 +3,17 @@
 use std::{
     env,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use mistralrs_core::{Response, Usage};
 use tokio::sync::mpsc::Receiver;
 
-use crate::{types::SharedMistralRsState, util::sanitize_error_message};
+use crate::{
+    metrics::{ITL_METRIC, TTFT_METRIC},
+    types::SharedMistralRsState,
+    util::sanitize_error_message,
+};
 
 /// What a streaming request produced, filled in by the streamer and read once the SSE body ends.
 #[derive(Debug, Clone, Default)]
@@ -20,31 +25,71 @@ pub struct StreamOutcome {
 
 /// Shared between the observability middleware and the streamer that serves the request.
 #[derive(Debug, Clone, Default)]
-pub struct StreamOutcomeHandle(Arc<Mutex<StreamOutcome>>);
+pub struct StreamOutcomeHandle(Arc<Mutex<StreamOutcomeState>>);
+
+#[derive(Debug, Default)]
+struct StreamOutcomeState {
+    usage: Option<Usage>,
+    error: Option<String>,
+    latency: Option<StreamLatency>,
+    last_token_at: Option<Instant>,
+}
+
+/// Set at body-wrap time, before any engine response can be observed.
+#[derive(Debug)]
+struct StreamLatency {
+    labels: [(&'static str, String); 4],
+    start: Instant,
+}
 
 impl StreamOutcomeHandle {
     pub fn snapshot(&self) -> StreamOutcome {
-        self.0.lock().expect("stream outcome poisoned").clone()
+        let state = self.0.lock().expect("stream outcome poisoned");
+        StreamOutcome {
+            usage: state.usage.clone(),
+            error: state.error.clone(),
+        }
     }
 
-    /// Record usage or errors from any engine response as it flows through a streamer.
+    /// Enable TTFT/ITL recording with the request's labels and arrival time.
+    pub fn set_latency_labels(&self, labels: [(&'static str, String); 4], start: Instant) {
+        let mut state = self.0.lock().expect("stream outcome poisoned");
+        state.latency = Some(StreamLatency { labels, start });
+    }
+
+    /// Record usage, errors, and streaming latency from any engine response as it flows through a streamer.
     pub fn observe(&self, response: &Response) {
-        let mut outcome = self.0.lock().expect("stream outcome poisoned");
+        let mut state = self.0.lock().expect("stream outcome poisoned");
         match response {
             Response::Chunk(chunk) => {
                 if let Some(usage) = &chunk.usage {
-                    outcome.usage = Some(usage.clone());
+                    state.usage = Some(usage.clone());
                 }
             }
-            Response::Done(done) => outcome.usage = Some(done.usage.clone()),
-            Response::CompletionDone(done) => outcome.usage = Some(done.usage.clone()),
+            Response::Done(done) => state.usage = Some(done.usage.clone()),
+            Response::CompletionDone(done) => state.usage = Some(done.usage.clone()),
             Response::ModelError(msg, _) | Response::CompletionModelError(msg, _) => {
-                outcome.error = Some(msg.clone())
+                state.error = Some(msg.clone())
             }
             Response::InternalError(e) | Response::ValidationError(e) => {
-                outcome.error = Some(sanitize_error_message(e.as_ref()))
+                state.error = Some(sanitize_error_message(e.as_ref()))
             }
             _ => {}
+        }
+        // Only token steps carry decoded output; agentic control events and done markers share the channel
+        if matches!(response, Response::Chunk(_) | Response::CompletionChunk(_)) {
+            let Some(latency) = &state.latency else {
+                return;
+            };
+            let now = Instant::now();
+            if let Some(last) = state.last_token_at {
+                metrics::histogram!(ITL_METRIC, &latency.labels)
+                    .record(now.duration_since(last).as_secs_f64());
+            } else {
+                metrics::histogram!(TTFT_METRIC, &latency.labels)
+                    .record(now.duration_since(latency.start).as_secs_f64());
+            }
+            state.last_token_at = Some(now);
         }
     }
 }
