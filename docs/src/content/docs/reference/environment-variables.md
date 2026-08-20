@@ -67,6 +67,7 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
+| `MISTRALRS_DFLASH_ADAPTIVE` | Adaptive DFlash draft depth is on by default (off when `--mtp-n-predict` is set). Set to `0` to always draft at full depth, or `1` to adapt below an explicit `--mtp-n-predict`. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |

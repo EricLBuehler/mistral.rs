@@ -38,6 +38,12 @@ pub trait SpeculativeTargetMixin {
         None
     }
 
+    /// Every proposal length the proposer may use, for decode-graph precapture. Defaults to the
+    /// current length; adaptive proposers return all their depth tiers.
+    fn speculative_proposal_len_options(&self) -> Vec<usize> {
+        self.speculative_proposal_len().into_iter().collect()
+    }
+
     /// Returns `Ok(None)` when speculation is unsupported for the current step.
     /// Return `Err` only for real failures that should stop generation.
     fn speculative_propose(

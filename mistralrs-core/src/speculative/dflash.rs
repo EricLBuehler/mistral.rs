@@ -25,6 +25,25 @@ const DEFAULT_BLOCK_SIZE: usize = 16;
 // Rotary table length precomputed at load; positions past it fall back to on-the-fly computation.
 const ROPE_TABLE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
+// Adaptive draft depth (SGLang-style): EMA of mean accepted drafts per step picks a tier from
+// {3, 5, max}; a tier switch only lands after ADAPT_STICKY consecutive agreeing decisions.
+const ADAPT_EMA_ALPHA: f32 = 0.2;
+// Tier t is worth keeping while the EMA stays above t * ADAPT_TIER_FRAC accepted drafts.
+const ADAPT_TIER_FRAC: f32 = 0.65;
+const ADAPT_HYSTERESIS: f32 = 0.25;
+// Upshift once the EMA saturates the current depth to within this margin.
+const ADAPT_UP_MARGIN: f32 = 0.5;
+const ADAPT_STICKY: u32 = 4;
+const ADAPT_WARMUP: u32 = 8;
+// After a switch, hold the new depth for this many steps so borderline content cannot flap between
+// tiers every few steps (the bands overlap by construction: an EMA capped at the shallow tier can
+// sit inside the deeper tier's downshift range).
+const ADAPT_COOLDOWN: u32 = 32;
+// Past this batch size the batched drafter makes deep drafts nearly free, so always draft at max.
+// Also bounds which graph buckets the non-max draft depths are precaptured for.
+pub const ADAPT_MAX_BATCH: usize = 2;
+const ADAPT_MID_TIER: usize = 5;
+const ADAPT_MIN_TIER: usize = 3;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DFlashSpecificConfig {
@@ -254,30 +273,44 @@ impl CandidateSelector {
 
     /// Greedy path walk over the per-position top-k candidates; scores couple each candidate to the
     /// chosen predecessor through the low-rank codebooks gated by the position's hidden state.
-    fn select_greedy(&self, hidden: &Tensor, logits: &Tensor, anchor_id: u32) -> Result<Vec<u32>> {
-        let (positions, _vocab) = logits.dims2()?;
+    /// Greedy path walk over the per-position top-k candidates for every sequence at once; scores
+    /// couple each candidate to the chosen predecessor through the low-rank codebooks gated by the
+    /// position's hidden state. `hidden` `[batch, n, hidden]`, `logits` `[batch, n, vocab]`; one
+    /// batched top-k kernel and one D2H cover the whole batch, the walks are host-side.
+    fn select_greedy_batch(
+        &self,
+        hidden: &Tensor,
+        logits: &Tensor,
+        anchors: &[u32],
+    ) -> Result<Vec<Vec<u32>>> {
+        let (batch, positions, vocab) = logits.dims3()?;
         let k = self.top_k;
-        let logits = logits.to_dtype(DType::F32)?.contiguous()?;
+        let rows = batch * positions;
+        let logits = logits
+            .reshape((rows, vocab))?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
         let (unary, candidates) = topk_rows(&logits, k)?;
-        // H(h): [positions, rank]
+        // H(h): [rows, rank]
         let hproj = hidden
+            .reshape((rows, ()))?
             .to_dtype(DType::F32)?
             .broadcast_matmul(&self.hidden_projection.t()?.to_dtype(DType::F32)?)?;
         let cand_flat = candidates.iter().flatten().copied().collect::<Vec<u32>>();
-        let cand_ids = Tensor::from_vec(cand_flat.clone(), (positions * k,), logits.device())?;
+        let cand_ids = Tensor::from_vec(cand_flat.clone(), (rows * k,), logits.device())?;
         let succ = self
             .successor_codebook
             .to_dtype(DType::F32)?
-            .index_select(&cand_ids, 0)?; // [positions*k, rank]
-                                          // Predecessors can only be the anchor or one of the candidates
-        let mut pred_ids = vec![anchor_id];
+            .index_select(&cand_ids, 0)?; // [rows*k, rank]
+                                          // Predecessors can only be an anchor or one of the candidates
+        let mut pred_ids = anchors.to_vec();
         pred_ids.extend_from_slice(&cand_flat);
         let pred_ids_t = Tensor::from_vec(pred_ids.clone(), (pred_ids.len(),), logits.device())?;
         let pred = self
             .predecessor_codebook
             .to_dtype(DType::F32)?
             .index_select(&pred_ids_t, 0)?;
-        // One D2H for everything; the walk itself is tiny and host-side
+        // One D2H for everything; the walks themselves are tiny and host-side
         let rank = hproj.dim(1)?;
         let packed = Tensor::cat(
             &[
@@ -288,34 +321,40 @@ impl CandidateSelector {
             0,
         )?
         .to_vec1::<f32>()?;
-        let (h_len, s_len) = (positions * rank, positions * k * rank);
+        let (h_len, s_len) = (rows * rank, rows * k * rank);
         let hproj: Vec<&[f32]> = packed[..h_len].chunks(rank).collect();
         let succ: Vec<&[f32]> = packed[h_len..h_len + s_len].chunks(rank).collect();
         let pred: Vec<&[f32]> = packed[h_len + s_len..].chunks(rank).collect();
 
-        let mut path = Vec::with_capacity(positions);
-        let mut pred_row = 0usize;
-        for pos in 0..positions {
-            let mut best = f32::NEG_INFINITY;
-            let mut best_idx = 0usize;
-            for cand in 0..k {
-                let mut dot = 0f32;
-                let s = &succ[pos * k + cand];
-                let p = &pred[pred_row];
-                let h = &hproj[pos];
-                for r in 0..rank {
-                    dot += p[r] * h[r] * s[r];
+        let mut paths = Vec::with_capacity(batch);
+        for b in 0..batch {
+            let mut path = Vec::with_capacity(positions);
+            // pred rows: the batch anchors first, then every candidate
+            let mut pred_row = b;
+            for pos in 0..positions {
+                let row = b * positions + pos;
+                let mut best = f32::NEG_INFINITY;
+                let mut best_idx = 0usize;
+                for cand in 0..k {
+                    let mut dot = 0f32;
+                    let sv = &succ[row * k + cand];
+                    let pv = &pred[pred_row];
+                    let hv = &hproj[row];
+                    for r in 0..rank {
+                        dot += pv[r] * hv[r] * sv[r];
+                    }
+                    let score = unary[row][cand] + dot;
+                    if score > best {
+                        best = score;
+                        best_idx = cand;
+                    }
                 }
-                let score = unary[pos][cand] + dot;
-                if score > best {
-                    best = score;
-                    best_idx = cand;
-                }
+                path.push(candidates[row][best_idx]);
+                pred_row = batch + row * k + best_idx;
             }
-            path.push(candidates[pos][best_idx]);
-            pred_row = 1 + pos * k + best_idx;
+            paths.push(path);
         }
-        Ok(path)
+        Ok(paths)
     }
 }
 
@@ -371,13 +410,32 @@ struct DFlashLayer {
     sliding_window: Option<usize>,
 }
 
-/// Per-sequence accumulated context keys/values, one entry per layer, `[1, kv_heads, len, head_dim]`
-/// with rotary already applied to the keys. `next_pos` is the absolute position of the next token
-/// to append; `start_pos` the absolute position of the first cached entry (after window trimming).
+/// Per-sequence accumulated context keys/values stacked over layers,
+/// `[layers, kv_heads, len, head_dim]` with rotary already applied to the keys. `next_pos` is the
+/// absolute position of the next token to append; `start_pos` the absolute position of the first
+/// cached entry (after window trimming).
 struct SeqCtxCache {
-    layers: Vec<(Tensor, Tensor)>,
+    k: Tensor,
+    v: Tensor,
     start_pos: usize,
     next_pos: usize,
+}
+
+/// One sequence's context rows to append: `taps` `[1, rows, taps*hidden]` at absolute positions
+/// `start_pos..start_pos + rows`.
+pub struct CtxAppend {
+    pub seq_id: usize,
+    pub taps: Tensor,
+    pub start_pos: usize,
+}
+
+struct AdaptiveState {
+    ema: f32,
+    current: usize,
+    pending: usize,
+    streak: u32,
+    seen: u32,
+    cooldown: u32,
 }
 
 pub struct DFlashDraftModel {
@@ -401,6 +459,7 @@ pub struct DFlashDraftModel {
     // cos/sin for positions 0..ROPE_TABLE_LEN, [len, head_dim/2]
     rope_table: (Tensor, Tensor),
     mask_cache: Mutex<HashMap<MaskKey, Tensor>>,
+    adaptive: Mutex<Option<AdaptiveState>>,
 }
 
 fn load_linear(
@@ -631,7 +690,125 @@ impl DFlashDraftModel {
             ctx_cache: Mutex::new(HashMap::new()),
             rope_table,
             mask_cache: Mutex::new(HashMap::new()),
+            adaptive: Mutex::new(None),
         })
+    }
+
+    fn adaptive_tiers(max_n: usize) -> Vec<usize> {
+        let mut tiers = vec![ADAPT_MIN_TIER, ADAPT_MID_TIER, max_n];
+        tiers.retain(|t| *t <= max_n);
+        tiers.dedup();
+        tiers
+    }
+
+    /// Enables acceptance-driven draft depth; drafting starts at `max_n` and settles per workload.
+    pub fn enable_adaptive(&self, max_n: usize) -> bool {
+        if Self::adaptive_tiers(max_n).len() < 2 {
+            return false;
+        }
+        *self.adaptive.lock().expect("dflash adaptive poisoned") = Some(AdaptiveState {
+            ema: 0.0,
+            current: max_n,
+            pending: max_n,
+            streak: 0,
+            seen: 0,
+            cooldown: 0,
+        });
+        true
+    }
+
+    /// The draft depth to use this step: the adaptive tier if enabled, else `max_n`.
+    pub fn current_n(&self, max_n: usize) -> usize {
+        self.adaptive
+            .lock()
+            .expect("dflash adaptive poisoned")
+            .as_ref()
+            .map_or(max_n, |s| s.current)
+    }
+
+    /// The draft depths the adaptive controller can pick, for graph precapture. Empty when fixed.
+    pub fn adaptive_depths(&self, max_n: usize) -> Vec<usize> {
+        if self
+            .adaptive
+            .lock()
+            .expect("dflash adaptive poisoned")
+            .is_none()
+        {
+            return Vec::new();
+        }
+        Self::adaptive_tiers(max_n)
+    }
+
+    /// Feeds this step's per-sequence accepted draft counts into the depth controller.
+    pub fn adaptive_observe(&self, accepted: &[usize], max_n: usize, batch: usize) {
+        let mut guard = self.adaptive.lock().expect("dflash adaptive poisoned");
+        let Some(state) = guard.as_mut() else {
+            return;
+        };
+        if batch > ADAPT_MAX_BATCH {
+            if state.current != max_n {
+                tracing::info!(
+                    "DFlash adaptive draft depth {} -> {max_n} (batch {batch})",
+                    state.current
+                );
+                state.current = max_n;
+                state.cooldown = ADAPT_COOLDOWN;
+            }
+            state.streak = 0;
+            return;
+        }
+        if accepted.is_empty() {
+            return;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let mean = accepted.iter().sum::<usize>() as f32 / accepted.len() as f32;
+        state.seen += 1;
+        state.ema = if state.seen == 1 {
+            mean
+        } else {
+            ADAPT_EMA_ALPHA * mean + (1.0 - ADAPT_EMA_ALPHA) * state.ema
+        };
+        if state.seen < ADAPT_WARMUP {
+            return;
+        }
+        if state.cooldown > 0 {
+            state.cooldown -= 1;
+            return;
+        }
+        let tiers = Self::adaptive_tiers(max_n);
+        let Some(idx) = tiers.iter().position(|t| *t == state.current) else {
+            return;
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let desired = if idx + 1 < tiers.len()
+            && state.ema >= state.current as f32 - ADAPT_UP_MARGIN
+        {
+            tiers[idx + 1]
+        } else if idx > 0 && state.ema < state.current as f32 * ADAPT_TIER_FRAC - ADAPT_HYSTERESIS {
+            tiers[idx - 1]
+        } else {
+            state.current
+        };
+        if desired == state.current {
+            state.streak = 0;
+            return;
+        }
+        if state.pending == desired {
+            state.streak += 1;
+        } else {
+            state.pending = desired;
+            state.streak = 1;
+        }
+        if state.streak >= ADAPT_STICKY {
+            tracing::info!(
+                "DFlash adaptive draft depth {} -> {desired} (accept EMA {:.2})",
+                state.current,
+                state.ema
+            );
+            state.current = desired;
+            state.streak = 0;
+            state.cooldown = ADAPT_COOLDOWN;
+        }
     }
 
     pub fn block_size(&self) -> usize {
@@ -708,49 +885,59 @@ impl DFlashDraftModel {
         x.transpose(1, 2)?.contiguous()
     }
 
-    /// Projects tap features and appends per-layer context keys/values for `taps` (`[1, rows,
-    /// taps*hidden]`) at absolute positions `start_pos..start_pos + rows`.
-    pub fn append_ctx(&self, seq_id: usize, taps: &Tensor, start_pos: usize) -> Result<()> {
-        let rows = taps.dim(1)?;
-        if rows == 0 {
+    /// Projects tap features and appends context keys/values for every entry at once: the fc and
+    /// per-layer k/v projections read their weights once over all sequences' rows packed together.
+    pub fn append_ctx_batch(&self, entries: &[CtxAppend]) -> Result<()> {
+        let rows = entries
+            .iter()
+            .map(|e| e.taps.dim(1))
+            .collect::<Result<Vec<_>>>()?;
+        let total: usize = rows.iter().sum();
+        if total == 0 {
             return Ok(());
         }
+        let packed = if entries.len() == 1 {
+            entries[0].taps.clone()
+        } else {
+            Tensor::cat(&entries.iter().map(|e| &e.taps).collect::<Vec<_>>(), 1)?
+        };
         let ctx_hidden = self
             .hidden_norm
-            .forward(&self.fc.forward(&taps.to_dtype(self.dtype)?)?)?;
-        let (cos, sin) = self.cos_sin(start_pos, rows)?;
+            .forward(&self.fc.forward(&packed.to_dtype(self.dtype)?)?)?;
+        let (cos, sin) = {
+            let mut coss = Vec::with_capacity(entries.len());
+            let mut sins = Vec::with_capacity(entries.len());
+            for (e, r) in entries.iter().zip(rows.iter()) {
+                if *r == 0 {
+                    continue;
+                }
+                let (c, s) = self.cos_sin(e.start_pos, *r)?;
+                coss.push(c);
+                sins.push(s);
+            }
+            (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?)
+        };
 
-        let mut cache = self.ctx_cache.lock().expect("dflash cache poisoned");
-        let entry = cache.entry(seq_id).or_insert_with(|| SeqCtxCache {
-            layers: Vec::new(),
-            start_pos,
-            next_pos: start_pos,
-        });
-        if entry.next_pos != start_pos {
-            candle_core::bail!(
-                "DFlash context append at position {start_pos} but cache expects {}",
-                entry.next_pos
-            );
-        }
-        for (i, layer) in self.layers.iter().enumerate() {
+        let mut ks = Vec::with_capacity(self.layers.len());
+        let mut vs = Vec::with_capacity(self.layers.len());
+        for layer in &self.layers {
             let k = Self::heads_first(&layer.k_norm.forward(
                 &layer.k_proj.forward(&ctx_hidden)?.reshape((
                     1,
-                    rows,
+                    total,
                     self.num_kv_heads,
                     self.head_dim,
                 ))?,
             )?)?;
             let k = self.rope(&k, &cos, &sin)?;
             let v = self.split_heads(&layer.v_proj.forward(&ctx_hidden)?, self.num_kv_heads)?;
-            if let Some((ck, cv)) = entry.layers.get_mut(i) {
-                *ck = Tensor::cat(&[&*ck, &k], 2)?;
-                *cv = Tensor::cat(&[&*cv, &v], 2)?;
-            } else {
-                entry.layers.push((k, v));
-            }
+            ks.push(k.squeeze(0)?);
+            vs.push(v.squeeze(0)?);
         }
-        entry.next_pos = start_pos + rows;
+        // [layers, kv_heads, total, head_dim]
+        let k_all = Tensor::stack(&ks, 0)?;
+        let v_all = Tensor::stack(&vs, 0)?;
+
         // Sliding layers never look further back than their window; trim by the widest window plus
         // a block so every layer keeps what it can see (full-attention layers keep everything).
         let keep = self
@@ -762,47 +949,147 @@ impl DFlashDraftModel {
             })
             .max()
             .unwrap_or(usize::MAX);
-        if keep != usize::MAX {
-            let len = entry.next_pos - entry.start_pos;
-            if len > keep {
-                let drop = len - keep;
-                for (k, v) in entry.layers.iter_mut() {
-                    *k = k.narrow(2, drop, keep)?;
-                    *v = v.narrow(2, drop, keep)?;
+
+        let mut cache = self.ctx_cache.lock().expect("dflash cache poisoned");
+        let mut offset = 0;
+        for (e, r) in entries.iter().zip(rows.iter()) {
+            if *r == 0 {
+                continue;
+            }
+            let k = k_all.narrow(2, offset, *r)?;
+            let v = v_all.narrow(2, offset, *r)?;
+            offset += r;
+            let entry = match cache.get_mut(&e.seq_id) {
+                Some(entry) => {
+                    if entry.next_pos != e.start_pos {
+                        candle_core::bail!(
+                            "DFlash context append at position {} but cache expects {}",
+                            e.start_pos,
+                            entry.next_pos
+                        );
+                    }
+                    entry.k = Tensor::cat(&[&entry.k, &k], 2)?;
+                    entry.v = Tensor::cat(&[&entry.v, &v], 2)?;
+                    entry.next_pos = e.start_pos + r;
+                    entry
                 }
-                entry.start_pos += drop;
+                None => {
+                    cache.insert(
+                        e.seq_id,
+                        SeqCtxCache {
+                            k: k.contiguous()?,
+                            v: v.contiguous()?,
+                            start_pos: e.start_pos,
+                            next_pos: e.start_pos + r,
+                        },
+                    );
+                    cache.get_mut(&e.seq_id).expect("just inserted")
+                }
+            };
+            if keep != usize::MAX {
+                let len = entry.next_pos - entry.start_pos;
+                if len > keep {
+                    let drop = len - keep;
+                    entry.k = entry.k.narrow(2, drop, keep)?.contiguous()?;
+                    entry.v = entry.v.narrow(2, drop, keep)?.contiguous()?;
+                    entry.start_pos += drop;
+                }
             }
         }
         Ok(())
     }
 
-    /// One block draft: noise `[anchor, mask * n_drafts]` at absolute positions `start_pos..`,
-    /// attending to the accumulated context. Returns the drafted tokens and the full draft logits
-    /// (`[n_drafts, vocab]`) for stochastic verification.
-    pub fn draft(
+    /// One block draft for every sequence at once: noise `[anchor, mask * n_drafts]` rows at each
+    /// sequence's `start_positions[i]..`, attending to that sequence's accumulated context left-
+    /// padded to the batch maximum (pad columns are masked out). Every weight is read once for the
+    /// whole batch. Returns the normed hidden states `[batch, n_drafts, hidden]`.
+    pub fn draft_hidden_batch(
         &self,
-        seq_id: usize,
+        seq_ids: &[usize],
         noise_embedding: &Tensor,
-        start_pos: usize,
-        lm_head: &Arc<dyn QuantMethod>,
-        greedy: bool,
-        anchor_id: u32,
-    ) -> Result<(Vec<u32>, Tensor)> {
-        let block = noise_embedding.dim(1)?;
+        start_positions: &[usize],
+    ) -> Result<Tensor> {
+        let (b, block, _) = noise_embedding.dims3()?;
         let cache = self.ctx_cache.lock().expect("dflash cache poisoned");
-        let entry = cache.get(&seq_id).ok_or_else(|| {
-            candle_core::Error::msg("DFlash draft requested for a sequence with no context cache")
-        })?;
-        if entry.next_pos != start_pos {
-            candle_core::bail!(
-                "DFlash draft at position {start_pos} but context ends at {}",
-                entry.next_pos
-            );
+        let mut lens = Vec::with_capacity(b);
+        for (seq_id, start_pos) in seq_ids.iter().zip(start_positions.iter()) {
+            let entry = cache.get(seq_id).ok_or_else(|| {
+                candle_core::Error::msg(
+                    "DFlash draft requested for a sequence with no context cache",
+                )
+            })?;
+            if entry.next_pos != *start_pos {
+                candle_core::bail!(
+                    "DFlash draft at position {start_pos} but context ends at {}",
+                    entry.next_pos
+                );
+            }
+            lens.push(entry.next_pos - entry.start_pos);
         }
-        let ctx_start = entry.start_pos;
-        let ctx_len = entry.next_pos - entry.start_pos;
+        let max_ctx = *lens.iter().max().expect("non-empty batch");
+        let mut padded_k = Vec::with_capacity(b);
+        let mut padded_v = Vec::with_capacity(b);
+        for (seq_id, len) in seq_ids.iter().zip(lens.iter()) {
+            let entry = cache.get(seq_id).expect("validated above");
+            if *len == max_ctx {
+                padded_k.push(entry.k.clone());
+                padded_v.push(entry.v.clone());
+            } else {
+                let pad = Tensor::zeros(
+                    (
+                        self.layers.len(),
+                        self.num_kv_heads,
+                        max_ctx - len,
+                        self.head_dim,
+                    ),
+                    self.dtype,
+                    &self.device,
+                )?;
+                padded_k.push(Tensor::cat(&[&pad, &entry.k], 2)?);
+                padded_v.push(Tensor::cat(&[&pad, &entry.v], 2)?);
+            }
+        }
+        drop(cache);
+        // [layers, batch, kv_heads, max_ctx, head_dim]
+        let ctx_k = Tensor::stack(&padded_k, 1)?;
+        let ctx_v = Tensor::stack(&padded_v, 1)?;
 
-        let (q_cos, q_sin) = self.cos_sin(start_pos, block)?;
+        // One mask per attention kind, shared by every layer of that kind
+        let mut kind_masks: HashMap<(bool, Option<usize>), Tensor> = HashMap::new();
+        for layer in &self.layers {
+            let kind = (layer.is_causal, layer.sliding_window);
+            if kind_masks.contains_key(&kind) {
+                continue;
+            }
+            let mut rows = Vec::with_capacity(b);
+            for len in &lens {
+                let geometry = self.geometry_mask(kind.0, kind.1, *len, block)?;
+                if *len == max_ctx {
+                    rows.push(geometry);
+                } else {
+                    let pad = Tensor::full(
+                        f32::NEG_INFINITY,
+                        (1, 1, block, max_ctx - len),
+                        &self.device,
+                    )?
+                    .to_dtype(self.dtype)?;
+                    rows.push(Tensor::cat(&[pad, geometry], 3)?);
+                }
+            }
+            kind_masks.insert(kind, Tensor::cat(&rows, 0)?);
+        }
+
+        let (q_cos, q_sin) = {
+            let mut coss = Vec::with_capacity(b);
+            let mut sins = Vec::with_capacity(b);
+            for start_pos in start_positions {
+                let (c, s) = self.cos_sin(*start_pos, block)?;
+                coss.push(c);
+                sins.push(s);
+            }
+            // [batch, block, head_dim/2]
+            (Tensor::stack(&coss, 0)?, Tensor::stack(&sins, 0)?)
+        };
         #[allow(clippy::cast_precision_loss)]
         let scale = 1f64 / (self.head_dim as f64).sqrt();
         let groups = self.num_heads / self.num_kv_heads;
@@ -821,37 +1108,37 @@ impl DFlashDraftModel {
             };
             let q = Self::heads_first(
                 &layer.q_norm.forward(&layer.q_proj.forward(&x)?.reshape((
-                    1,
+                    b,
                     block,
                     self.num_heads,
                     self.head_dim,
                 ))?)?,
             )?;
-            let q = self.rope(&q, &q_cos, &q_sin)?;
             let k_noise = Self::heads_first(
                 &layer.k_norm.forward(&layer.k_proj.forward(&x)?.reshape((
-                    1,
+                    b,
                     block,
                     self.num_kv_heads,
                     self.head_dim,
                 ))?)?,
             )?;
-            let k_noise = self.rope(&k_noise, &q_cos, &q_sin)?;
+            // candle's fused rope kernel takes the batched [b, block, d/2] tables directly
+            let q = candle_nn::rotary_emb::rope(&q, &q_cos, &q_sin)?;
+            let k_noise = candle_nn::rotary_emb::rope(&k_noise, &q_cos, &q_sin)?;
             let v_noise = self.split_heads(&layer.v_proj.forward(&x)?, self.num_kv_heads)?;
-            let (ctx_k, ctx_v) = &entry.layers[i];
-            let k = Tensor::cat(&[ctx_k, &k_noise], 2)?;
-            let v = Tensor::cat(&[ctx_v, &v_noise], 2)?;
-            let mask = self.attention_mask(layer, start_pos, block, ctx_start, ctx_len)?;
+            let k = Tensor::cat(&[ctx_k.narrow(0, i, 1)?.squeeze(0)?, k_noise], 2)?;
+            let v = Tensor::cat(&[ctx_v.narrow(0, i, 1)?.squeeze(0)?, v_noise], 2)?;
+            let mask = &kind_masks[&(layer.is_causal, layer.sliding_window)];
             // GQA via repeat: tiny shapes, plain matmul attention
             let k = repeat_kv(&k, groups)?;
             let v = repeat_kv(&v, groups)?;
             let att = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            let att = att.broadcast_add(&mask)?;
+            let att = att.broadcast_add(mask)?;
             let att = candle_nn::ops::softmax_last_dim(&att)?;
             let out = att.matmul(&v)?;
             let out = out
                 .transpose(1, 2)?
-                .reshape((1, block, self.num_heads * self.head_dim))?;
+                .reshape((b, block, self.num_heads * self.head_dim))?;
             let mut out = layer.o_proj.forward(&out)?;
             if let (Some(conv), Some(kernel)) = (&layer.attention_conv, attn_kernel) {
                 out = conv.finish(&out, &kernel)?;
@@ -880,38 +1167,48 @@ impl DFlashDraftModel {
             }
             hs = (residual + out)?;
         }
-        drop(cache);
 
         let hs = self.norm.forward(&hs)?;
         // Positions 1.. predict the drafts; position 0 carries the anchor
-        let draft_hidden = hs.narrow(1, 1, block - 1)?;
-        let mut logits = lm_head.forward(&draft_hidden)?.squeeze(0)?;
+        hs.narrow(1, 1, block - 1)
+    }
+
+    /// One lm_head projection and one D2H finish every sequence's drafts: `hidden` is the
+    /// `[batch, n, hidden]` output of `draft_hidden_batch`. Returns per-seq
+    /// (tokens, logits `[n, vocab]`).
+    pub fn finish_drafts(
+        &self,
+        hidden: &Tensor,
+        anchors: &[u32],
+        lm_head: &Arc<dyn QuantMethod>,
+        greedy: bool,
+    ) -> Result<Vec<(Vec<u32>, Tensor)>> {
+        let mut logits = lm_head.forward(hidden)?; // [batch, n, vocab]
         if (self.output_multiplier - 1.0).abs() > f64::EPSILON {
             logits = (logits * self.output_multiplier)?;
         }
-
         let use_selector = std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
-        let tokens = match (&self.selector, greedy && use_selector) {
-            (Some(selector), true) => {
-                selector.select_greedy(&draft_hidden.squeeze(0)?, &logits, anchor_id)?
-            }
-            _ => logits.argmax(D::Minus1)?.to_vec1::<u32>()?,
+        let tokens_per_seq = match (&self.selector, greedy && use_selector) {
+            (Some(selector), true) => selector.select_greedy_batch(hidden, &logits, anchors)?,
+            _ => logits.argmax(D::Minus1)?.to_vec2::<u32>()?,
         };
-        Ok((tokens, logits))
+        tokens_per_seq
+            .into_iter()
+            .enumerate()
+            .map(|(i, tokens)| Ok((tokens, logits.i(i)?)))
+            .collect()
     }
 
-    fn attention_mask(
+    fn geometry_mask(
         &self,
-        layer: &DFlashLayer,
-        start_pos: usize,
-        block: usize,
-        ctx_start: usize,
+        is_causal: bool,
+        sliding_window: Option<usize>,
         ctx_len: usize,
+        block: usize,
     ) -> Result<Tensor> {
         // Visibility depends only on relative geometry (the context always ends right before the
         // block), so one cached mask per (layer kind, ctx_len, block) covers every step.
-        debug_assert_eq!(ctx_start + ctx_len, start_pos);
-        let key = (layer.is_causal, layer.sliding_window, ctx_len, block);
+        let key = (is_causal, sliding_window, ctx_len, block);
         if let Some(mask) = self
             .mask_cache
             .lock()
@@ -931,12 +1228,12 @@ impl DFlashDraftModel {
                     ctx_len + (kj - ctx_len)
                 };
                 let mut visible = true;
-                if layer.is_causal {
+                if is_causal {
                     visible &= kp <= qp;
                 }
-                if let Some(w) = layer.sliding_window {
+                if let Some(w) = sliding_window {
                     visible &= qp.saturating_sub(kp) < w;
-                    if !layer.is_causal {
+                    if !is_causal {
                         visible &= kp.saturating_sub(qp) < w;
                     }
                 }
