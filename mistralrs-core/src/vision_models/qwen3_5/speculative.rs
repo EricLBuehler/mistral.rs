@@ -16,10 +16,11 @@ use crate::{
     layers_masker::CausalMaskConfig,
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
-        paged_rows::make_paged_rows_metadata, proposer::sample_draft_rows, SpeculativeAttachInfo,
-        SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphState, SpeculativeKvCache,
-        SpeculativePrefillCtx, SpeculativeProposal, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeTargetMixin, TargetAttentionInputs,
+        dflash::DFlashDraftModel, paged_rows::make_paged_rows_metadata,
+        proposer::sample_draft_rows, SpeculativeAttachInfo, SpeculativeCommitRow,
+        SpeculativeConfig, SpeculativeGraphState, SpeculativeKvCache, SpeculativePrefillCtx,
+        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+        SpeculativeTargetMixin, TargetAttentionInputs,
     },
 };
 
@@ -35,6 +36,9 @@ pub const DEFAULT_MTP_N_PREDICT: usize = 2;
 // Qwen3.8-27B: n=3 beats n=2 by ~5% while n=4 over-drafts (acceptance falls under 50%).
 pub const DEFAULT_MTP_N_PREDICT_LARGE: usize = 3;
 const MTP_LARGE_HIDDEN_SIZE: usize = 4096;
+// Verify cost grows with block width and quantized targets accept shorter blocks anyway; deeper
+// drafting stays available via --mtp-n-predict.
+const DFLASH_DEFAULT_MAX_DRAFTS: usize = 7;
 const MROPE_DIMS: usize = 3;
 // Feeds prompt rows whose next token is not known yet; their KV is rewritten before it is ever attended to
 const PLACEHOLDER_TOKEN: u32 = 0;
@@ -172,6 +176,168 @@ impl Qwen3_5Model {
         let head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
         // [1, rows, hidden] -> [rows, vocab]
         head.forward(normed_hidden)?.squeeze(0)
+    }
+
+    fn attach_dflash(
+        &mut self,
+        config: crate::speculative::MtpConfig,
+    ) -> Result<Option<SpeculativeAttachInfo>> {
+        let drafter = DFlashDraftModel::load(
+            &config,
+            self.text.layer_types.len(),
+            self.text.cfg.hidden_size,
+            &self.text.device,
+            self.text.dtype,
+            false,
+        )?;
+        let block = drafter.block_size();
+        let n_predict = match config.n_predict {
+            Some(n) if n + 1 > block => {
+                candle_core::bail!(
+                    "requested {n} draft tokens but this DFlash drafter's block size is {block} (max {} drafts)",
+                    block - 1
+                );
+            }
+            Some(0) => candle_core::bail!("MTP n_predict must be at least 1."),
+            Some(n) => n,
+            None => (block - 1).min(DFLASH_DEFAULT_MAX_DRAFTS),
+        };
+        self.text
+            .set_dflash_tap_layers(drafter.target_layer_ids.clone());
+        self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
+        self.text.set_store_spec_hidden(true);
+        if let Some(ty) = config.draft_lm_head_isq {
+            let head = self.text.lm_head().clone().apply_isq(
+                Some(ty),
+                self.text.device.clone(),
+                &std::sync::atomic::AtomicUsize::new(0),
+                None,
+                mistralrs_quant::QuantizeOntoGuard::new(),
+            )?;
+            *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
+        }
+        let kind = if drafter.has_selector() {
+            "DFlash2"
+        } else {
+            "DFlash"
+        };
+        let name = format!(
+            "{kind} `{}` (block {block}, taps {:?})",
+            config.model.as_deref().unwrap_or("dflash"),
+            drafter.target_layer_ids
+        );
+        *self.dflash.lock().expect("dflash poisoned") = Some(std::sync::Arc::new(drafter));
+        Ok(Some(SpeculativeAttachInfo::mtp(name, n_predict)))
+    }
+
+    fn dflash_noise_embedding(
+        &self,
+        drafter: &DFlashDraftModel,
+        anchor: u32,
+        n: usize,
+    ) -> Result<Tensor> {
+        let mut ids = vec![anchor];
+        ids.extend(std::iter::repeat_n(drafter.mask_token_id(), n));
+        let len = ids.len();
+        let ids = Tensor::from_vec(ids, (1, len), &self.text.device)?;
+        let mut emb = self.text.embed_tokens(&ids)?;
+        let scale = drafter.input_embedding_scale();
+        if (scale - 1.0).abs() > f64::EPSILON {
+            emb = (emb * scale)?;
+        }
+        Ok(emb)
+    }
+
+    fn dflash_propose(
+        &self,
+        ctx: SpeculativeProposeBatchCtx<'_>,
+    ) -> Result<Option<SpeculativeProposalBatch>> {
+        let drafter = self
+            .dflash
+            .lock()
+            .expect("dflash poisoned")
+            .clone()
+            .ok_or_else(|| candle_core::Error::msg("DFlash propose without a drafter"))?;
+        let n_predict = self.mtp_n_predict();
+        let batch = ctx.seq_ids.len();
+        if batch == 0 || n_predict == 0 {
+            return Ok(None);
+        }
+        let Some(capture) = self.text.last_spec_capture() else {
+            return Ok(None);
+        };
+        if capture.taps.len() != drafter.target_layer_ids.len() {
+            return Ok(None);
+        }
+        drafter.retain_seqs(ctx.seq_ids);
+
+        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
+        let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
+
+        let mut proposals = Vec::with_capacity(batch);
+        for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
+            let (batch_idx, count) = ctx.target_rows[i];
+            let base_len = ctx.base_lens[i];
+            let ctx_next = drafter.ctx_next_pos(*seq_id);
+            let needed = match ctx_next {
+                Some(next) if next <= base_len => base_len - next,
+                // Unknown or ahead (sequence restarted): resync from what this forward provides
+                _ => count.min(base_len),
+            };
+            if needed > 0 {
+                if needed > count || capture.taps[0].dim(1)? < count {
+                    // Rows this forward can't cover (e.g. a prefix-cache hit skipped taps): skip
+                    // proposing this round; the next verify refreshes everything.
+                    return Ok(None);
+                }
+                let start_row = count - needed;
+                let taps = capture
+                    .taps
+                    .iter()
+                    .map(|t| t.narrow(0, batch_idx, 1)?.narrow(1, start_row, needed))
+                    .collect::<Result<Vec<_>>>()?;
+                let taps = Tensor::cat(&taps, candle_core::D::Minus1)?;
+                drafter.append_ctx(*seq_id, &taps, base_len - needed)?;
+            }
+            let anchor = ctx.sampled_tokens[i];
+            let noise = self.dflash_noise_embedding(&drafter, anchor, n_predict)?;
+            let greedy = ctx.sequences[i].sampler().is_argmax();
+            let (tokens, logits) =
+                drafter.draft(*seq_id, &noise, base_len, lm_head, greedy, anchor)?;
+            proposals.push(SpeculativeProposal::with_logits(tokens, logits));
+        }
+        Ok(Some(SpeculativeProposalBatch::new(proposals)))
+    }
+
+    fn dflash_prefill(&self, ctx: SpeculativePrefillCtx<'_>) -> Result<()> {
+        let drafter = self
+            .dflash
+            .lock()
+            .expect("dflash poisoned")
+            .clone()
+            .ok_or_else(|| candle_core::Error::msg("DFlash prefill without a drafter"))?;
+        let Some(capture) = self.text.last_full_capture() else {
+            return Ok(());
+        };
+        if capture.taps.len() != drafter.target_layer_ids.len() {
+            return Ok(());
+        }
+        for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
+            let batch_idx = ctx.batch_indices[i];
+            let (start, end) = ctx.chunk_ranges[i];
+            if end <= start || capture.taps[0].dim(1)? < end - start {
+                continue;
+            }
+            let rows = end - start;
+            let taps = capture
+                .taps
+                .iter()
+                .map(|t| t.narrow(0, batch_idx, 1)?.narrow(1, 0, rows))
+                .collect::<Result<Vec<_>>>()?;
+            let taps = Tensor::cat(&taps, candle_core::D::Minus1)?;
+            drafter.append_ctx(*seq_id, &taps, start)?;
+        }
+        Ok(())
     }
 
     fn mtp_propose(
@@ -450,12 +616,12 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         let SpeculativeConfig::Mtp(config) = config else {
             self.mtp_n_predict.store(0, Ordering::Relaxed);
             self.text.set_store_spec_hidden(false);
+            self.text.set_dflash_tap_layers(Vec::new());
+            *self.dflash.lock().expect("dflash poisoned") = None;
             return Ok(None);
         };
         if !config.is_builtin() {
-            candle_core::bail!(
-                "Qwen3.5 uses the MTP head built into its checkpoint; pass `--mtp` instead of `--mtp-model`."
-            );
+            return self.attach_dflash(config);
         }
         if self.text.mtp.is_none() {
             candle_core::bail!(
@@ -506,6 +672,9 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         &mut self,
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>> {
+        if self.dflash.lock().expect("dflash poisoned").is_some() {
+            return self.dflash_propose(ctx);
+        }
         self.mtp_propose(ctx)
     }
 
@@ -524,6 +693,9 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
     fn speculative_prefill(&mut self, ctx: SpeculativePrefillCtx<'_>) -> Result<()> {
         if self.mtp_n_predict() == 0 {
             return Ok(());
+        }
+        if self.dflash.lock().expect("dflash poisoned").is_some() {
+            return self.dflash_prefill(ctx);
         }
         self.mtp_prefill(ctx)
     }

@@ -431,6 +431,8 @@ enum TextWeightPrefix {
 pub(super) struct SpecCapture {
     pub(super) hidden: Tensor,
     pub(super) positions: Tensor,
+    // Hidden states after each DFlash tap layer, row-aligned with `hidden`; empty unless attached
+    pub(super) taps: Vec<Tensor>,
 }
 
 /// Per-GDN-layer inputs and pre-forward states of the last multi-token decode, so a rejected tail
@@ -466,6 +468,7 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
         {
             out.push(capture.hidden.clone());
             out.push(capture.positions.clone());
+            out.extend(capture.taps.iter().cloned());
         }
         if let Some(stash) = &self.gdn_stash {
             for layer in &stash.layers {
@@ -496,6 +499,9 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
         {
             capture.hidden = next()?;
             capture.positions = next()?;
+            for tap in capture.taps.iter_mut() {
+                *tap = next()?;
+            }
         }
         if let Some(stash) = state.gdn_stash.as_mut() {
             for layer in stash.layers.iter_mut() {
@@ -534,6 +540,8 @@ pub struct Qwen3_5TextModel {
     // Every row of the last forward, so a proposer can catch up over a prompt chunk
     last_full_capture: Mutex<Option<SpecCapture>>,
     gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
+    // Target layers whose outputs a DFlash drafter consumes; empty when none is attached
+    dflash_tap_layers: Mutex<Vec<usize>>,
 }
 
 impl Qwen3_5TextModel {
@@ -777,6 +785,7 @@ impl Qwen3_5TextModel {
             last_spec_capture: Mutex::new(None),
             last_full_capture: Mutex::new(None),
             gdn_replay_stash: Mutex::new(None),
+            dflash_tap_layers: Mutex::new(Vec::new()),
         })
     }
 
@@ -835,6 +844,10 @@ impl Qwen3_5TextModel {
 
     pub(super) fn clear_gdn_replay_stash(&self) {
         *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+    }
+
+    pub(super) fn set_dflash_tap_layers(&self, layers: Vec<usize>) {
+        *self.dflash_tap_layers.lock().expect("dflash taps poisoned") = layers;
     }
 
     pub(super) fn take_spec_graph_state(&self) -> Option<SpecGraphState> {
@@ -974,6 +987,14 @@ impl Qwen3_5TextModel {
             layers: Vec::new(),
         });
 
+        let tap_layers = self
+            .dflash_tap_layers
+            .lock()
+            .expect("dflash taps poisoned")
+            .clone();
+        let capture_taps = self.store_spec_hidden.load(Ordering::Relaxed) && !tap_layers.is_empty();
+        let mut taps_all: Vec<Tensor> = Vec::with_capacity(tap_layers.len());
+
         // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
         let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
             let mask_flat: Vec<f32> = visual_pos_masks
@@ -1090,6 +1111,9 @@ impl Qwen3_5TextModel {
                     xs = self.deepstack_process(xs, idx, idx_expanded, &deepstack[i])?;
                 }
             }
+            if capture_taps && tap_layers.contains(&i) {
+                taps_all.push(xs.to_device(&self.device)?);
+            }
         }
         if self.store_spec_hidden.load(Ordering::Relaxed) {
             *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
@@ -1104,6 +1128,7 @@ impl Qwen3_5TextModel {
                 .expect("spec capture poisoned") = Some(SpecCapture {
                 hidden: xs.clone(),
                 positions: position_ids.to_device(&self.device)?,
+                taps: taps_all.clone(),
             });
         }
         let xs = ctx.logits(&xs)?;
@@ -1114,12 +1139,17 @@ impl Qwen3_5TextModel {
                 .permute((1, 2, 0))?
                 .contiguous()?;
             let positions = ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?;
+            let taps = taps_all
+                .iter()
+                .map(|t| ctx.logits(t))
+                .collect::<Result<Vec<_>>>()?;
             *self
                 .last_spec_capture
                 .lock()
                 .expect("spec capture poisoned") = Some(SpecCapture {
                 hidden: xs.clone(),
                 positions,
+                taps,
             });
         }
         self.lm_head.forward(&xs)
