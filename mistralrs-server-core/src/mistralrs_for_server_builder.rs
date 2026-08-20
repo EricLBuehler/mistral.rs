@@ -759,7 +759,9 @@ impl MistralRsForServerBuilder {
             pipeline
                 .lock()
                 .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
+                    mtp_config.with_draft_lm_head_isq(isq),
+                ))?;
         }
 
         let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
@@ -917,7 +919,9 @@ impl MistralRsForServerBuilder {
             pipeline
                 .lock()
                 .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
+                    mtp_config.with_draft_lm_head_isq(isq),
+                ))?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model

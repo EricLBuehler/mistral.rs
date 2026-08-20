@@ -23,7 +23,10 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout},
+    gdn::{
+        GatedDeltaNet, GdnConfig, GdnForwardStash, GdnInputProjectionKind, GdnLayerCache,
+        GdnVHeadLayout,
+    },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
@@ -386,12 +389,13 @@ impl DecoderLayer {
         ffn_out + residual
     }
 
-    fn forward_linear(
+    fn forward_linear_with_stash(
         &self,
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
         packed_query_lens: Option<&[usize]>,
+        stash_out: Option<&mut Option<GdnForwardStash>>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -402,7 +406,7 @@ impl DecoderLayer {
         let gdn_out = if let Some(query_lens) = packed_query_lens {
             forward_packed_gdn(gdn, &x, cache, batch_kind, query_lens)?
         } else {
-            gdn.forward(&x, cache, batch_kind)?
+            gdn.forward_with_stash(&x, cache, batch_kind, stash_out)?
         };
         let x = (gdn_out + residual)?;
         let residual = &x;
@@ -440,7 +444,7 @@ pub(super) struct GdnReplayStash {
 #[derive(Clone)]
 pub(super) struct GdnLayerStash {
     pub(super) layer_idx: usize,
-    pub(super) input: Tensor,
+    pub(super) projected: GdnForwardStash,
     pub(super) conv_state: Tensor,
     pub(super) recurrent_state: Tensor,
 }
@@ -465,7 +469,9 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
         }
         if let Some(stash) = &self.gdn_stash {
             for layer in &stash.layers {
-                out.push(layer.input.clone());
+                out.push(layer.projected.mixed_qkv.clone());
+                out.push(layer.projected.b.clone());
+                out.push(layer.projected.a.clone());
                 out.push(layer.conv_state.clone());
                 out.push(layer.recurrent_state.clone());
             }
@@ -493,7 +499,9 @@ impl crate::speculative::SpeculativeGraphState for SpecGraphState {
         }
         if let Some(stash) = state.gdn_stash.as_mut() {
             for layer in stash.layers.iter_mut() {
-                layer.input = next()?;
+                layer.projected.mixed_qkv = next()?;
+                layer.projected.b = next()?;
+                layer.projected.a = next()?;
                 layer.conv_state = next()?;
                 layer.recurrent_state = next()?;
             }
@@ -813,13 +821,7 @@ impl Qwen3_5TextModel {
                     .contiguous()?,
                 slots: None,
             };
-            let x = layer
-                .input
-                .narrow(0, batch_idx, 1)?
-                .narrow(1, 0, keep_rows)?
-                .contiguous()?;
-            let x = self.layers[layer.layer_idx].input_layernorm.forward(&x)?;
-            gdn.advance_state(&x, &mut cache)?;
+            gdn.advance_state_from_stash(&layer.projected, batch_idx, keep_rows, &mut cache)?;
             snapshots.push(crate::kv_cache::RecurrentStateSnapshot {
                 conv_state: cache.conv_state,
                 recurrent_state: cache.recurrent_state,
@@ -1024,15 +1026,16 @@ impl Qwen3_5TextModel {
                         ))
                     })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        if let Some(stash) = gdn_stash.as_mut() {
-                            // Gathers are fresh copies, untouched by the in-place state kernels
-                            stash.layers.push(GdnLayerStash {
-                                layer_idx: i,
-                                input: xs.clone(),
-                                conv_state: pool.gather_conv_state(&indices)?,
-                                recurrent_state: pool.gather_recurrent_state(&indices)?,
-                            });
-                        }
+                        // Gathers are fresh copies, untouched by the in-place state kernels
+                        let stash_states = gdn_stash
+                            .as_ref()
+                            .map(|_| {
+                                candle_core::Result::Ok((
+                                    pool.gather_conv_state(&indices)?,
+                                    pool.gather_recurrent_state(&indices)?,
+                                ))
+                            })
+                            .transpose()?;
 
                         // Packed prefill slices the gathered rows per logical sequence
                         let mut gdn_cache = if packed_query_lens.is_some() {
@@ -1044,12 +1047,27 @@ impl Qwen3_5TextModel {
                             GdnLayerCache::checkout(pool, &indices)?
                         };
 
-                        xs = layer.forward_linear(
+                        let mut projected_stash = None;
+                        xs = layer.forward_linear_with_stash(
                             &xs,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
                             packed_query_lens.as_deref(),
+                            stash_states.is_some().then_some(&mut projected_stash),
                         )?;
+                        if let (Some(stash), Some((conv_state, recurrent_state))) =
+                            (gdn_stash.as_mut(), stash_states)
+                        {
+                            let projected = projected_stash.ok_or_else(|| {
+                                candle_core::Error::msg("GDN forward returned no stash")
+                            })?;
+                            stash.layers.push(GdnLayerStash {
+                                layer_idx: i,
+                                projected,
+                                conv_state,
+                                recurrent_state,
+                            });
+                        }
 
                         gdn_cache.commit(
                             pool,

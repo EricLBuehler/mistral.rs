@@ -6932,6 +6932,10 @@ impl IsqModelLoader for Qwen3_5Loader {
             Regex::new(
                 r"^(language_model\.model|model\.language_model)\.layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$",
             )?,
+            // Built-in MTP head: quantize its projections with the rest of the model
+            Regex::new(r"^mtp\.fc\.weight$")?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.self_attn\.(q|k|v|o)_proj\.(weight|bias)$")?,
+            Regex::new(r"^mtp\.layers\.(\d+)\.mlp\.(gate|up|down)_proj\.(weight|bias)$")?,
         ])
     }
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {

@@ -10,6 +10,61 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sampler::Logprobs;
 use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 
+/// One batched argmax + a single D2H for every verify row of a greedy sequence, replacing a
+/// host sampler round trip per draft. None when anything could make the sampler diverge from argmax.
+#[cfg(feature = "cuda")]
+fn greedy_device_verify_tokens(
+    seq: &Sequence,
+    verify_logits: &Tensor,
+    return_logprobs: bool,
+) -> Result<Option<Vec<u32>>> {
+    if !verify_logits.device().is_cuda()
+        || return_logprobs
+        || !matches!(seq.recognizer, SequenceRecognizer::None)
+        || seq.tool_call_state.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(plan) = seq.sampler().cuda_batch_sampling_plan(false) else {
+        return Ok(None);
+    };
+    if !plan.kind.is_argmax() {
+        return Ok(None);
+    }
+    let logits = match *verify_logits.dims() {
+        [1, rows, vocab] => verify_logits.reshape((rows, vocab))?,
+        [_, _] => verify_logits.clone(),
+        _ => return Ok(None),
+    };
+    let logits = logits.to_dtype(DType::F32)?.contiguous()?;
+    let packed = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?
+        .packed
+        .to_vec2::<f32>()?;
+    let mut tokens = Vec::with_capacity(packed.len());
+    for row in packed {
+        if row.len() != crate::ops::CUDA_TOP1_PACKED_WIDTH
+            || !row[1].is_finite()
+            || row[1] < 0.0
+            || row[1].fract() != 0.0
+        {
+            candle_core::bail!("invalid batched CUDA top-1 verify output");
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        tokens.push(row[1] as u32);
+    }
+    Ok(Some(tokens))
+}
+
+#[cfg(feature = "cuda")]
+fn device_token_logprobs(token: u32) -> Logprobs {
+    Logprobs {
+        token,
+        logprob: 0.0,
+        top_logprobs: None,
+        bytes: None,
+    }
+}
+
 pub struct VerificationOutcome {
     pub accepted_drafts: usize,
     pub proposed_drafts: usize,
@@ -70,22 +125,33 @@ pub async fn finish_verified_step<P: Pipeline>(
         }
     }
 
+    #[cfg(feature = "cuda")]
+    let device_tokens = greedy_device_verify_tokens(seq, &verify_logits, return_logprobs)?;
+    #[cfg(not(feature = "cuda"))]
+    let device_tokens: Option<Vec<u32>> = None;
+
     let mut accepted = 0usize;
     for (idx, draft) in proposal.iter().copied().enumerate() {
-        let row = logit_row(&verify_logits, idx)?;
-        let sampled = sample_sequence(
-            row.clone(),
-            seq,
-            return_logprobs,
-            eos_tok,
-            general_metadata.llg_factory.clone(),
-            general_metadata.max_seq_len,
-            rng.clone(),
-            false,
-            false,
-            false,
-        )
-        .await?;
+        let sampled = match &device_tokens {
+            #[cfg(feature = "cuda")]
+            Some(tokens) => device_token_logprobs(tokens[idx]),
+            _ => {
+                let row = logit_row(&verify_logits, idx)?;
+                sample_sequence(
+                    row.clone(),
+                    seq,
+                    return_logprobs,
+                    eos_tok,
+                    general_metadata.llg_factory.clone(),
+                    general_metadata.max_seq_len,
+                    rng.clone(),
+                    false,
+                    false,
+                    false,
+                )
+                .await?
+            }
+        };
         let sampled_token = sampled.token;
         if sampled_token == draft {
             accepted += 1;
@@ -121,20 +187,26 @@ pub async fn finish_verified_step<P: Pipeline>(
         }
     }
 
-    let row = logit_row(&verify_logits, accepted)?;
-    let continuation = sample_sequence(
-        row.clone(),
-        seq,
-        return_logprobs,
-        eos_tok,
-        general_metadata.llg_factory.clone(),
-        general_metadata.max_seq_len,
-        rng.clone(),
-        false,
-        false,
-        false,
-    )
-    .await?;
+    let continuation = match &device_tokens {
+        #[cfg(feature = "cuda")]
+        Some(tokens) => device_token_logprobs(tokens[accepted]),
+        _ => {
+            let row = logit_row(&verify_logits, accepted)?;
+            sample_sequence(
+                row.clone(),
+                seq,
+                return_logprobs,
+                eos_tok,
+                general_metadata.llg_factory.clone(),
+                general_metadata.max_seq_len,
+                rng.clone(),
+                false,
+                false,
+                false,
+            )
+            .await?
+        }
+    };
     let continuation_token = continuation.token;
     finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, true).await?;
 

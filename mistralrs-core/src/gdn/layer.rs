@@ -12,6 +12,15 @@ use super::norm::RmsNormGated;
 use super::projection::{GdnInputProjection, GdnProjection};
 use super::weights::{GdnInputProjectionKind, GdnWeightLoadCtx, GdnWeights};
 
+/// Pre-convolution projected inputs of one forward, kept so a speculative rollback can re-advance
+/// the recurrent state over an accepted prefix without re-reading any projection weights.
+#[derive(Clone)]
+pub struct GdnForwardStash {
+    pub mixed_qkv: Tensor,
+    pub b: Tensor,
+    pub a: Tensor,
+}
+
 pub struct GatedDeltaNet {
     pub input_proj: GdnInputProjection,
     pub conv1d_weight: Tensor,
@@ -69,11 +78,28 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
     ) -> Result<Tensor> {
+        self.forward_with_stash(x, cache, batch_kind, None)
+    }
+
+    pub fn forward_with_stash(
+        &self,
+        x: &Tensor,
+        cache: &mut GdnLayerCache,
+        batch_kind: RecurrentBatchKind,
+        stash_out: Option<&mut Option<GdnForwardStash>>,
+    ) -> Result<Tensor> {
         let (batch_size, seq_len, _) = x.dims3()?;
         let dtype = x.dtype();
 
         let projected = self.project(x, batch_size, seq_len)?;
         let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+        if let Some(stash_out) = stash_out {
+            *stash_out = Some(GdnForwardStash {
+                mixed_qkv: mixed_qkv.clone(),
+                b: projected.b.clone(),
+                a: projected.a.clone(),
+            });
+        }
         let mixed_qkv = backend::causal_conv1d(
             &mixed_qkv,
             &self.conv1d_weight,
@@ -97,12 +123,23 @@ impl GatedDeltaNet {
         self.finish_forward(y, projected.z, batch_size, seq_len, dtype)
     }
 
-    /// Advance `cache` over `x` without producing an output; used to replay an accepted prefix
-    /// after speculative verification rejected the tail of a multi-token step.
-    pub fn advance_state(&self, x: &Tensor, cache: &mut GdnLayerCache) -> Result<()> {
-        let (batch_size, seq_len, _) = x.dims3()?;
-        let projected = self.project(x, batch_size, seq_len)?;
-        let mixed_qkv = projected.conv_input(&self.dims, batch_size, seq_len)?;
+    /// Advance `cache` over the first `rows` of a stashed forward's projected inputs; used to replay
+    /// an accepted prefix after speculative verification rejected the tail of a multi-token step.
+    /// Reads no projection weights: only the depthwise conv and the recurrence run.
+    pub fn advance_state_from_stash(
+        &self,
+        stash: &GdnForwardStash,
+        batch_idx: usize,
+        rows: usize,
+        cache: &mut GdnLayerCache,
+    ) -> Result<()> {
+        let mixed_qkv = stash
+            .mixed_qkv
+            .narrow(0, batch_idx, 1)?
+            .narrow(1, 0, rows)?
+            .contiguous()?;
+        let b = stash.b.narrow(0, batch_idx, 1)?.narrow(1, 0, rows)?;
+        let a = stash.a.narrow(0, batch_idx, 1)?.narrow(1, 0, rows)?;
         let mixed_qkv = backend::causal_conv1d(
             &mixed_qkv,
             &self.conv1d_weight,
@@ -112,15 +149,15 @@ impl GatedDeltaNet {
         )?;
         backend::apply_recurrence_from_convolved(
             &mixed_qkv,
-            &projected.b,
-            &projected.a,
+            &b,
+            &a,
             &self.a_log,
             &self.dt_bias,
             &self.dims,
-            batch_size,
-            seq_len,
+            1,
+            rows,
             cache,
-            x.dtype(),
+            stash.mixed_qkv.dtype(),
         )?;
         Ok(())
     }
