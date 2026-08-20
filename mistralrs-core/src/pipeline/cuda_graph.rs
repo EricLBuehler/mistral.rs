@@ -13,8 +13,14 @@ use crate::{
     paged_attention::{AttentionBackendKind, ModelConfigLike},
 };
 
+use crate::device_map::DeviceMapper;
+use crate::kv_cache::HybridCache;
+use crate::paged_attention::_PAD_SLOT_ID;
 use crate::pipeline::{
-    text_models_inputs_processor::PagedAttentionInputMetadata, text_positions_tensor,
+    text_models_inputs_processor::{
+        make_flash_params, DecodePagedRows, FlashParams, PagedAttentionInputMetadata,
+    },
+    text_positions_tensor, DecodeGraphPrecaptureCtx,
 };
 use crate::speculative::SpeculativeGraphState;
 
@@ -23,6 +29,259 @@ const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
 pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
+// Batches up to this size get their own graph; larger ones pad up to the next power of two.
+pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
+pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
+
+/// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
+pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
+    if batch == 0 {
+        None
+    } else if batch <= CUDA_GRAPH_EXACT_BATCH_BUCKETS {
+        Some(batch)
+    } else {
+        let bucket = batch.next_power_of_two();
+        (bucket <= CUDA_GRAPH_MAX_BATCH_BUCKET).then_some(bucket)
+    }
+}
+
+/// The batch buckets captured ahead of time at load.
+pub(crate) fn cuda_graph_precapture_batches() -> std::ops::RangeInclusive<usize> {
+    1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS
+}
+
+/// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
+/// their KV writes and point at the hybrid pad slot, so the model can run them and their outputs be
+/// dropped.
+pub(crate) struct CudaGraphDecodeStep {
+    pub(crate) input_ids: Tensor,
+    pub(crate) seqlen_offsets: Vec<usize>,
+    pub(crate) context_lens: Vec<(usize, usize)>,
+    pub(crate) position_ids: Vec<usize>,
+    pub(crate) metadata: PagedAttentionInputMetadata,
+    pub(crate) state_indices: Option<Vec<u32>>,
+    pub(crate) real_batch: usize,
+}
+
+pub(crate) struct CudaGraphDecodeStepInputs<'a> {
+    pub(crate) input_ids: &'a Tensor,
+    pub(crate) seqlen_offsets: &'a [usize],
+    pub(crate) context_lens: &'a [(usize, usize)],
+    pub(crate) position_ids: &'a [usize],
+    pub(crate) metadata: &'a PagedAttentionInputMetadata,
+    pub(crate) state_indices: Option<&'a [u32]>,
+    pub(crate) pad_slot: Option<u32>,
+}
+
+impl CudaGraphDecodeStep {
+    /// Returns None when the step can't be padded (no host rows to rebuild the metadata from, or a
+    /// hybrid batch without a pad slot).
+    pub(crate) fn padded(
+        inputs: CudaGraphDecodeStepInputs<'_>,
+        batch: usize,
+    ) -> candle_core::Result<Option<Self>> {
+        let CudaGraphDecodeStepInputs {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+            state_indices,
+            pad_slot,
+        } = inputs;
+        let real_batch = input_ids.dim(0)?;
+        if real_batch == batch {
+            return Ok(Some(Self {
+                input_ids: input_ids.clone(),
+                seqlen_offsets: seqlen_offsets.to_vec(),
+                context_lens: context_lens.to_vec(),
+                position_ids: position_ids.to_vec(),
+                metadata: metadata.clone(),
+                state_indices: state_indices.map(<[u32]>::to_vec),
+                real_batch,
+            }));
+        }
+        let Some(rows) = metadata.decode_rows.as_ref() else {
+            return Ok(None);
+        };
+        let state_indices = match (state_indices, pad_slot) {
+            (Some(slots), Some(pad_slot)) => {
+                let mut padded = slots.to_vec();
+                padded.resize(batch, pad_slot);
+                Some(padded)
+            }
+            (Some(_), None) => return Ok(None),
+            (None, _) => None,
+        };
+        let pad = batch - real_batch;
+        let (_, q_len) = input_ids.dims2()?;
+        let pad_ids = input_ids.narrow(0, 0, 1)?.repeat((pad, 1))?;
+        let input_ids = Tensor::cat(&[input_ids, &pad_ids], 0)?;
+        let mut seqlen_offsets = seqlen_offsets.to_vec();
+        seqlen_offsets.resize(batch, seqlen_offsets[0]);
+        let mut context_lens = context_lens.to_vec();
+        context_lens.resize(batch, context_lens[0]);
+        let mut position_ids = position_ids.to_vec();
+        position_ids.resize(batch, position_ids[0]);
+        let rows = Arc::new(rows.padded(batch));
+        if rows.query_len != q_len {
+            candle_core::bail!(
+                "CUDA graph decode rows cover {} query tokens but the input has {q_len}",
+                rows.query_len
+            );
+        }
+        let metadata = rows.build().map_err(candle_core::Error::msg)?;
+        Ok(Some(Self {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+            state_indices,
+            real_batch,
+        }))
+    }
+
+    pub(crate) fn batch(&self) -> usize {
+        self.seqlen_offsets.len()
+    }
+
+    /// Drops the pad rows from a `[batch, ...]` or `[batch * q, ...]` output.
+    pub(crate) fn narrow_rows(&self, tensor: &Tensor) -> candle_core::Result<Tensor> {
+        let batch = self.batch();
+        if batch == self.real_batch {
+            return Ok(tensor.clone());
+        }
+        let rows = tensor.dim(0)? / batch * self.real_batch;
+        tensor.narrow(0, 0, rows)
+    }
+}
+
+/// A fabricated batch-1 decode step (token 0 at position 0 over one block, no KV writes) that the
+/// precapture pads up to every bucket.
+pub(crate) struct CudaGraphPrecaptureInputs {
+    pub(crate) input_ids: Tensor,
+    pub(crate) seqlen_offsets: Vec<usize>,
+    pub(crate) context_lens: Vec<(usize, usize)>,
+    pub(crate) position_ids: Vec<usize>,
+    pub(crate) metadata: PagedAttentionInputMetadata,
+    pub(crate) flash_meta: FlashParams,
+}
+
+impl CudaGraphPrecaptureInputs {
+    pub(crate) fn new(
+        ctx: &DecodeGraphPrecaptureCtx,
+        q_len: usize,
+        device: &Device,
+        mapper: Option<&dyn DeviceMapper>,
+    ) -> candle_core::Result<Self> {
+        let devices = mapper
+            .map(|mapper| mapper.get_unique_devices())
+            .unwrap_or_else(|| vec![device.clone()]);
+        let rows = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![_PAD_SLOT_ID; q_len]],
+            block_tables: vec![vec![0]; q_len],
+            context_lens: vec![1; q_len],
+            full_block_tables: vec![vec![0]; q_len],
+            full_context_lens: vec![1; q_len],
+            query_len: q_len,
+            block_size: ctx.block_size,
+            use_standard_metadata: ctx.attention_backend == AttentionBackendKind::Standard,
+            max_paged_context_len: ctx.max_paged_context_len,
+            sliding_window: ctx.sliding_window,
+            decode_window: 1,
+            devices,
+            num_kv_heads: ctx.num_kv_heads,
+        });
+        let metadata = rows.build().map_err(candle_core::Error::msg)?;
+        let q_len_u32 = u32::try_from(q_len).map_err(candle_core::Error::wrap)?;
+        let flash_meta = if crate::using_flash_attn() {
+            make_flash_params(
+                device,
+                mapper,
+                &[0, q_len_u32],
+                &[0, q_len_u32],
+                ctx.sliding_window,
+                true,
+                false,
+            )
+            .map_err(candle_core::Error::msg)?
+        } else {
+            FlashParams::empty(true)
+        };
+        Ok(Self {
+            input_ids: Tensor::zeros((1, q_len), DType::U32, device)?,
+            seqlen_offsets: vec![0],
+            context_lens: vec![(0, q_len)],
+            position_ids: vec![q_len],
+            metadata,
+            flash_meta,
+        })
+    }
+
+    pub(crate) fn step_inputs<'a>(
+        &'a self,
+        state_indices: Option<&'a [u32]>,
+        pad_slot: Option<u32>,
+    ) -> CudaGraphDecodeStepInputs<'a> {
+        CudaGraphDecodeStepInputs {
+            input_ids: &self.input_ids,
+            seqlen_offsets: &self.seqlen_offsets,
+            context_lens: &self.context_lens,
+            position_ids: &self.position_ids,
+            metadata: &self.metadata,
+            state_indices,
+            pad_slot,
+        }
+    }
+}
+
+pub(crate) struct HybridGraphSlots {
+    pub(crate) real: Vec<u32>,
+    pub(crate) pad_slot: u32,
+    // Allocating the pad slot reallocated the pools, invalidating every captured graph
+    pub(crate) grew: bool,
+}
+
+/// The batch's live recurrent slots plus the scratch slot pad rows write into.
+pub(crate) fn hybrid_graph_slots(cache: &mut HybridCache) -> Option<HybridGraphSlots> {
+    let real = cache.state_indices_host()?.to_vec();
+    let capacity = cache.recurrent_capacity();
+    let pad_slot = cache.graph_pad_slot()?;
+    Some(HybridGraphSlots {
+        real,
+        pad_slot: u32::try_from(pad_slot).ok()?,
+        grew: cache.recurrent_capacity() != capacity,
+    })
+}
+
+/// Points the hybrid cache's state indices at fresh `Var` buffers holding `host`, one per recurrent
+/// device, so a captured forward reads slots the replay can overwrite.
+pub(crate) fn install_hybrid_graph_state_indices(
+    cache: &mut HybridCache,
+    host: &[u32],
+) -> candle_core::Result<CudaGraphVarMap> {
+    let mut vars = CudaGraphVarMap::new();
+    let mut tensors = Vec::new();
+    for device in cache.recurrent_devices() {
+        let var = Var::from_tensor(&Tensor::from_vec(host.to_vec(), (host.len(),), &device)?)?;
+        tensors.push((device.clone(), var.as_detached_tensor()));
+        vars.insert(device.location(), var);
+    }
+    cache.set_state_indices_tensors(host.to_vec(), tensors);
+    Ok(vars)
+}
+
+fn copy_state_indices(dst: &CudaGraphVarMap, host: &[u32]) -> candle_core::Result<()> {
+    for var in dst.values() {
+        var.set(&Tensor::from_vec(
+            host.to_vec(),
+            (host.len(),),
+            var.device(),
+        )?)?;
+    }
+    Ok(())
+}
 
 pub(crate) struct CudaGraphHandle {
     graph: sys::CUgraph,
@@ -107,7 +366,6 @@ pub(crate) struct CudaDecodeGraphKey {
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
-    state_key: Option<Vec<u32>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,7 +391,8 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
     pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
     pub(crate) warmup_logits: &'a Tensor,
-    pub(crate) retained_tensors: Vec<Tensor>,
+    pub(crate) state_indices: Option<CudaGraphVarMap>,
+    pub(crate) real_batch: usize,
 }
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
@@ -282,13 +541,7 @@ impl CudaDecodeGraphKey {
                 bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
             ),
             tensors,
-            state_key: None,
         })
-    }
-
-    pub(crate) fn with_state_key(mut self, state_key: Option<Vec<u32>>) -> Self {
-        self.state_key = state_key;
-        self
     }
 }
 
@@ -586,6 +839,7 @@ impl CudaDecodeGraphMetadataBuffers {
             query_lens: metadata.query_lens.clone(),
             cu_seqlens_q: metadata.cu_seqlens_q.clone(),
             cu_seqlens_kv: metadata.cu_seqlens_kv.clone(),
+            decode_rows: metadata.decode_rows.clone(),
         }
     }
 }
@@ -595,8 +849,8 @@ pub(crate) struct CudaDecodeGraphEntry {
     graph: CudaGraphHandle,
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
+    state_indices: Option<CudaGraphVarMap>,
     _metadata: PagedAttentionInputMetadata,
-    _retained_tensors: Vec<Tensor>,
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
@@ -648,28 +902,37 @@ impl CudaDecodeGraphState {
         self.clear();
     }
 
+    pub(crate) fn contains(&self, key: &CudaDecodeGraphKey) -> bool {
+        self.entries.iter().any(|entry| entry.key == *key)
+    }
+
     pub(crate) fn replay(
         &mut self,
         key: &CudaDecodeGraphKey,
-        input_ids: &Tensor,
-        metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
+        step: &CudaGraphDecodeStep,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
-        entry.input_ids.set(input_ids)?;
-        let (_, seq_len) = input_ids.dims2()?;
+        entry.input_ids.set(&step.input_ids)?;
+        let (_, seq_len) = step.input_ids.dims2()?;
         entry
             .metadata_buffers
-            .copy_from(metadata, seqlen_offsets, seq_len)?;
+            .copy_from(&step.metadata, &step.seqlen_offsets, seq_len)?;
+        match (&entry.state_indices, &step.state_indices) {
+            (Some(dst), Some(host)) => copy_state_indices(dst, host)?,
+            (None, None) => {}
+            _ => candle_core::bail!(
+                "hybrid state indices changed optional state during CUDA graph replay"
+            ),
+        }
         entry
             .graph
             .launch()
             .map_err(|err| err.context("CUDA graph replay launch failed"))?;
         let replay = CudaDecodeGraphReplay {
-            logits: entry.logits.clone(),
+            logits: step.narrow_rows(&entry.logits)?,
             spec_state: entry.spec_state.clone(),
         };
         self.entries.push(entry);
@@ -700,9 +963,10 @@ where
         metadata,
         model_metadata,
         warmup_logits,
-        retained_tensors,
+        state_indices,
+        real_batch,
     } = ctx;
-    let (_, seq_len) = input_ids.dims2()?;
+    let (batch, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
     let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
         metadata,
@@ -767,14 +1031,17 @@ where
     restore_event_tracking_after_capture(&stream, restore_event_tracking);
 
     graph.upload()?;
+    tracing::debug!(
+        "Captured CUDA decode graph: batch bucket {batch} ({real_batch} live rows), {seq_len} query tokens"
+    );
 
     Ok(CudaDecodeGraphEntry {
         key,
         graph,
         input_ids,
         metadata_buffers,
+        state_indices,
         _metadata: metadata,
-        _retained_tensors: retained_tensors,
         logits: graph_logits,
         spec_state: None,
     })
@@ -1165,6 +1432,25 @@ fn copy_rope_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_buckets_are_exact_then_power_of_two() {
+        assert_eq!(cuda_graph_batch_bucket(0), None);
+        for batch in 1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS {
+            assert_eq!(cuda_graph_batch_bucket(batch), Some(batch));
+        }
+        assert_eq!(cuda_graph_batch_bucket(9), Some(16));
+        assert_eq!(cuda_graph_batch_bucket(16), Some(16));
+        assert_eq!(cuda_graph_batch_bucket(17), Some(32));
+        assert_eq!(
+            cuda_graph_batch_bucket(CUDA_GRAPH_MAX_BATCH_BUCKET),
+            Some(CUDA_GRAPH_MAX_BATCH_BUCKET)
+        );
+        assert_eq!(
+            cuda_graph_batch_bucket(CUDA_GRAPH_MAX_BATCH_BUCKET + 1),
+            None
+        );
+    }
 
     #[test]
     fn graph_context_len_tracks_paged_attention_partitions() {

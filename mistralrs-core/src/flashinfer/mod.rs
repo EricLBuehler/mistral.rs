@@ -10,9 +10,9 @@ use crate::paged_attention::attention_backend::{
 
 mod metadata;
 pub(crate) use metadata::{
-    decode_split_pages, flashinfer_metadata, flashinfer_paged_kv, flashinfer_tile_plan,
-    flashinfer_view, make_paged_kv_decode_tensors, make_paged_kv_decode_tensors_from_lens,
-    make_paged_kv_tensors,
+    decode_split_capacity_pages, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
+    flashinfer_tile_plan, flashinfer_view, make_paged_kv_decode_tensors,
+    make_paged_kv_decode_tensors_from_lens, make_paged_kv_tensors,
 };
 
 // Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.

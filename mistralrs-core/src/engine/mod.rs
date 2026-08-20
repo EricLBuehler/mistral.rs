@@ -4,7 +4,7 @@ use crate::{
     pipeline::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        CacheBackendMetadata, CacheInstruction,
+        CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx,
     },
     prefix_cacher::PrefixCacheManagerV2,
     scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
@@ -177,6 +177,8 @@ pub struct Engine {
     pending_notify: Arc<Notify>,
     pub(crate) session_store: Arc<std::sync::Mutex<agentic_session::AgenticSessionStore>>,
     pub(crate) file_store: crate::files::FileStore,
+    // Re-runs the decode graph precapture after the recurrent pool grows and drops every graph
+    pub(crate) graph_precapture_ctx: Option<DecodeGraphPrecaptureCtx>,
 }
 
 struct HybridPagedPrefixValidator {
@@ -332,6 +334,44 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
+        let graph_precapture_ctx = if no_kv_cache {
+            None
+        } else {
+            let ctx = {
+                let scheduler = get_mut_arcmutex!(scheduler);
+                scheduler
+                    .kv_cache_manager()
+                    .zip(scheduler.block_size())
+                    .map(|(kv_cache_manager, block_size)| {
+                        let pipeline = get_mut_arcmutex!(pipeline);
+                        let pipeline_metadata = pipeline.get_metadata();
+                        let max_paged_context_len = {
+                            let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
+                            kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
+                        };
+                        DecodeGraphPrecaptureCtx {
+                            block_size,
+                            max_paged_context_len,
+                            attention_backend: pipeline_metadata
+                                .model_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.attention_backend_kind())
+                                .unwrap_or(crate::paged_attention::AttentionBackendKind::Standard),
+                            sliding_window: pipeline_metadata.sliding_window,
+                            num_kv_heads: pipeline_metadata
+                                .model_metadata
+                                .as_ref()
+                                .map(|metadata| metadata.num_kv_heads())
+                                .unwrap_or(1)
+                                .max(1),
+                        }
+                    })
+            };
+            if let Some(ctx) = &ctx {
+                get_mut_arcmutex!(pipeline).precapture_cuda_decode_graphs(ctx);
+            }
+            ctx
+        };
 
         Ok(Self {
             tx,
@@ -356,6 +396,7 @@ impl Engine {
             pending_notify: Arc::new(Notify::new()),
             session_store,
             file_store,
+            graph_precapture_ctx,
         })
     }
 

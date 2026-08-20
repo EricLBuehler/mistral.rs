@@ -867,7 +867,15 @@ impl Qwen3_5TextModel {
             .last_full_capture
             .lock()
             .expect("spec capture poisoned") = state.full_capture.clone();
-        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = state.gdn_stash.clone();
+        let mut gdn_stash = state.gdn_stash.clone();
+        if let Some(stash) = gdn_stash.as_mut() {
+            // A replayed graph carries the slots of the step it was captured on; the rows belong to
+            // whatever sequences occupy the batch now
+            if let Some(slots) = self.cache.hybrid().state_indices_host() {
+                stash.slots = slots.to_vec();
+            }
+        }
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
     }
 
     pub(super) fn last_spec_capture(&self) -> Option<SpecCapture> {

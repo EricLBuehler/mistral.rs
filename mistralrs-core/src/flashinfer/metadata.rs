@@ -6,10 +6,72 @@ use super::{
     FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
 };
 
-// Split-KV decode chunk target, not a context cap.
-const DECODE_FIXED_SPLIT_TOKENS: usize = 2048;
-pub(crate) fn decode_split_pages(block_size: usize) -> usize {
-    DECODE_FIXED_SPLIT_TOKENS.div_ceil(block_size).max(1)
+// Split-KV decode chunks each (sequence, kv head) context so the grid reaches about this many
+// blocks per SM; grids that are already full keep one 2048-token chunk and skip the partial merge.
+const DECODE_SPLIT_BLOCKS_PER_SM: usize = 2;
+const DECODE_SPLIT_MIN_TOKENS: usize = 256;
+const DECODE_SPLIT_MAX_TOKENS: usize = 2048;
+// Used when the SM count can't be queried; errs toward more, smaller chunks.
+const DECODE_SPLIT_FALLBACK_SM_COUNT: usize = 64;
+
+#[cfg(feature = "cuda")]
+fn cuda_sm_count() -> usize {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    static SM_COUNT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *SM_COUNT.get_or_init(|| {
+        result::init()
+            .ok()
+            .and_then(|_| result::device::get(0).ok())
+            .and_then(|dev| unsafe {
+                result::device::get_attribute(
+                    dev,
+                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+                )
+                .ok()
+            })
+            .and_then(|count| usize::try_from(count).ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(DECODE_SPLIT_FALLBACK_SM_COUNT)
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cuda_sm_count() -> usize {
+    DECODE_SPLIT_FALLBACK_SM_COUNT
+}
+
+/// Smallest chunk the planner can pick, in pages: tile plans are sized for it so their shape stays
+/// fixed while the live chunk size varies with context.
+pub(crate) fn decode_split_capacity_pages(block_size: usize) -> usize {
+    DECODE_SPLIT_MIN_TOKENS.div_ceil(block_size).max(1)
+}
+
+/// Split-KV chunk size in pages for a decode batch: the largest chunk that still puts about
+/// `DECODE_SPLIT_BLOCKS_PER_SM` blocks per SM in flight at the batch's longest context.
+pub(crate) fn decode_split_pages(
+    block_size: usize,
+    batch_size: usize,
+    num_kv_heads: usize,
+    max_context_len: usize,
+) -> usize {
+    decode_split_tokens(batch_size, num_kv_heads, cuda_sm_count(), max_context_len)
+        .div_ceil(block_size)
+        .max(1)
+}
+
+fn decode_split_tokens(
+    batch_size: usize,
+    num_kv_heads: usize,
+    sm_count: usize,
+    max_context_len: usize,
+) -> usize {
+    let blocks_unsplit = (batch_size * num_kv_heads).max(1);
+    let chunks_needed = (DECODE_SPLIT_BLOCKS_PER_SM * sm_count)
+        .div_ceil(blocks_unsplit)
+        .max(1);
+    let tokens =
+        (max_context_len / chunks_needed).clamp(DECODE_SPLIT_MIN_TOKENS, DECODE_SPLIT_MAX_TOKENS);
+    1 << (usize::BITS - 1 - tokens.leading_zeros())
 }
 
 // Converts scheduler block tables into FlashInfer's paged-KV CSR tensors.
@@ -219,5 +281,25 @@ pub(crate) fn flashinfer_metadata(
         views: FlashInferPagedAttentionViews { logical, sliding },
         decode_tmp_v: None,
         decode_tmp_s: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_split_fills_small_grids_and_leaves_full_ones_alone() {
+        // Qwen3.5-class: 4 kv heads, batch 1 on a 48-SM GPU wants 24 chunks per (seq, head)
+        assert_eq!(decode_split_tokens(1, 4, 48, 8192), 256);
+        assert_eq!(decode_split_tokens(1, 4, 48, 16384), 512);
+        assert_eq!(decode_split_tokens(1, 4, 48, 65536), 2048);
+        assert_eq!(decode_split_tokens(1, 4, 48, 100), 256);
+        assert_eq!(decode_split_tokens(1, 8, 48, 8192), 512);
+        // Already 64 blocks without splitting: keep one big chunk per (seq, head)
+        assert_eq!(decode_split_tokens(8, 8, 48, 8192), 2048);
+        assert_eq!(decode_split_tokens(64, 8, 48, 8192), 2048);
+        assert_eq!(decode_split_capacity_pages(32), 8);
+        assert!(decode_split_pages(32, 1, 4, 8192) >= decode_split_capacity_pages(32));
     }
 }
