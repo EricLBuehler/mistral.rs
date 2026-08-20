@@ -53,6 +53,8 @@ pub struct Qwen3_5Model {
     pub(super) mtp_n_predict: std::sync::atomic::AtomicUsize,
     // Draft-only lm_head at the base ISQ type; the target verifies with the promoted head
     pub(super) draft_lm_head: Mutex<Option<std::sync::Arc<dyn mistralrs_quant::QuantMethod>>>,
+    // External DFlash block-diffusion drafter, replacing the built-in MTP head when attached
+    pub(super) dflash: Mutex<Option<std::sync::Arc<crate::speculative::DFlashDraftModel>>>,
     pending_prompt_tails: Mutex<std::collections::HashMap<usize, speculative::PendingPromptTail>>,
 }
 
@@ -99,6 +101,7 @@ impl Qwen3_5Model {
             encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
             mtp_n_predict: std::sync::atomic::AtomicUsize::new(0),
             draft_lm_head: Mutex::new(None),
+            dflash: Mutex::new(None),
             pending_prompt_tails: Mutex::new(std::collections::HashMap::new()),
         })
     }
