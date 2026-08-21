@@ -804,6 +804,135 @@ impl ColumnParallelLayer {
         }
         Ok(vec_layers)
     }
+
+    /// Load several column-parallel projections sharing `in_dim` into one packed weight owned by
+    /// `packed`, exposing each constituent as a view-backed layer wrapped exactly as
+    /// `new_with_shard` would produce. Returns `None` when packing does not apply (quantized
+    /// config, ISQ, bias, missing tensors); callers fall back to separate layers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_packed(
+        in_dim: usize,
+        out_dims: &[usize],
+        names: &[&str],
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        comm: &Arc<crate::Comm>,
+        shards: Option<&[Shard]>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Option<PackedColumnParallel>> {
+        if config.is_some() || bias || crate::get_immediate_isq().is_some() {
+            return Ok(None);
+        }
+        let default_shard = shard(0, comm.rank(), comm.world_size());
+        let mut parts = Vec::with_capacity(names.len());
+        let mut rows_per_rank = Vec::with_capacity(names.len());
+        for (i, (name, &out_dim)) in names.iter().zip(out_dims).enumerate() {
+            let vb_n = vb.pp(name);
+            if should_apply_immediate_isq(&vb_n)
+                || load_weight_source_linear_shard(default_shard, &vb_n)?.is_some()
+                || !vb_n.contains_tensor("weight")
+            {
+                return Ok(None);
+            }
+            let s = shards.map_or(default_shard, |s| s[i]);
+            let part = vb_n.get_with_hints((out_dim, in_dim), "weight", s)?;
+            rows_per_rank.push(part.dim(0)?);
+            parts.push(part);
+        }
+        // One owning packed tensor; the per-projection tensors are temporaries
+        let packed_weight = Tensor::cat(&parts.iter().collect::<Vec<_>>(), 0)?;
+        drop(parts);
+        let packed = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(packed_weight.clone(), None)),
+        )?) as Arc<dyn QuantMethod>;
+
+        let mut constituents = Vec::with_capacity(names.len());
+        let mut offset = 0;
+        for (i, (name, &out_dim)) in names.iter().zip(out_dims).enumerate() {
+            let vb_n = vb.pp(name);
+            let s = shards.map_or(default_shard, |s| s[i]);
+            let rows = rows_per_rank[i];
+            let view = packed_weight.narrow(0, offset, rows)?;
+            let view_linear = Arc::new(<UnquantLinear as QuantMethod>::new(
+                QuantMethodConfig::Unquantized(Linear::new(view, None)),
+            )?) as Arc<dyn QuantMethod>;
+            let wrapped = maybe_wrap_dynamic_lora_with_key(
+                &vb_n,
+                view_linear,
+                LoraSiteKey::new(vb_n.prefix()),
+                LoraLinearSpec::column(in_dim, out_dim, s),
+            )?;
+            constituents.push(Arc::new(Self {
+                weight: wrapped,
+                bias: None,
+            }) as Arc<dyn QuantMethod>);
+            offset += rows;
+        }
+        Ok(Some(PackedColumnParallel {
+            packed,
+            constituents,
+            rows_per_rank,
+        }))
+    }
+
+    /// Like `new_packed` for a checkpoint that already stores the projections fused in one
+    /// tensor of `chunks` equal chunks (e.g. `gate_up_proj`): the fused tensor is loaded once and
+    /// becomes the sole owner, constituents are chunk views. Single-rank only; tensor-parallel
+    /// runs keep the sharded `new_merged` path.
+    pub fn new_packed_from_fused(
+        in_dim: usize,
+        out_dim: usize,
+        chunks: usize,
+        config: &Option<QuantizedConfig>,
+        comm: &Arc<crate::Comm>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Option<PackedColumnParallel>> {
+        if config.is_some() || crate::get_immediate_isq().is_some() || comm.world_size() != 1 {
+            return Ok(None);
+        }
+        if should_apply_immediate_isq(&vb)
+            || load_weight_source_linear_shard(Shard::default(), &vb)?.is_some()
+            || !vb.contains_tensor("weight")
+        {
+            return Ok(None);
+        }
+        let packed_weight = vb.get_with_hints((out_dim, in_dim), "weight", Shard::default())?;
+        let packed = Arc::new(<UnquantLinear as QuantMethod>::new(
+            QuantMethodConfig::Unquantized(Linear::new(packed_weight.clone(), None)),
+        )?) as Arc<dyn QuantMethod>;
+
+        let rows = out_dim / chunks;
+        let mut constituents = Vec::with_capacity(chunks);
+        for chunk_idx in 0..chunks {
+            let view = packed_weight.narrow(0, chunk_idx * rows, rows)?;
+            let view_linear = Arc::new(<UnquantLinear as QuantMethod>::new(
+                QuantMethodConfig::Unquantized(Linear::new(view, None)),
+            )?) as Arc<dyn QuantMethod>;
+            let wrapped = maybe_wrap_dynamic_lora_with_key(
+                &vb,
+                view_linear,
+                LoraSiteKey::with_slice(vb.prefix(), chunk_idx, chunks)?,
+                LoraLinearSpec::column(in_dim, out_dim, shard(0, chunk_idx, chunks)),
+            )?;
+            constituents.push(Arc::new(Self {
+                weight: wrapped,
+                bias: None,
+            }) as Arc<dyn QuantMethod>);
+        }
+        Ok(Some(PackedColumnParallel {
+            packed,
+            constituents,
+            rows_per_rank: vec![rows; chunks],
+        }))
+    }
+}
+
+/// A group of column-parallel projections backed by one packed weight; `constituents` are
+/// zero-copy row views of `packed`'s weight with their usual wrapper stacks.
+pub struct PackedColumnParallel {
+    pub packed: Arc<dyn QuantMethod>,
+    pub constituents: Vec<Arc<dyn QuantMethod>>,
+    pub rows_per_rank: Vec<usize>,
 }
 
 impl QuantMethod for ColumnParallelLayer {

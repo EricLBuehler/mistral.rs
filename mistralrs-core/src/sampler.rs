@@ -1130,7 +1130,11 @@ impl Sampler {
             || packed[1] < 0.0
             || packed[1].fract() != 0.0
         {
-            candle_core::bail!("invalid CUDA top-1 output");
+            candle_core::bail!(
+                "invalid CUDA top-1 output: max_logit={} argmax={}",
+                packed[0],
+                packed[1]
+            );
         }
         Ok(packed[1] as u32)
     }

@@ -3415,23 +3415,42 @@ impl Mlp {
         bias: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
-        let gate = ColumnParallelLayer::new(
+        let packed = ColumnParallelLayer::new_packed(
             hidden_size,
-            intermediate_size,
+            &[intermediate_size, intermediate_size],
+            &["gate_proj", "up_proj"],
             quantization_config,
             bias,
             comm,
-            vb.pp("gate_proj"),
+            None,
+            vb.clone(),
         )?;
-        let up = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quantization_config,
-            bias,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => (
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("gate_proj"),
+                )?,
+                ColumnParallelLayer::new(
+                    hidden_size,
+                    intermediate_size,
+                    quantization_config,
+                    bias,
+                    comm,
+                    vb.pp("up_proj"),
+                )?,
+                None,
+            ),
+        };
 
         Ok(Self {
             gate,
@@ -3460,19 +3479,37 @@ impl Mlp {
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         assert!(chunks == 2, "Only gate_up_proj merge is supported!");
-        let gate_up_projs = ColumnParallelLayer::new_merged(
+        let packed = ColumnParallelLayer::new_packed_from_fused(
             hidden_size,
             intermediate_size * 2,
             2,
             quantization_config,
-            false,
             comm,
             vb.pp("gate_up_proj"),
         )?;
-
-        let gate = gate_up_projs[0].to_owned();
-        let up = gate_up_projs[1].to_owned();
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
+        let (gate, up, merged_gate_up) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => {
+                let gate_up_projs = ColumnParallelLayer::new_merged(
+                    hidden_size,
+                    intermediate_size * 2,
+                    2,
+                    quantization_config,
+                    false,
+                    comm,
+                    vb.pp("gate_up_proj"),
+                )?;
+                (
+                    gate_up_projs[0].to_owned(),
+                    gate_up_projs[1].to_owned(),
+                    None,
+                )
+            }
+        };
 
         Ok(Self {
             gate,
@@ -3561,13 +3598,12 @@ impl MlpLayer for Mlp {
             self.down.clone()
         };
 
-        let merged_gate_up = crate::ops::MergedDenseProjection::new(&[gate.clone(), up.clone()])?;
-
         Ok(Box::new(Self {
             gate,
             up,
             down,
-            merged_gate_up,
+            // Delta-modified copies no longer alias the packed weight; run the projections separately
+            merged_gate_up: None,
             act: self.act,
             params: self.params.clone(),
         }))

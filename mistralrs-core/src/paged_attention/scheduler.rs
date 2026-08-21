@@ -259,6 +259,27 @@ impl PagedAttentionScheduler {
         selected
     }
 
+    fn reject_front_of_waiting(
+        &mut self,
+        reason: String,
+        metric_reason: &'static str,
+        prefix_validator: &mut Option<&mut dyn PagedPrefixCacheValidator>,
+    ) {
+        warn!("{reason}");
+        metrics::counter!("mistralrs_sequences_rejected_total", "reason" => metric_reason)
+            .increment(1);
+        let seq = self.waiting.pop_front().unwrap();
+        let recurrent_state_idx = get_mut_arcmutex!(seq).recurrent_state_idx();
+        let recurrent_state_released = if let (Some(slot_idx), Some(validator)) =
+            (recurrent_state_idx, prefix_validator.as_mut())
+        {
+            validator.release_recurrent_state(slot_idx)
+        } else {
+            false
+        };
+        self.finish_ignored_sequence(seq, reason, recurrent_state_released);
+    }
+
     fn enforce_completion_compatibility(&mut self) {
         let running = std::mem::take(&mut self.running);
         self.running = self.bucket_and_preempt_sequences(
@@ -298,6 +319,22 @@ impl PagedAttentionScheduler {
             let block_hash_revision = seq_guard.block_hash_revision();
             let return_raw_logits = seq_guard.return_raw_logits;
             drop(seq_guard);
+
+            // A sequence larger than the whole cache can never be scheduled; reject it up front
+            // instead of letting it wait out the starvation timeout.
+            let total_token_capacity =
+                get_mut_arcmutex!(self.kv_cache_manager).num_gpu_blocks() * self.block_size;
+            if num_tokens > total_token_capacity {
+                self.reject_front_of_waiting(
+                    format!(
+                        "Sequence {seq_id} with {num_tokens} tokens exceeds the total KV cache \
+                         capacity of {total_token_capacity} tokens."
+                    ),
+                    "over_total_capacity",
+                    &mut prefix_validator,
+                );
+                continue;
+            }
 
             // Compute block hashes for prefix cache lookup
             self.ensure_block_hashes(
@@ -372,15 +409,19 @@ impl PagedAttentionScheduler {
                     *count += 1;
 
                     if *count > WAITING_TIMEOUT {
-                        // Try to preempt a running sequence
-                        if let Some(seq_to_preempt) = self.running.pop_back() {
+                        // Preempt as many running sequences as needed; a feasible sequence waits
+                        // or evicts, it does not error.
+                        let mut allocated = false;
+                        loop {
+                            let Some(seq_to_preempt) = self.running.pop_back() else {
+                                break;
+                            };
                             let preempted_id = *get_mut_arcmutex!(seq_to_preempt).id();
                             let waiting_seq = self.waiting.pop_front().unwrap();
                             self._preempt(seq_to_preempt);
                             self.waiting.push_front(waiting_seq);
                             scheduled.retain(|seq| *get_mut_arcmutex!(seq).id() != preempted_id);
 
-                            // Retry allocation
                             let mut kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
                             let retry = kv_mgr.allocate_slots(
                                 seq_id,
@@ -388,18 +429,19 @@ impl PagedAttentionScheduler {
                                 &computed.block_ids[..computed_block_count],
                             );
                             drop(kv_mgr);
-
-                            if retry.is_none() {
-                                ignore_reason = Some(format!(
-                                    "Sequence {seq_id} with {num_tokens} tokens exceeds the \
-                                     available KV cache capacity after preemption."
-                                ));
-                            } else {
-                                self.waiting_counts.remove(&seq_id);
+                            if retry.is_some() {
+                                allocated = true;
+                                break;
                             }
+                        }
+                        if allocated {
+                            self.waiting_counts.remove(&seq_id);
                         } else {
+                            // Fits in total capacity but not even an empty cache satisfies the
+                            // allocation (reserved blocks/fragmentation); erroring beats spinning.
                             ignore_reason = Some(format!(
-                                "Sequence {seq_id} with {num_tokens} tokens exceeds the available KV cache capacity."
+                                "Sequence {seq_id} with {num_tokens} tokens cannot be scheduled: \
+                                 KV cache exhausted even after preempting all running sequences."
                             ));
                         }
                     } else {
@@ -409,17 +451,7 @@ impl PagedAttentionScheduler {
             }
 
             if let Some(reason) = ignore_reason {
-                warn!("{reason}");
-                let seq = self.waiting.pop_front().unwrap();
-                let recurrent_state_idx = get_mut_arcmutex!(seq).recurrent_state_idx();
-                let recurrent_state_released = if let (Some(slot_idx), Some(validator)) =
-                    (recurrent_state_idx, prefix_validator.as_mut())
-                {
-                    validator.release_recurrent_state(slot_idx)
-                } else {
-                    false
-                };
-                self.finish_ignored_sequence(seq, reason, recurrent_state_released);
+                self.reject_front_of_waiting(reason, "cache_exhausted", &mut prefix_validator);
                 continue;
             }
 

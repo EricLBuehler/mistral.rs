@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use candle_core::{shape::Dim, DType, Result, Tensor, D};
-use candle_nn::Linear;
 
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
@@ -4012,62 +4011,14 @@ pub(crate) struct MergedDenseProjection {
 }
 
 impl MergedDenseProjection {
-    pub(crate) fn new(projs: &[Arc<dyn mistralrs_quant::QuantMethod>]) -> Result<Option<Self>> {
-        // Deferred capture (UQFF writes, imatrix) tracks the constituent layers; merging would
-        // bypass their forwards, leaving stats empty and runtime swaps unobserved.
-        if mistralrs_quant::get_immediate_isq()
-            .is_some_and(|p| p.capture != mistralrs_quant::IsqCaptureMode::Immediate)
-        {
-            return Ok(None);
+    /// Wrap a packed projection group: `packed` owns the fused weight, `constituents` are its
+    /// view-backed layers used for the dynamic-LoRA fallback path.
+    pub(crate) fn from_packed(group: &mistralrs_quant::PackedColumnParallel) -> Self {
+        Self {
+            proj: group.packed.clone(),
+            originals: group.constituents.clone(),
+            output_dims: group.rows_per_rank.clone(),
         }
-        let mut weights = Vec::with_capacity(projs.len());
-        let mut output_dims = Vec::with_capacity(projs.len());
-        let mut input_dim = None;
-        let mut dtype_device: Option<(DType, candle_core::Device)> = None;
-
-        for proj in projs {
-            if proj.has_bias() {
-                return Ok(None);
-            }
-            let Some((weight, bias)) = proj.unquant_weight_bias() else {
-                return Ok(None);
-            };
-            if bias.is_some() {
-                return Ok(None);
-            }
-            let (rows, cols) = weight.dims2()?;
-            if let Some(input_dim) = input_dim {
-                if input_dim != cols {
-                    return Ok(None);
-                }
-            } else {
-                input_dim = Some(cols);
-            }
-            let this_dtype_device = (weight.dtype(), weight.device().clone());
-            if let Some((dtype, device)) = dtype_device.as_ref() {
-                if *dtype != this_dtype_device.0
-                    || device.location() != this_dtype_device.1.location()
-                {
-                    return Ok(None);
-                }
-            } else {
-                dtype_device = Some(this_dtype_device);
-            }
-            output_dims.push(rows);
-            weights.push(weight);
-        }
-
-        let weight_refs = weights.iter().collect::<Vec<_>>();
-        let weight = Tensor::cat(&weight_refs, 0)?;
-        let proj = <mistralrs_quant::UnquantLinear as mistralrs_quant::QuantMethod>::new(
-            mistralrs_quant::QuantMethodConfig::Unquantized(Linear::new(weight, None)),
-        )?;
-
-        Ok(Some(Self {
-            proj: Arc::new(proj),
-            originals: projs.to_vec(),
-            output_dims,
-        }))
     }
 
     pub(crate) fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
@@ -4260,18 +4211,26 @@ mod tests {
         let vb =
             ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
                 .with_lora_registry(registry.clone());
-        let gate = maybe_wrap_dynamic_lora(
-            &vb.pp("gate"),
-            unquant(&[[1., 0.], [0., 1.]])?,
-            LoraLinearSpec::replicated(2, 2),
-        )?;
-        let up = maybe_wrap_dynamic_lora(
-            &vb.pp("up"),
-            unquant(&[[1., 1.], [1., -1.]])?,
-            LoraLinearSpec::replicated(2, 2),
-        )?;
+        let packed_weight =
+            Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.], [1., -1.]], &Device::Cpu)?;
+        let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(packed_weight.clone(), None),
+        ))?) as Arc<dyn QuantMethod>;
+        let gate_view = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(packed_weight.narrow(0, 0, 2)?, None),
+        ))?) as Arc<dyn QuantMethod>;
+        let up_view = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(packed_weight.narrow(0, 2, 2)?, None),
+        ))?) as Arc<dyn QuantMethod>;
+        let gate =
+            maybe_wrap_dynamic_lora(&vb.pp("gate"), gate_view, LoraLinearSpec::replicated(2, 2))?;
+        let up = maybe_wrap_dynamic_lora(&vb.pp("up"), up_view, LoraLinearSpec::replicated(2, 2))?;
         registry.finalize()?;
-        let merged = MergedDenseProjection::new(&[gate, up])?.expect("mergeable projections");
+        let merged = MergedDenseProjection::from_packed(&mistralrs_quant::PackedColumnParallel {
+            packed,
+            constituents: vec![gate, up],
+            rows_per_rank: vec![2, 2],
+        });
         let input = Tensor::new(&[[2f32, 3.]], &Device::Cpu)?;
         let base = merged.forward(&input)?;
         assert_eq!(base[0].to_vec2::<f32>()?, vec![vec![2., 3.]]);
