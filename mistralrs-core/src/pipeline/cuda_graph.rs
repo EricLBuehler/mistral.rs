@@ -1,7 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
-use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
+use candle_core::cuda_backend::cudarc::driver::{
+    sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
+};
+use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
 
 #[cfg(target_family = "unix")]
 use crate::paged_attention::plan::DecodePlan;
@@ -32,6 +34,7 @@ pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 // Batches up to this size get their own graph; larger ones pad up to the next power of two.
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
+pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
 
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
 pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
@@ -46,8 +49,8 @@ pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
 }
 
 /// The batch buckets captured ahead of time at load.
-pub(crate) fn cuda_graph_precapture_batches() -> std::ops::RangeInclusive<usize> {
-    1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS
+pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
+    (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
 }
 
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
@@ -193,7 +196,7 @@ impl CudaGraphPrecaptureInputs {
             devices,
             num_kv_heads: ctx.num_kv_heads,
         });
-        let metadata = rows.build().map_err(candle_core::Error::msg)?;
+        let metadata = rows.build_materialized().map_err(candle_core::Error::msg)?;
         let q_len_u32 = u32::try_from(q_len).map_err(candle_core::Error::wrap)?;
         let flash_meta = if crate::using_flash_attn() {
             make_flash_params(
@@ -377,10 +380,29 @@ struct CudaGraphTensorKey {
 }
 
 type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
+type CudaGraphHostStagingMap = HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>;
 type FlashInferDecodeScratchMaps = (
     Option<HashMap<DeviceLocation, Tensor>>,
     Option<HashMap<DeviceLocation, Tensor>>,
 );
+
+enum CudaGraphPinnedData {
+    U8(PinnedHostSlice<u8>),
+    U32(PinnedHostSlice<u32>),
+    I32(PinnedHostSlice<i32>),
+    I64(PinnedHostSlice<i64>),
+}
+
+struct CudaGraphPinnedBuffer {
+    data: CudaGraphPinnedData,
+    copy_complete: CudaEvent,
+}
+
+impl Drop for CudaGraphPinnedBuffer {
+    fn drop(&mut self) {
+        let _ = self.copy_complete.synchronize();
+    }
+}
 
 pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) key: CudaDecodeGraphKey,
@@ -396,6 +418,8 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
 }
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
+    flashinfer_views_alias: bool,
+    host_staging: CudaGraphHostStagingMap,
     slot_mappings: CudaGraphVarMap,
     block_tables: Option<CudaGraphVarMap>,
     context_lens: Option<CudaGraphVarMap>,
@@ -522,6 +546,9 @@ impl CudaDecodeGraphKey {
             flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             &mut tensors,
         );
+        if flashinfer_views_alias(metadata) {
+            tensors.retain(|tensor| !tensor.name.starts_with("full_"));
+        }
         tensors.sort_by(|a, b| {
             a.name.cmp(b.name).then_with(|| {
                 device_location_sort_key(&a.location).cmp(&device_location_sort_key(&b.location))
@@ -565,12 +592,21 @@ impl CudaDecodeGraphMetadataBuffers {
             model_metadata,
             activation_dtype,
         )?;
-        let buffers = Self {
+        let flashinfer_views_alias = flashinfer_views_alias(metadata);
+        let mut buffers = Self {
+            flashinfer_views_alias,
+            host_staging: HashMap::new(),
             slot_mappings,
             block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
             context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
-            full_block_tables: option_var_map_from_tensor_map(metadata.full_block_tables.as_ref())?,
-            full_context_lens: option_var_map_from_tensor_map(metadata.full_context_lens.as_ref())?,
+            full_block_tables: option_var_map_from_tensor_map_if_distinct(
+                metadata.full_block_tables.as_ref(),
+                flashinfer_views_alias,
+            )?,
+            full_context_lens: option_var_map_from_tensor_map_if_distinct(
+                metadata.full_context_lens.as_ref(),
+                flashinfer_views_alias,
+            )?,
             paged_kv_indptr: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
             )?,
@@ -580,14 +616,17 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_last_page_len: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             )?,
-            full_paged_kv_indptr: option_var_map_from_tensor_map(
+            full_paged_kv_indptr: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_indices: option_var_map_from_tensor_map(
+            full_paged_kv_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_last_page_len: option_var_map_from_tensor_map(
+            full_paged_kv_last_page_len: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
+                flashinfer_views_alias,
             )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
@@ -604,25 +643,42 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_block_valid_mask: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             )?,
-            full_paged_kv_request_indices: option_var_map_from_tensor_map(
+            full_paged_kv_request_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_tile_indices: option_var_map_from_tensor_map(
+            full_paged_kv_tile_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_o_indptr: option_var_map_from_tensor_map(
+            full_paged_kv_o_indptr: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_chunk_size: option_var_map_from_tensor_map(
+            full_paged_kv_chunk_size: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
+            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
+                flashinfer_views_alias,
             )?,
             flashinfer_decode_tmp_v,
             flashinfer_decode_tmp_s,
             rope_positions,
         };
+        if flashinfer_views_alias {
+            buffers.full_block_tables = buffers.block_tables.clone();
+            buffers.full_context_lens = buffers.context_lens.clone();
+            buffers.full_paged_kv_indptr = buffers.paged_kv_indptr.clone();
+            buffers.full_paged_kv_indices = buffers.paged_kv_indices.clone();
+            buffers.full_paged_kv_last_page_len = buffers.paged_kv_last_page_len.clone();
+            buffers.full_paged_kv_request_indices = buffers.paged_kv_request_indices.clone();
+            buffers.full_paged_kv_tile_indices = buffers.paged_kv_tile_indices.clone();
+            buffers.full_paged_kv_o_indptr = buffers.paged_kv_o_indptr.clone();
+            buffers.full_paged_kv_chunk_size = buffers.paged_kv_chunk_size.clone();
+            buffers.full_paged_kv_block_valid_mask = buffers.paged_kv_block_valid_mask.clone();
+        }
         let metadata = buffers.metadata_from(metadata, block_size);
         Ok((buffers, metadata))
     }
@@ -637,112 +693,142 @@ impl CudaDecodeGraphMetadataBuffers {
             &self.slot_mappings,
             &metadata.slot_mappings,
             "slot_mappings",
+            &mut self.host_staging,
         )?;
         copy_option_var_map(
             &self.context_lens,
             metadata.context_lens.as_ref(),
             "context_lens",
+            &mut self.host_staging,
         )?;
-        copy_option_var_map(
-            &self.full_context_lens,
-            metadata.full_context_lens.as_ref(),
-            "full_context_lens",
-        )?;
+        if !self.flashinfer_views_alias {
+            copy_option_var_map(
+                &self.full_context_lens,
+                metadata.full_context_lens.as_ref(),
+                "full_context_lens",
+                &mut self.host_staging,
+            )?;
+        }
         copy_option_var_map(
             &self.paged_kv_last_page_len,
             flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             "paged_kv_last_page_len",
+            &mut self.host_staging,
         )?;
-        copy_option_var_map(
-            &self.full_paged_kv_last_page_len,
-            flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
-            "full_paged_kv_last_page_len",
-        )?;
+        if !self.flashinfer_views_alias {
+            copy_option_var_map(
+                &self.full_paged_kv_last_page_len,
+                flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
+                "full_paged_kv_last_page_len",
+                &mut self.host_staging,
+            )?;
+        }
         {
             copy_option_var_map(
                 &self.block_tables,
                 metadata.block_tables.as_ref(),
                 "block_tables",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indptr,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
                 "paged_kv_indptr",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
                 "paged_kv_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_request_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "paged_kv_request_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_tile_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "paged_kv_tile_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_o_indptr,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "paged_kv_o_indptr",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_chunk_size,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "paged_kv_chunk_size",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_block_valid_mask,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "paged_kv_block_valid_mask",
+                &mut self.host_staging,
             )?;
         }
-        {
+        if !self.flashinfer_views_alias {
             copy_option_var_map(
                 &self.full_block_tables,
                 metadata.full_block_tables.as_ref(),
                 "full_block_tables",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indptr,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
                 "full_paged_kv_indptr",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indices,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
                 "full_paged_kv_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_request_indices,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "full_paged_kv_request_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_tile_indices,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "full_paged_kv_tile_indices",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_o_indptr,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "full_paged_kv_o_indptr",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_chunk_size,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "full_paged_kv_chunk_size",
+                &mut self.host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_block_valid_mask,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "full_paged_kv_block_valid_mask",
+                &mut self.host_staging,
             )?;
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len)?;
+        copy_rope_positions(
+            &self.rope_positions,
+            seqlen_offsets,
+            seq_len,
+            &mut self.host_staging,
+        )?;
         Ok(())
     }
 
@@ -968,6 +1054,10 @@ where
         state_indices,
         real_batch,
     } = ctx;
+    let materialized_metadata = metadata
+        .materialize_decode_tensors()
+        .map_err(candle_core::Error::msg)?;
+    let metadata = &materialized_metadata;
     let (batch, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
     let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
@@ -1274,6 +1364,13 @@ fn flashinfer_full_view(
     Some(&metadata.flashinfer.as_ref()?.views.logical)
 }
 
+fn flashinfer_views_alias(metadata: &PagedAttentionInputMetadata) -> bool {
+    metadata
+        .flashinfer
+        .as_ref()
+        .is_some_and(|flashinfer| flashinfer.views.sliding.is_none())
+}
+
 fn flashinfer_paged_kv_from_vars(
     indptr: &Option<CudaGraphVarMap>,
     indices: &Option<CudaGraphVarMap>,
@@ -1366,6 +1463,17 @@ fn option_var_map_from_tensor_map(
     map.map(var_map_from_tensor_map).transpose()
 }
 
+fn option_var_map_from_tensor_map_if_distinct(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    aliases_existing: bool,
+) -> candle_core::Result<Option<CudaGraphVarMap>> {
+    if aliases_existing {
+        Ok(None)
+    } else {
+        option_var_map_from_tensor_map(map)
+    }
+}
+
 fn tensor_map_from_var_map(map: &CudaGraphVarMap) -> HashMap<DeviceLocation, Tensor> {
     map.iter()
         .map(|(location, var)| (*location, var.as_detached_tensor()))
@@ -1378,10 +1486,124 @@ fn option_tensor_map_from_var_map(
     map.as_ref().map(tensor_map_from_var_map)
 }
 
+impl CudaGraphPinnedBuffer {
+    fn new(dst: &Var) -> candle_core::Result<Self> {
+        let Device::Cuda(device) = dst.device() else {
+            candle_core::bail!("CUDA graph host staging requires a CUDA destination");
+        };
+        let stream = device.cuda_stream();
+        let context = stream.context();
+        let len = dst.elem_count();
+        let data = unsafe {
+            match dst.dtype() {
+                DType::U8 => CudaGraphPinnedData::U8(
+                    context
+                        .alloc_pinned(len)
+                        .map_err(candle_core::Error::wrap)?,
+                ),
+                DType::U32 => CudaGraphPinnedData::U32(
+                    context
+                        .alloc_pinned(len)
+                        .map_err(candle_core::Error::wrap)?,
+                ),
+                DType::I32 => CudaGraphPinnedData::I32(
+                    context
+                        .alloc_pinned(len)
+                        .map_err(candle_core::Error::wrap)?,
+                ),
+                DType::I64 => CudaGraphPinnedData::I64(
+                    context
+                        .alloc_pinned(len)
+                        .map_err(candle_core::Error::wrap)?,
+                ),
+                dtype => candle_core::bail!(
+                    "CUDA graph host staging does not support metadata dtype {dtype:?}"
+                ),
+            }
+        };
+        let copy_complete = context
+            .new_event(Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
+            .map_err(candle_core::Error::wrap)?;
+        Ok(Self {
+            data,
+            copy_complete,
+        })
+    }
+
+    fn copy_from(&mut self, src: &Tensor, dst: &Var) -> candle_core::Result<()> {
+        if src.shape() != dst.shape() || src.dtype() != dst.dtype() {
+            candle_core::bail!("CUDA graph host staging expected matching tensors");
+        }
+        let (src_storage, src_layout) = src.storage_and_layout();
+        let Storage::Cpu(src_storage) = &*src_storage else {
+            candle_core::bail!("CUDA graph host staging expected CPU source metadata");
+        };
+        if !src_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous source metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA destination metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous destination metadata");
+        }
+        self.copy_complete
+            .synchronize()
+            .map_err(candle_core::Error::wrap)?;
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        let len = src.elem_count();
+        let src_offset = src_layout.start_offset();
+        let dst_offset = dst_layout.start_offset();
+
+        macro_rules! stage_and_copy {
+            ($variant:ident, $ty:ty) => {{
+                let CudaGraphPinnedData::$variant(host) = &mut self.data else {
+                    candle_core::bail!("CUDA graph host staging dtype changed");
+                };
+                let src = src_storage.as_slice::<$ty>()?;
+                let src = &src[src_offset..src_offset + len];
+                let host = host.as_mut_slice().map_err(candle_core::Error::wrap)?;
+                host.copy_from_slice(src);
+                let dst = dst_storage.as_cuda_slice::<$ty>()?;
+                let dst = dst.slice(dst_offset..dst_offset + len);
+                let (dst_ptr, _dst_guard) = dst.device_ptr(&stream);
+                let result = unsafe {
+                    sys::cuMemcpyHtoDAsync_v2(
+                        dst_ptr,
+                        host.as_ptr().cast(),
+                        std::mem::size_of_val(host),
+                        stream.cu_stream(),
+                    )
+                };
+                if result != sys::CUresult::CUDA_SUCCESS {
+                    return Err(candle_core::Error::msg(format!("{result:?}"))
+                        .context("CUDA graph metadata H2D copy failed"));
+                }
+            }};
+        }
+
+        match src.dtype() {
+            DType::U8 => stage_and_copy!(U8, u8),
+            DType::U32 => stage_and_copy!(U32, u32),
+            DType::I32 => stage_and_copy!(I32, i32),
+            DType::I64 => stage_and_copy!(I64, i64),
+            dtype => candle_core::bail!(
+                "CUDA graph host staging does not support metadata dtype {dtype:?}"
+            ),
+        }
+        self.copy_complete
+            .record(&stream)
+            .map_err(candle_core::Error::wrap)?;
+        Ok(())
+    }
+}
+
 fn copy_var_map(
     dst: &CudaGraphVarMap,
     src: &HashMap<DeviceLocation, Tensor>,
-    name: &str,
+    name: &'static str,
+    host_staging: &mut CudaGraphHostStagingMap,
 ) -> candle_core::Result<()> {
     if dst.len() != src.len() {
         candle_core::bail!("{name} device count changed during CUDA graph replay");
@@ -1390,7 +1612,18 @@ fn copy_var_map(
         let src = src
             .get(location)
             .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
-        dst.set(src)?;
+        if src.device().is_cpu() && dst.device().is_cuda() {
+            let key = (name, *location);
+            let buffer = match host_staging.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                }
+            };
+            buffer.copy_from(src, dst)?;
+        } else {
+            dst.set(src)?;
+        }
     }
     Ok(())
 }
@@ -1398,10 +1631,11 @@ fn copy_var_map(
 fn copy_option_var_map(
     dst: &Option<CudaGraphVarMap>,
     src: Option<&HashMap<DeviceLocation, Tensor>>,
-    name: &str,
+    name: &'static str,
+    host_staging: &mut CudaGraphHostStagingMap,
 ) -> candle_core::Result<()> {
     match (dst, src) {
-        (Some(dst), Some(src)) => copy_var_map(dst, src, name),
+        (Some(dst), Some(src)) => copy_var_map(dst, src, name, host_staging),
         (None, None) => Ok(()),
         _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
     }
@@ -1425,10 +1659,22 @@ fn copy_rope_positions(
     dst: &CudaGraphVarMap,
     seqlen_offsets: &[usize],
     seq_len: usize,
+    host_staging: &mut CudaGraphHostStagingMap,
 ) -> candle_core::Result<()> {
-    for dst in dst.values() {
-        let positions = text_positions_tensor(seqlen_offsets, seq_len, dst.device())?;
-        dst.set(&positions)?;
+    let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
+    for (location, dst) in dst {
+        if dst.device().is_cuda() {
+            let key = ("rope_positions", *location);
+            let buffer = match host_staging.entry(key) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+                }
+            };
+            buffer.copy_from(&positions, dst)?;
+        } else {
+            dst.set(&positions)?;
+        }
     }
     Ok(())
 }
@@ -1457,6 +1703,14 @@ mod tests {
     }
 
     #[test]
+    fn precapture_includes_the_first_power_of_two_bucket() {
+        assert_eq!(
+            cuda_graph_precapture_batches().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 16]
+        );
+    }
+
+    #[test]
     fn graph_context_len_tracks_paged_attention_partitions() {
         assert_eq!(graph_context_len(Some(1), Some(2048)), Some(512));
         assert_eq!(graph_context_len(Some(512), Some(2048)), Some(512));
@@ -1469,6 +1723,93 @@ mod tests {
         assert_eq!(graph_context_len(Some(513), None), Some(513));
         assert_eq!(graph_context_len(None, Some(2048)), Some(2048));
         assert_eq!(graph_context_len(None, None), None);
+    }
+
+    #[test]
+    fn graph_buffers_share_unsliding_flashinfer_metadata() {
+        let table = vec![1, 2, 3, 4];
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![127]],
+            block_tables: vec![table.clone()],
+            context_lens: vec![128],
+            full_block_tables: vec![table],
+            full_context_lens: vec![128],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 1_604_288,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 4,
+        })
+        .build()
+        .unwrap();
+        let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
+        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32).unwrap();
+        assert!(key
+            .tensors
+            .iter()
+            .all(|tensor| !tensor.name.starts_with("full_")));
+
+        let (buffers, _) =
+            CudaDecodeGraphMetadataBuffers::new(&metadata, &[127], 1, 32, &[], None, DType::F32)
+                .unwrap();
+        assert!(buffers.flashinfer_views_alias);
+        let location = Device::Cpu.location();
+        assert_eq!(
+            buffers.paged_kv_indices.as_ref().unwrap()[&location].id(),
+            buffers.full_paged_kv_indices.as_ref().unwrap()[&location].id()
+        );
+        assert_eq!(
+            buffers.paged_kv_request_indices.as_ref().unwrap()[&location].id(),
+            buffers.full_paged_kv_request_indices.as_ref().unwrap()[&location].id()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_metadata_replay_updates_persistent_cuda_buffers() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rows = |table: Vec<usize>, context_len: usize| -> anyhow::Result<_> {
+            Ok(Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![i64::try_from(context_len - 1)?]],
+                block_tables: vec![table.clone()],
+                context_lens: vec![context_len],
+                full_block_tables: vec![table],
+                full_context_lens: vec![context_len],
+                query_len: 1,
+                block_size: 32,
+                use_standard_metadata: false,
+                max_paged_context_len: 1_604_288,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![device.clone()],
+                num_kv_heads: 4,
+            }))
+        };
+        let initial = rows(vec![1, 2, 3, 4], 128)?.build_materialized()?;
+        let updated = rows(vec![5, 6, 7, 8, 9, 10, 11, 12], 256)?.build()?;
+        assert!(updated.has_host_staged_decode_tensors());
+
+        let (mut buffers, _) =
+            CudaDecodeGraphMetadataBuffers::new(&initial, &[127], 1, 32, &[], None, DType::F32)?;
+        buffers.copy_from(&updated, &[255], 1)?;
+        device.synchronize()?;
+
+        let location = device.location();
+        let indices = buffers.paged_kv_indices.as_ref().unwrap()[&location]
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<i32>()?;
+        assert_eq!(&indices[..8], &[5, 6, 7, 8, 9, 10, 11, 12]);
+        let positions = buffers.rope_positions[&location]
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        assert_eq!(positions, vec![255]);
+        assert!(!buffers.host_staging.is_empty());
+        Ok(())
     }
 
     #[test]

@@ -54,7 +54,7 @@ use crate::pipeline::cuda_graph::{
     cuda_graph_batch_bucket, cuda_graph_precapture_batches, hybrid_graph_slots,
     install_hybrid_graph_state_indices, prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx,
     CudaDecodeGraphKey, CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
-    CudaGraphPrecaptureInputs, CUDA_GRAPH_EXACT_BATCH_BUCKETS,
+    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1874,8 +1874,8 @@ impl MultimodalPipeline {
         }
         if captured > 0 {
             info!(
-                "Captured {captured} CUDA decode graphs (batch 1-{}) in {:.2?}",
-                CUDA_GRAPH_EXACT_BATCH_BUCKETS,
+                "Captured {captured} CUDA decode graphs through batch bucket {} in {:.2?}",
+                CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
                 start.elapsed()
             );
         }
@@ -1903,6 +1903,10 @@ impl MultimodalPipeline {
         };
         prepare_cuda_graph_memory_pool(&cuda_device.cuda_stream())?;
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+        let metadata = step
+            .metadata
+            .materialize_decode_tensors()
+            .map_err(candle_core::Error::msg)?;
 
         // The graph reads the slot table from buffers the replay rewrites; the live step's own
         // indices come back once both forwards are done
@@ -1934,7 +1938,7 @@ impl MultimodalPipeline {
             &step.seqlen_offsets,
             &step.context_lens,
             &step.position_ids,
-            Some((kv_cache, &step.metadata)),
+            Some((kv_cache, &metadata)),
             flash_meta,
         )
         .with_recurrent_batch_kind(recurrent_batch_kind)
@@ -1980,7 +1984,7 @@ impl MultimodalPipeline {
                 seqlen_offsets: &step.seqlen_offsets,
                 block_size,
                 kv_cache,
-                metadata: &step.metadata,
+                metadata: &metadata,
                 model_metadata: self.metadata.model_metadata.as_deref(),
                 warmup_logits: &warmup_logits,
                 state_indices: state_index_buffers,
@@ -2154,13 +2158,21 @@ impl Pipeline for MultimodalPipeline {
                 Err(err) => self.disable_cuda_decode_graph(&err),
             }
         }
+        let paged_attn_meta = paged_attn_meta
+            .map(|(kv_cache, metadata)| {
+                metadata
+                    .materialize_decode_tensors()
+                    .map(|metadata| (kv_cache, metadata))
+            })
+            .transpose()
+            .map_err(candle_core::Error::msg)?;
         let mut ctx = ModelForwardContext::new(
             &seqlen_offsets,
             &context_lens,
             &position_ids,
             paged_attn_meta
                 .as_ref()
-                .map(|(kv_cache, meta)| (kv_cache.as_slice(), *meta)),
+                .map(|(kv_cache, meta)| (kv_cache.as_slice(), meta)),
             &flash_meta,
         )
         .with_recurrent_batch_kind(recurrent_batch_kind)
