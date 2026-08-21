@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ptr::NonNull, sync::Arc};
 
 use candle_core::cuda_backend::cudarc::driver::{
     sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
@@ -278,11 +278,10 @@ pub(crate) fn install_hybrid_graph_state_indices(
 fn copy_state_indices(
     dst: &CudaGraphVarMap,
     host: &[u32],
-    host_staging: &mut CudaGraphHostStagingMap,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     for (location, var) in dst {
-        host_staging_buffer(host_staging, "state_indices", *location, var)?
-            .copy_from_u32_slice(host, var)?;
+        host_staging.copy_from_u32_slice("state_indices", *location, host, var)?;
     }
     Ok(())
 }
@@ -381,27 +380,62 @@ struct CudaGraphTensorKey {
 }
 
 type CudaGraphVarMap = HashMap<DeviceLocation, Var>;
-type CudaGraphHostStagingMap = HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>;
 type FlashInferDecodeScratchMaps = (
     Option<HashMap<DeviceLocation, Tensor>>,
     Option<HashMap<DeviceLocation, Tensor>>,
 );
 
+struct CudaGraphPinnedAllocation<T> {
+    allocation: PinnedHostSlice<T>,
+    ptr: NonNull<T>,
+}
+
+// The allocation owns the pointer and all accesses require an exclusive borrow.
+unsafe impl<T: Send> Send for CudaGraphPinnedAllocation<T> {}
+
+impl<T> CudaGraphPinnedAllocation<T> {
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.allocation.len()) }
+    }
+
+    fn as_ptr(&self) -> *const T {
+        self.ptr.as_ptr()
+    }
+}
+
 enum CudaGraphPinnedData {
-    U8(PinnedHostSlice<u8>),
-    U32(PinnedHostSlice<u32>),
-    I32(PinnedHostSlice<i32>),
-    I64(PinnedHostSlice<i64>),
+    U8(CudaGraphPinnedAllocation<u8>),
+    U32(CudaGraphPinnedAllocation<u32>),
+    I32(CudaGraphPinnedAllocation<i32>),
+    I64(CudaGraphPinnedAllocation<i64>),
 }
 
 struct CudaGraphPinnedBuffer {
     data: CudaGraphPinnedData,
-    copy_complete: CudaEvent,
 }
 
-impl Drop for CudaGraphPinnedBuffer {
+struct CudaGraphCopyCompletion {
+    event: CudaEvent,
+    stream: Arc<CudaStream>,
+    pending: bool,
+    active: bool,
+}
+
+#[derive(Default)]
+struct CudaGraphHostStaging {
+    buffers: HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>,
+    completions: HashMap<DeviceLocation, CudaGraphCopyCompletion>,
+}
+
+impl Drop for CudaGraphHostStaging {
     fn drop(&mut self) {
-        let _ = self.copy_complete.synchronize();
+        for completion in self.completions.values() {
+            if completion.pending {
+                let _ = completion.event.synchronize();
+            } else if completion.active {
+                let _ = completion.stream.synchronize();
+            }
+        }
     }
 }
 
@@ -420,7 +454,6 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
     flashinfer_views_alias: bool,
-    host_staging: CudaGraphHostStagingMap,
     slot_mappings: CudaGraphVarMap,
     block_tables: Option<CudaGraphVarMap>,
     context_lens: Option<CudaGraphVarMap>,
@@ -596,7 +629,6 @@ impl CudaDecodeGraphMetadataBuffers {
         let flashinfer_views_alias = flashinfer_views_alias(metadata);
         let mut buffers = Self {
             flashinfer_views_alias,
-            host_staging: HashMap::new(),
             slot_mappings,
             block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
             context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
@@ -684,44 +716,45 @@ impl CudaDecodeGraphMetadataBuffers {
         Ok((buffers, metadata))
     }
 
-    pub(crate) fn copy_from(
+    fn copy_from(
         &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
         seq_len: usize,
+        host_staging: &mut CudaGraphHostStaging,
     ) -> candle_core::Result<()> {
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
             "slot_mappings",
-            &mut self.host_staging,
+            host_staging,
         )?;
         copy_option_var_map(
             &self.context_lens,
             metadata.context_lens.as_ref(),
             "context_lens",
-            &mut self.host_staging,
+            host_staging,
         )?;
         if !self.flashinfer_views_alias {
             copy_option_var_map(
                 &self.full_context_lens,
                 metadata.full_context_lens.as_ref(),
                 "full_context_lens",
-                &mut self.host_staging,
+                host_staging,
             )?;
         }
         copy_option_var_map(
             &self.paged_kv_last_page_len,
             flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             "paged_kv_last_page_len",
-            &mut self.host_staging,
+            host_staging,
         )?;
         if !self.flashinfer_views_alias {
             copy_option_var_map(
                 &self.full_paged_kv_last_page_len,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
                 "full_paged_kv_last_page_len",
-                &mut self.host_staging,
+                host_staging,
             )?;
         }
         {
@@ -729,49 +762,49 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.block_tables,
                 metadata.block_tables.as_ref(),
                 "block_tables",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indptr,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
                 "paged_kv_indptr",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
                 "paged_kv_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_request_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "paged_kv_request_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_tile_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "paged_kv_tile_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_o_indptr,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "paged_kv_o_indptr",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_chunk_size,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "paged_kv_chunk_size",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_block_valid_mask,
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "paged_kv_block_valid_mask",
-                &mut self.host_staging,
+                host_staging,
             )?;
         }
         if !self.flashinfer_views_alias {
@@ -779,57 +812,52 @@ impl CudaDecodeGraphMetadataBuffers {
                 &self.full_block_tables,
                 metadata.full_block_tables.as_ref(),
                 "full_block_tables",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indptr,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
                 "full_paged_kv_indptr",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_indices,
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
                 "full_paged_kv_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_request_indices,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
                 "full_paged_kv_request_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_tile_indices,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
                 "full_paged_kv_tile_indices",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_o_indptr,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
                 "full_paged_kv_o_indptr",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_chunk_size,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
                 "full_paged_kv_chunk_size",
-                &mut self.host_staging,
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.full_paged_kv_block_valid_mask,
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
                 "full_paged_kv_block_valid_mask",
-                &mut self.host_staging,
+                host_staging,
             )?;
         }
-        copy_rope_positions(
-            &self.rope_positions,
-            seqlen_offsets,
-            seq_len,
-            &mut self.host_staging,
-        )?;
+        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len, host_staging)?;
         Ok(())
     }
 
@@ -939,7 +967,7 @@ pub(crate) struct CudaDecodeGraphEntry {
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     state_indices: Option<CudaGraphVarMap>,
-    state_indices_staging: CudaGraphHostStagingMap,
+    host_staging: CudaGraphHostStaging,
     _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
@@ -1007,18 +1035,24 @@ impl CudaDecodeGraphState {
         let mut entry = self.entries.remove(pos);
         entry.input_ids.set(&step.input_ids)?;
         let (_, seq_len) = step.input_ids.dims2()?;
-        entry
-            .metadata_buffers
-            .copy_from(&step.metadata, &step.seqlen_offsets, seq_len)?;
-        match (&entry.state_indices, &step.state_indices) {
-            (Some(dst), Some(host)) => {
-                copy_state_indices(dst, host, &mut entry.state_indices_staging)?
+        let metadata_buffers = &mut entry.metadata_buffers;
+        let state_indices = &entry.state_indices;
+        entry.host_staging.update(|host_staging| {
+            metadata_buffers.copy_from(
+                &step.metadata,
+                &step.seqlen_offsets,
+                seq_len,
+                host_staging,
+            )?;
+            match (state_indices, &step.state_indices) {
+                (Some(dst), Some(host)) => copy_state_indices(dst, host, host_staging),
+                (None, None) => Ok(()),
+                _ => candle_core::bail!(
+                    "hybrid state indices changed optional state during CUDA graph replay"
+                ),
             }
-            (None, None) => {}
-            _ => candle_core::bail!(
-                "hybrid state indices changed optional state during CUDA graph replay"
-            ),
-        }
+        })?;
+        entry.host_staging.order_before_graph(&entry.graph.stream)?;
         entry
             .graph
             .launch()
@@ -1138,7 +1172,7 @@ where
         input_ids,
         metadata_buffers,
         state_indices,
-        state_indices_staging: HashMap::new(),
+        host_staging: CudaGraphHostStaging::default(),
         _metadata: metadata,
         logits: graph_logits,
         spec_state: None,
@@ -1499,43 +1533,38 @@ impl CudaGraphPinnedBuffer {
         let stream = device.cuda_stream();
         let context = stream.context();
         let len = dst.elem_count();
-        let data = unsafe {
-            match dst.dtype() {
-                DType::U8 => CudaGraphPinnedData::U8(
+        macro_rules! allocate {
+            ($variant:ident, $ty:ty) => {{
+                let mut allocation = unsafe {
                     context
-                        .alloc_pinned(len)
-                        .map_err(candle_core::Error::wrap)?,
-                ),
-                DType::U32 => CudaGraphPinnedData::U32(
-                    context
-                        .alloc_pinned(len)
-                        .map_err(candle_core::Error::wrap)?,
-                ),
-                DType::I32 => CudaGraphPinnedData::I32(
-                    context
-                        .alloc_pinned(len)
-                        .map_err(candle_core::Error::wrap)?,
-                ),
-                DType::I64 => CudaGraphPinnedData::I64(
-                    context
-                        .alloc_pinned(len)
-                        .map_err(candle_core::Error::wrap)?,
-                ),
-                dtype => candle_core::bail!(
-                    "CUDA graph host staging does not support metadata dtype {dtype:?}"
-                ),
-            }
+                        .alloc_pinned::<$ty>(len)
+                        .map_err(candle_core::Error::wrap)?
+                };
+                let ptr = NonNull::new(allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?)
+                    .ok_or_else(|| {
+                        candle_core::Error::msg("CUDA returned a null pinned pointer")
+                    })?;
+                CudaGraphPinnedData::$variant(CudaGraphPinnedAllocation { allocation, ptr })
+            }};
+        }
+        let data = match dst.dtype() {
+            DType::U8 => allocate!(U8, u8),
+            DType::U32 => allocate!(U32, u32),
+            DType::I32 => allocate!(I32, i32),
+            DType::I64 => allocate!(I64, i64),
+            dtype => candle_core::bail!(
+                "CUDA graph host staging does not support metadata dtype {dtype:?}"
+            ),
         };
-        let copy_complete = context
-            .new_event(Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
-            .map_err(candle_core::Error::wrap)?;
-        Ok(Self {
-            data,
-            copy_complete,
-        })
+        Ok(Self { data })
     }
 
-    fn copy_from(&mut self, src: &Tensor, dst: &Var) -> candle_core::Result<()> {
+    fn copy_from(
+        &mut self,
+        src: &Tensor,
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
         if src.shape() != dst.shape() || src.dtype() != dst.dtype() {
             candle_core::bail!("CUDA graph host staging expected matching tensors");
         }
@@ -1553,10 +1582,6 @@ impl CudaGraphPinnedBuffer {
         if !dst_layout.is_contiguous() {
             candle_core::bail!("CUDA graph host staging expected contiguous destination metadata");
         }
-        self.copy_complete
-            .synchronize()
-            .map_err(candle_core::Error::wrap)?;
-        let stream = dst.device().as_cuda_device()?.cuda_stream();
         let len = src.elem_count();
         let src_offset = src_layout.start_offset();
         let dst_offset = dst_layout.start_offset();
@@ -1568,16 +1593,15 @@ impl CudaGraphPinnedBuffer {
                 };
                 let src = src_storage.as_slice::<$ty>()?;
                 let src = &src[src_offset..src_offset + len];
-                let host = host.as_mut_slice().map_err(candle_core::Error::wrap)?;
-                host.copy_from_slice(src);
+                host.as_mut_slice().copy_from_slice(src);
                 let dst = dst_storage.as_cuda_slice::<$ty>()?;
                 let dst = dst.slice(dst_offset..dst_offset + len);
-                let (dst_ptr, _dst_guard) = dst.device_ptr(&stream);
+                let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
                 let result = unsafe {
                     sys::cuMemcpyHtoDAsync_v2(
                         dst_ptr,
                         host.as_ptr().cast(),
-                        std::mem::size_of_val(host),
+                        len * std::mem::size_of::<$ty>(),
                         stream.cu_stream(),
                     )
                 };
@@ -1597,13 +1621,15 @@ impl CudaGraphPinnedBuffer {
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
         }
-        self.copy_complete
-            .record(&stream)
-            .map_err(candle_core::Error::wrap)?;
         Ok(())
     }
 
-    fn copy_from_u32_slice(&mut self, src: &[u32], dst: &Var) -> candle_core::Result<()> {
+    fn copy_from_u32_slice(
+        &mut self,
+        src: &[u32],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
         if dst.dtype() != DType::U32 || dst.elem_count() != src.len() {
             candle_core::bail!("CUDA graph host staging expected matching u32 state indices");
         }
@@ -1617,21 +1643,16 @@ impl CudaGraphPinnedBuffer {
         let CudaGraphPinnedData::U32(host) = &mut self.data else {
             candle_core::bail!("CUDA graph host staging state index dtype changed");
         };
-        self.copy_complete
-            .synchronize()
-            .map_err(candle_core::Error::wrap)?;
-        let host = host.as_mut_slice().map_err(candle_core::Error::wrap)?;
-        host.copy_from_slice(src);
-        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        host.as_mut_slice().copy_from_slice(src);
         let dst = dst_storage.as_cuda_slice::<u32>()?;
         let dst_offset = dst_layout.start_offset();
         let dst = dst.slice(dst_offset..dst_offset + src.len());
-        let (dst_ptr, _dst_guard) = dst.device_ptr(&stream);
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
         let result = unsafe {
             sys::cuMemcpyHtoDAsync_v2(
                 dst_ptr,
                 host.as_ptr().cast(),
-                std::mem::size_of_val(host),
+                std::mem::size_of_val(src),
                 stream.cu_stream(),
             )
         };
@@ -1639,33 +1660,146 @@ impl CudaGraphPinnedBuffer {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph state index H2D copy failed"));
         }
-        self.copy_complete
-            .record(&stream)
-            .map_err(candle_core::Error::wrap)?;
         Ok(())
     }
 }
 
-fn host_staging_buffer<'a>(
-    host_staging: &'a mut CudaGraphHostStagingMap,
-    name: &'static str,
-    location: DeviceLocation,
-    dst: &Var,
-) -> candle_core::Result<&'a mut CudaGraphPinnedBuffer> {
-    let key = (name, location);
-    Ok(match host_staging.entry(key) {
-        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-        std::collections::hash_map::Entry::Vacant(entry) => {
-            entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+impl CudaGraphHostStaging {
+    fn update(
+        &mut self,
+        copy: impl FnOnce(&mut Self) -> candle_core::Result<()>,
+    ) -> candle_core::Result<()> {
+        self.begin_update()?;
+        let copy_result = copy(self);
+        let finish_result = self.finish_update();
+        copy_result.and(finish_result)
+    }
+
+    fn begin_update(&mut self) -> candle_core::Result<()> {
+        for completion in self.completions.values_mut() {
+            if completion.active {
+                completion
+                    .stream
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                completion.active = false;
+            }
+            if completion.pending {
+                completion
+                    .event
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                completion.pending = false;
+            }
         }
-    })
+        Ok(())
+    }
+
+    fn finish_update(&mut self) -> candle_core::Result<()> {
+        let mut result = Ok(());
+        for completion in self.completions.values_mut() {
+            if !completion.active {
+                continue;
+            }
+            match completion.event.record(&completion.stream) {
+                Ok(()) => {
+                    completion.pending = true;
+                    completion.active = false;
+                }
+                Err(err) => {
+                    completion.pending = false;
+                    if completion.stream.synchronize().is_ok() {
+                        completion.active = false;
+                    }
+                    if result.is_ok() {
+                        result = Err(candle_core::Error::wrap(err));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn order_before_graph(&self, graph_stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+        for completion in self.completions.values() {
+            if completion.pending && completion.stream.cu_stream() != graph_stream.cu_stream() {
+                graph_stream
+                    .wait(&completion.event)
+                    .map_err(candle_core::Error::wrap)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_copy(
+        &mut self,
+        location: DeviceLocation,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        let completion = match self.completions.entry(location) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let event = stream
+                    .context()
+                    .new_event(Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
+                    .map_err(candle_core::Error::wrap)?;
+                entry.insert(CudaGraphCopyCompletion {
+                    event,
+                    stream: stream.clone(),
+                    pending: false,
+                    active: false,
+                })
+            }
+        };
+        if completion.stream.cu_stream() != stream.cu_stream() {
+            candle_core::bail!("CUDA graph metadata stream changed during replay");
+        }
+        completion.active = true;
+        Ok(())
+    }
+
+    fn copy_from(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &Tensor,
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from(src, dst, &stream)
+    }
+
+    fn copy_from_u32_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[u32],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_u32_slice(src, dst, &stream)
+    }
 }
 
 fn copy_var_map(
     dst: &CudaGraphVarMap,
     src: &HashMap<DeviceLocation, Tensor>,
     name: &'static str,
-    host_staging: &mut CudaGraphHostStagingMap,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     if dst.len() != src.len() {
         candle_core::bail!("{name} device count changed during CUDA graph replay");
@@ -1675,7 +1809,7 @@ fn copy_var_map(
             .get(location)
             .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
         if src.device().is_cpu() && dst.device().is_cuda() {
-            host_staging_buffer(host_staging, name, *location, dst)?.copy_from(src, dst)?;
+            host_staging.copy_from(name, *location, src, dst)?;
         } else {
             dst.set(src)?;
         }
@@ -1687,7 +1821,7 @@ fn copy_option_var_map(
     dst: &Option<CudaGraphVarMap>,
     src: Option<&HashMap<DeviceLocation, Tensor>>,
     name: &'static str,
-    host_staging: &mut CudaGraphHostStagingMap,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     match (dst, src) {
         (Some(dst), Some(src)) => copy_var_map(dst, src, name, host_staging),
@@ -1714,13 +1848,12 @@ fn copy_rope_positions(
     dst: &CudaGraphVarMap,
     seqlen_offsets: &[usize],
     seq_len: usize,
-    host_staging: &mut CudaGraphHostStagingMap,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
     for (location, dst) in dst {
         if dst.device().is_cuda() {
-            host_staging_buffer(host_staging, "rope_positions", *location, dst)?
-                .copy_from(&positions, dst)?;
+            host_staging.copy_from("rope_positions", *location, &positions, dst)?;
         } else {
             dst.set(&positions)?;
         }
@@ -1843,10 +1976,20 @@ mod tests {
 
         let (mut buffers, _) =
             CudaDecodeGraphMetadataBuffers::new(&initial, &[127], 1, 32, &[], None, DType::F32)?;
-        buffers.copy_from(&updated, &[255], 1)?;
+        let location = device.location();
+        let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
+        let mut state_indices_map = HashMap::from([(location, state_indices)]);
+        let mut host_staging = CudaGraphHostStaging::default();
+        host_staging.update(|host_staging| {
+            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
+        })?;
+        host_staging.update(|host_staging| {
+            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            copy_state_indices(&state_indices_map, &[11, 13, 17], host_staging)
+        })?;
         device.synchronize()?;
 
-        let location = device.location();
         let indices = buffers.paged_kv_indices.as_ref().unwrap()[&location]
             .as_detached_tensor()
             .to_device(&Device::Cpu)?
@@ -1857,19 +2000,9 @@ mod tests {
             .to_device(&Device::Cpu)?
             .to_vec1::<u32>()?;
         assert_eq!(positions, vec![255]);
-        assert!(!buffers.host_staging.is_empty());
+        assert!(host_staging.buffers.len() > 1);
+        assert_eq!(host_staging.completions.len(), 1);
 
-        let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
-        let mut state_indices_map = HashMap::from([(location, state_indices)]);
-        let mut state_indices_staging = HashMap::new();
-        copy_state_indices(&state_indices_map, &[3, 5, 7], &mut state_indices_staging)?;
-        copy_state_indices(
-            &state_indices_map,
-            &[11, 13, 17],
-            &mut state_indices_staging,
-        )?;
-        device.synchronize()?;
-        assert_eq!(state_indices_staging.len(), 1);
         let state_indices = state_indices_map
             .remove(&location)
             .unwrap()
