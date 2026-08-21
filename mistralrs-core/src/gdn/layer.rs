@@ -174,11 +174,7 @@ impl GatedDeltaNet {
         seq_len: usize,
         _dtype: DType,
     ) -> Result<Tensor> {
-        let z_shape = z.shape().clone();
-        let y = y.reshape(((), self.dims.head_v_dim))?;
-        let z = z.reshape(((), self.dims.head_v_dim))?;
         let y = self.norm.forward(&y, &z)?;
-        let y = y.reshape(z_shape)?;
         let y = y.reshape((batch_size, seq_len, self.dims.value_dim))?;
         let y = shard_out_proj_input(y, self.out_proj_input_shard)?;
         self.out_proj.forward(&y)

@@ -58,7 +58,7 @@ impl GdnInputProjection {
                                 "packed GDN QKV/Z returned the wrong output count",
                             )
                         })?;
-                    (mixed_qkv.contiguous()?, mixed_z)
+                    (mixed_qkv, mixed_z)
                 } else {
                     shared_qkv_z(x, in_proj_qkv, in_proj_z)?
                 };
@@ -90,7 +90,7 @@ impl GdnInputProjection {
                                 "packed GDN QKV/Z returned the wrong output count",
                             )
                         })?;
-                    (mixed_qkv.contiguous()?, mixed_z)
+                    (mixed_qkv, mixed_z)
                 } else {
                     shared_qkv_z(x, in_proj_qkv, in_proj_z)?
                 };
@@ -126,14 +126,15 @@ fn shared_qkv_z(
 }
 
 pub struct GdnProjection {
-    pub q: Tensor,
-    pub k: Tensor,
-    pub v: Tensor,
     pub z: Tensor,
     pub b: Tensor,
     pub a: Tensor,
-    // Set when the projection already produced `[q | k | v]` contiguously, so the conv needs no copy
-    conv_src: Option<Tensor>,
+    conv_input: GdnConvInput,
+}
+
+enum GdnConvInput {
+    Direct(Tensor),
+    Segmented { q: Tensor, k: Tensor, v: Tensor },
 }
 
 impl GdnProjection {
@@ -163,13 +164,14 @@ impl GdnProjection {
         let a = mixed_ba.narrow(D::Minus1, dims.v_per_group, dims.v_per_group)?;
 
         Ok(Self {
-            q,
-            k,
-            v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
             z: z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
             b: b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: a.reshape((batch_size, seq_len, dims.num_v_heads))?,
-            conv_src: None,
+            conv_input: GdnConvInput::Segmented {
+                q,
+                k,
+                v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
+            },
         })
     }
 
@@ -182,22 +184,11 @@ impl GdnProjection {
         batch_size: usize,
         seq_len: usize,
     ) -> Result<Self> {
-        let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
-        let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
-        let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
-        let conv_src = mixed_qkv
-            .is_contiguous()
-            .then(|| mixed_qkv.reshape((batch_size, seq_len, dims.conv_dim)))
-            .transpose()?;
-
         Ok(Self {
-            q: q.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
-            k: k.reshape((batch_size, seq_len, dims.num_k_heads, dims.head_k_dim))?,
-            v: v.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
-            z: mixed_z.reshape((batch_size, seq_len, dims.num_v_heads, dims.head_v_dim))?,
+            z: mixed_z,
             b: mixed_b.reshape((batch_size, seq_len, dims.num_v_heads))?,
             a: mixed_a.reshape((batch_size, seq_len, dims.num_v_heads))?,
-            conv_src,
+            conv_input: GdnConvInput::Direct(mixed_qkv),
         })
     }
 
@@ -223,12 +214,75 @@ impl GdnProjection {
     }
 
     pub fn conv_input(&self, dims: &GdnDims, batch_size: usize, seq_len: usize) -> Result<Tensor> {
-        if let Some(src) = &self.conv_src {
-            return Ok(src.clone());
+        match &self.conv_input {
+            GdnConvInput::Direct(src) => Ok(src.clone()),
+            GdnConvInput::Segmented { q, k, v } => {
+                let q = q.reshape((batch_size, seq_len, dims.key_dim))?;
+                let k = k.reshape((batch_size, seq_len, dims.key_dim))?;
+                let v = v.reshape((batch_size, seq_len, dims.value_dim))?;
+                Tensor::cat(&[&q, &k, &v], D::Minus1)
+            }
         }
-        let q = self.q.reshape((batch_size, seq_len, dims.key_dim))?;
-        let k = self.k.reshape((batch_size, seq_len, dims.key_dim))?;
-        let v = self.v.reshape((batch_size, seq_len, dims.value_dim))?;
-        Tensor::cat(&[&q, &k, &v], D::Minus1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{Device, Tensor};
+
+    use super::*;
+    use crate::gdn::config::GdnVHeadLayout;
+
+    fn dims() -> GdnDims {
+        GdnDims {
+            hidden_size: 32,
+            num_k_heads: 2,
+            num_v_heads: 4,
+            head_k_dim: 3,
+            head_v_dim: 5,
+            conv_kernel_size: 4,
+            key_dim: 6,
+            value_dim: 20,
+            conv_dim: 32,
+            v_per_group: 2,
+            v_head_layout: GdnVHeadLayout::Grouped,
+        }
+    }
+
+    #[test]
+    fn split_projection_preserves_strided_qkv_and_z_views() -> Result<()> {
+        let dev = Device::Cpu;
+        let dims = dims();
+        let (batch_size, seq_len) = (3, 2);
+        let qkv_physical = dims.conv_dim + 7;
+        let z_physical = dims.value_dim + 5;
+        let qkv = Tensor::from_vec(
+            vec![0.0f32; batch_size * seq_len * qkv_physical],
+            (batch_size, seq_len, qkv_physical),
+            &dev,
+        )?
+        .narrow(2, 3, dims.conv_dim)?;
+        let z = Tensor::from_vec(
+            vec![0.0f32; batch_size * seq_len * z_physical],
+            (batch_size, seq_len, z_physical),
+            &dev,
+        )?
+        .narrow(2, 2, dims.value_dim)?;
+        let b = Tensor::zeros((batch_size, seq_len, dims.num_v_heads), qkv.dtype(), &dev)?;
+        let a = b.clone();
+
+        let projection =
+            GdnProjection::from_split(qkv.clone(), z, b, a, &dims, batch_size, seq_len)?;
+        let conv_input = projection.conv_input(&dims, batch_size, seq_len)?;
+        assert_eq!(conv_input.shape(), qkv.shape());
+        assert_eq!(conv_input.stride(), qkv.stride());
+        assert_eq!(
+            conv_input.layout().start_offset(),
+            qkv.layout().start_offset()
+        );
+        assert!(!conv_input.is_contiguous());
+        assert!(!projection.z.is_contiguous());
+        assert!(projection.z.layout().start_offset() > 0);
+        Ok(())
     }
 }

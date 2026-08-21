@@ -671,7 +671,6 @@ fn finish_recurrence(
     out_bh
         .reshape((batch_size, dims.num_v_heads, seq_len, dims.head_v_dim))?
         .transpose(1, 2)?
-        .contiguous()?
         .to_dtype(dtype)
 }
 
@@ -705,17 +704,15 @@ fn causal_conv1d_update(
         return causal_conv1d_update_cpu(x, conv1d_weight, dims, cache);
     }
 
-    let x_t = x.transpose(1, 2)?.contiguous()?;
-
     #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() {
+    if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
         let conv_state = cache.conv_state.contiguous()?;
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
-            &x_t,
+            x,
             &weight,
             &conv_state,
             dims.conv_kernel_size,
@@ -723,8 +720,10 @@ fn causal_conv1d_update(
             GdnStateSlots::from_option(cache.slots.as_ref()),
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
+
+    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
     if x_t.device().is_metal() {
@@ -827,16 +826,15 @@ fn causal_conv1d_full(
     cache: &mut GdnLayerCache,
 ) -> Result<Tensor> {
     let (batch_size, seq_len, conv_dim) = x.dims3()?;
-    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() {
+    if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
-            &x_t,
+            x,
             &weight,
             &cache.conv_state,
             dims.conv_kernel_size,
@@ -844,8 +842,10 @@ fn causal_conv1d_full(
             GdnStateSlots::from_option(cache.slots.as_ref()),
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
+
+    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
     if x_t.device().is_metal() {

@@ -201,10 +201,10 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
 ///
-/// x: [B, conv_dim, S] (S=1 for update)  weight: [conv_dim, kernel_size]
+/// x: [B, S, conv_dim] (S=1 for update)  weight: [conv_dim, kernel_size]
 /// conv_state: [B, conv_dim, kernel_size], or the [cap, conv_dim, kernel_size] pool with `Pooled` slots.
 /// Update mutates `conv_state` in place; full writes a fresh state (gathered) or the pool rows (pooled).
-/// Returns (output [B, conv_dim, S], conv_state after the step).
+/// Returns (output [B, S, conv_dim], conv_state after the step).
 #[cfg(feature = "cuda")]
 pub fn causal_conv1d_cuda(
     x: &Tensor,
@@ -229,7 +229,7 @@ pub fn causal_conv1d_cuda(
         dtype_code: i32,
     ) -> Result<(Tensor, Tensor)> {
         let dev = x.device().as_cuda_device()?;
-        let (batch_size, conv_dim, seq_len) = x.dims3()?;
+        let (batch_size, seq_len, conv_dim) = x.dims3()?;
         let pooled = matches!(slots, GdnStateSlots::Pooled(_));
 
         let (x_s, x_l) = x.storage_and_layout();
@@ -238,6 +238,7 @@ pub fn causal_conv1d_cuda(
             _ => candle::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
+        let x_stride = x_l.stride();
 
         let (w_s, w_l) = weight.storage_and_layout();
         let w_s = match &*w_s {
@@ -273,6 +274,9 @@ pub fn causal_conv1d_cuda(
                             batch_size as i32,
                             conv_dim as i32,
                             kernel_size as i32,
+                            x_stride[0] as i64,
+                            x_stride[1] as i64,
+                            x_stride[2] as i64,
                             slot_ptr,
                             dtype_code,
                             stream,
@@ -285,7 +289,7 @@ pub fn causal_conv1d_cuda(
             let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
                 candle::Storage::Cuda(output_storage),
-                (batch_size, conv_dim, 1usize),
+                (batch_size, 1usize, conv_dim),
             ));
 
             Ok((output, conv_state_new))
@@ -321,6 +325,9 @@ pub fn causal_conv1d_cuda(
                         conv_dim as i32,
                         seq_len as i32,
                         kernel_size as i32,
+                        x_stride[0] as i64,
+                        x_stride[1] as i64,
+                        x_stride[2] as i64,
                         slot_ptr,
                         dtype_code,
                         stream,
@@ -332,7 +339,7 @@ pub fn causal_conv1d_cuda(
             let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
             let output = Tensor::from((
                 candle::Storage::Cuda(output_storage),
-                (batch_size, conv_dim, seq_len),
+                (batch_size, seq_len, conv_dim),
             ));
 
             let new_conv_state = match cs_buf {
@@ -350,7 +357,6 @@ pub fn causal_conv1d_cuda(
         }
     }
 
-    let x = x.contiguous()?;
     let weight = weight.contiguous()?;
     if matches!(slots, GdnStateSlots::Pooled(_)) && !conv_state.is_contiguous() {
         candle_core::bail!("pooled conv state must be contiguous");
@@ -358,10 +364,10 @@ pub fn causal_conv1d_cuda(
     let conv_state = conv_state.contiguous()?;
     match x.dtype() {
         DType::F16 => {
-            cuda_fwd::<half::f16>(&x, &weight, &conv_state, kernel_size, is_update, slots, 0)
+            cuda_fwd::<half::f16>(x, &weight, &conv_state, kernel_size, is_update, slots, 0)
         }
         DType::BF16 => {
-            cuda_fwd::<half::bf16>(&x, &weight, &conv_state, kernel_size, is_update, slots, 1)
+            cuda_fwd::<half::bf16>(x, &weight, &conv_state, kernel_size, is_update, slots, 1)
         }
         other => candle_core::bail!("causal_conv1d_cuda only supports f16/bf16, got {:?}", other),
     }
@@ -748,14 +754,35 @@ pub fn fused_decode_recurrence_cuda(
     candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }
 
-/// CUDA-accelerated fused GDN gating computation.
-///
-/// Computes: beta = sigmoid(b), g = -exp(a_log) * softplus(a + dt_bias)
+/// CUDA RMSNorm with a SiLU gate; packed final dimensions are split by the norm weight width.
 #[cfg(feature = "cuda")]
 pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
+
+    fn normalize_layout(
+        dims: &[usize],
+        strides: &[usize],
+        hidden_dim: usize,
+    ) -> Result<([usize; 4], [usize; 4])> {
+        match (dims, strides) {
+            ([d0, d1], [s0, s1]) if d1 % hidden_dim == 0 => Ok((
+                [1, *d0, d1 / hidden_dim, hidden_dim],
+                [0, *s0, hidden_dim * *s1, *s1],
+            )),
+            ([d0, d1, d2], [s0, s1, s2]) if d2 % hidden_dim == 0 => Ok((
+                [*d0, *d1, d2 / hidden_dim, hidden_dim],
+                [*s0, *s1, hidden_dim * *s2, *s2],
+            )),
+            ([d0, d1, d2, d3], [s0, s1, s2, s3]) if *d3 == hidden_dim => {
+                Ok(([*d0, *d1, *d2, *d3], [*s0, *s1, *s2, *s3]))
+            }
+            _ => candle::bail!(
+                "gated RMSNorm expects rank 2-4 with a final dimension divisible by {hidden_dim}"
+            ),
+        }
+    }
 
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
@@ -766,10 +793,8 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
         eps: f64,
         dtype_code: i32,
     ) -> Result<Tensor> {
-        let x = x.contiguous()?;
-        let gate = gate.contiguous()?;
         let weight = weight.contiguous()?;
-        let (rows, hidden_dim) = x.dims2()?;
+        let hidden_dim = weight.dims1()?;
         let dev = x.device().as_cuda_device()?;
 
         let (x_s, x_l) = x.storage_and_layout();
@@ -778,6 +803,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
             _ => candle::bail!("x must be a cuda tensor"),
         };
         let x_offset = x_l.start_offset();
+        let (dims, x_stride) = normalize_layout(x.dims(), x_l.stride(), hidden_dim)?;
 
         let (gate_s, gate_l) = gate.storage_and_layout();
         let gate_s = match &*gate_s {
@@ -785,6 +811,10 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
             _ => candle::bail!("gate must be a cuda tensor"),
         };
         let gate_offset = gate_l.start_offset();
+        let (gate_dims, gate_stride) = normalize_layout(gate.dims(), gate_l.stride(), hidden_dim)?;
+        if gate_dims != dims {
+            candle::bail!("gated RMSNorm inputs have incompatible logical shapes");
+        }
 
         let (weight_s, weight_l) = weight.storage_and_layout();
         let weight_s = match &*weight_s {
@@ -793,6 +823,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
         };
         let weight_offset = weight_l.start_offset();
 
+        let rows = dims[0] * dims[1] * dims[2];
         let output_buf = unsafe { dev.alloc::<T>(rows * hidden_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
@@ -807,6 +838,16 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
                 output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                 rows as i32,
                 hidden_dim as i32,
+                dims[1] as i32,
+                dims[2] as i32,
+                x_stride[0] as i64,
+                x_stride[1] as i64,
+                x_stride[2] as i64,
+                x_stride[3] as i64,
+                gate_stride[0] as i64,
+                gate_stride[1] as i64,
+                gate_stride[2] as i64,
+                gate_stride[3] as i64,
                 eps as f32,
                 dtype_code,
                 stream,
@@ -816,7 +857,7 @@ pub fn rmsnorm_gated_cuda(x: &Tensor, gate: &Tensor, weight: &Tensor, eps: f64) 
         let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
         Ok(Tensor::from((
             candle::Storage::Cuda(output_storage),
-            (rows, hidden_dim),
+            x.shape().clone(),
         )))
     }
 
@@ -1289,7 +1330,7 @@ mod tests {
         let kernel_size = 4;
         let x = tensor3(
             patterned(batch_size * conv_dim, 50, 0.08, 0.01),
-            (batch_size, conv_dim, 1),
+            (batch_size, 1, conv_dim),
             &dev,
         )?
         .to_dtype(DType::BF16)?;
@@ -1350,7 +1391,7 @@ mod tests {
         let kernel_size = 4;
         let x = tensor3(
             patterned(batch_size * conv_dim * seq_len, 20, 0.08, 0.01),
-            (batch_size, conv_dim, seq_len),
+            (batch_size, seq_len, conv_dim),
             &dev,
         )?
         .to_dtype(DType::F16)?;
@@ -1376,7 +1417,7 @@ mod tests {
             GdnStateSlots::Gathered,
         )?;
         let (first, first_state) = causal_conv1d_cuda(
-            &x.narrow(2, 0, split)?,
+            &x.narrow(1, 0, split)?,
             &weight,
             &initial_state,
             kernel_size,
@@ -1384,14 +1425,14 @@ mod tests {
             GdnStateSlots::Gathered,
         )?;
         let (second, chunked_state) = causal_conv1d_cuda(
-            &x.narrow(2, split, seq_len - split)?,
+            &x.narrow(1, split, seq_len - split)?,
             &weight,
             &first_state,
             kernel_size,
             false,
             GdnStateSlots::Gathered,
         )?;
-        let chunked = Tensor::cat(&[first, second], 2)?;
+        let chunked = Tensor::cat(&[first, second], 1)?;
 
         assert_close(
             "causal conv output",
@@ -1403,6 +1444,188 @@ mod tests {
             "causal conv state",
             &flat(&one_shot_state.to_dtype(DType::F32)?)?,
             &flat(&chunked_state.to_dtype(DType::F32)?)?,
+            2.0e-3,
+        );
+        Ok(())
+    }
+
+    #[derive(Clone, Copy)]
+    struct ConvShape {
+        batch_size: usize,
+        seq_len: usize,
+        conv_dim: usize,
+        kernel_size: usize,
+    }
+
+    fn causal_conv_reference(
+        x: &[f32],
+        weight: &[f32],
+        initial_state: &[f32],
+        shape: ConvShape,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let ConvShape {
+            batch_size,
+            seq_len,
+            conv_dim,
+            kernel_size,
+        } = shape;
+        let mut state = initial_state.to_vec();
+        let mut output = vec![0.0f32; batch_size * seq_len * conv_dim];
+        for b in 0..batch_size {
+            for pos in 0..seq_len {
+                for ch in 0..conv_dim {
+                    let state_base = (b * conv_dim + ch) * kernel_size;
+                    state.copy_within(state_base + 1..state_base + kernel_size, state_base);
+                    state[state_base + kernel_size - 1] = x[(b * seq_len + pos) * conv_dim + ch];
+                    let weight_base = ch * kernel_size;
+                    let mut sum = 0.0f32;
+                    for k in 0..kernel_size {
+                        sum += state[state_base + k] * weight[weight_base + k];
+                    }
+                    output[(b * seq_len + pos) * conv_dim + ch] = sum / (1.0 + (-sum).exp());
+                }
+            }
+        }
+        (output, state)
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn causal_conv1d_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let batch_size = 3;
+        let conv_dim = 19;
+        let kernel_size = 4;
+        let prefix = 3;
+        let physical_dim = conv_dim + 7;
+
+        for seq_len in [1usize, 5] {
+            let logical = patterned(batch_size * seq_len * conv_dim, 60 + seq_len, 0.08, 0.01);
+            let mut packed = vec![-7.0f32; batch_size * seq_len * physical_dim];
+            for b in 0..batch_size {
+                for pos in 0..seq_len {
+                    let logical_base = (b * seq_len + pos) * conv_dim;
+                    let packed_base = (b * seq_len + pos) * physical_dim + prefix;
+                    packed[packed_base..packed_base + conv_dim]
+                        .copy_from_slice(&logical[logical_base..logical_base + conv_dim]);
+                }
+            }
+            let x = Tensor::from_vec(packed, (batch_size, seq_len, physical_dim), &dev)?
+                .to_dtype(DType::F16)?
+                .narrow(2, prefix, conv_dim)?;
+            assert!(!x.is_contiguous());
+            assert!(x.layout().start_offset() > 0);
+
+            let weight = tensor2(
+                patterned(conv_dim * kernel_size, 70 + seq_len, 0.05, -0.01),
+                (conv_dim, kernel_size),
+                &dev,
+            )?
+            .to_dtype(DType::F16)?;
+            let state = tensor3(
+                patterned(batch_size * conv_dim * kernel_size, 80 + seq_len, 0.03, 0.0),
+                (batch_size, conv_dim, kernel_size),
+                &dev,
+            )?
+            .to_dtype(DType::F16)?;
+            let x_host = flat(&x.to_dtype(DType::F32)?.contiguous()?)?;
+            let weight_host = flat(&weight.to_dtype(DType::F32)?)?;
+            let state_host = flat(&state.to_dtype(DType::F32)?)?;
+            let (expected, expected_state) = causal_conv_reference(
+                &x_host,
+                &weight_host,
+                &state_host,
+                ConvShape {
+                    batch_size,
+                    seq_len,
+                    conv_dim,
+                    kernel_size,
+                },
+            );
+
+            let (actual, actual_state) = causal_conv1d_cuda(
+                &x,
+                &weight,
+                &state,
+                kernel_size,
+                seq_len == 1,
+                GdnStateSlots::Gathered,
+            )?;
+            assert_eq!(actual.dims3()?, (batch_size, seq_len, conv_dim));
+            assert!(actual.is_contiguous());
+            assert_close(
+                "strided causal conv output",
+                &flat(&actual.to_dtype(DType::F32)?)?,
+                &expected,
+                2.0e-3,
+            );
+            assert_close(
+                "strided causal conv state",
+                &flat(&actual_state.to_dtype(DType::F32)?)?,
+                &expected_state,
+                5.0e-4,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn rmsnorm_gated_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let (batch_size, seq_len, heads, hidden_dim) = (3, 2, 5, 17);
+        let x_physical_dim = hidden_dim + 7;
+        let value_dim = heads * hidden_dim;
+        let gate_physical_dim = value_dim + 7;
+        let x = Tensor::from_vec(
+            patterned(batch_size * seq_len * heads * x_physical_dim, 91, 0.2, 0.01),
+            (batch_size, heads, seq_len, x_physical_dim),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?
+        .narrow(3, 2, hidden_dim)?
+        .transpose(1, 2)?;
+        let gate = Tensor::from_vec(
+            patterned(batch_size * seq_len * gate_physical_dim, 92, 0.3, -0.02),
+            (batch_size, seq_len, gate_physical_dim),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?
+        .narrow(2, 3, value_dim)?;
+        let weight = Tensor::from_vec(patterned(hidden_dim, 93, 0.1, 1.0), (hidden_dim,), &dev)?
+            .to_dtype(DType::BF16)?;
+        assert!(!x.is_contiguous());
+        assert!(!gate.is_contiguous());
+        assert!(x.layout().start_offset() > 0 && gate.layout().start_offset() > 0);
+
+        let rows = batch_size * seq_len * heads;
+        let x_host = flat(&x.to_dtype(DType::F32)?.contiguous()?)?;
+        let gate_host = flat(&gate.to_dtype(DType::F32)?.contiguous()?)?;
+        let weight_host = flat(&weight.to_dtype(DType::F32)?)?;
+        let eps = 1.0e-6;
+        let mut expected = vec![0.0f32; rows * hidden_dim];
+        for row in 0..rows {
+            let base = row * hidden_dim;
+            let mean_square = x_host[base..base + hidden_dim]
+                .iter()
+                .map(|value| value * value)
+                .sum::<f32>()
+                / hidden_dim as f32;
+            let inv_rms = (mean_square + eps as f32).sqrt().recip();
+            for col in 0..hidden_dim {
+                let gate_value = gate_host[base + col];
+                let silu_gate = gate_value / (1.0 + (-gate_value).exp());
+                expected[base + col] = x_host[base + col] * inv_rms * weight_host[col] * silu_gate;
+            }
+        }
+
+        let actual = rmsnorm_gated_cuda(&x, &gate, &weight, eps)?;
+        assert_eq!(actual.shape(), x.shape());
+        assert!(actual.is_contiguous());
+        assert_close(
+            "strided gated RMSNorm",
+            &flat(&actual.to_dtype(DType::F32)?)?,
+            &expected,
             2.0e-3,
         );
         Ok(())
@@ -1504,7 +1727,7 @@ mod tests {
 
             let x = tensor3(
                 patterned(batch * conv_dim * seq_len, 20, 0.08, 0.01),
-                (batch, conv_dim, seq_len),
+                (batch, seq_len, conv_dim),
                 &dev,
             )?
             .to_dtype(DType::BF16)?;
