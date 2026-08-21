@@ -981,6 +981,8 @@ __global__ void gdn_decode_recurrence_kernel(
     const float *__restrict__ dt_bias, float *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_v_dim, int tiled_v_heads,
+    int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
     const int32_t *__restrict__ slot_indices) {
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
@@ -999,8 +1001,6 @@ __global__ void gdn_decode_recurrence_kernel(
   const int conv_dim = 2 * key_dim + value_dim;
 
   const T *row = mixed_qkv + bidx * conv_dim;
-  const T *b_row = b + bidx * num_v_heads;
-  const T *a_row = a + bidx * num_v_heads;
   float *state_bh = state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
   T *out_bh = output + bh * head_v_dim;
 
@@ -1038,8 +1038,9 @@ __global__ void gdn_decode_recurrence_kernel(
   if (tid == 0) {
     q_mul = rsqrtf(red_q[0] + 1.0e-6f) * rsqrtf((float)BK);
     k_mul = rsqrtf(red_k[0] + 1.0e-6f);
-    float b_val = (float)b_row[hv];
-    float a_val = (float)a_row[hv] + dt_bias[hv];
+    float b_val = (float)b[bidx * b_batch_stride + hv * b_head_stride];
+    float a_val =
+        (float)a[bidx * a_batch_stride + hv * a_head_stride] + dt_bias[hv];
     float softplus_val = a_val > 20.0f
                              ? a_val
                              : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
@@ -1091,6 +1092,8 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
     const float *__restrict__ dt_bias, float *__restrict__ state,
     T *__restrict__ output, int batch_size, int num_k_heads,
     int num_v_heads, int head_k_dim, int head_v_dim, int tiled_v_heads,
+    int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
     const int32_t *__restrict__ slot_indices) {
   const int v_tile = blockIdx.x;
   const int bh = blockIdx.y;
@@ -1109,8 +1112,6 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   const int conv_dim = 2 * key_dim + value_dim;
 
   const T *row = mixed_qkv + bidx * conv_dim;
-  const T *b_row = b + bidx * num_v_heads;
-  const T *a_row = a + bidx * num_v_heads;
   float *state_bh =
       state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * head_k_dim * head_v_dim;
   T *out_bh = output + bh * head_v_dim;
@@ -1150,8 +1151,9 @@ __global__ void gdn_decode_recurrence_kernel_fallback(
   if (tid == 0) {
     q_mul = rsqrtf(red_q[0] + 1.0e-6f) * rsqrtf((float)head_k_dim);
     k_mul = rsqrtf(red_k[0] + 1.0e-6f);
-    float b_val = (float)b_row[hv];
-    float a_val = (float)a_row[hv] + dt_bias[hv];
+    float b_val = (float)b[bidx * b_batch_stride + hv * b_head_stride];
+    float a_val =
+        (float)a[bidx * a_batch_stride + hv * a_head_stride] + dt_bias[hv];
     float softplus_val = a_val > 20.0f
                              ? a_val
                              : (a_val > 0.0f ? a_val + log1pf(expf(-a_val))
@@ -1199,7 +1201,9 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
                       const float *a_log, const float *dt_bias, float *state,
                       void *output, int batch_size, int num_k_heads,
                       int num_v_heads, int head_k_dim, int head_v_dim,
-                      int tiled_v_heads, const int32_t *slot_indices, int dtype,
+                      int tiled_v_heads, int64_t b_batch_stride,
+                      int64_t b_head_stride, int64_t a_batch_stride,
+                      int64_t a_head_stride, const int32_t *slot_indices, int dtype,
                       int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int BV = GDN_DECODE_VALUE_TILE;
@@ -1212,13 +1216,15 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
           <<<grid, block, 0, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
               a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, slot_indices);
+              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
+              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
     } else {
       gdn_decode_recurrence_kernel<__nv_bfloat16, 128, BV>
           <<<grid, block, 0, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
               (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
               batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+              b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
               slot_indices);
     }
   } else if (head_k_dim == 64) {
@@ -1227,13 +1233,15 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
           <<<grid, block, 0, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
               a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_v_dim, tiled_v_heads, slot_indices);
+              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
+              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
     } else {
       gdn_decode_recurrence_kernel<__nv_bfloat16, 64, BV>
           <<<grid, block, 0, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
               (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
               batch_size, num_k_heads, num_v_heads, head_v_dim, tiled_v_heads,
+              b_batch_stride, b_head_stride, a_batch_stride, a_head_stride,
               slot_indices);
     }
   } else {
@@ -1244,14 +1252,16 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
           <<<grid, block, smem, custream>>>(
               (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
               a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-              num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, slot_indices);
+              num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride,
+              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
     } else {
       gdn_decode_recurrence_kernel_fallback<__nv_bfloat16, BV, MAX_K>
           <<<grid, block, smem, custream>>>(
               (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
               (const __nv_bfloat16 *)a, a_log, dt_bias, state, (__nv_bfloat16 *)output,
               batch_size, num_k_heads, num_v_heads, head_k_dim, head_v_dim,
-              tiled_v_heads, slot_indices);
+              tiled_v_heads, b_batch_stride, b_head_stride, a_batch_stride,
+              a_head_stride, slot_indices);
     }
   }
 }

@@ -412,8 +412,11 @@ fn recurrence_cuda_from_convolved(
     dtype: DType,
 ) -> Result<Tensor> {
     let mixed_qkv = mixed_qkv.contiguous()?;
-    let b = b.contiguous()?;
-    let a = a.contiguous()?;
+    let (b, a) = if seq_len == 1 {
+        (b.clone(), a.clone())
+    } else {
+        (b.contiguous()?, a.contiguous()?)
+    };
     let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
     let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
     let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;

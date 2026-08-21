@@ -628,6 +628,9 @@ pub fn fused_decode_recurrence_cuda(
             _ => candle::bail!("b must be a cuda tensor"),
         };
         let b_offset = b_l.start_offset();
+        let b_stride = b_l.stride();
+        let b_batch_stride = b_stride[0];
+        let b_head_stride = b_stride[b_stride.len() - 1];
 
         let (a_s, a_l) = a.storage_and_layout();
         let a_s = match &*a_s {
@@ -635,6 +638,9 @@ pub fn fused_decode_recurrence_cuda(
             _ => candle::bail!("a must be a cuda tensor"),
         };
         let a_offset = a_l.start_offset();
+        let a_stride = a_l.stride();
+        let a_batch_stride = a_stride[0];
+        let a_head_stride = a_stride[a_stride.len() - 1];
 
         let (alog_s, alog_l) = a_log.storage_and_layout();
         let alog_s = match &*alog_s {
@@ -677,6 +683,10 @@ pub fn fused_decode_recurrence_cuda(
                     head_k_dim as i32,
                     head_v_dim as i32,
                     i32::from(tiled_v_heads),
+                    b_batch_stride as i64,
+                    b_head_stride as i64,
+                    a_batch_stride as i64,
+                    a_head_stride as i64,
                     slot_ptr,
                     dtype_code,
                     stream,
@@ -989,7 +999,7 @@ pub fn fused_gdn_gating_cuda(
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
-    use candle_core::Device;
+    use candle_core::{Device, D};
 
     #[derive(Clone, Copy)]
     struct RecurrenceCase {
@@ -1205,6 +1215,7 @@ mod tests {
         tiled_v_heads: bool,
         dtype: DType,
         pooled: bool,
+        strided_gates: bool,
     ) -> Result<()> {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
@@ -1215,18 +1226,32 @@ mod tests {
             dev,
         )?
         .to_dtype(dtype)?;
-        let b = tensor3(
+        let b_reference = tensor3(
             patterned(batch_size * num_v_heads, 41, 0.2, 0.1),
             (batch_size, 1, num_v_heads),
             dev,
         )?
         .to_dtype(dtype)?;
-        let a = tensor3(
+        let a_reference = tensor3(
             patterned(batch_size * num_v_heads, 42, 0.18, -0.04),
             (batch_size, 1, num_v_heads),
             dev,
         )?
         .to_dtype(dtype)?;
+        let packed_gates = strided_gates
+            .then(|| Tensor::cat(&[&b_reference, &a_reference], D::Minus1))
+            .transpose()?;
+        let (b, a) = if let Some(packed_gates) = packed_gates {
+            assert!(!packed_gates
+                .narrow(D::Minus1, 0, num_v_heads)?
+                .is_contiguous());
+            (
+                packed_gates.narrow(D::Minus1, 0, num_v_heads)?,
+                packed_gates.narrow(D::Minus1, num_v_heads, num_v_heads)?,
+            )
+        } else {
+            (b_reference.clone(), a_reference.clone())
+        };
         let a_log = Tensor::from_vec(patterned(num_v_heads, 43, 0.05, -0.2), (num_v_heads,), dev)?;
         let dt_bias = Tensor::from_vec(patterned(num_v_heads, 44, 0.1, 0.3), (num_v_heads,), dev)?;
 
@@ -1273,8 +1298,8 @@ mod tests {
         )?;
         let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
             &mixed_qkv,
-            &b,
-            &a,
+            &b_reference,
+            &a_reference,
             &a_log,
             &dt_bias,
             batch_size,
@@ -1317,8 +1342,9 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false)?;
-        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true)
+        run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false, false)?;
+        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true, false)?;
+        run_fused_decode_case(&dev, 8, 4, 8, 128, 128, false, DType::BF16, false, true)
     }
 
     #[test]
