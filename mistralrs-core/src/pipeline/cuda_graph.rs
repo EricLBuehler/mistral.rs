@@ -419,12 +419,19 @@ struct CudaGraphCopyCompletion {
     stream: Arc<CudaStream>,
     pending: bool,
     active: bool,
+    ordered_after_graph: bool,
 }
 
-#[derive(Default)]
 struct CudaGraphHostStaging {
     buffers: HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>,
     completions: HashMap<DeviceLocation, CudaGraphCopyCompletion>,
+    graph_complete: CudaEvent,
+    graph_stream: Arc<CudaStream>,
+    graph_pending: bool,
+}
+
+fn same_cuda_stream(left: &CudaStream, right: &CudaStream) -> bool {
+    Arc::ptr_eq(left.context(), right.context()) && left.cu_stream() == right.cu_stream()
 }
 
 impl Drop for CudaGraphHostStaging {
@@ -964,10 +971,10 @@ impl CudaDecodeGraphMetadataBuffers {
 pub(crate) struct CudaDecodeGraphEntry {
     key: CudaDecodeGraphKey,
     graph: CudaGraphHandle,
+    host_staging: CudaGraphHostStaging,
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     state_indices: Option<CudaGraphVarMap>,
-    host_staging: CudaGraphHostStaging,
     _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
@@ -1052,11 +1059,12 @@ impl CudaDecodeGraphState {
                 ),
             }
         })?;
-        entry.host_staging.order_before_graph(&entry.graph.stream)?;
+        entry.host_staging.order_before_graph()?;
         entry
             .graph
             .launch()
             .map_err(|err| err.context("CUDA graph replay launch failed"))?;
+        entry.host_staging.record_graph_complete()?;
         let replay = CudaDecodeGraphReplay {
             logits: step.narrow_rows(&entry.logits)?,
             spec_state: entry.spec_state.clone(),
@@ -1162,6 +1170,7 @@ where
     restore_event_tracking_after_capture(&stream, restore_event_tracking);
 
     graph.upload()?;
+    let host_staging = CudaGraphHostStaging::new(graph.stream.clone())?;
     tracing::debug!(
         "Captured CUDA decode graph: batch bucket {batch} ({real_batch} live rows), {seq_len} query tokens"
     );
@@ -1169,10 +1178,10 @@ where
     Ok(CudaDecodeGraphEntry {
         key,
         graph,
+        host_staging,
         input_ids,
         metadata_buffers,
         state_indices,
-        host_staging: CudaGraphHostStaging::default(),
         _metadata: metadata,
         logits: graph_logits,
         spec_state: None,
@@ -1665,6 +1674,20 @@ impl CudaGraphPinnedBuffer {
 }
 
 impl CudaGraphHostStaging {
+    fn new(graph_stream: Arc<CudaStream>) -> candle_core::Result<Self> {
+        let graph_complete = graph_stream
+            .context()
+            .new_event(None)
+            .map_err(candle_core::Error::wrap)?;
+        Ok(Self {
+            buffers: HashMap::new(),
+            completions: HashMap::new(),
+            graph_complete,
+            graph_stream,
+            graph_pending: false,
+        })
+    }
+
     fn update(
         &mut self,
         copy: impl FnOnce(&mut Self) -> candle_core::Result<()>,
@@ -1677,6 +1700,7 @@ impl CudaGraphHostStaging {
 
     fn begin_update(&mut self) -> candle_core::Result<()> {
         for completion in self.completions.values_mut() {
+            completion.ordered_after_graph = false;
             if completion.active {
                 completion
                     .stream
@@ -1720,14 +1744,22 @@ impl CudaGraphHostStaging {
         result
     }
 
-    fn order_before_graph(&self, graph_stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    fn order_before_graph(&self) -> candle_core::Result<()> {
         for completion in self.completions.values() {
-            if completion.pending && completion.stream.cu_stream() != graph_stream.cu_stream() {
-                graph_stream
+            if completion.pending && !same_cuda_stream(&completion.stream, &self.graph_stream) {
+                self.graph_stream
                     .wait(&completion.event)
                     .map_err(candle_core::Error::wrap)?;
             }
         }
+        Ok(())
+    }
+
+    fn record_graph_complete(&mut self) -> candle_core::Result<()> {
+        self.graph_complete
+            .record(&self.graph_stream)
+            .map_err(candle_core::Error::wrap)?;
+        self.graph_pending = true;
         Ok(())
     }
 
@@ -1748,11 +1780,21 @@ impl CudaGraphHostStaging {
                     stream: stream.clone(),
                     pending: false,
                     active: false,
+                    ordered_after_graph: false,
                 })
             }
         };
-        if completion.stream.cu_stream() != stream.cu_stream() {
+        if !same_cuda_stream(&completion.stream, stream) {
             candle_core::bail!("CUDA graph metadata stream changed during replay");
+        }
+        if self.graph_pending && !completion.ordered_after_graph {
+            if !same_cuda_stream(&completion.stream, &self.graph_stream) {
+                completion
+                    .stream
+                    .wait(&self.graph_complete)
+                    .map_err(candle_core::Error::wrap)?;
+            }
+            completion.ordered_after_graph = true;
         }
         completion.active = true;
         Ok(())
@@ -1979,7 +2021,7 @@ mod tests {
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
-        let mut host_staging = CudaGraphHostStaging::default();
+        let mut host_staging = CudaGraphHostStaging::new(device.as_cuda_device()?.cuda_stream())?;
         host_staging.update(|host_staging| {
             buffers.copy_from(&updated, &[255], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
@@ -2010,6 +2052,29 @@ mod tests {
             .to_device(&Device::Cpu)?
             .to_vec1::<u32>()?;
         assert_eq!(state_indices, vec![11, 13, 17]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_staging_orders_secondary_streams_both_directions() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let graph_stream = device.as_cuda_device()?.cuda_stream();
+        let copy_stream = graph_stream.fork()?;
+        assert!(!same_cuda_stream(&graph_stream, &copy_stream));
+        let location = device.location();
+        let mut staging = CudaGraphHostStaging::new(graph_stream.clone())?;
+
+        staging.record_graph_complete()?;
+        staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
+        assert!(staging.completions[&location].ordered_after_graph);
+        staging.order_before_graph()?;
+
+        staging.record_graph_complete()?;
+        staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
+        assert!(staging.completions[&location].ordered_after_graph);
+        staging.order_before_graph()?;
+        graph_stream.synchronize()?;
         Ok(())
     }
 
