@@ -13,11 +13,14 @@ pub enum GdnInputProjection {
         in_proj_z: Arc<dyn QuantMethod>,
         in_proj_b: Arc<dyn QuantMethod>,
         in_proj_a: Arc<dyn QuantMethod>,
+        merged_qkv_z: Option<crate::ops::MergedDenseProjection>,
+        merged_b_a: Option<crate::ops::MergedDenseProjection>,
     },
     SplitQkvzGroupedBa {
         in_proj_qkv: Arc<dyn QuantMethod>,
         in_proj_z: Arc<dyn QuantMethod>,
         in_proj_ba: Arc<dyn QuantMethod>,
+        merged_qkv_z: Option<crate::ops::MergedDenseProjection>,
     },
 }
 
@@ -45,24 +48,52 @@ impl GdnInputProjection {
                 in_proj_z,
                 in_proj_b,
                 in_proj_a,
+                merged_qkv_z,
+                merged_b_a,
             } => {
-                let (mixed_qkv, mixed_z) = shared_qkv_z(x, in_proj_qkv, in_proj_z)?;
+                let (mixed_qkv, mixed_z) = if let Some(merged_qkv_z) = merged_qkv_z {
+                    let [mixed_qkv, mixed_z]: [Tensor; 2] =
+                        merged_qkv_z.forward(x)?.try_into().map_err(|_| {
+                            candle_core::Error::msg(
+                                "packed GDN QKV/Z returned the wrong output count",
+                            )
+                        })?;
+                    (mixed_qkv.contiguous()?, mixed_z)
+                } else {
+                    shared_qkv_z(x, in_proj_qkv, in_proj_z)?
+                };
+                let (mixed_b, mixed_a) = if let Some(merged_b_a) = merged_b_a {
+                    let [mixed_b, mixed_a]: [Tensor; 2] =
+                        merged_b_a.forward(x)?.try_into().map_err(|_| {
+                            candle_core::Error::msg(
+                                "packed GDN B/A returned the wrong output count",
+                            )
+                        })?;
+                    (mixed_b, mixed_a)
+                } else {
+                    (in_proj_b.forward(x)?, in_proj_a.forward(x)?)
+                };
                 GdnProjection::from_split(
-                    mixed_qkv,
-                    mixed_z,
-                    in_proj_b.forward(x)?,
-                    in_proj_a.forward(x)?,
-                    dims,
-                    batch_size,
-                    seq_len,
+                    mixed_qkv, mixed_z, mixed_b, mixed_a, dims, batch_size, seq_len,
                 )
             }
             Self::SplitQkvzGroupedBa {
                 in_proj_qkv,
                 in_proj_z,
                 in_proj_ba,
+                merged_qkv_z,
             } => {
-                let (mixed_qkv, mixed_z) = shared_qkv_z(x, in_proj_qkv, in_proj_z)?;
+                let (mixed_qkv, mixed_z) = if let Some(merged_qkv_z) = merged_qkv_z {
+                    let [mixed_qkv, mixed_z]: [Tensor; 2] =
+                        merged_qkv_z.forward(x)?.try_into().map_err(|_| {
+                            candle_core::Error::msg(
+                                "packed GDN QKV/Z returned the wrong output count",
+                            )
+                        })?;
+                    (mixed_qkv.contiguous()?, mixed_z)
+                } else {
+                    shared_qkv_z(x, in_proj_qkv, in_proj_z)?
+                };
                 GdnProjection::from_split_grouped_ba(
                     mixed_qkv,
                     mixed_z,

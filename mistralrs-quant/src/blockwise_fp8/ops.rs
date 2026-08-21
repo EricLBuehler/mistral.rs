@@ -39,13 +39,14 @@ impl Fp8BlockwiseDequantize {
         let grid_y = weight_l.dim(0)?.div_ceil(self.weight_block_size[0]);
         let grid_x = weight_l.dim(1)?.div_ceil(self.weight_block_size[1]);
 
-        let res = vec![T::zero(); weight.len()];
+        let res = vec![T::zero(); weight_l.shape().elem_count()];
+        let output_width = weight_l.dim(1)?;
 
         (0..grid_y).into_par_iter().for_each(|y| {
             (0..grid_x).into_par_iter().for_each(|x| {
                 let res_ptr = res.as_ptr() as *mut T;
 
-                let scale = scale[y * scale_l.stride()[0] + x];
+                let scale = scale[scale_l.start_offset() + y * scale_l.stride()[0] + x];
 
                 let start_y = y * self.weight_block_size[0];
                 let end_y = start_y + self.weight_block_size[0];
@@ -64,11 +65,12 @@ impl Fp8BlockwiseDequantize {
                             break;
                         }
 
-                        let weight_pos = row_offset + weight_x;
+                        let weight_pos = weight_l.start_offset() + row_offset + weight_x;
+                        let output_pos = weight_y * output_width + weight_x;
 
                         // SAFETY: We know each thread will only update indepedant values!
                         unsafe {
-                            *res_ptr.wrapping_add(weight_pos) =
+                            *res_ptr.wrapping_add(output_pos) =
                                 T::from_f64((weight[weight_pos].to_f32() * scale) as f64);
                         }
                     }
@@ -98,11 +100,11 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
         let candle_core::CpuStorage::F32(scale) = scale_s else {
             candle_core::bail!("Expected F8E4M3 weight!");
         };
-        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        if !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to be continuous");
         }
-        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        if !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to be continuous");
         }
         if weight_l.dims().len() != 2 {
             candle_core::bail!("Expected weight to be rank 2");
@@ -147,11 +149,11 @@ impl CustomOp2 for Fp8BlockwiseDequantize {
             candle_core::bail!("Do not have blockwise FP8 dequant kernels.");
         }
 
-        if weight_l.start_offset() != 0 || !weight_l.is_contiguous() {
-            candle_core::bail!("Expected weight to have start offset 0, continuous");
+        if !weight_l.is_contiguous() {
+            candle_core::bail!("Expected weight to be continuous");
         }
-        if scale_l.start_offset() != 0 || !scale_l.is_contiguous() {
-            candle_core::bail!("Expected scales to have start offset 0, continuous");
+        if !scale_l.is_contiguous() {
+            candle_core::bail!("Expected scales to be continuous");
         }
         if weight_l.dims().len() != 2 {
             candle_core::bail!("Expected weight to be rank 2");

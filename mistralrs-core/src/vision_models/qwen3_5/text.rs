@@ -78,6 +78,7 @@ pub(super) struct FullAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
+    merged_qkv: Option<crate::ops::MergedDenseProjection>,
     o_proj: Arc<dyn QuantMethod>,
     pub(super) q_norm: GemmaRmsNorm,
     pub(super) k_norm: GemmaRmsNorm,
@@ -119,34 +120,61 @@ impl FullAttention {
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
 
-        // q_proj outputs num_heads * head_dim * 2 (doubled for gate)
-        let q_proj = ColumnParallelLayer::new(
-            cfg.hidden_size,
-            num_heads * head_dim * 2,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb_sa.pp("q_proj"),
-        )?;
         let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
-        let k_proj = ColumnParallelLayer::new_with_shard(
+        let q_shard = mistralrs_quant::Shard::Simple {
+            dim: 0,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let q_dim = num_heads * head_dim * 2;
+        let kv_dim = num_kv_heads * head_dim;
+        let packed = ColumnParallelLayer::new_packed(
             cfg.hidden_size,
-            num_kv_heads * head_dim,
+            &[q_dim, kv_dim, kv_dim],
+            &["q_proj", "k_proj", "v_proj"],
             &cfg.quantization_config,
             false,
             comm,
-            kv_shard,
-            vb_sa.pp("k_proj"),
+            Some(&[q_shard, kv_shard, kv_shard]),
+            vb_sa.clone(),
         )?;
-        let v_proj = ColumnParallelLayer::new_with_shard(
-            cfg.hidden_size,
-            num_kv_heads * head_dim,
-            &cfg.quantization_config,
-            false,
-            comm,
-            kv_shard,
-            vb_sa.pp("v_proj"),
-        )?;
+        let (q_proj, k_proj, v_proj, merged_qkv) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                group.constituents[2].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => (
+                ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    q_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb_sa.pp("q_proj"),
+                )?,
+                ColumnParallelLayer::new_with_shard(
+                    cfg.hidden_size,
+                    kv_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    kv_shard,
+                    vb_sa.pp("k_proj"),
+                )?,
+                ColumnParallelLayer::new_with_shard(
+                    cfg.hidden_size,
+                    kv_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    kv_shard,
+                    vb_sa.pp("v_proj"),
+                )?,
+                None,
+            ),
+        };
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             cfg.hidden_size,
@@ -163,6 +191,7 @@ impl FullAttention {
             q_proj,
             k_proj,
             v_proj,
+            merged_qkv,
             o_proj,
             q_norm,
             k_norm,
@@ -192,8 +221,14 @@ impl FullAttention {
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let (q_gate, k, v) =
-            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
+        let (q_gate, k, v) = if let Some(merged_qkv) = &self.merged_qkv {
+            let [q_gate, k, v]: [Tensor; 3] = merged_qkv.forward(x)?.try_into().map_err(|_| {
+                candle_core::Error::msg("packed QKV returned the wrong output count")
+            })?;
+            (q_gate, k, v)
+        } else {
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?
+        };
         // Split q_gate into q and gate
         let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
         let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;

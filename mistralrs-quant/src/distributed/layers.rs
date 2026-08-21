@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-#[cfg(all(feature = "cuda", has_marlin_kernels))]
-use candle_core::DType;
-use candle_core::{Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::{blockwise_fp8_linear_b, blockwise_fp8_moe},
+    blockwise_fp8::{
+        blockwise_fp8_linear_b, blockwise_fp8_module_kind, blockwise_fp8_moe,
+        scale_shard_from_weight_shard, BlockwiseFp8ModuleKind,
+    },
     distributed,
     gptq::gptq_linear,
     lora::maybe_wrap_dynamic_lora_with_key,
@@ -14,8 +15,8 @@ use crate::{
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::apply_immediate_isq_sharded,
-    ActivationQuantizationScheme, AfqLayer, BnbLinear, DistributedKind, LoraLinearSpec,
-    LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    ActivationQuantizationScheme, AfqLayer, BlockwiseFP8Linear, BnbLinear, DistributedKind,
+    LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
     QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
@@ -63,6 +64,227 @@ fn load_weight_source_dense(
         None
     };
     Ok(Some((weight, bias)))
+}
+
+struct PackedWeights {
+    packed: Arc<dyn QuantMethod>,
+    constituents: Vec<Arc<dyn QuantMethod>>,
+    rows: Vec<usize>,
+}
+
+enum PackedWeightKind {
+    Unquantized,
+    BlockwiseFp8 {
+        block_size: [usize; 2],
+        activation_scheme: Option<crate::Fp8ActivationScheme>,
+    },
+}
+
+fn load_packed_weights(
+    in_dim: usize,
+    out_dims: &[usize],
+    names: &[&str],
+    config: &Option<QuantizedConfig>,
+    shards: &[Shard],
+    vb: ShardedVarBuilder,
+) -> Result<Option<PackedWeights>> {
+    if out_dims.is_empty() || out_dims.len() != names.len() || names.len() != shards.len() {
+        candle_core::bail!(
+            "packed projection requires matching nonempty output dimensions, names, and shards"
+        );
+    }
+    if crate::get_immediate_isq().is_some() {
+        return Ok(None);
+    }
+
+    let builders = names.iter().map(|name| vb.pp(name)).collect::<Vec<_>>();
+    if builders
+        .iter()
+        .any(|builder| should_apply_immediate_isq(builder) || builder.weight_source().is_some())
+    {
+        return Ok(None);
+    }
+
+    let kind = match config {
+        None => PackedWeightKind::Unquantized,
+        Some(
+            config @ QuantizedConfig::Fp8 {
+                weight_block_size, ..
+            },
+        ) => {
+            let Some(weight_block_size) = weight_block_size else {
+                return Ok(None);
+            };
+            let module_kinds = builders
+                .iter()
+                .map(|builder| blockwise_fp8_module_kind(config, builder))
+                .collect::<Result<Vec<_>>>()?;
+            let Some(&first) = module_kinds.first() else {
+                unreachable!()
+            };
+            if first == BlockwiseFp8ModuleKind::Missing
+                || module_kinds.iter().any(|kind| *kind != first)
+            {
+                return Ok(None);
+            }
+            match first {
+                BlockwiseFp8ModuleKind::Missing => unreachable!(),
+                BlockwiseFp8ModuleKind::Unquantized => PackedWeightKind::Unquantized,
+                BlockwiseFp8ModuleKind::Quantized => {
+                    let QuantizedConfig::Fp8 {
+                        activation_scheme,
+                        fmt,
+                        ..
+                    } = config
+                    else {
+                        unreachable!()
+                    };
+                    let [row_block, col_block]: [usize; 2] = weight_block_size
+                        .as_slice()
+                        .try_into()
+                        .map_err(|_| {
+                            candle_core::Error::msg(format!(
+                                "expected FP8 weight block size with two dimensions, got {weight_block_size:?}"
+                            ))
+                        })?;
+                    if row_block == 0 || col_block == 0 {
+                        candle_core::bail!(
+                            "expected nonzero FP8 weight block dimensions, got {weight_block_size:?}"
+                        );
+                    }
+                    if fmt.as_deref().is_some_and(|fmt| fmt != "e4m3") {
+                        candle_core::bail!(
+                            "unsupported blockwise FP8 format {fmt:?}; expected `e4m3`"
+                        );
+                    }
+                    PackedWeightKind::BlockwiseFp8 {
+                        block_size: [row_block, col_block],
+                        activation_scheme: *activation_scheme,
+                    }
+                }
+            }
+        }
+        Some(_) => return Ok(None),
+    };
+
+    match kind {
+        PackedWeightKind::Unquantized => {
+            let parts = builders
+                .iter()
+                .zip(out_dims)
+                .zip(shards)
+                .map(|((builder, &out_dim), &shard)| {
+                    builder.get_with_hints((out_dim, in_dim), "weight", shard)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let rows = parts
+                .iter()
+                .map(|part| part.dim(0))
+                .collect::<Result<Vec<_>>>()?;
+            let packed_weight = Tensor::cat(&parts.iter().collect::<Vec<_>>(), 0)?;
+            let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                Linear::new(packed_weight.clone(), None),
+            ))?) as Arc<dyn QuantMethod>;
+            let mut constituents = Vec::with_capacity(parts.len());
+            let mut offset = 0;
+            for &rows in &rows {
+                let weight = packed_weight.narrow(0, offset, rows)?;
+                constituents.push(Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    Linear::new(weight, None),
+                ))?) as Arc<dyn QuantMethod>);
+                offset += rows;
+            }
+            Ok(Some(PackedWeights {
+                packed,
+                constituents,
+                rows,
+            }))
+        }
+        PackedWeightKind::BlockwiseFp8 {
+            block_size,
+            activation_scheme,
+        } => {
+            let mut weights = Vec::with_capacity(builders.len());
+            let mut scales = Vec::with_capacity(builders.len());
+            let mut rows = Vec::with_capacity(builders.len());
+            for (((builder, &out_dim), &shard), name) in
+                builders.iter().zip(out_dims).zip(shards).zip(names)
+            {
+                let scale_shard =
+                    scale_shard_from_weight_shard([out_dim, in_dim], block_size, shard)?;
+                let weight = builder.get_with_hints_dtype(
+                    (out_dim, in_dim),
+                    "weight",
+                    shard,
+                    DType::F8E4M3,
+                )?;
+                let local_rows = weight.dim(0)?;
+                if !local_rows.is_multiple_of(block_size[0]) {
+                    tracing::debug!(
+                        projection = *name,
+                        rows = local_rows,
+                        block_rows = block_size[0],
+                        "Skipping FP8 projection packing because an output boundary is not block aligned"
+                    );
+                    return Ok(None);
+                }
+                let scale = builder.get_with_hints_dtype(
+                    (
+                        out_dim.div_ceil(block_size[0]),
+                        in_dim.div_ceil(block_size[1]),
+                    ),
+                    "weight_scale_inv",
+                    scale_shard,
+                    DType::F32,
+                )?;
+                if scale.dim(0)? != local_rows / block_size[0] {
+                    candle_core::bail!(
+                        "FP8 projection `{}` has {} local scale rows for {local_rows} weight rows and block size {}",
+                        builder.prefix(),
+                        scale.dim(0)?,
+                        block_size[0]
+                    );
+                }
+                rows.push(local_rows);
+                weights.push(weight);
+                scales.push(scale);
+            }
+
+            let packed_weight = Tensor::cat(&weights.iter().collect::<Vec<_>>(), 0)?;
+            let packed_scales = Tensor::cat(&scales.iter().collect::<Vec<_>>(), 0)?;
+            let make_layer =
+                |weight: Tensor, weight_scale_inv: Tensor| -> Result<Arc<dyn QuantMethod>> {
+                    Ok(Arc::new(BlockwiseFP8Linear::new(
+                        QuantMethodConfig::BlockwiseFP8 {
+                            weight,
+                            weight_scale_inv,
+                            bias: None,
+                            dequant_dtype: vb.dtype(),
+                            weight_block_size: block_size.to_vec(),
+                            activation_scheme,
+                        },
+                    )?))
+                };
+            let packed = make_layer(packed_weight.clone(), packed_scales.clone())?;
+            let mut constituents = Vec::with_capacity(rows.len());
+            let mut weight_offset = 0;
+            let mut scale_offset = 0;
+            for &rows in &rows {
+                let scale_rows = rows / block_size[0];
+                constituents.push(make_layer(
+                    packed_weight.narrow(0, weight_offset, rows)?,
+                    packed_scales.narrow(0, scale_offset, scale_rows)?,
+                )?);
+                weight_offset += rows;
+                scale_offset += scale_rows;
+            }
+            Ok(Some(PackedWeights {
+                packed,
+                constituents,
+                rows,
+            }))
+        }
+    }
 }
 
 fn matformer_narrow(
@@ -829,10 +1051,6 @@ impl ColumnParallelLayer {
         Ok(vec_layers)
     }
 
-    /// Load several column-parallel projections sharing `in_dim` into one packed weight owned by
-    /// `packed`, exposing each constituent as a view-backed layer wrapped exactly as
-    /// `new_with_shard` would produce. Returns `None` when packing does not apply (quantized
-    /// config, ISQ, bias, missing tensors); callers fall back to separate layers.
     #[allow(clippy::too_many_arguments)]
     pub fn new_packed(
         in_dim: usize,
@@ -844,58 +1062,45 @@ impl ColumnParallelLayer {
         shards: Option<&[Shard]>,
         vb: ShardedVarBuilder,
     ) -> Result<Option<PackedColumnParallel>> {
-        if config.is_some() || bias || crate::get_immediate_isq().is_some() {
+        if bias {
             return Ok(None);
         }
         let default_shard = shard(0, comm.rank(), comm.world_size());
-        let mut parts = Vec::with_capacity(names.len());
-        let mut rows_per_rank = Vec::with_capacity(names.len());
-        for (i, (name, &out_dim)) in names.iter().zip(out_dims).enumerate() {
-            let vb_n = vb.pp(name);
-            if should_apply_immediate_isq(&vb_n)
-                || load_weight_source_linear_shard(default_shard, &vb_n)?.is_some()
-                || !vb_n.contains_tensor("weight")
-            {
-                return Ok(None);
-            }
-            let s = shards.map_or(default_shard, |s| s[i]);
-            let part = vb_n.get_with_hints((out_dim, in_dim), "weight", s)?;
-            rows_per_rank.push(part.dim(0)?);
-            parts.push(part);
+        if shards.is_some_and(|shards| shards.len() != names.len()) {
+            candle_core::bail!("packed projection shard count does not match projection count");
         }
-        // One owning packed tensor; the per-projection tensors are temporaries
-        let packed_weight = Tensor::cat(&parts.iter().collect::<Vec<_>>(), 0)?;
-        drop(parts);
-        let packed = Arc::new(<UnquantLinear as QuantMethod>::new(
-            QuantMethodConfig::Unquantized(Linear::new(packed_weight.clone(), None)),
-        )?) as Arc<dyn QuantMethod>;
+        let shards = (0..names.len())
+            .map(|i| shards.map_or(default_shard, |shards| shards[i]))
+            .collect::<Vec<_>>();
+        let Some(loaded) =
+            load_packed_weights(in_dim, out_dims, names, config, &shards, vb.clone())?
+        else {
+            return Ok(None);
+        };
 
-        let mut constituents = Vec::with_capacity(names.len());
-        let mut offset = 0;
-        for (i, (name, &out_dim)) in names.iter().zip(out_dims).enumerate() {
+        let mut constituents = Vec::with_capacity(loaded.constituents.len());
+        for (((name, &out_dim), &shard), weight) in names
+            .iter()
+            .zip(out_dims)
+            .zip(&shards)
+            .zip(loaded.constituents)
+        {
             let vb_n = vb.pp(name);
-            let s = shards.map_or(default_shard, |s| s[i]);
-            let rows = rows_per_rank[i];
-            let view = packed_weight.narrow(0, offset, rows)?;
-            let view_linear = Arc::new(<UnquantLinear as QuantMethod>::new(
-                QuantMethodConfig::Unquantized(Linear::new(view, None)),
-            )?) as Arc<dyn QuantMethod>;
             let wrapped = maybe_wrap_dynamic_lora_with_key(
                 &vb_n,
-                view_linear,
+                weight,
                 LoraSiteKey::new(vb_n.prefix()),
-                LoraLinearSpec::column(in_dim, out_dim, s),
+                LoraLinearSpec::column(in_dim, out_dim, shard),
             )?;
             constituents.push(Arc::new(Self {
                 weight: wrapped,
                 bias: None,
             }) as Arc<dyn QuantMethod>);
-            offset += rows;
         }
-        Ok(Some(PackedColumnParallel {
-            packed,
+        Ok(Some(PackedLinear {
+            packed: loaded.packed,
             constituents,
-            rows_per_rank,
+            rows_per_rank: loaded.rows,
         }))
     }
 
@@ -943,7 +1148,7 @@ impl ColumnParallelLayer {
                 bias: None,
             }) as Arc<dyn QuantMethod>);
         }
-        Ok(Some(PackedColumnParallel {
+        Ok(Some(PackedLinear {
             packed,
             constituents,
             rows_per_rank: vec![rows; chunks],
@@ -951,13 +1156,13 @@ impl ColumnParallelLayer {
     }
 }
 
-/// A group of column-parallel projections backed by one packed weight; `constituents` are
-/// zero-copy row views of `packed`'s weight with their usual wrapper stacks.
-pub struct PackedColumnParallel {
+pub struct PackedLinear {
     pub packed: Arc<dyn QuantMethod>,
     pub constituents: Vec<Arc<dyn QuantMethod>>,
     pub rows_per_rank: Vec<usize>,
 }
+
+pub type PackedColumnParallel = PackedLinear;
 
 impl QuantMethod for ColumnParallelLayer {
     fn new(_method: QuantMethodConfig) -> Result<Self>
@@ -1262,6 +1467,54 @@ impl ReplicatedLayer {
         let this: Arc<dyn QuantMethod> =
             apply_immediate_isq_sharded(this_unquant, base_vb, Some(crate::Shard::default()))?;
         Ok(this)
+    }
+
+    pub fn new_packed(
+        lora_specs: &[LoraLinearSpec],
+        names: &[&str],
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Option<PackedLinear>> {
+        if bias || lora_specs.is_empty() || lora_specs.len() != names.len() {
+            return Ok(None);
+        }
+        let in_dim = lora_specs[0].in_features();
+        if lora_specs
+            .iter()
+            .any(|spec| !spec.is_replicated() || spec.in_features() != in_dim)
+        {
+            candle_core::bail!(
+                "packed replicated projections must share an input dimension and replicated layout"
+            );
+        }
+        let out_dims = lora_specs
+            .iter()
+            .map(LoraLinearSpec::out_features)
+            .collect::<Vec<_>>();
+        let shards = vec![Shard::default(); names.len()];
+        let Some(loaded) =
+            load_packed_weights(in_dim, &out_dims, names, config, &shards, vb.clone())?
+        else {
+            return Ok(None);
+        };
+
+        let mut constituents = Vec::with_capacity(loaded.constituents.len());
+        for ((name, spec), weight) in names.iter().zip(lora_specs).zip(loaded.constituents) {
+            let vb_n = vb.pp(name);
+            let wrapped = maybe_wrap_dynamic_lora_with_key(
+                &vb_n,
+                weight,
+                LoraSiteKey::new(vb_n.prefix()),
+                spec.clone(),
+            )?;
+            constituents.push(Arc::new(Self(wrapped)) as Arc<dyn QuantMethod>);
+        }
+        Ok(Some(PackedLinear {
+            packed: loaded.packed,
+            constituents,
+            rows_per_rank: loaded.rows,
+        }))
     }
 
     #[allow(clippy::new_ret_no_self)]
@@ -2006,11 +2259,11 @@ mod tests {
         RowParallelLayer,
     };
     use crate::{
-        create_isq_executor, set_immediate_isq_config, ActivationQuantizationScheme, Comm, Id,
-        ImmediateIsqConfig, ImmediateIsqOverride, IsqCaptureMode, IsqExecutorConfig, IsqPlanParams,
-        IsqRequest, IsqType, LoraLayerRegistry, LoraLinearSpec, QuantMethod, QuantMethodConfig,
-        QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde,
-        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
+        create_isq_executor, set_immediate_isq_config, ActivationQuantizationScheme, Comm,
+        Fp8ActivationScheme, Id, ImmediateIsqConfig, ImmediateIsqOverride, IsqCaptureMode,
+        IsqExecutorConfig, IsqPlanParams, IsqRequest, IsqType, LoraLayerRegistry, LoraLinearSpec,
+        QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedConfig,
+        QuantizedSerde, QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
     };
 
     #[derive(Debug)]
@@ -2264,6 +2517,191 @@ mod tests {
                 .to_vec2::<f32>()?,
             vec![vec![1., 2.]]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn packed_column_shards_each_projection_before_concatenating() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let matrix = |rows: usize, base: f32| {
+            Tensor::from_vec(
+                (0..rows)
+                    .flat_map(|row| [base + row as f32, base + row as f32 + 0.5])
+                    .collect::<Vec<_>>(),
+                (rows, 2),
+                &device,
+            )
+        };
+        let tensors = HashMap::from([
+            ("q.weight".to_string(), matrix(8, 0.)?),
+            ("k.weight".to_string(), matrix(4, 100.)?),
+            ("v.weight".to_string(), matrix(4, 200.)?),
+        ]);
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device.clone());
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 1, 2)?);
+        let shards = [
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: 2,
+            },
+            Shard::Offset {
+                dim: 0,
+                offset: 0,
+                len: 2,
+            },
+            Shard::Offset {
+                dim: 0,
+                offset: 2,
+                len: 2,
+            },
+        ];
+        let group = ColumnParallelLayer::new_packed(
+            2,
+            &[8, 4, 4],
+            &["q", "k", "v"],
+            &None,
+            false,
+            &comm,
+            Some(&shards),
+            vb,
+        )?
+        .expect("compatible projections should pack");
+
+        assert_eq!(group.rows_per_rank, [4, 2, 2]);
+        assert_eq!(
+            group.packed.dequantize_w()?.to_vec2::<f32>()?,
+            vec![
+                vec![4., 4.5],
+                vec![5., 5.5],
+                vec![6., 6.5],
+                vec![7., 7.5],
+                vec![100., 100.5],
+                vec![101., 101.5],
+                vec![202., 202.5],
+                vec![203., 203.5],
+            ]
+        );
+
+        let input = Tensor::new(&[[2f32, -1.]], &device)?;
+        let packed_output = group.packed.forward(&input)?;
+        let mut offset = 0;
+        for (projection, &rows) in group.constituents.iter().zip(&group.rows_per_rank) {
+            assert_eq!(
+                projection.forward(&input)?.to_vec2::<f32>()?,
+                packed_output.narrow(1, offset, rows)?.to_vec2::<f32>()?
+            );
+            offset += rows;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_blockwise_fp8_preserves_scale_rows_and_outputs() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let tensors = HashMap::from([
+            (
+                "gate.weight".to_string(),
+                Tensor::ones((4, 4), DType::F8E4M3, &device)?,
+            ),
+            (
+                "gate.weight_scale_inv".to_string(),
+                Tensor::new(&[[2f32, 3.], [5., 7.]], &device)?,
+            ),
+            (
+                "up.weight".to_string(),
+                Tensor::ones((4, 4), DType::F8E4M3, &device)?,
+            ),
+            (
+                "up.weight_scale_inv".to_string(),
+                Tensor::new(&[[11f32, 13.], [17., 19.]], &device)?,
+            ),
+        ]);
+        let vb = ShardedSafeTensors::wrap(tensors, DType::BF16, device.clone());
+        let config = Some(QuantizedConfig::Fp8 {
+            weight_block_size: Some(vec![2, 2]),
+            activation_scheme: Some(Fp8ActivationScheme::Dynamic),
+            fmt: Some("e4m3".to_string()),
+            modules_to_not_convert: Vec::new(),
+        });
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        let group = ColumnParallelLayer::new_packed(
+            4,
+            &[4, 4],
+            &["gate", "up"],
+            &config,
+            false,
+            &comm,
+            None,
+            vb.clone(),
+        )?
+        .expect("aligned FP8 projections should pack");
+        let gate = ColumnParallelLayer::new(4, 4, &config, false, &comm, vb.pp("gate"))?;
+        let up = ColumnParallelLayer::new(4, 4, &config, false, &comm, vb.pp("up"))?;
+        let expected_weight = Tensor::cat(&[&gate.dequantize_w()?, &up.dequantize_w()?], 0)?;
+        assert_eq!(
+            group
+                .packed
+                .dequantize_w()?
+                .to_dtype(DType::F32)?
+                .to_vec2::<f32>()?,
+            expected_weight.to_dtype(DType::F32)?.to_vec2::<f32>()?
+        );
+
+        let input = Tensor::new(&[[1f32, 2., 3., 4.]], &device)?.to_dtype(DType::BF16)?;
+        let packed_output = group.packed.forward(&input)?.to_dtype(DType::F32)?;
+        for (index, projection) in group.constituents.iter().enumerate() {
+            assert_eq!(
+                projection
+                    .forward(&input)?
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?,
+                packed_output.narrow(1, index * 4, 4)?.to_vec2::<f32>()?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_blockwise_fp8_falls_back_on_unaligned_boundary() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let tensors = HashMap::from([
+            (
+                "first.weight".to_string(),
+                Tensor::ones((3, 4), DType::F8E4M3, &device)?,
+            ),
+            (
+                "first.weight_scale_inv".to_string(),
+                Tensor::ones((2, 2), DType::F32, &device)?,
+            ),
+            (
+                "second.weight".to_string(),
+                Tensor::ones((4, 4), DType::F8E4M3, &device)?,
+            ),
+            (
+                "second.weight_scale_inv".to_string(),
+                Tensor::ones((2, 2), DType::F32, &device)?,
+            ),
+        ]);
+        let vb = ShardedSafeTensors::wrap(tensors, DType::BF16, device.clone());
+        let config = Some(QuantizedConfig::Fp8 {
+            weight_block_size: Some(vec![2, 2]),
+            activation_scheme: Some(Fp8ActivationScheme::Dynamic),
+            fmt: Some("e4m3".to_string()),
+            modules_to_not_convert: Vec::new(),
+        });
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        assert!(ColumnParallelLayer::new_packed(
+            4,
+            &[3, 4],
+            &["first", "second"],
+            &config,
+            false,
+            &comm,
+            None,
+            vb,
+        )?
+        .is_none());
         Ok(())
     }
 

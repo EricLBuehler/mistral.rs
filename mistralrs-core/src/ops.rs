@@ -4022,14 +4022,9 @@ impl MergedDenseProjection {
     }
 
     pub(crate) fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        let Some(ys) = self.forward_packed(xs)? else {
             return self.originals.iter().map(|proj| proj.forward(xs)).collect();
-        }
-        let ys = self.proj.forward(xs)?;
+        };
         let mut parts = Vec::with_capacity(self.output_dims.len());
         let mut offset = 0;
         for &dim in &self.output_dims {
@@ -4037,6 +4032,18 @@ impl MergedDenseProjection {
             offset += dim;
         }
         Ok(parts)
+    }
+
+    pub(crate) fn forward_packed(&self, xs: &Tensor) -> Result<Option<Tensor>> {
+        if self
+            .originals
+            .iter()
+            .any(|proj| proj.is_dynamic_lora_active())
+        {
+            Ok(None)
+        } else {
+            self.proj.forward(xs).map(Some)
+        }
     }
 }
 
@@ -4254,6 +4261,40 @@ mod tests {
         let active = with_lora_execution(Some(Arc::new(execution)), || merged.forward(&input))?;
         assert_eq!(active[0].to_vec2::<f32>()?, vec![vec![6., 3.]]);
         assert_eq!(active[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
+        Ok(())
+    }
+
+    #[test]
+    fn merged_projection_keeps_multirow_gate_up_packed() -> candle_core::Result<()> {
+        let packed_weight =
+            Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.], [1., -1.]], &Device::Cpu)?;
+        let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(packed_weight, None),
+        ))?) as Arc<dyn QuantMethod>;
+        let dummy = || {
+            Arc::new(mistralrs_quant::DummyLayer::placeholder(
+                mistralrs_quant::DummyLayerInfo::unknown(),
+            )) as Arc<dyn QuantMethod>
+        };
+        let merged = MergedDenseProjection::from_packed(&mistralrs_quant::PackedLinear {
+            packed,
+            constituents: vec![dummy(), dummy()],
+            rows_per_rank: vec![2, 2],
+        });
+        let input = Tensor::new(&[[2f32, 3.], [4., 5.]], &Device::Cpu)?;
+        let packed_output = merged
+            .forward_packed(&input)?
+            .expect("inactive constituents keep the packed path");
+        assert_eq!(packed_output.dims(), &[2, 4]);
+        let actual = super::split_mul_and_act(&packed_output, 2, crate::layers::Activation::Silu)?;
+        let gate = packed_output
+            .narrow(candle_core::D::Minus1, 0, 2)?
+            .contiguous()?;
+        let up = packed_output
+            .narrow(candle_core::D::Minus1, 2, 2)?
+            .contiguous()?;
+        let expected = super::mul_and_act(&gate, &up, crate::layers::Activation::Silu)?;
+        assert_eq!(actual.to_vec2::<f32>()?, expected.to_vec2::<f32>()?);
         Ok(())
     }
 

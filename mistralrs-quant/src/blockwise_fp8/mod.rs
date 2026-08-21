@@ -16,7 +16,7 @@ pub(crate) use ops::{fp8_blockwise_matmul, fp8_indexed_moe_gemm};
 mod ffi;
 
 use crate::{
-    generate_isq, generate_isq_imatrix, has_missing_required_tensors,
+    generate_isq, generate_isq_imatrix,
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     make_dummy_or_error, ActivationQuantizationScheme, AfqBits, AfqGroupSize, AfqLayer, FP8Linear,
     Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType, QuantMethod,
@@ -594,46 +594,20 @@ pub fn blockwise_fp8_linear_b(
         weight_block_size,
         activation_scheme,
         fmt,
-        modules_to_not_convert,
         ..
     } = config
     else {
         candle_core::bail!("Unexpected quantization config.")
     };
 
-    let has_weight = vb.contains_tensor("weight");
-    let has_scale = vb.contains_tensor("weight_scale_inv");
-    let prefix = vb.prefix();
-    let module_path = canonical_language_model_module_path(&prefix);
-    let is_excluded = modules_to_not_convert
-        .iter()
-        .any(|module| canonical_language_model_module_path(module) == module_path);
-
-    if is_excluded {
-        if has_scale {
-            candle_core::bail!(
-                "FP8-excluded module `{}` unexpectedly has `weight_scale_inv`",
-                vb.prefix()
-            );
-        }
-        if !has_weight {
+    match blockwise_fp8_module_kind(config, &vb)? {
+        BlockwiseFp8ModuleKind::Missing => {
             return make_dummy_or_error("blockwise_fp8_linear", &vb, &["weight"]);
         }
-        return unquantized_linear_b_with_hints(in_dim, out_dim, bias, hints, vb);
-    }
-
-    if has_weight && !has_scale {
-        if !modules_to_not_convert.is_empty() {
-            candle_core::bail!(
-                "FP8 module `{}` has no `weight_scale_inv` and is not listed in `modules_to_not_convert`",
-                vb.prefix()
-            );
+        BlockwiseFp8ModuleKind::Unquantized => {
+            return unquantized_linear_b_with_hints(in_dim, out_dim, bias, hints, vb);
         }
-        return unquantized_linear_b_with_hints(in_dim, out_dim, bias, hints, vb);
-    }
-
-    if has_missing_required_tensors(&vb, &["weight", "weight_scale_inv"]) {
-        return make_dummy_or_error("blockwise_fp8_linear", &vb, &["weight", "weight_scale_inv"]);
+        BlockwiseFp8ModuleKind::Quantized => {}
     }
 
     // Blockwise FP8 requires weight_block_size to be set
@@ -684,6 +658,64 @@ pub fn blockwise_fp8_linear_b(
     Ok(Arc::new(layer))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BlockwiseFp8ModuleKind {
+    Missing,
+    Unquantized,
+    Quantized,
+}
+
+pub(crate) fn blockwise_fp8_module_kind(
+    config: &QuantizedConfig,
+    vb: &ShardedVarBuilder,
+) -> Result<BlockwiseFp8ModuleKind> {
+    let QuantizedConfig::Fp8 {
+        modules_to_not_convert,
+        ..
+    } = config
+    else {
+        candle_core::bail!("Unexpected quantization config.")
+    };
+
+    let has_weight = vb.contains_tensor("weight");
+    let has_scale = vb.contains_tensor("weight_scale_inv");
+    let prefix = vb.prefix();
+    let module_path = canonical_language_model_module_path(&prefix);
+    let is_excluded = modules_to_not_convert
+        .iter()
+        .any(|module| canonical_language_model_module_path(module) == module_path);
+
+    if is_excluded {
+        if has_scale {
+            candle_core::bail!(
+                "FP8-excluded module `{}` unexpectedly has `weight_scale_inv`",
+                vb.prefix()
+            );
+        }
+        return Ok(if has_weight {
+            BlockwiseFp8ModuleKind::Unquantized
+        } else {
+            BlockwiseFp8ModuleKind::Missing
+        });
+    }
+
+    if has_weight && !has_scale {
+        if !modules_to_not_convert.is_empty() {
+            candle_core::bail!(
+                "FP8 module `{}` has no `weight_scale_inv` and is not listed in `modules_to_not_convert`",
+                vb.prefix()
+            );
+        }
+        return Ok(BlockwiseFp8ModuleKind::Unquantized);
+    }
+
+    Ok(if has_weight && has_scale {
+        BlockwiseFp8ModuleKind::Quantized
+    } else {
+        BlockwiseFp8ModuleKind::Missing
+    })
+}
+
 fn canonical_language_model_module_path(path: &str) -> Cow<'_, str> {
     for prefix in ["model.language_model.", "language_model.model."] {
         if let Some(suffix) = path.strip_prefix(prefix) {
@@ -711,7 +743,7 @@ fn unquantized_linear_b_with_hints(
     )?))
 }
 
-fn scale_shard_from_weight_shard(
+pub(crate) fn scale_shard_from_weight_shard(
     weight_shape: [usize; 2],
     weight_block_size: [usize; 2],
     weight_shard: Shard,

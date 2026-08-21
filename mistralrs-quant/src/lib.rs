@@ -143,7 +143,7 @@ pub use blockwise_fp8::{
 pub use distributed::{
     layers::{
         compute_kv_shard, compute_n_kv_groups, validate_tp_head_layout, ColumnParallelLayer,
-        PackedColumnParallel, PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
+        PackedColumnParallel, PackedLinear, PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
@@ -2076,6 +2076,7 @@ pub fn try_fused_gate_up_metal(
         GluActivationType::Gelu => 1,
         GluActivationType::GeluErf => 2,
         GluActivationType::Relu => 3,
+        GluActivationType::Sigmoid => return Ok(None),
     };
 
     let xs = xs.contiguous()?;
