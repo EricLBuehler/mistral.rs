@@ -29,12 +29,18 @@ using namespace cute;
 constexpr int kActivationGroupSize = 128;
 constexpr int kThreadsPerGroup = 16;
 constexpr int kMaxGroupsPerBlock = 16;
+constexpr int kSmallMThreshold = 32;
+constexpr int kSmallMOutputTileN = 128;
+// CUTLASS's blockwise builder only accepts auto-carveout policies; this yields eight stages for the 128x16 tile.
+constexpr int kSmallMCooperativeCarveoutBytes = 64 * 1024;
 constexpr float kFp8Max = 448.0f;
 constexpr float kScaleEpsilon = 1.0e-10f;
 
 template <class Output, int ScaleM, int ScaleN, int ScaleK,
           class MmaTileShape, class ClusterShape, class EpilogueScheduler,
-          class MainloopScheduler, bool SwapAB = false>
+          class MainloopScheduler, bool SwapAB = false,
+          int MainloopCarveoutBytes = 0,
+          class TileScheduler = void>
 struct BlockwiseGemm {
   static constexpr bool kSwapAB = SwapAB;
 
@@ -87,38 +93,68 @@ struct BlockwiseGemm {
           conditional_t<SwapAB, LayoutDT, LayoutD>, AlignmentD,
           EpilogueScheduler, EpilogueOperation>::CollectiveOp;
 
+  using MainloopStageCount = cutlass::gemm::collective::StageCountAutoCarveout<
+      static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage)) +
+      MainloopCarveoutBytes>;
+
   using CollectiveMainloop = conditional_t<
       SwapAB,
       typename cutlass::gemm::collective::CollectiveBuilder<
           ArchTag, OperatorClass, ElementB, tuple<LayoutBT, LayoutSFA>,
           AlignmentB, ElementA, tuple<LayoutAT, LayoutSFB>, AlignmentA,
           ElementAccumulator, MmaTileShape, ClusterShape,
-          cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
-              sizeof(typename CollectiveEpilogue::SharedStorage))>,
-          MainloopScheduler>::CollectiveOp,
+          MainloopStageCount, MainloopScheduler>::CollectiveOp,
       typename cutlass::gemm::collective::CollectiveBuilder<
           ArchTag, OperatorClass, ElementA, tuple<LayoutA, LayoutSFA>,
           AlignmentA, ElementB, tuple<LayoutB, LayoutSFB>, AlignmentB,
           ElementAccumulator, MmaTileShape, ClusterShape,
-          cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
-              sizeof(typename CollectiveEpilogue::SharedStorage))>,
-          MainloopScheduler>::CollectiveOp>;
+          MainloopStageCount, MainloopScheduler>::CollectiveOp>;
 
   using Kernel = cutlass::gemm::kernel::GemmUniversal<
-      Shape<int, int, int, int>, CollectiveMainloop, CollectiveEpilogue>;
+      Shape<int, int, int, int>, CollectiveMainloop, CollectiveEpilogue,
+      TileScheduler>;
 };
 
 template <typename Output>
-using CooperativeGemm = BlockwiseGemm<
+using LargeMGemm = BlockwiseGemm<
     Output, 1, 128, 128, Shape<_128, _128, _128>, Shape<_1, _2, _1>,
     cutlass::epilogue::TmaWarpSpecializedCooperative,
     cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum>;
 
 template <typename Output>
-using SwapGemm = BlockwiseGemm<
+using SmallMGemm = BlockwiseGemm<
     Output, 128, 1, 128, Shape<_128, _16, _128>, Shape<_1, _1, _1>,
     cutlass::epilogue::TmaWarpSpecialized,
     cutlass::gemm::KernelTmaWarpSpecializedPingpongFP8BlockScaledAccum, true>;
+
+template <typename Output>
+using SmallMCooperativeGemm = BlockwiseGemm<
+    Output, 128, 1, 128, Shape<_128, _16, _128>, Shape<_1, _1, _1>,
+    cutlass::epilogue::TmaWarpSpecializedCooperative,
+    cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum,
+    true, kSmallMCooperativeCarveoutBytes>;
+
+template <typename Output>
+using SmallMStreamKGemm = BlockwiseGemm<
+    Output, 128, 1, 128, Shape<_128, _16, _128>, Shape<_1, _1, _1>,
+    cutlass::epilogue::TmaWarpSpecializedCooperative,
+    cutlass::gemm::KernelTmaWarpSpecializedCooperativeFP8BlockScaledAccum,
+    true, kSmallMCooperativeCarveoutBytes,
+    cutlass::gemm::StreamKScheduler>;
+
+bool use_small_m_gemm(int m) {
+  return m < kSmallMThreshold || m % 4 != 0;
+}
+
+bool use_stream_k_gemm(int n, int sm_count) {
+  const int output_tiles = (n + kSmallMOutputTileN - 1) / kSmallMOutputTileN;
+  return output_tiles * 2 < sm_count;
+}
+
+bool use_cooperative_gemm(int n, int sm_count) {
+  const int output_tiles = (n + kSmallMOutputTileN - 1) / kSmallMOutputTileN;
+  return output_tiles >= sm_count * 2;
+}
 
 template <typename Gemm>
 typename Gemm::Kernel::Arguments make_arguments(
@@ -342,10 +378,18 @@ int launch_quantize(const T *input, __nv_fp8_e4m3 *output, float *scales,
 
 template <typename Output>
 int dispatch_workspace_size(int m, int n, int k, int sm_count, size_t *bytes) {
-  if (m % 4 == 0) {
-    return workspace_size<CooperativeGemm<Output>>(m, n, k, sm_count, bytes);
+  if (use_small_m_gemm(m)) {
+    if (use_stream_k_gemm(n, sm_count)) {
+      return workspace_size<SmallMStreamKGemm<Output>>(m, n, k, sm_count,
+                                                       bytes);
+    }
+    if (use_cooperative_gemm(n, sm_count)) {
+      return workspace_size<SmallMCooperativeGemm<Output>>(m, n, k, sm_count,
+                                                          bytes);
+    }
+    return workspace_size<SmallMGemm<Output>>(m, n, k, sm_count, bytes);
   }
-  return workspace_size<SwapGemm<Output>>(m, n, k, sm_count, bytes);
+  return workspace_size<LargeMGemm<Output>>(m, n, k, sm_count, bytes);
 }
 
 template <typename Output>
@@ -353,12 +397,22 @@ int dispatch_gemm(const void *activation, const void *weight,
                   const float *activation_scales, const float *weight_scales,
                   void *output, int m, int n, int k, void *workspace,
                   size_t workspace_bytes, int sm_count, cudaStream_t stream) {
-  if (m % 4 == 0) {
-    return launch_gemm<CooperativeGemm<Output>>(
+  if (use_small_m_gemm(m)) {
+    if (use_stream_k_gemm(n, sm_count)) {
+      return launch_gemm<SmallMStreamKGemm<Output>>(
+          activation, weight, activation_scales, weight_scales, output, m, n,
+          k, workspace, workspace_bytes, sm_count, stream);
+    }
+    if (use_cooperative_gemm(n, sm_count)) {
+      return launch_gemm<SmallMCooperativeGemm<Output>>(
+          activation, weight, activation_scales, weight_scales, output, m, n,
+          k, workspace, workspace_bytes, sm_count, stream);
+    }
+    return launch_gemm<SmallMGemm<Output>>(
         activation, weight, activation_scales, weight_scales, output, m, n, k,
         workspace, workspace_bytes, sm_count, stream);
   }
-  return launch_gemm<SwapGemm<Output>>(
+  return launch_gemm<LargeMGemm<Output>>(
       activation, weight, activation_scales, weight_scales, output, m, n, k,
       workspace, workspace_bytes, sm_count, stream);
 }
@@ -375,22 +429,42 @@ extern "C" const char *mistralrs_cutlass_fp8_error_string(int status) {
 
 extern "C" int mistralrs_cutlass_fp8_blockwise_prepare() {
   int status = mistralrs::fp8::prepare_kernel<
-      mistralrs::fp8::CooperativeGemm<cutlass::half_t>>();
+      mistralrs::fp8::LargeMGemm<cutlass::half_t>>();
   if (status != 0) {
     return status;
   }
   status = mistralrs::fp8::prepare_kernel<
-      mistralrs::fp8::SwapGemm<cutlass::half_t>>();
+      mistralrs::fp8::SmallMGemm<cutlass::half_t>>();
   if (status != 0) {
     return status;
   }
   status = mistralrs::fp8::prepare_kernel<
-      mistralrs::fp8::CooperativeGemm<cutlass::bfloat16_t>>();
+      mistralrs::fp8::SmallMCooperativeGemm<cutlass::half_t>>();
+  if (status != 0) {
+    return status;
+  }
+  status = mistralrs::fp8::prepare_kernel<
+      mistralrs::fp8::SmallMStreamKGemm<cutlass::half_t>>();
+  if (status != 0) {
+    return status;
+  }
+  status = mistralrs::fp8::prepare_kernel<
+      mistralrs::fp8::LargeMGemm<cutlass::bfloat16_t>>();
+  if (status != 0) {
+    return status;
+  }
+  status = mistralrs::fp8::prepare_kernel<
+      mistralrs::fp8::SmallMGemm<cutlass::bfloat16_t>>();
+  if (status != 0) {
+    return status;
+  }
+  status = mistralrs::fp8::prepare_kernel<
+      mistralrs::fp8::SmallMCooperativeGemm<cutlass::bfloat16_t>>();
   if (status != 0) {
     return status;
   }
   return mistralrs::fp8::prepare_kernel<
-      mistralrs::fp8::SwapGemm<cutlass::bfloat16_t>>();
+      mistralrs::fp8::SmallMStreamKGemm<cutlass::bfloat16_t>>();
 }
 
 extern "C" int mistralrs_cutlass_fp8_blockwise_workspace_size(
