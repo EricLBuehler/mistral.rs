@@ -6,56 +6,188 @@ use candle_core::{Result, Tensor};
 use candle_core::DType;
 
 #[cfg(any(feature = "cuda", test))]
-const GDN_COOPERATIVE_MIN_COMPUTE_MAJOR: i32 = 9;
+const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
 #[cfg(any(feature = "cuda", test))]
-const GDN_COOPERATIVE_BATCH_LIMIT: usize = 3;
+const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
 #[cfg(any(feature = "cuda", test))]
-const GDN_COOPERATIVE_K_DIM: usize = 128;
+const GDN_DECODE_K_DIM: usize = 128;
 #[cfg(any(feature = "cuda", test))]
-const GDN_COOPERATIVE_V_TILE: usize = 16;
+const GDN_DECODE_COOPERATIVE_V_TILE: usize = 16;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_PIPELINED_V_TILE: usize = 32;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_COOPERATIVE_STATE_WAVES: usize = 2;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_PIPELINED_OCCUPANCY_WAVES: usize = 4;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_PIPELINED_AMORTIZED_WAVES: usize = 8;
 #[cfg(feature = "cuda")]
-const GDN_COOPERATIVE_VECTOR_ALIGNMENT: usize = 16;
+const GDN_DECODE_VECTOR_ALIGNMENT: usize = 16;
+#[cfg(feature = "cuda")]
+const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
 
 #[cfg(any(feature = "cuda", test))]
-fn use_cooperative_decode_kernel(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(i32)]
+enum GdnDecodeKernel {
+    Baseline = 0,
+    Cooperative = 1,
+    Pipelined = 2,
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[derive(Clone, Copy)]
+struct GdnDecodePolicy {
     compute_major: i32,
-    batch_size: usize,
+    multiprocessor_count: usize,
+    state_blocks: usize,
     head_k_dim: usize,
     head_v_dim: usize,
-) -> bool {
-    compute_major >= GDN_COOPERATIVE_MIN_COMPUTE_MAJOR
-        && batch_size < GDN_COOPERATIVE_BATCH_LIMIT
-        && head_k_dim == GDN_COOPERATIVE_K_DIM
-        && head_v_dim.is_multiple_of(GDN_COOPERATIVE_V_TILE)
+    vector_aligned: bool,
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> bool {
+    match kernel {
+        GdnDecodeKernel::Baseline => true,
+        GdnDecodeKernel::Cooperative => {
+            policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+                && policy.vector_aligned
+                && policy.head_k_dim == GDN_DECODE_K_DIM
+                && policy
+                    .head_v_dim
+                    .is_multiple_of(GDN_DECODE_COOPERATIVE_V_TILE)
+        }
+        GdnDecodeKernel::Pipelined => {
+            policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+                && policy.vector_aligned
+                && policy.head_k_dim == GDN_DECODE_K_DIM
+                && policy.head_v_dim >= GDN_DECODE_PIPELINED_V_TILE
+                && policy
+                    .head_v_dim
+                    .is_multiple_of(GDN_DECODE_PIPELINED_V_TILE)
+        }
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
+    if policy.compute_major != GDN_DECODE_TUNED_COMPUTE_MAJOR || policy.multiprocessor_count == 0 {
+        return GdnDecodeKernel::Baseline;
+    }
+
+    let cooperative_limit = policy
+        .multiprocessor_count
+        .saturating_mul(GDN_DECODE_COOPERATIVE_STATE_WAVES);
+    let pipelined_occupancy_limit = policy
+        .multiprocessor_count
+        .saturating_mul(GDN_DECODE_PIPELINED_OCCUPANCY_WAVES);
+    let pipelined_amortized_start = policy
+        .multiprocessor_count
+        .saturating_mul(GDN_DECODE_PIPELINED_AMORTIZED_WAVES);
+    let pipelined_has_overlap = policy.head_v_dim >= GDN_DECODE_PIPELINED_V_TILE.saturating_mul(2);
+
+    if decode_kernel_supported(GdnDecodeKernel::Cooperative, policy)
+        && policy.state_blocks < cooperative_limit
+    {
+        GdnDecodeKernel::Cooperative
+    } else if decode_kernel_supported(GdnDecodeKernel::Pipelined, policy)
+        && pipelined_has_overlap
+        && policy.state_blocks >= cooperative_limit
+        && (policy.state_blocks < pipelined_occupancy_limit
+            || policy.state_blocks >= pipelined_amortized_start)
+    {
+        // The 256-thread, 39 KiB CTA has an SM90 4-8 state-wave scheduling valley.
+        GdnDecodeKernel::Pipelined
+    } else {
+        GdnDecodeKernel::Baseline
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn select_decode_kernel(
+    policy: GdnDecodePolicy,
+    requested: Option<GdnDecodeKernel>,
+) -> std::result::Result<GdnDecodeKernel, GdnDecodeKernel> {
+    match requested {
+        Some(kernel) if decode_kernel_supported(kernel, policy) => Ok(kernel),
+        Some(kernel) => Err(kernel),
+        None => Ok(automatic_decode_kernel(policy)),
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn parse_decode_kernel(value: &str) -> std::result::Result<Option<GdnDecodeKernel>, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Ok(None),
+        "baseline" => Ok(Some(GdnDecodeKernel::Baseline)),
+        "cooperative" => Ok(Some(GdnDecodeKernel::Cooperative)),
+        "pipelined" => Ok(Some(GdnDecodeKernel::Pipelined)),
+        other => Err(format!(
+            "invalid GDN decode kernel '{other}', expected auto, baseline, cooperative, or pipelined"
+        )),
+    }
 }
 
 #[cfg(feature = "cuda")]
-fn cuda_compute_major(dev: &candle_core::CudaDevice) -> Result<i32> {
+fn decode_kernel_override() -> Result<Option<GdnDecodeKernel>> {
+    use std::sync::OnceLock;
+
+    static OVERRIDE: OnceLock<std::result::Result<Option<GdnDecodeKernel>, String>> =
+        OnceLock::new();
+    match OVERRIDE.get_or_init(|| {
+        std::env::var(GDN_DECODE_KERNEL_ENV).map_or(Ok(None), |value| parse_decode_kernel(&value))
+    }) {
+        Ok(kernel) => Ok(*kernel),
+        Err(error) => Err(candle_core::Error::msg(error.clone())),
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+struct GdnCudaDeviceProperties {
+    compute_major: i32,
+    multiprocessor_count: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDeviceProperties> {
     use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
-    static CACHE: OnceLock<Mutex<HashMap<i32, i32>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<i32, GdnCudaDeviceProperties>>> = OnceLock::new();
     let stream = dev.cuda_stream();
     let context = stream.context();
     let device = context.cu_device();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(major) = cache
+    if let Some(properties) = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&device)
         .copied()
     {
-        return Ok(major);
+        return Ok(properties);
     }
-    let major = context
+    let compute_major = context
         .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
         .map_err(candle_core::Error::wrap)?;
+    let multiprocessor_count = context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .map_err(candle_core::Error::wrap)?;
+    let multiprocessor_count = usize::try_from(multiprocessor_count)
+        .ok()
+        .filter(|count| *count > 0)
+        .ok_or_else(|| candle_core::Error::msg("CUDA device reported no multiprocessors"))?;
+    let properties = GdnCudaDeviceProperties {
+        compute_major,
+        multiprocessor_count,
+    };
     cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(device, major);
-    Ok(major)
+        .insert(device, properties);
+    Ok(properties)
 }
 
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
@@ -628,6 +760,24 @@ pub fn prepare_recurrence_inputs_cuda(
 }
 
 #[cfg(feature = "cuda")]
+struct GdnDecodeLaunch<'a> {
+    mixed_qkv: &'a Tensor,
+    b: &'a Tensor,
+    a: &'a Tensor,
+    a_log: &'a Tensor,
+    dt_bias: &'a Tensor,
+    state: &'a mut Tensor,
+    batch_size: usize,
+    num_k_heads: usize,
+    num_v_heads: usize,
+    head_k_dim: usize,
+    head_v_dim: usize,
+    tiled_v_heads: bool,
+    slots: GdnStateSlots<'a>,
+    requested_kernel: Option<GdnDecodeKernel>,
+}
+
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn fused_decode_recurrence_cuda(
     mixed_qkv: &Tensor,
@@ -644,6 +794,26 @@ pub fn fused_decode_recurrence_cuda(
     tiled_v_heads: bool,
     slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
+    fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
+        mixed_qkv,
+        b,
+        a,
+        a_log,
+        dt_bias,
+        state,
+        batch_size,
+        num_k_heads,
+        num_v_heads,
+        head_k_dim,
+        head_v_dim,
+        tiled_v_heads,
+        slots,
+        requested_kernel: decode_kernel_override()?,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tensor> {
     use candle::cuda_backend::cudarc::driver::DevicePtr;
     use candle_core as candle;
     use core::ffi::c_void;
@@ -651,23 +821,27 @@ pub fn fused_decode_recurrence_cuda(
     fn cuda_fwd<
         T: candle::cuda_backend::CudaDType + candle::cuda_backend::cudarc::driver::DeviceRepr,
     >(
-        mixed_qkv: &Tensor,
-        b: &Tensor,
-        a: &Tensor,
-        a_log: &Tensor,
-        dt_bias: &Tensor,
-        state: &mut Tensor,
-        batch_size: usize,
-        num_k_heads: usize,
-        num_v_heads: usize,
-        head_k_dim: usize,
-        head_v_dim: usize,
-        tiled_v_heads: bool,
-        slots: GdnStateSlots<'_>,
+        launch: GdnDecodeLaunch<'_>,
         dtype_code: i32,
     ) -> Result<Tensor> {
+        let GdnDecodeLaunch {
+            mixed_qkv,
+            b,
+            a,
+            a_log,
+            dt_bias,
+            state,
+            batch_size,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+            slots,
+            requested_kernel,
+        } = launch;
         let dev = mixed_qkv.device().as_cuda_device()?;
-        let compute_major = cuda_compute_major(dev)?;
+        let device_properties = gdn_cuda_device_properties(dev)?;
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
@@ -717,9 +891,20 @@ pub fn fused_decode_recurrence_cuda(
         };
         let state_offset = state_l.start_offset();
         let state_ptr = state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32;
-        let use_cooperative =
-            use_cooperative_decode_kernel(compute_major, batch_size, head_k_dim, head_v_dim)
-                && (state_ptr as usize).is_multiple_of(GDN_COOPERATIVE_VECTOR_ALIGNMENT);
+        let policy = GdnDecodePolicy {
+            compute_major: device_properties.compute_major,
+            multiprocessor_count: device_properties.multiprocessor_count,
+            state_blocks: batch_size.saturating_mul(num_v_heads),
+            head_k_dim,
+            head_v_dim,
+            vector_aligned: (state_ptr as usize).is_multiple_of(GDN_DECODE_VECTOR_ALIGNMENT),
+        };
+        let decode_kernel = select_decode_kernel(policy, requested_kernel).map_err(|kernel| {
+            candle_core::Error::msg(format!(
+                "requested {kernel:?} GDN kernel is unsupported on compute {}, K={}, V={}, aligned={}",
+                policy.compute_major, policy.head_k_dim, policy.head_v_dim, policy.vector_aligned
+            ))
+        })?;
 
         let bh = batch_size * num_v_heads;
         let output_buf = unsafe { dev.alloc::<T>(bh * head_v_dim) }?;
@@ -746,7 +931,7 @@ pub fn fused_decode_recurrence_cuda(
                     a_batch_stride as i64,
                     a_head_stride as i64,
                     slot_ptr,
-                    i32::from(use_cooperative),
+                    decode_kernel as i32,
                     dtype_code,
                     stream,
                 );
@@ -763,39 +948,9 @@ pub fn fused_decode_recurrence_cuda(
         )))
     }
 
-    match mixed_qkv.dtype() {
-        DType::F16 => cuda_fwd::<half::f16>(
-            mixed_qkv,
-            b,
-            a,
-            a_log,
-            dt_bias,
-            state,
-            batch_size,
-            num_k_heads,
-            num_v_heads,
-            head_k_dim,
-            head_v_dim,
-            tiled_v_heads,
-            slots,
-            0,
-        ),
-        DType::BF16 => cuda_fwd::<half::bf16>(
-            mixed_qkv,
-            b,
-            a,
-            a_log,
-            dt_bias,
-            state,
-            batch_size,
-            num_k_heads,
-            num_v_heads,
-            head_k_dim,
-            head_v_dim,
-            tiled_v_heads,
-            slots,
-            1,
-        ),
+    match launch.mixed_qkv.dtype() {
+        DType::F16 => cuda_fwd::<half::f16>(launch, 0),
+        DType::BF16 => cuda_fwd::<half::bf16>(launch, 1),
         other => candle_core::bail!(
             "fused_decode_recurrence_cuda only supports f16/bf16, got {:?}",
             other
@@ -1057,16 +1212,134 @@ pub fn fused_gdn_gating_cuda(
 
 #[cfg(test)]
 mod dispatch_tests {
-    use super::use_cooperative_decode_kernel;
+    use super::{
+        automatic_decode_kernel, parse_decode_kernel, select_decode_kernel, GdnDecodeKernel,
+        GdnDecodePolicy,
+    };
+
+    const TEST_SM_COUNT: usize = 132;
+
+    fn sm90_policy(state_blocks: usize) -> GdnDecodePolicy {
+        GdnDecodePolicy {
+            compute_major: 9,
+            multiprocessor_count: TEST_SM_COUNT,
+            state_blocks,
+            head_k_dim: 128,
+            head_v_dim: 128,
+            vector_aligned: true,
+        }
+    }
 
     #[test]
-    fn cooperative_decode_dispatch_is_arch_shape_and_batch_gated() {
-        assert!(use_cooperative_decode_kernel(9, 1, 128, 128));
-        assert!(use_cooperative_decode_kernel(10, 2, 128, 96));
-        assert!(!use_cooperative_decode_kernel(8, 1, 128, 128));
-        assert!(!use_cooperative_decode_kernel(9, 3, 128, 128));
-        assert!(!use_cooperative_decode_kernel(9, 2, 64, 128));
-        assert!(!use_cooperative_decode_kernel(9, 2, 128, 127));
+    fn decode_dispatch_uses_sm90_state_waves() {
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(TEST_SM_COUNT)),
+            GdnDecodeKernel::Cooperative
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(2 * TEST_SM_COUNT - 1)),
+            GdnDecodeKernel::Cooperative
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(2 * TEST_SM_COUNT)),
+            GdnDecodeKernel::Pipelined
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(3 * TEST_SM_COUNT)),
+            GdnDecodeKernel::Pipelined
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(4 * TEST_SM_COUNT)),
+            GdnDecodeKernel::Baseline
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(6 * TEST_SM_COUNT)),
+            GdnDecodeKernel::Baseline
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(8 * TEST_SM_COUNT - 1)),
+            GdnDecodeKernel::Baseline
+        );
+        assert_eq!(
+            automatic_decode_kernel(sm90_policy(8 * TEST_SM_COUNT)),
+            GdnDecodeKernel::Pipelined
+        );
+    }
+
+    #[test]
+    fn automatic_decode_dispatch_requires_a_tuned_architecture_and_shape() {
+        let mut unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.compute_major = 8;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+        unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.compute_major = 10;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+        unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.head_k_dim = 64;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+        unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.head_v_dim = 127;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+        unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.head_v_dim = 32;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+        unsupported = sm90_policy(12 * TEST_SM_COUNT);
+        unsupported.vector_aligned = false;
+        assert_eq!(
+            automatic_decode_kernel(unsupported),
+            GdnDecodeKernel::Baseline
+        );
+    }
+
+    #[test]
+    fn decode_kernel_override_is_forceable_and_validated() {
+        assert_eq!(parse_decode_kernel("auto").unwrap(), None);
+        assert_eq!(
+            parse_decode_kernel("BASELINE").unwrap(),
+            Some(GdnDecodeKernel::Baseline)
+        );
+        assert_eq!(
+            parse_decode_kernel("cooperative").unwrap(),
+            Some(GdnDecodeKernel::Cooperative)
+        );
+        assert_eq!(
+            parse_decode_kernel("pipelined").unwrap(),
+            Some(GdnDecodeKernel::Pipelined)
+        );
+        assert!(parse_decode_kernel("unknown").is_err());
+
+        let policy = sm90_policy(3 * TEST_SM_COUNT);
+        assert_eq!(
+            select_decode_kernel(policy, Some(GdnDecodeKernel::Baseline)).unwrap(),
+            GdnDecodeKernel::Baseline
+        );
+        let mut unsupported = policy;
+        unsupported.compute_major = 8;
+        assert_eq!(
+            select_decode_kernel(unsupported, Some(GdnDecodeKernel::Pipelined)),
+            Err(GdnDecodeKernel::Pipelined)
+        );
+        let mut untuned = policy;
+        untuned.compute_major = 10;
+        assert_eq!(
+            select_decode_kernel(untuned, Some(GdnDecodeKernel::Pipelined)).unwrap(),
+            GdnDecodeKernel::Pipelined
+        );
     }
 }
 
@@ -1290,6 +1563,7 @@ mod tests {
         dtype: DType,
         pooled: bool,
         strided_gates: bool,
+        requested_kernel: Option<GdnDecodeKernel>,
     ) -> Result<()> {
         let key_dim = num_k_heads * head_k_dim;
         let value_dim = num_v_heads * head_v_dim;
@@ -1355,21 +1629,22 @@ mod tests {
         let mut fused_state = state.copy()?;
         let mut reference_state = state.copy()?;
 
-        let fused = fused_decode_recurrence_cuda(
-            &mixed_qkv,
-            &b,
-            &a,
-            &a_log,
-            &dt_bias,
-            &mut fused_state,
+        let fused = fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
+            mixed_qkv: &mixed_qkv,
+            b: &b,
+            a: &a,
+            a_log: &a_log,
+            dt_bias: &dt_bias,
+            state: &mut fused_state,
             batch_size,
             num_k_heads,
             num_v_heads,
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
-            state_slots,
-        )?;
+            slots: state_slots,
+            requested_kernel,
+        })?;
         let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
             &mixed_qkv,
             &b_reference,
@@ -1410,21 +1685,22 @@ mod tests {
             2.0e-5,
         );
 
-        let fused_second = fused_decode_recurrence_cuda(
-            &mixed_qkv,
-            &b,
-            &a,
-            &a_log,
-            &dt_bias,
-            &mut fused_state,
+        let fused_second = fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
+            mixed_qkv: &mixed_qkv,
+            b: &b,
+            a: &a,
+            a_log: &a_log,
+            dt_bias: &dt_bias,
+            state: &mut fused_state,
             batch_size,
             num_k_heads,
             num_v_heads,
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
-            state_slots,
-        )?;
+            slots: state_slots,
+            requested_kernel,
+        })?;
         let reference_second = gated_delta_rule_recurrence_cuda(
             RecurrenceInputs {
                 q: &q,
@@ -1455,12 +1731,93 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
-        run_fused_decode_case(&dev, 1, 2, 4, 128, 128, false, DType::F16, false, false)?;
-        run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false, false)?;
-        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true, true)?;
-        run_fused_decode_case(&dev, 8, 4, 8, 128, 128, false, DType::BF16, false, true)?;
-        run_fused_decode_case(&dev, 3, 2, 4, 128, 128, true, DType::BF16, true, true)?;
-        run_fused_decode_case(&dev, 4, 2, 4, 128, 128, false, DType::BF16, false, false)
+        run_fused_decode_case(
+            &dev,
+            1,
+            2,
+            4,
+            128,
+            128,
+            false,
+            DType::F16,
+            false,
+            false,
+            None,
+        )?;
+        run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false, false, None)?;
+        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true, true, None)?;
+        run_fused_decode_case(
+            &dev,
+            8,
+            4,
+            8,
+            128,
+            128,
+            false,
+            DType::BF16,
+            false,
+            true,
+            None,
+        )?;
+        run_fused_decode_case(&dev, 3, 2, 4, 128, 128, true, DType::BF16, true, true, None)?;
+        run_fused_decode_case(
+            &dev,
+            4,
+            2,
+            4,
+            128,
+            128,
+            false,
+            DType::BF16,
+            false,
+            false,
+            None,
+        )
+    }
+
+    #[test]
+    #[ignore = "requires an SM90 CUDA device"]
+    fn sm90_fused_decode_kernel_variants_match_decomposed_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        run_fused_decode_case(
+            &dev,
+            1,
+            2,
+            4,
+            128,
+            128,
+            false,
+            DType::F16,
+            false,
+            false,
+            Some(GdnDecodeKernel::Cooperative),
+        )?;
+        run_fused_decode_case(
+            &dev,
+            2,
+            2,
+            6,
+            128,
+            128,
+            true,
+            DType::F16,
+            true,
+            true,
+            Some(GdnDecodeKernel::Pipelined),
+        )?;
+        run_fused_decode_case(
+            &dev,
+            8,
+            4,
+            8,
+            128,
+            128,
+            false,
+            DType::BF16,
+            false,
+            true,
+            Some(GdnDecodeKernel::Pipelined),
+        )
     }
 
     #[test]

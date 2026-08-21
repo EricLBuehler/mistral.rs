@@ -7,4 +7,4 @@ Some of the code in this project are adapted from other open-source projects wit
 licenses. This product also bundles some third-party components under other open source licenses.
 See licenses/ for text of these licenses.
 
-The cooperative K-major GDN decode kernel in mistralrs-core is adapted from FlashInfer.
+The cooperative and pipelined K-major GDN decode kernels in mistralrs-core are adapted from FlashInfer.

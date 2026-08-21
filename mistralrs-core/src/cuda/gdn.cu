@@ -14,6 +14,15 @@ constexpr int GDN_DECODE_COOPERATIVE_V = 16;
 constexpr int GDN_DECODE_COOPERATIVE_V_PADDED = 20;
 constexpr int GDN_DECODE_COOPERATIVE_THREADS = 128;
 constexpr int GDN_DECODE_COOPERATIVE_VALUES_PER_WARP = 4;
+constexpr int GDN_DECODE_PIPELINED_K = 128;
+constexpr int GDN_DECODE_PIPELINED_V = 32;
+constexpr int GDN_DECODE_PIPELINED_V_PADDED = 36;
+constexpr int GDN_DECODE_PIPELINED_STAGES = 2;
+constexpr int GDN_DECODE_PIPELINED_THREADS = 256;
+constexpr int GDN_DECODE_PIPELINED_WARPS = GDN_DECODE_PIPELINED_THREADS / 32;
+constexpr int GDN_DECODE_PIPELINED_VALUES_PER_WARP = 4;
+constexpr int GDN_DECODE_KERNEL_COOPERATIVE = 1;
+constexpr int GDN_DECODE_KERNEL_PIPELINED = 2;
 constexpr int GDN_PACKED_CONV_WIDTH = 4;
 
 // (batch, head) -> row of the state buffer: identity on a gathered [B*H, ...] copy, or through the
@@ -988,13 +997,36 @@ __device__ __forceinline__ float gdn_warp_sum(float value) {
   return value;
 }
 
-__device__ __forceinline__ float gdn_cooperative_k_sum(float value) {
+template <int VALUES_PER_WARP>
+__device__ __forceinline__ float gdn_grouped_k_sum(float value) {
 #pragma unroll
-  for (int offset = 16; offset >= GDN_DECODE_COOPERATIVE_VALUES_PER_WARP;
-       offset >>= 1) {
+  for (int offset = 16; offset >= VALUES_PER_WARP; offset >>= 1) {
     value += __shfl_xor_sync(0xffffffff, value, offset);
   }
   return value;
+}
+
+__device__ __forceinline__ void gdn_cp_async_cg_16(void *dst,
+                                                   const void *src) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  const uint32_t dst_smem = static_cast<uint32_t>(__cvta_generic_to_shared(dst));
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n"
+               : : "r"(dst_smem), "l"(src));
+#else
+  *reinterpret_cast<float4 *>(dst) = *reinterpret_cast<const float4 *>(src);
+#endif
+}
+
+__device__ __forceinline__ void gdn_cp_async_commit() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  asm volatile("cp.async.commit_group;\n" : :);
+#endif
+}
+
+__device__ __forceinline__ void gdn_cp_async_wait() {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+  asm volatile("cp.async.wait_group 0;\n" : :);
+#endif
 }
 
 // Adapted from FlashInfer's Apache-2.0 nontranspose GDN kernel, Copyright (c) 2025 FlashInfer team.
@@ -1113,7 +1145,8 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
         state_buf[k_idx * GDN_DECODE_COOPERATIVE_V_PADDED + v_in_tile] * decay_t;
     state_dot_k = __fmaf_rn(old_state, k_buf[k_idx], state_dot_k);
   }
-  state_dot_k = gdn_cooperative_k_sum(state_dot_k);
+  state_dot_k =
+      gdn_grouped_k_sum<GDN_DECODE_COOPERATIVE_VALUES_PER_WARP>(state_dot_k);
 
   float delta = 0.0f;
   if (k_lane == 0) {
@@ -1132,7 +1165,8 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
     state_buf[state_idx] = new_state;
     state_dot_q = __fmaf_rn(new_state, q_buf[k_idx], state_dot_q);
   }
-  state_dot_q = gdn_cooperative_k_sum(state_dot_q);
+  state_dot_q =
+      gdn_grouped_k_sum<GDN_DECODE_COOPERATIVE_VALUES_PER_WARP>(state_dot_q);
   if (k_lane == 0) {
     out_bh[v_idx] = (T)state_dot_q;
   }
@@ -1147,6 +1181,210 @@ __global__ void gdn_decode_recurrence_kernel_cooperative(
         state_buf + k_idx * GDN_DECODE_COOPERATIVE_V_PADDED + v_vector * 4;
     float *dst = state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
     *reinterpret_cast<float4 *>(dst) = *reinterpret_cast<const float4 *>(src);
+  }
+}
+
+// Adapted from FlashInfer's Apache-2.0 large-batch nontranspose GDN kernel.
+// Exact source revision and license notices are in third_party/flashinfer_gdn.
+template <typename T>
+__global__ void gdn_decode_recurrence_kernel_pipelined(
+    const T *__restrict__ mixed_qkv, const T *__restrict__ b,
+    const T *__restrict__ a, const float *__restrict__ a_log,
+    const float *__restrict__ dt_bias, float *__restrict__ state,
+    T *__restrict__ output, int batch_size, int num_k_heads,
+    int num_v_heads, int head_v_dim, int tiled_v_heads,
+    int64_t b_batch_stride, int64_t b_head_stride,
+    int64_t a_batch_stride, int64_t a_head_stride,
+    const int32_t *__restrict__ slot_indices) {
+  constexpr int BK = GDN_DECODE_PIPELINED_K;
+  constexpr int BV = GDN_DECODE_PIPELINED_V;
+  constexpr int VECTORS_PER_ROW = BV / 4;
+  constexpr int STATE_VECTORS = BK * VECTORS_PER_ROW;
+  constexpr int K_LANES_PER_VALUE =
+      32 / GDN_DECODE_PIPELINED_VALUES_PER_WARP;
+  constexpr int K_ITERATIONS = BK / K_LANES_PER_VALUE;
+  static_assert(BV == GDN_DECODE_PIPELINED_WARPS *
+                          GDN_DECODE_PIPELINED_VALUES_PER_WARP,
+                "each warp must own one group of values");
+  static_assert(BK % K_LANES_PER_VALUE == 0,
+                "K must divide across the grouped lanes");
+  static_assert(GDN_DECODE_PIPELINED_V_PADDED % 4 == 0,
+                "padded rows must preserve vector alignment");
+  static_assert(GDN_DECODE_PIPELINED_STAGES == 2,
+                "the decode pipeline expects two stages");
+
+  const int tid = threadIdx.x;
+  const int lane = tid & 31;
+  const int warp = tid >> 5;
+  const int bh = blockIdx.x;
+  const int bidx = bh / num_v_heads;
+  const int hv = bh - bidx * num_v_heads;
+  const int v_local = lane % GDN_DECODE_PIPELINED_VALUES_PER_WARP;
+  const int k_lane = lane / GDN_DECODE_PIPELINED_VALUES_PER_WARP;
+  const int v_in_tile = warp * GDN_DECODE_PIPELINED_VALUES_PER_WARP + v_local;
+
+  if (bidx >= batch_size) {
+    return;
+  }
+
+  const int v_per_group = num_v_heads / num_k_heads;
+  const int hk = tiled_v_heads ? hv % num_k_heads : hv / v_per_group;
+  const int key_dim = num_k_heads * BK;
+  const int value_dim = num_v_heads * head_v_dim;
+  const int conv_dim = 2 * key_dim + value_dim;
+  const int num_v_tiles = head_v_dim / BV;
+  const T *row = mixed_qkv + bidx * conv_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) * BK * head_v_dim;
+  T *out_bh = output + bh * head_v_dim;
+
+  __shared__ __align__(16)
+      float state_buf[GDN_DECODE_PIPELINED_STAGES]
+                     [BK * GDN_DECODE_PIPELINED_V_PADDED];
+  __shared__ float q_buf[BK];
+  __shared__ float k_buf[BK];
+  __shared__ float q_warp_sums[GDN_DECODE_PIPELINED_WARPS];
+  __shared__ float k_warp_sums[GDN_DECODE_PIPELINED_WARPS];
+  __shared__ float beta_t;
+  __shared__ float decay_t;
+  __shared__ float q_mul;
+  __shared__ float k_mul;
+
+  if (tid < BK) {
+    const float q_value = (float)row[hk * BK + tid];
+    const float k_value = (float)row[key_dim + hk * BK + tid];
+    q_buf[tid] = q_value;
+    k_buf[tid] = k_value;
+  }
+
+  const float q_value = tid < BK ? q_buf[tid] : 0.0f;
+  const float k_value = tid < BK ? k_buf[tid] : 0.0f;
+  const float q_sum = gdn_warp_sum(q_value * q_value);
+  const float k_sum = gdn_warp_sum(k_value * k_value);
+  if (lane == 0) {
+    q_warp_sums[warp] = q_sum;
+    k_warp_sums[warp] = k_sum;
+  }
+
+  if (tid == 0) {
+    const float b_value = (float)b[bidx * b_batch_stride + hv * b_head_stride];
+    const float a_value =
+        (float)a[bidx * a_batch_stride + hv * a_head_stride] + dt_bias[hv];
+    const float softplus =
+        a_value > 20.0f
+            ? a_value
+            : (a_value > 0.0f ? a_value + log1pf(expf(-a_value))
+                              : log1pf(expf(a_value)));
+    beta_t = 1.0f / (1.0f + expf(-b_value));
+    decay_t = expf(-expf(a_log[hv]) * softplus);
+  }
+  __syncthreads();
+
+  if (tid == 0) {
+    float q_norm = 0.0f;
+    float k_norm = 0.0f;
+#pragma unroll
+    for (int warp_idx = 0; warp_idx < GDN_DECODE_PIPELINED_WARPS;
+         warp_idx++) {
+      q_norm += q_warp_sums[warp_idx];
+      k_norm += k_warp_sums[warp_idx];
+    }
+    q_mul = rsqrtf(q_norm + 1.0e-6f) * rsqrtf((float)BK);
+    k_mul = rsqrtf(k_norm + 1.0e-6f);
+  }
+  __syncthreads();
+
+  if (tid < BK) {
+    q_buf[tid] *= q_mul;
+    k_buf[tid] *= k_mul;
+  }
+
+  if (num_v_tiles > 0) {
+#pragma unroll
+    for (int vector_idx = tid; vector_idx < STATE_VECTORS;
+         vector_idx += GDN_DECODE_PIPELINED_THREADS) {
+      const int k_idx = vector_idx / VECTORS_PER_ROW;
+      const int v_vector = vector_idx % VECTORS_PER_ROW;
+      const float *src = state_bh + k_idx * head_v_dim + v_vector * 4;
+      float *dst = state_buf[0] +
+                   k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
+      gdn_cp_async_cg_16(dst, src);
+    }
+    gdn_cp_async_commit();
+  }
+  __syncthreads();
+
+  for (int v_tile = 0; v_tile < num_v_tiles; v_tile++) {
+    const int stage = v_tile % GDN_DECODE_PIPELINED_STAGES;
+    const int next_v_tile = v_tile + 1;
+    gdn_cp_async_wait();
+    __syncthreads();
+
+    if (next_v_tile < num_v_tiles) {
+      const int next_stage = next_v_tile % GDN_DECODE_PIPELINED_STAGES;
+#pragma unroll
+      for (int vector_idx = tid; vector_idx < STATE_VECTORS;
+           vector_idx += GDN_DECODE_PIPELINED_THREADS) {
+        const int k_idx = vector_idx / VECTORS_PER_ROW;
+        const int v_vector = vector_idx % VECTORS_PER_ROW;
+        const float *src = state_bh + k_idx * head_v_dim +
+                           next_v_tile * BV + v_vector * 4;
+        float *dst = state_buf[next_stage] +
+                     k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
+        gdn_cp_async_cg_16(dst, src);
+      }
+      gdn_cp_async_commit();
+    }
+
+    float state_dot_k = 0.0f;
+#pragma unroll
+    for (int iteration = 0; iteration < K_ITERATIONS; iteration++) {
+      const int k_idx = iteration * K_LANES_PER_VALUE + k_lane;
+      const float old_state =
+          state_buf[stage][k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_in_tile] *
+          decay_t;
+      state_dot_k = __fmaf_rn(old_state, k_buf[k_idx], state_dot_k);
+    }
+    state_dot_k =
+        gdn_grouped_k_sum<GDN_DECODE_PIPELINED_VALUES_PER_WARP>(state_dot_k);
+
+    const int v_idx = v_tile * BV + v_in_tile;
+    float delta = 0.0f;
+    if (k_lane == 0) {
+      const float v_value = (float)row[2 * key_dim + hv * head_v_dim + v_idx];
+      delta = (v_value - state_dot_k) * beta_t;
+    }
+    delta = __shfl_sync(0xffffffff, delta, v_local);
+
+    float state_dot_q = 0.0f;
+#pragma unroll
+    for (int iteration = 0; iteration < K_ITERATIONS; iteration++) {
+      const int k_idx = iteration * K_LANES_PER_VALUE + k_lane;
+      const int state_idx =
+          k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_in_tile;
+      const float old_state = state_buf[stage][state_idx] * decay_t;
+      const float new_state = __fmaf_rn(k_buf[k_idx], delta, old_state);
+      state_buf[stage][state_idx] = new_state;
+      state_dot_q = __fmaf_rn(new_state, q_buf[k_idx], state_dot_q);
+    }
+    state_dot_q =
+        gdn_grouped_k_sum<GDN_DECODE_PIPELINED_VALUES_PER_WARP>(state_dot_q);
+    if (k_lane == 0) {
+      out_bh[v_idx] = (T)state_dot_q;
+    }
+    __syncthreads();
+
+#pragma unroll
+    for (int vector_idx = tid; vector_idx < STATE_VECTORS;
+         vector_idx += GDN_DECODE_PIPELINED_THREADS) {
+      const int k_idx = vector_idx / VECTORS_PER_ROW;
+      const int v_vector = vector_idx % VECTORS_PER_ROW;
+      const float *src = state_buf[stage] +
+                         k_idx * GDN_DECODE_PIPELINED_V_PADDED + v_vector * 4;
+      float *dst = state_bh + k_idx * head_v_dim + v_tile * BV + v_vector * 4;
+      *reinterpret_cast<float4 *>(dst) = *reinterpret_cast<const float4 *>(src);
+    }
+    __syncthreads();
   }
 }
 
@@ -1380,13 +1618,36 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
                       int tiled_v_heads, int64_t b_batch_stride,
                       int64_t b_head_stride, int64_t a_batch_stride,
                       int64_t a_head_stride, const int32_t *slot_indices,
-                      int use_cooperative, int dtype, int64_t stream) {
+                      int kernel_kind, int dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int BV = GDN_DECODE_VALUE_TILE;
   dim3 grid((head_v_dim + BV - 1) / BV, batch_size * num_v_heads);
   dim3 block(BV);
 
-  if (use_cooperative) {
+  if (kernel_kind == GDN_DECODE_KERNEL_PIPELINED &&
+      head_k_dim == GDN_DECODE_PIPELINED_K &&
+      head_v_dim % GDN_DECODE_PIPELINED_V == 0) {
+    dim3 pipelined_grid(batch_size * num_v_heads);
+    dim3 pipelined_block(GDN_DECODE_PIPELINED_THREADS);
+    if (dtype == 0) {
+      gdn_decode_recurrence_kernel_pipelined<__half>
+          <<<pipelined_grid, pipelined_block, 0, custream>>>(
+              (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
+              a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
+              num_v_heads, head_v_dim, tiled_v_heads, b_batch_stride,
+              b_head_stride, a_batch_stride, a_head_stride, slot_indices);
+    } else {
+      gdn_decode_recurrence_kernel_pipelined<__nv_bfloat16>
+          <<<pipelined_grid, pipelined_block, 0, custream>>>(
+              (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
+              (const __nv_bfloat16 *)a, a_log, dt_bias, state,
+              (__nv_bfloat16 *)output, batch_size, num_k_heads, num_v_heads,
+              head_v_dim, tiled_v_heads, b_batch_stride, b_head_stride,
+              a_batch_stride, a_head_stride, slot_indices);
+    }
+  } else if (kernel_kind == GDN_DECODE_KERNEL_COOPERATIVE &&
+             head_k_dim == GDN_DECODE_COOPERATIVE_K &&
+             head_v_dim % GDN_DECODE_COOPERATIVE_V == 0) {
     constexpr int COOPERATIVE_BV = GDN_DECODE_COOPERATIVE_V;
     dim3 cooperative_grid(head_v_dim / COOPERATIVE_BV,
                           batch_size * num_v_heads);
