@@ -7,13 +7,21 @@ pub use paged_attention::PagedAttention;
 pub mod paged_attention {
     use candle_core::{Device, Result, Tensor};
 
+    use crate::paged_attention::Fp8AttentionScales;
     use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
     use crate::{
         attention::{AttentionMask, SdpaParams},
         pipeline::text_models_inputs_processor::FlashParams,
     };
 
-    pub struct PagedAttention;
+    #[allow(dead_code)]
+    pub struct PagedAttention {
+        fp8_attention_scales: Fp8AttentionScales,
+        fp8_attention_scales_calibrated: bool,
+        fp8_q_scale: Tensor,
+        fp8_k_scale: Tensor,
+        fp8_v_scale: Tensor,
+    }
 
     impl PagedAttention {
         pub fn new(
@@ -22,6 +30,45 @@ pub mod paged_attention {
             _alibi_slopes: Option<Vec<f32>>,
         ) -> Result<Self> {
             candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
+        pub fn new_with_fp8_attention_scales(
+            _head_dim: usize,
+            _device: &Device,
+            _alibi_slopes: Option<Vec<f32>>,
+            _fp8_attention_scales: Option<Fp8AttentionScales>,
+        ) -> Result<Self> {
+            candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
+        }
+
+        #[allow(dead_code)]
+        pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
+            self.fp8_attention_scales
+        }
+
+        #[allow(dead_code)]
+        pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
+            self.fp8_attention_scales_calibrated
+        }
+
+        #[allow(dead_code)]
+        pub fn fp8_q_scale(&self) -> &Tensor {
+            &self.fp8_q_scale
+        }
+
+        #[allow(dead_code)]
+        pub fn fp8_k_scale(&self) -> &Tensor {
+            &self.fp8_k_scale
+        }
+
+        #[allow(dead_code)]
+        pub fn fp8_v_scale(&self) -> &Tensor {
+            &self.fp8_v_scale
+        }
+
+        #[allow(dead_code)]
+        pub fn fp8_q_scale_value(&self) -> f32 {
+            self.fp8_attention_scales.q
         }
 
         #[allow(clippy::too_many_arguments)]

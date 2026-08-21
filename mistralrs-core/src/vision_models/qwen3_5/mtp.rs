@@ -14,7 +14,7 @@ use crate::{
     attention::AttentionMask,
     device_map::DeviceMapper,
     layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
-    paged_attention::{AttentionImplementation, PagedAttention},
+    paged_attention::{load_fp8_attention_scales, AttentionImplementation, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         NormalLoadingMetadata,
@@ -98,13 +98,19 @@ impl Qwen3_5MtpHead {
             &device,
             cfg.mrope_section().to_vec(),
         )?);
+        let vb_layer = vb_plain.pp("layers").pp(0);
         let paged_attn = match attention_mechanism {
             AttentionImplementation::Eager => None,
             AttentionImplementation::PagedAttention => {
-                Some(PagedAttention::new(cfg.head_dim, &device, None)?)
+                let attention_vb = vb_layer.pp("self_attn");
+                Some(PagedAttention::new_with_fp8_attention_scales(
+                    cfg.head_dim,
+                    &device,
+                    None,
+                    load_fp8_attention_scales(&attention_vb)?,
+                )?)
             }
         };
-        let vb_layer = vb_plain.pp("layers").pp(0);
         let vb_layer_quant = vb_quant.pp("layers").pp(0);
         let layer = DecoderLayer::load_full_attention(
             vb_layer_quant,

@@ -16,6 +16,7 @@ mod layers;
 pub(crate) mod mm_prefix;
 #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
 pub(crate) mod plan;
+mod scales;
 mod scheduler;
 pub const _PAD_SLOT_ID: i64 = -1;
 
@@ -27,6 +28,7 @@ pub use config::{
 };
 pub use kv_cache_manager::KVCacheManager;
 pub use layers::PagedAttention;
+pub use scales::{load_fp8_attention_scales, Fp8AttentionScales};
 pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };

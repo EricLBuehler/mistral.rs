@@ -8,16 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{KvCacheLayout, ModelConfigLike};
 
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct KvCacheScales {
-    pub k: f32,
-    pub v: f32,
-}
-
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
-pub(crate) const FP8_KV_CACHE_SCALES: KvCacheScales = KvCacheScales { k: 1.0, v: 1.0 };
-
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 fn cuda_supports_fp8(device: &Device) -> bool {
     use candle_core::cuda::cudarc::driver::{result, sys};
@@ -552,12 +542,5 @@ mod tests {
             )
             .unwrap_err();
         assert!(err.contains("not supported for MLA layer 0"));
-    }
-
-    #[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
-    #[test]
-    fn fp8_cache_uses_explicit_immutable_unit_scales() {
-        assert_eq!(FP8_KV_CACHE_SCALES.k, 1.0);
-        assert_eq!(FP8_KV_CACHE_SCALES.v, 1.0);
     }
 }

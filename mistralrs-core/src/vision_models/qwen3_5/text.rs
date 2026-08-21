@@ -32,7 +32,9 @@ use crate::{
     },
     layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa},
     layers_masker::{CausalMaskConfig, PastKvLenCache},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        load_fp8_attention_scales, AttentionImplementation, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
@@ -100,11 +102,21 @@ impl FullAttention {
         layer_idx: usize,
         loading_isq: bool,
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-        paged_attn: Option<PagedAttention>,
+        use_paged_attention: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        let paged_attn = if use_paged_attention {
+            Some(PagedAttention::new_with_fp8_attention_scales(
+                cfg.head_dim,
+                vb_sa_norms.device(),
+                None,
+                load_fp8_attention_scales(&vb_sa_norms)?,
+            )?)
+        } else {
+            None
+        };
         Self::load_with(vb_sa, vb_sa_norms, cfg, rotary_emb, paged_attn, comm)
     }
 
@@ -739,12 +751,6 @@ impl Qwen3_5TextModel {
                         .get(&device.location())
                         .expect("No RoPE for device location!")
                         .clone();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => {
-                            Some(PagedAttention::new(cfg.head_dim, device, None)?)
-                        }
-                    };
                     LayerImpl::FullAttention(FullAttention::load(
                         vb_l.pp(layer_idx),
                         cfg,
@@ -752,7 +758,7 @@ impl Qwen3_5TextModel {
                         layer_idx,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
-                        paged_attn,
+                        matches!(attention_mechanism, AttentionImplementation::PagedAttention),
                         &comm,
                     )?)
                 }

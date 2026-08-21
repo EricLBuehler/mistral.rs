@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Once};
 
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -15,14 +15,37 @@ use crate::{
     layers::Sdpa,
     paged_attention::{
         block_aligned_sliding_window_start,
-        cache_engine::FP8_KV_CACHE_SCALES,
         plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
-        AttentionBackendKind, _PAD_SLOT_ID,
+        AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
         FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
 };
+
+static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
+
+#[derive(Clone, Copy)]
+struct CacheScales<'a> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    attention: Fp8AttentionScales,
+    k: Option<&'a Tensor>,
+    v: Option<&'a Tensor>,
+}
+
+impl CacheScales<'_> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn flashinfer(self, key_cache: &Tensor) -> FlashInferKvCacheScales {
+        if key_cache.dtype() == DType::F8E4M3 {
+            FlashInferKvCacheScales {
+                k: self.attention.k,
+                v: self.attention.v,
+            }
+        } else {
+            DEFAULT_FP8_KV_CACHE_SCALES
+        }
+    }
+}
 
 fn resolve_tensor_for_device(
     tensors: &HashMap<candle_core::DeviceLocation, Tensor>,
@@ -117,23 +140,10 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
         && row_stride >= heads.saturating_mul(head_size))
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
-fn flashinfer_cache_scales(key_cache: &Tensor) -> FlashInferKvCacheScales {
-    if key_cache.dtype() == DType::F8E4M3 {
-        FlashInferKvCacheScales {
-            k: FP8_KV_CACHE_SCALES.k,
-            v: FP8_KV_CACHE_SCALES.v,
-        }
-    } else {
-        DEFAULT_FP8_KV_CACHE_SCALES
-    }
-}
-
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scales: CacheScales<'_>,
     key_cache: &mut Tensor,
     value_cache: &mut Tensor,
     slot_mapping: &Tensor,
@@ -162,7 +172,7 @@ fn write_kv_cache(
                     key_cache,
                     value_cache,
                     slot_mapping,
-                    flashinfer_cache_scales(key_cache),
+                    scales.flashinfer(key_cache),
                 )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
@@ -173,8 +183,8 @@ fn write_kv_cache(
         AttentionBackendKind::Standard => reshape_and_cache(
             key,
             value,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             slot_mapping,
@@ -185,8 +195,7 @@ fn write_kv_cache(
 fn gather_kv_cache_for_layout(
     key_cache: &Tensor,
     value_cache: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scales: CacheScales<'_>,
     block_tables: &Tensor,
     cu_kv: &Tensor,
     dtype: DType,
@@ -201,7 +210,7 @@ fn gather_kv_cache_for_layout(
                     block_tables,
                     cu_kv,
                     dtype,
-                    flashinfer_cache_scales(key_cache),
+                    scales.flashinfer(key_cache),
                 )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
@@ -212,8 +221,8 @@ fn gather_kv_cache_for_layout(
         AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
             key_cache,
             value_cache,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             block_tables,
             cu_kv,
             dtype,
@@ -710,30 +719,91 @@ impl PagedForwardCtx<'_> {
 
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
+    fp8_attention_scales: Fp8AttentionScales,
+    fp8_attention_scales_calibrated: bool,
+    #[allow(dead_code)]
+    fp8_q_scale: Tensor,
     fp8_k_scale: Tensor,
     fp8_v_scale: Tensor,
 }
 
 impl PagedAttention {
     pub fn new(head_dim: usize, device: &Device, alibi_slopes: Option<Vec<f32>>) -> Result<Self> {
+        Self::new_with_fp8_attention_scales(head_dim, device, alibi_slopes, None)
+    }
+
+    pub fn new_with_fp8_attention_scales(
+        head_dim: usize,
+        device: &Device,
+        alibi_slopes: Option<Vec<f32>>,
+        fp8_attention_scales: Option<Fp8AttentionScales>,
+    ) -> Result<Self> {
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
             assert_eq!(alibi_slopes.len(), head_dim);
             Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };
+        let fp8_attention_scales_calibrated = fp8_attention_scales.is_some();
+        let fp8_attention_scales = fp8_attention_scales.unwrap_or_default().validate()?;
         Ok(Self {
             alibi_slopes,
-            fp8_k_scale: Tensor::new(FP8_KV_CACHE_SCALES.k, device)?,
-            fp8_v_scale: Tensor::new(FP8_KV_CACHE_SCALES.v, device)?,
+            fp8_attention_scales,
+            fp8_attention_scales_calibrated,
+            fp8_q_scale: Tensor::new(fp8_attention_scales.q, device)?,
+            fp8_k_scale: Tensor::new(fp8_attention_scales.k, device)?,
+            fp8_v_scale: Tensor::new(fp8_attention_scales.v, device)?,
         })
     }
 
-    fn cache_scales<'a>(&'a self, key_cache: &Tensor) -> (Option<&'a Tensor>, Option<&'a Tensor>) {
-        if key_cache.dtype() == DType::F8E4M3 {
+    #[allow(dead_code)]
+    pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
+        self.fp8_attention_scales
+    }
+
+    #[allow(dead_code)]
+    pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
+        self.fp8_attention_scales_calibrated
+    }
+
+    #[allow(dead_code)]
+    pub fn fp8_q_scale(&self) -> &Tensor {
+        &self.fp8_q_scale
+    }
+
+    #[allow(dead_code)]
+    pub fn fp8_k_scale(&self) -> &Tensor {
+        &self.fp8_k_scale
+    }
+
+    #[allow(dead_code)]
+    pub fn fp8_v_scale(&self) -> &Tensor {
+        &self.fp8_v_scale
+    }
+
+    #[allow(dead_code)]
+    pub fn fp8_q_scale_value(&self) -> f32 {
+        self.fp8_attention_scales.q
+    }
+
+    fn cache_scales<'a>(&'a self, key_cache: &Tensor) -> CacheScales<'a> {
+        let (k, v) = if key_cache.dtype() == DType::F8E4M3 {
+            if !self.fp8_attention_scales_calibrated {
+                UNCALIBRATED_FP8_ATTENTION_WARNING.call_once(|| {
+                    tracing::warn!(
+                        "FP8 KV cache is using uncalibrated unit Q/K/V scales; load offline q_scale, k_scale, and v_scale for calibrated serving"
+                    );
+                });
+            }
             (Some(&self.fp8_k_scale), Some(&self.fp8_v_scale))
         } else {
             (None, None)
+        };
+        CacheScales {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            attention: self.fp8_attention_scales,
+            k,
+            v,
         }
     }
 
@@ -789,16 +859,9 @@ impl PagedAttention {
             block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
         };
         let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;
-        let (k_scale, v_scale) = self.cache_scales(key_cache);
-        let (k, v) = gather_kv_cache_for_layout(
-            key_cache,
-            value_cache,
-            k_scale,
-            v_scale,
-            &table,
-            &cu_kv,
-            dtype,
-        )?;
+        let scales = self.cache_scales(key_cache);
+        let (k, v) =
+            gather_kv_cache_for_layout(key_cache, value_cache, scales, &table, &cu_kv, dtype)?;
         // Packed [num_seqs * kv_len, kv_heads, head_size] -> [num_seqs, kv_heads, kv_len, hd].
         let unpack = |t: Tensor| -> Result<Tensor> {
             let (_, kv_heads, head_size) = t.dims3()?;
@@ -903,12 +966,11 @@ impl PagedAttention {
             let v_flat = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
-            let (k_scale, v_scale) = self.cache_scales(key_cache);
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &k_flat,
                 &v_flat,
-                k_scale,
-                v_scale,
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1034,12 +1096,11 @@ impl PagedAttention {
             && query_lens.len() == 1;
 
         let key_cache_ref = key_cache.as_ref().unwrap();
-        let (k_scale, v_scale) = self.cache_scales(key_cache_ref);
+        let scales = self.cache_scales(key_cache_ref);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache_ref,
             value_cache.as_ref().unwrap(),
-            k_scale,
-            v_scale,
+            scales,
             block_tables,
             &cu_kv,
             tensors.query.dtype(),
@@ -1361,12 +1422,11 @@ impl PagedAttention {
             let value = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
-            let (k_scale, v_scale) = self.cache_scales(key_cache);
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &key,
                 &value,
-                k_scale,
-                v_scale,
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1406,12 +1466,11 @@ impl PagedAttention {
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
-            let (k_scale, v_scale) = self.cache_scales(key_cache);
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 key.as_ref().unwrap(),
                 value.as_ref().unwrap(),
-                k_scale,
-                v_scale,
+                scales,
                 key_cache,
                 value_cache,
                 &ctx.slot_mapping,
@@ -1489,12 +1548,11 @@ impl PagedAttention {
         };
         let query_rows = decode_query_rows(query, &kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
-        let (k_scale, v_scale) = self.cache_scales(key_cache);
+        let scales = self.cache_scales(key_cache);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            k_scale,
-            v_scale,
+            scales,
             block_tables,
             &cu_kv,
             query.dtype(),
@@ -1603,7 +1661,7 @@ impl PagedAttention {
             query,
             key_cache,
             value_cache,
-            flashinfer_cache_scales(key_cache),
+            self.cache_scales(key_cache).flashinfer(key_cache),
             fi_meta.paged_kv_indptr,
             fi_meta.paged_kv_indices,
             fi_meta.paged_kv_last_page_len,
@@ -1640,11 +1698,11 @@ impl PagedAttention {
         value_cache: &Tensor,
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
-        let (k_scale, v_scale) = self.cache_scales(key_cache);
+        let scales = self.cache_scales(key_cache);
         paged_attention(
             query,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),
@@ -1837,6 +1895,47 @@ impl PagedAttention {
 mod tests {
     use super::*;
     use candle_core::D;
+
+    #[test]
+    fn owns_validated_fp8_attention_scales() -> Result<()> {
+        let scales = Fp8AttentionScales {
+            q: 0.25,
+            k: 0.5,
+            v: 0.75,
+        };
+        let attention =
+            PagedAttention::new_with_fp8_attention_scales(128, &Device::Cpu, None, Some(scales))?;
+        assert_eq!(attention.fp8_attention_scales(), scales);
+        assert!(attention.has_calibrated_fp8_attention_scales());
+        assert_eq!(attention.fp8_q_scale_value(), scales.q);
+        assert_eq!(attention.fp8_q_scale().to_scalar::<f32>()?, scales.q);
+        assert_eq!(attention.fp8_k_scale().to_scalar::<f32>()?, scales.k);
+        assert_eq!(attention.fp8_v_scale().to_scalar::<f32>()?, scales.v);
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        {
+            let fp8_cache = Tensor::zeros((1,), DType::F8E4M3, &Device::Cpu)?;
+            let flashinfer_scales = attention.cache_scales(&fp8_cache).flashinfer(&fp8_cache);
+            assert_eq!(flashinfer_scales.k, scales.k);
+            assert_eq!(flashinfer_scales.v, scales.v);
+        }
+
+        let default = PagedAttention::new(128, &Device::Cpu, None)?;
+        assert_eq!(default.fp8_attention_scales(), Fp8AttentionScales::UNIT);
+        assert!(!default.has_calibrated_fp8_attention_scales());
+
+        assert!(PagedAttention::new_with_fp8_attention_scales(
+            128,
+            &Device::Cpu,
+            None,
+            Some(Fp8AttentionScales {
+                q: 1.0,
+                k: 0.0,
+                v: 1.0,
+            }),
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
