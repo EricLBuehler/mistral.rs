@@ -298,6 +298,13 @@ impl QuantMethod for RuntimeOutputLinear {
         self.inner.activation_quantization_scheme()
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.inner.activation_quantization_scheme_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.inner.quantize_activation(a)
     }
@@ -1008,6 +1015,13 @@ impl QuantMethod for RowParallelLayer {
         self.weight.activation_quantization_scheme()
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.weight.activation_quantization_scheme_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -1649,6 +1663,13 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.activation_quantization_scheme()
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.weight.activation_quantization_scheme_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.weight.quantize_activation(a)
     }
@@ -2188,6 +2209,13 @@ impl QuantMethod for ReplicatedLayer {
 
     fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
         self.0.activation_quantization_scheme()
+    }
+
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.0.activation_quantization_scheme_for(a)
     }
 
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {

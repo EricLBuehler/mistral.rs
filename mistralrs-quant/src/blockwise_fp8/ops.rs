@@ -2,9 +2,15 @@ use candle_core::{CpuStorage, CustomOp1, CustomOp2, DType, Result, Tensor, WithD
 use float8::F8E4M3;
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
 use super::ffi;
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -12,10 +18,21 @@ use std::{
     sync::{Arc, Mutex, OnceLock},
 };
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-const CUTLASS_FP8_ALIGNMENT_BYTES: usize = 16;
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-const CUTLASS_FP8_BLOCK_SIZE: usize = 128;
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+const FP8_ALIGNMENT_BYTES: usize = 16;
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+const CUDA_STREAM_PER_THREAD_HANDLE: usize = 2;
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+pub(super) const FP8_BLOCK_SIZE: usize = 128;
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
 const CUTLASS_FP8_N_ALIGNMENT: usize = 16;
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
@@ -1130,30 +1147,24 @@ pub(crate) fn cutlass_fp8_blockwise_supported(
         use candle_core::Device;
 
         if !ffi::HAVE_CUTLASS_FP8_SM90_KERNELS
-            || weight_block_size != [CUTLASS_FP8_BLOCK_SIZE, CUTLASS_FP8_BLOCK_SIZE]
+            || weight_block_size != [FP8_BLOCK_SIZE, FP8_BLOCK_SIZE]
             || weight.dtype() != DType::F8E4M3
             || weight_scales.dtype() != DType::F32
             || !weight.is_contiguous()
             || !weight_scales.is_contiguous()
             || !weight.device().same_device(weight_scales.device())
-            || !cutlass_tensor_aligned(weight)
-            || !cutlass_tensor_aligned(weight_scales)
+            || !fp8_tensor_aligned(weight)
+            || !fp8_tensor_aligned(weight_scales)
         {
             return false;
         }
         let [n, k] = weight.dims() else {
             return false;
         };
-        if *n == 0 || *k == 0 || n % CUTLASS_FP8_N_ALIGNMENT != 0 || k % CUTLASS_FP8_BLOCK_SIZE != 0
-        {
+        if *n == 0 || *k == 0 || n % CUTLASS_FP8_N_ALIGNMENT != 0 || k % FP8_BLOCK_SIZE != 0 {
             return false;
         }
-        if weight_scales.dims()
-            != [
-                n.div_ceil(CUTLASS_FP8_BLOCK_SIZE),
-                k / CUTLASS_FP8_BLOCK_SIZE,
-            ]
-        {
+        if weight_scales.dims() != [n.div_ceil(FP8_BLOCK_SIZE), k / FP8_BLOCK_SIZE] {
             return false;
         }
         let Device::Cuda(dev) = weight.device() else {
@@ -1163,24 +1174,33 @@ pub(crate) fn cutlass_fp8_blockwise_supported(
     }
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-fn cutlass_tensor_aligned(tensor: &Tensor) -> bool {
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+pub(super) fn fp8_tensor_aligned(tensor: &Tensor) -> bool {
     tensor
         .layout()
         .start_offset()
         .checked_mul(tensor.dtype().size_in_bytes())
-        .is_some_and(|offset| offset % CUTLASS_FP8_ALIGNMENT_BYTES == 0)
+        .is_some_and(|offset| offset % FP8_ALIGNMENT_BYTES == 0)
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-static CUTLASS_FP8_SM90_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> =
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+static FP8_SM90_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> =
     OnceLock::new();
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-fn is_sm90(dev: &candle_core::CudaDevice) -> bool {
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+pub(super) fn is_sm90(dev: &candle_core::CudaDevice) -> bool {
     use candle_core::cuda::cudarc::driver::{result, sys};
 
-    let devices = CUTLASS_FP8_SM90_DEVICES.get_or_init(|| Mutex::new(HashMap::new()));
+    let devices = FP8_SM90_DEVICES.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(supported) = devices.lock().unwrap().get(&dev.id()).copied() {
         return supported;
     }
@@ -1256,24 +1276,45 @@ pub(super) fn prepare_cutlass_fp8(dev: &candle_core::CudaDevice) -> Result<i32> 
     Ok(sm_count)
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-struct CutlassWorkspaceKey {
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+#[derive(Eq, Hash, PartialEq)]
+struct Fp8WorkspaceKey {
     device: candle_core::cuda::DeviceId,
     stream: usize,
+    thread: Option<std::thread::ThreadId>,
     capacity: usize,
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-struct CutlassWorkspace {
-    slice: candle_core::cuda::cudarc::driver::CudaSlice<u8>,
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+fn fp8_workspace_thread(stream: usize) -> Option<std::thread::ThreadId> {
+    (stream == CUDA_STREAM_PER_THREAD_HANDLE).then(|| std::thread::current().id())
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-type CutlassWorkspaceMap = Mutex<HashMap<CutlassWorkspaceKey, Arc<Mutex<CutlassWorkspace>>>>;
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+pub(super) struct Fp8Workspace {
+    pub(super) slice: candle_core::cuda::cudarc::driver::CudaSlice<u8>,
+}
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-static CUTLASS_FP8_WORKSPACES: OnceLock<CutlassWorkspaceMap> = OnceLock::new();
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+type Fp8WorkspaceMap = Mutex<HashMap<Fp8WorkspaceKey, Arc<Mutex<Fp8Workspace>>>>;
+
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+static FP8_WORKSPACES: OnceLock<Fp8WorkspaceMap> = OnceLock::new();
 
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -1313,24 +1354,30 @@ fn cutlass_workspace_size(key: CutlassWorkspaceRequirementsKey) -> Result<usize>
     Ok(bytes)
 }
 
-#[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-fn cutlass_workspace(
+#[cfg(all(
+    feature = "cuda",
+    any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+))]
+pub(super) fn fp8_workspace(
     dev: &candle_core::CudaDevice,
     bytes: usize,
-) -> Result<Option<Arc<Mutex<CutlassWorkspace>>>> {
+    provider: &str,
+) -> Result<Option<Arc<Mutex<Fp8Workspace>>>> {
     if bytes == 0 {
         return Ok(None);
     }
-    let capacity = bytes
-        .checked_next_power_of_two()
-        .ok_or_else(|| candle_core::Error::msg("CUTLASS FP8 workspace size overflow"))?;
+    let capacity = bytes.checked_next_power_of_two().ok_or_else(|| {
+        candle_core::Error::msg(format!("{provider} FP8 workspace size overflow"))
+    })?;
     let stream = dev.cuda_stream();
-    let key = CutlassWorkspaceKey {
+    let stream_handle = stream.cu_stream() as usize;
+    let key = Fp8WorkspaceKey {
         device: dev.id(),
-        stream: stream.cu_stream() as usize,
+        stream: stream_handle,
+        thread: fp8_workspace_thread(stream_handle),
         capacity,
     };
-    let workspaces = CUTLASS_FP8_WORKSPACES.get_or_init(|| Mutex::new(HashMap::new()));
+    let workspaces = FP8_WORKSPACES.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(workspace) = workspaces.lock().unwrap().get(&key).cloned() {
         return Ok(Some(workspace));
     }
@@ -1341,11 +1388,11 @@ fn cutlass_workspace(
         != candle_core::cuda::cudarc::driver::sys::CUstreamCaptureStatus::CU_STREAM_CAPTURE_STATUS_NONE
     {
         candle_core::bail!(
-            "CUTLASS FP8 workspace for this shape must be warmed before CUDA graph capture"
+            "{provider} FP8 workspace for this shape must be warmed before CUDA graph capture"
         )
     }
     let slice = unsafe { dev.alloc::<u8>(capacity)? };
-    let workspace = Arc::new(Mutex::new(CutlassWorkspace { slice }));
+    let workspace = Arc::new(Mutex::new(Fp8Workspace { slice }));
     let workspace = workspaces
         .lock()
         .unwrap()
@@ -1366,13 +1413,13 @@ pub(crate) fn fp8_quantize_activation_cutlass(input: &Tensor) -> Result<(Tensor,
         candle_core::bail!("CUTLASS FP8 activation quantization requires CUDA")
     };
     let input = input.contiguous()?;
-    let input = if cutlass_tensor_aligned(&input) {
+    let input = if fp8_tensor_aligned(&input) {
         input
     } else {
         input.copy()?
     };
     let (rows, cols) = input.dims2()?;
-    if rows == 0 || cols == 0 || cols % CUTLASS_FP8_BLOCK_SIZE != 0 {
+    if rows == 0 || cols == 0 || cols % FP8_BLOCK_SIZE != 0 {
         candle_core::bail!(
             "CUTLASS FP8 activation shape ({rows}, {cols}) requires nonzero dimensions and K divisible by 128"
         )
@@ -1382,7 +1429,7 @@ pub(crate) fn fp8_quantize_activation_cutlass(input: &Tensor) -> Result<(Tensor,
     let cols_i32 = i32::try_from(cols)
         .map_err(|_| candle_core::Error::msg("FP8 activation column count exceeds i32"))?;
     let scale_count = rows
-        .checked_mul(cols / CUTLASS_FP8_BLOCK_SIZE)
+        .checked_mul(cols / FP8_BLOCK_SIZE)
         .ok_or_else(|| candle_core::Error::msg("FP8 activation scale count overflow"))?;
     let _ = i32::try_from(scale_count)
         .map_err(|_| candle_core::Error::msg("FP8 activation scale count exceeds i32"))?;
@@ -1448,7 +1495,7 @@ pub(crate) fn fp8_quantize_activation_cutlass(input: &Tensor) -> Result<(Tensor,
     ));
     let scales = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, dev.clone())),
-        Shape::from_dims(&[rows, cols / CUTLASS_FP8_BLOCK_SIZE]),
+        Shape::from_dims(&[rows, cols / FP8_BLOCK_SIZE]),
     ));
     Ok((quantized, scales))
 }
@@ -1491,7 +1538,7 @@ fn launch_cutlass_gemm(context: CutlassGemm<'_>, output_ptr: u64) -> Result<()> 
         output_dtype,
         sm_count,
     })?;
-    let workspace = cutlass_workspace(dev, workspace_bytes)?;
+    let workspace = fp8_workspace(dev, workspace_bytes, "CUTLASS")?;
     let mut workspace_lock = workspace
         .as_ref()
         .map(|workspace| workspace.lock().unwrap());
@@ -1587,25 +1634,21 @@ pub(crate) fn fp8_blockwise_matmul_cutlass(
     if activation.dtype() != DType::F8E4M3 || activation_scales.dtype() != DType::F32 {
         candle_core::bail!("CUTLASS FP8 activation values/scales must be F8E4M3/F32")
     }
-    if !cutlass_fp8_blockwise_supported(
-        weight,
-        weight_scales,
-        &[CUTLASS_FP8_BLOCK_SIZE, CUTLASS_FP8_BLOCK_SIZE],
-    ) {
+    if !cutlass_fp8_blockwise_supported(weight, weight_scales, &[FP8_BLOCK_SIZE, FP8_BLOCK_SIZE]) {
         candle_core::bail!("CUTLASS blockwise FP8 GEMM does not support this weight layout")
     }
     if !activation.is_contiguous()
         || !activation_scales.is_contiguous()
         || !activation.device().same_device(activation_scales.device())
         || !activation.device().same_device(weight.device())
-        || !cutlass_tensor_aligned(activation)
-        || !cutlass_tensor_aligned(activation_scales)
+        || !fp8_tensor_aligned(activation)
+        || !fp8_tensor_aligned(activation_scales)
     {
         candle_core::bail!("CUTLASS FP8 operands must be contiguous and on the same device")
     }
     let (m, k) = activation.dims2()?;
     let (n, weight_k) = weight.dims2()?;
-    if m == 0 || weight_k != k || activation_scales.dims() != [m, k / CUTLASS_FP8_BLOCK_SIZE] {
+    if m == 0 || weight_k != k || activation_scales.dims() != [m, k / FP8_BLOCK_SIZE] {
         candle_core::bail!("CUTLASS FP8 activation, scale, and weight shapes are incompatible")
     }
     let Device::Cuda(dev) = activation.device() else {
@@ -1655,7 +1698,37 @@ mod tests {
     use candle_nn::{Linear, Module};
     use half::bf16;
 
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    use crate::blockwise_fp8::deepgemm;
     use crate::blockwise_fp8::ops;
+
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[test]
+    fn deepgemm_ffi_plan_layout() {
+        use crate::blockwise_fp8::ffi::{DeepGemmPlan, DeepGemmPrepared};
+
+        assert_eq!(std::mem::offset_of!(DeepGemmPlan, workspace_bytes), 56);
+        assert_eq!(std::mem::offset_of!(DeepGemmPlan, cache_key), 64);
+        assert_eq!(std::mem::size_of::<DeepGemmPlan>(), 72);
+        assert_eq!(std::mem::offset_of!(DeepGemmPrepared, function), 72);
+        assert_eq!(std::mem::size_of::<DeepGemmPrepared>(), 80);
+    }
+
+    #[cfg(all(
+        feature = "cuda",
+        any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+    ))]
+    #[test]
+    fn fp8_workspace_keys_per_thread_default_streams() {
+        let current = ops::fp8_workspace_thread(ops::CUDA_STREAM_PER_THREAD_HANDLE).unwrap();
+        let other = std::thread::spawn(|| {
+            ops::fp8_workspace_thread(ops::CUDA_STREAM_PER_THREAD_HANDLE).unwrap()
+        })
+        .join()
+        .unwrap();
+        assert_ne!(current, other);
+        assert_eq!(ops::fp8_workspace_thread(0x1000), None);
+    }
 
     #[test]
     fn test_fp8_blockwise_dequant() -> Result<()> {
@@ -2005,6 +2078,254 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
+    fn test_deepgemm_blockwise_fp8_and_cuda_graph() -> Result<()> {
+        use candle_core::cuda::cudarc::driver::sys;
+
+        const BLOCK_SIZE: usize = 128;
+        const K: usize = 256;
+        const N: usize = 256;
+
+        fn assert_close(rows: usize, reference: &Tensor, output: &Tensor) -> Result<()> {
+            let reference = reference.flatten_all()?.to_vec1::<f32>()?;
+            let output = output.flatten_all()?.to_vec1::<f32>()?;
+            let max_reference = reference.iter().copied().map(f32::abs).fold(0.0, f32::max);
+            let max_error = reference
+                .iter()
+                .zip(&output)
+                .map(|(reference, output)| (reference - output).abs())
+                .fold(0.0, f32::max);
+            assert!(
+                max_error <= 0.02 + 0.02 * max_reference,
+                "rows={rows}: max error {max_error}, max reference {max_reference}"
+            );
+            Ok(())
+        }
+
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_dev) = &dev else {
+            unreachable!()
+        };
+        let stream = cuda_dev.cuda_stream();
+        unsafe { stream.context().disable_event_tracking() };
+        let weight_values = (0..N * K)
+            .map(|index| {
+                let row = index / K;
+                let column = index % K;
+                let block = row / BLOCK_SIZE * 2 + column / BLOCK_SIZE;
+                let amplitude = [0.04, 0.18, 0.75, 1.6][block];
+                let value = ((row * 17 + column * 29) % 31) as f32 - 15.0;
+                value * amplitude
+            })
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(weight_values, (N, K), &dev)?.to_dtype(DType::BF16)?;
+        let (weight, weight_scales) =
+            ops::fp8_blockwise_quantize(&weight, vec![BLOCK_SIZE, BLOCK_SIZE])?;
+        let weight_scale_values = weight_scales.flatten_all()?.to_vec1::<f32>()?;
+        let min_scale = weight_scale_values
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        let max_scale = weight_scale_values
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        assert!(max_scale > min_scale * 8.0);
+        assert!(deepgemm::supported(
+            &weight,
+            &weight_scales,
+            &[BLOCK_SIZE, BLOCK_SIZE]
+        ));
+        let live_event = stream
+            .record_event(None)
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+        stream
+            .wait(&live_event)
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+        dev.synchronize()?;
+        let prepared = deepgemm::prepare(&weight, &weight_scales, &[BLOCK_SIZE, BLOCK_SIZE])?;
+        stream
+            .wait(&live_event)
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+        dev.synchronize()?;
+        for rows in [1usize, 8, 16] {
+            let input_values = (0..rows * K)
+                .map(|index| {
+                    let row = index / K;
+                    let column = index % K;
+                    let block = column / BLOCK_SIZE;
+                    let amplitude = (row + 1) as f32 * (block + 1) as f32 * 0.025;
+                    let value = ((row * 11 + column * 7) % 29) as f32 - 14.0;
+                    value * amplitude
+                })
+                .collect::<Vec<_>>();
+            let input = Tensor::from_vec(input_values, (rows, K), &dev)?.to_dtype(DType::BF16)?;
+            let (activation, activation_scales) = ops::fp8_quantize_activation_cutlass(&input)?;
+            dev.synchronize()?;
+            let reference = ops::fp8_blockwise_matmul_cutlass(
+                &activation,
+                &activation_scales,
+                &weight,
+                &weight_scales,
+                DType::BF16,
+            )?;
+            dev.synchronize()?;
+            let reference = reference.to_dtype(DType::F32)?;
+            dev.synchronize()?;
+            let output = deepgemm::matmul(&prepared, &input, &weight, &weight_scales)?;
+            dev.synchronize()?;
+            let output = output.to_dtype(DType::F32)?;
+            dev.synchronize()?;
+            assert_close(rows, &reference, &output)?;
+            dev.synchronize()?;
+
+            if rows != 8 {
+                continue;
+            }
+
+            let graph_output = Tensor::zeros((rows, N), DType::BF16, &dev)?;
+            let restore_event_tracking = stream.context().is_event_tracking();
+            if restore_event_tracking {
+                unsafe { stream.context().disable_event_tracking() };
+            }
+            if let Err(error) =
+                stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+            {
+                if restore_event_tracking {
+                    unsafe { stream.context().enable_event_tracking() };
+                }
+                return Err(candle_core::Error::msg(error.to_string()));
+            }
+            let captured =
+                deepgemm::matmul(&prepared, &input, &weight, &weight_scales).and_then(|captured| {
+                    use crate::utils::slice_ptr_on_stream;
+                    use candle_core::Storage;
+
+                    let status = {
+                        let (src_storage, src_layout) = captured.storage_and_layout();
+                        let Storage::Cuda(src_storage) = &*src_storage else {
+                            unreachable!()
+                        };
+                        let (dst_storage, dst_layout) = graph_output.storage_and_layout();
+                        let Storage::Cuda(dst_storage) = &*dst_storage else {
+                            unreachable!()
+                        };
+                        let (src_ptr, src_guard) = slice_ptr_on_stream(
+                            src_storage.as_cuda_slice::<bf16>()?,
+                            src_layout.start_offset(),
+                            &stream,
+                        );
+                        let (dst_ptr, dst_guard) = slice_ptr_on_stream(
+                            dst_storage.as_cuda_slice::<bf16>()?,
+                            dst_layout.start_offset(),
+                            &stream,
+                        );
+                        let status = unsafe {
+                            sys::cuMemcpyDtoDAsync_v2(
+                                dst_ptr,
+                                src_ptr,
+                                rows * N * std::mem::size_of::<bf16>(),
+                                stream.cu_stream(),
+                            )
+                        };
+                        drop((src_guard, dst_guard));
+                        status
+                    };
+                    drop(captured);
+                    if status != sys::cudaError_enum::CUDA_SUCCESS {
+                        candle_core::bail!("CUDA graph output copy failed: {status:?}")
+                    }
+                    Ok(())
+                });
+            let graph = stream.end_capture(
+                sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+            );
+            if restore_event_tracking {
+                unsafe { stream.context().enable_event_tracking() };
+            }
+            captured?;
+            let graph = graph
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?
+                .ok_or_else(|| candle_core::Error::msg("CUDA graph capture returned no graph"))?;
+            graph
+                .launch()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            graph
+                .launch()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            stream
+                .synchronize()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            assert_close(rows, &reference, &graph_output.to_dtype(DType::F32)?)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and runtime nvcc or a prepared cubin cache"]
+    fn test_deepgemm_shared_prepared_state_across_ptds_threads() -> Result<()> {
+        const BLOCK_SIZE: usize = 128;
+        const ITERATIONS: usize = 32;
+        const K: usize = 256;
+        const N: usize = 256;
+        const ROWS: usize = 8;
+
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_dev) = &dev else {
+            unreachable!()
+        };
+        unsafe { cuda_dev.cuda_stream().context().disable_event_tracking() };
+        let weight = Tensor::ones((N, K), DType::F8E4M3, &Device::Cpu)?.to_device(&dev)?;
+        let weight_scales = Tensor::ones((N / BLOCK_SIZE, K / BLOCK_SIZE), DType::F32, &dev)?
+            .affine(1.0 / K as f64, 0.0)?;
+        let prepared = deepgemm::prepare(&weight, &weight_scales, &[BLOCK_SIZE, BLOCK_SIZE])?;
+        dev.synchronize()?;
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        std::thread::scope(|scope| -> Result<()> {
+            let spawn = |value: f32| {
+                let dev = dev.clone();
+                let weight = weight.clone();
+                let weight_scales = weight_scales.clone();
+                let prepared = prepared.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || -> Result<()> {
+                    let values = vec![bf16::from_f32(value); ROWS * K];
+                    let input = Tensor::from_vec(values, (ROWS, K), &dev)?;
+                    barrier.wait();
+                    let mut output = None;
+                    for _ in 0..ITERATIONS {
+                        output = Some(deepgemm::matmul(
+                            &prepared,
+                            &input,
+                            &weight,
+                            &weight_scales,
+                        )?);
+                        std::thread::yield_now();
+                    }
+                    dev.synchronize()?;
+                    let output = output.unwrap().to_dtype(DType::F32)?;
+                    let max_error = output
+                        .flatten_all()?
+                        .to_vec1::<f32>()?
+                        .into_iter()
+                        .map(|output| (output - value).abs())
+                        .fold(0.0, f32::max);
+                    assert!(max_error <= 0.02, "value={value}: max error {max_error}");
+                    Ok(())
+                })
+            };
+            let first = spawn(0.5);
+            let second = spawn(2.0);
+            first.join().expect("first PTDS worker panicked")?;
+            second.join().expect("second PTDS worker panicked")?;
+            Ok(())
+        })
+    }
+
     #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
     #[derive(Clone, Copy)]
     struct BlockwiseFp8BenchShape {
@@ -2063,6 +2384,85 @@ mod tests {
             .elapsed_ms(&end)
             .map_err(|error| candle_core::Error::msg(format!("CUDA timing failed: {error}")))?;
         Ok(f64::from(elapsed_ms) * 1_000.0 / iterations as f64)
+    }
+
+    #[cfg(all(
+        feature = "cuda",
+        any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
+    ))]
+    fn measure_blockwise_fp8_cuda_graph_us<T>(
+        dev: &Device,
+        warmup: usize,
+        iterations: usize,
+        samples: usize,
+        capture: impl FnOnce() -> Result<T>,
+    ) -> Result<Vec<f64>> {
+        use candle_core::cuda::cudarc::driver::sys;
+
+        dev.synchronize()?;
+        let Device::Cuda(cuda_dev) = dev else {
+            candle_core::bail!("CUDA graph timing requires a CUDA device")
+        };
+        let stream = cuda_dev.cuda_stream();
+        let restore_event_tracking = stream.context().is_event_tracking();
+        if restore_event_tracking {
+            unsafe { stream.context().disable_event_tracking() };
+        }
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            if restore_event_tracking {
+                unsafe { stream.context().enable_event_tracking() };
+            }
+            return Err(candle_core::Error::msg(error.to_string()));
+        }
+        let captured = capture();
+        let graph = stream.end_capture(
+            sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        );
+        if restore_event_tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        let captured = captured?;
+        let graph = graph
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?
+            .ok_or_else(|| candle_core::Error::msg("CUDA graph capture returned no graph"))?;
+        for _ in 0..warmup {
+            graph
+                .launch()
+                .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+
+        let mut timings = Vec::with_capacity(samples);
+        for _ in 0..samples {
+            let start = stream
+                .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+                .map_err(|error| {
+                    candle_core::Error::msg(format!("CUDA start event failed: {error}"))
+                })?;
+            for _ in 0..iterations {
+                graph
+                    .launch()
+                    .map_err(|error| candle_core::Error::msg(error.to_string()))?;
+            }
+            let end = stream
+                .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+                .map_err(|error| {
+                    candle_core::Error::msg(format!("CUDA end event failed: {error}"))
+                })?;
+            end.synchronize().map_err(|error| {
+                candle_core::Error::msg(format!("CUDA event synchronization failed: {error}"))
+            })?;
+            let elapsed_ms = start
+                .elapsed_ms(&end)
+                .map_err(|error| candle_core::Error::msg(format!("CUDA timing failed: {error}")))?;
+            timings.push(f64::from(elapsed_ms) * 1_000.0 / iterations as f64);
+        }
+        drop((captured, graph));
+        Ok(timings)
     }
 
     #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
@@ -2196,6 +2596,278 @@ mod tests {
                 println!(
                     "{},{},{},{},{quantize_us:.3},{gemm_us:.3},{max_error:.6},{warmup},{iterations}",
                     shape.name, m, shape.n, shape.k
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and reports latency to stdout"]
+    fn bench_deepgemm_blockwise_fp8_production_shapes_sm90() -> Result<()> {
+        const BLOCK_SIZE: usize = 128;
+        const DEFAULT_WARMUP: usize = 10;
+        const DEFAULT_ITERATIONS: usize = 100;
+        const OUTPUT_TOLERANCE: f32 = 0.02;
+        const M_VALUES: [usize; 3] = [1, 8, 16];
+        const SHAPES: [BlockwiseFp8BenchShape; 5] = [
+            BlockwiseFp8BenchShape {
+                name: "gdn_qkvz",
+                n: 16_384,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "attention_qkv",
+                n: 14_336,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "output_projection",
+                n: 5_120,
+                k: 6_144,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_gate_up",
+                n: 34_816,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_down",
+                n: 5_120,
+                k: 17_408,
+            },
+        ];
+
+        let warmup =
+            blockwise_fp8_bench_iterations("MISTRALRS_BLOCKWISE_FP8_BENCH_WARMUP", DEFAULT_WARMUP)?;
+        let iterations = blockwise_fp8_bench_iterations(
+            "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
+            DEFAULT_ITERATIONS,
+        )?;
+        let dev = Device::new_cuda(0)?;
+        println!("shape,m,n,k,fused_gpu_us,max_abs_error,warmup,iterations");
+
+        for shape in SHAPES {
+            let weight =
+                Tensor::ones((shape.n, shape.k), DType::F8E4M3, &Device::Cpu)?.to_device(&dev)?;
+            let weight_scales = Tensor::ones(
+                (shape.n / BLOCK_SIZE, shape.k / BLOCK_SIZE),
+                DType::F32,
+                &dev,
+            )?
+            .affine(1.0 / shape.k as f64, 0.0)?;
+            let prepared = deepgemm::prepare(&weight, &weight_scales, &[BLOCK_SIZE, BLOCK_SIZE])?;
+
+            for m in M_VALUES {
+                let input = Tensor::ones((m, shape.k), DType::BF16, &dev)?;
+                let fused_us = measure_blockwise_fp8_cuda_us(&dev, warmup, iterations, || {
+                    deepgemm::matmul(&prepared, &input, &weight, &weight_scales)
+                })?;
+                let output = deepgemm::matmul(&prepared, &input, &weight, &weight_scales)?;
+                let max_error = output
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?
+                    .into_iter()
+                    .map(|value| (value - 1.0).abs())
+                    .fold(0.0, f32::max);
+                assert!(
+                    max_error <= OUTPUT_TOLERANCE,
+                    "M={m}, N={}, K={}: output error {max_error}",
+                    shape.n,
+                    shape.k
+                );
+                println!(
+                    "{},{},{},{},{fused_us:.3},{max_error:.6},{warmup},{iterations}",
+                    shape.name, m, shape.n, shape.k
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    fn median_cuda_us(mut samples: Vec<f64>) -> f64 {
+        samples.sort_by(f64::total_cmp);
+        samples[samples.len() / 2]
+    }
+
+    #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and reports latency to stdout"]
+    fn bench_cutlass_vs_deepgemm_fused_production_shapes_sm90() -> Result<()> {
+        const BLOCK_SIZE: usize = 128;
+        const DEFAULT_WARMUP: usize = 10;
+        const DEFAULT_ITERATIONS: usize = 100;
+        const SAMPLES: usize = 7;
+        const M_VALUES: [usize; 3] = [1, 8, 16];
+        const SHAPES: [BlockwiseFp8BenchShape; 5] = [
+            BlockwiseFp8BenchShape {
+                name: "gdn_qkvz",
+                n: 16_384,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "attention_qkv",
+                n: 14_336,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "output_projection",
+                n: 5_120,
+                k: 6_144,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_gate_up",
+                n: 34_816,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_down",
+                n: 5_120,
+                k: 17_408,
+            },
+        ];
+
+        let warmup =
+            blockwise_fp8_bench_iterations("MISTRALRS_BLOCKWISE_FP8_BENCH_WARMUP", DEFAULT_WARMUP)?;
+        let iterations = blockwise_fp8_bench_iterations(
+            "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
+            DEFAULT_ITERATIONS,
+        )?;
+        let dev = Device::new_cuda(0)?;
+        let Device::Cuda(cuda_dev) = &dev else {
+            unreachable!()
+        };
+        unsafe { cuda_dev.cuda_stream().context().disable_event_tracking() };
+        println!(
+            "shape,m,n,k,cutlass_quant_median_us,cutlass_gemm_median_us,cutlass_fused_median_us,deepgemm_fused_median_us,deepgemm_speedup,cutlass_graph_median_us,deepgemm_graph_median_us,deepgemm_graph_speedup,samples,warmup,iterations"
+        );
+
+        for shape in SHAPES {
+            let weight =
+                Tensor::ones((shape.n, shape.k), DType::F8E4M3, &Device::Cpu)?.to_device(&dev)?;
+            let weight_scales = Tensor::ones(
+                (shape.n / BLOCK_SIZE, shape.k / BLOCK_SIZE),
+                DType::F32,
+                &dev,
+            )?
+            .affine(1.0 / shape.k as f64, 0.0)?;
+            let prepared = deepgemm::prepare(&weight, &weight_scales, &[BLOCK_SIZE, BLOCK_SIZE])?;
+
+            for m in M_VALUES {
+                let input = Tensor::ones((m, shape.k), DType::BF16, &dev)?;
+                let (activation, activation_scales) = ops::fp8_quantize_activation_cutlass(&input)?;
+                let mut cutlass_quant = Vec::with_capacity(SAMPLES);
+                let mut cutlass_gemm = Vec::with_capacity(SAMPLES);
+                let mut cutlass_fused = Vec::with_capacity(SAMPLES);
+                let mut deepgemm_fused = Vec::with_capacity(SAMPLES);
+                for sample in 0..SAMPLES {
+                    if sample % 2 == 0 {
+                        cutlass_fused.push(measure_blockwise_fp8_cuda_us(
+                            &dev,
+                            warmup,
+                            iterations,
+                            || {
+                                let (activation, scales) =
+                                    ops::fp8_quantize_activation_cutlass(&input)?;
+                                ops::fp8_blockwise_matmul_cutlass(
+                                    &activation,
+                                    &scales,
+                                    &weight,
+                                    &weight_scales,
+                                    DType::BF16,
+                                )
+                            },
+                        )?);
+                        deepgemm_fused.push(measure_blockwise_fp8_cuda_us(
+                            &dev,
+                            warmup,
+                            iterations,
+                            || deepgemm::matmul(&prepared, &input, &weight, &weight_scales),
+                        )?);
+                    } else {
+                        deepgemm_fused.push(measure_blockwise_fp8_cuda_us(
+                            &dev,
+                            warmup,
+                            iterations,
+                            || deepgemm::matmul(&prepared, &input, &weight, &weight_scales),
+                        )?);
+                        cutlass_fused.push(measure_blockwise_fp8_cuda_us(
+                            &dev,
+                            warmup,
+                            iterations,
+                            || {
+                                let (activation, scales) =
+                                    ops::fp8_quantize_activation_cutlass(&input)?;
+                                ops::fp8_blockwise_matmul_cutlass(
+                                    &activation,
+                                    &scales,
+                                    &weight,
+                                    &weight_scales,
+                                    DType::BF16,
+                                )
+                            },
+                        )?);
+                    }
+                    cutlass_quant.push(measure_blockwise_fp8_cuda_us(
+                        &dev,
+                        warmup,
+                        iterations,
+                        || ops::fp8_quantize_activation_cutlass(&input),
+                    )?);
+                    cutlass_gemm.push(measure_blockwise_fp8_cuda_us(
+                        &dev,
+                        warmup,
+                        iterations,
+                        || {
+                            ops::fp8_blockwise_matmul_cutlass(
+                                &activation,
+                                &activation_scales,
+                                &weight,
+                                &weight_scales,
+                                DType::BF16,
+                            )
+                        },
+                    )?);
+                }
+                let cutlass_quant = median_cuda_us(cutlass_quant);
+                let cutlass_gemm = median_cuda_us(cutlass_gemm);
+                let cutlass_fused = median_cuda_us(cutlass_fused);
+                let deepgemm_fused = median_cuda_us(deepgemm_fused);
+                let cutlass_graph = median_cuda_us(measure_blockwise_fp8_cuda_graph_us(
+                    &dev,
+                    warmup,
+                    iterations,
+                    SAMPLES,
+                    || {
+                        let (activation, scales) = ops::fp8_quantize_activation_cutlass(&input)?;
+                        let output = ops::fp8_blockwise_matmul_cutlass(
+                            &activation,
+                            &scales,
+                            &weight,
+                            &weight_scales,
+                            DType::BF16,
+                        )?;
+                        Ok((activation, scales, output))
+                    },
+                )?);
+                let deepgemm_graph = median_cuda_us(measure_blockwise_fp8_cuda_graph_us(
+                    &dev,
+                    warmup,
+                    iterations,
+                    SAMPLES,
+                    || deepgemm::matmul(&prepared, &input, &weight, &weight_scales),
+                )?);
+                println!(
+                    "{},{},{},{},{cutlass_quant:.3},{cutlass_gemm:.3},{cutlass_fused:.3},{deepgemm_fused:.3},{:.3},{cutlass_graph:.3},{deepgemm_graph:.3},{:.3},{SAMPLES},{warmup},{iterations}",
+                    shape.name,
+                    m,
+                    shape.n,
+                    shape.k,
+                    cutlass_fused / deepgemm_fused,
+                    cutlass_graph / deepgemm_graph
                 );
             }
         }

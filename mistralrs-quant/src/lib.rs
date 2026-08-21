@@ -1602,6 +1602,13 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        _a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.activation_quantization_scheme()
+    }
+
     fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
         candle_core::bail!("{} does not support activation quantization", self.name())
     }
@@ -1690,13 +1697,13 @@ pub fn try_forward_with_shared_quantized_activation(
     if !matches!(a.dtype(), DType::F16 | DType::BF16) {
         return Ok(None);
     }
-    let Some(scheme) = first.activation_quantization_scheme() else {
+    let Some(scheme) = first.activation_quantization_scheme_for(a) else {
         return Ok(None);
     };
     if methods
         .iter()
         .skip(1)
-        .any(|method| method.activation_quantization_scheme() != Some(scheme))
+        .any(|method| method.activation_quantization_scheme_for(a) != Some(scheme))
     {
         return Ok(None);
     }

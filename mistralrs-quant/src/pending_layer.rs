@@ -174,6 +174,13 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve().ok()?.activation_quantization_scheme()
     }
 
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.resolve().ok()?.activation_quantization_scheme_for(a)
+    }
+
     fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
         self.resolve()?.quantize_activation(a)
     }
