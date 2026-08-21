@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::{DType, Device, DeviceLocation, Result, Tensor, D};
+use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
     flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
@@ -1836,6 +1836,7 @@ impl PagedAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candle_core::D;
 
     #[test]
     fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
