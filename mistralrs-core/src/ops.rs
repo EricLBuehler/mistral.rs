@@ -4222,11 +4222,8 @@ mod tests {
         let up_view = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
             Linear::new(packed_weight.narrow(0, 2, 2)?, None),
         ))?) as Arc<dyn QuantMethod>;
-        let gate = maybe_wrap_dynamic_lora(
-            &vb.pp("gate"),
-            gate_view,
-            LoraLinearSpec::replicated(2, 2),
-        )?;
+        let gate =
+            maybe_wrap_dynamic_lora(&vb.pp("gate"), gate_view, LoraLinearSpec::replicated(2, 2))?;
         let up = maybe_wrap_dynamic_lora(&vb.pp("up"), up_view, LoraLinearSpec::replicated(2, 2))?;
         registry.finalize()?;
         let merged = MergedDenseProjection::from_packed(&mistralrs_quant::PackedColumnParallel {

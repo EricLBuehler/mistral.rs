@@ -3503,7 +3503,11 @@ impl Mlp {
                     comm,
                     vb.pp("gate_up_proj"),
                 )?;
-                (gate_up_projs[0].to_owned(), gate_up_projs[1].to_owned(), None)
+                (
+                    gate_up_projs[0].to_owned(),
+                    gate_up_projs[1].to_owned(),
+                    None,
+                )
             }
         };
 
