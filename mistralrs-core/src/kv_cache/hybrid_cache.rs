@@ -82,11 +82,11 @@ impl RecurrentStatePool {
         })
     }
 
-    /// Grow the pool by doubling capacity.
-    fn grow(&mut self) -> Result<()> {
-        let new_capacity = self.capacity * 2;
+    fn resize(&mut self, new_capacity: usize) -> Result<()> {
+        if new_capacity <= self.capacity {
+            return Ok(());
+        }
 
-        // Allocate new larger conv_state and copy existing data
         let new_conv = Tensor::zeros(
             (new_capacity, self.conv_dim, self.conv_width),
             self.conv_dtype,
@@ -94,13 +94,11 @@ impl RecurrentStatePool {
         )?;
         new_conv.slice_set(&self.conv_state, 0, 0)?;
 
-        // Allocate new larger recurrent_state and copy existing data
         let mut recurrent_shape = vec![new_capacity];
         recurrent_shape.extend_from_slice(&self.state_dims);
         let new_recurrent = Tensor::zeros(recurrent_shape, self.recurrent_dtype, &self.device)?;
         new_recurrent.slice_set(&self.recurrent_state, 0, 0)?;
 
-        // Add new slots to free list
         self.free_slots.extend((self.capacity..new_capacity).rev());
 
         self.conv_state = new_conv;
@@ -109,6 +107,22 @@ impl RecurrentStatePool {
 
         tracing::info!("Recurrent state pool grew to capacity {new_capacity}");
         Ok(())
+    }
+
+    fn grow(&mut self) -> Result<()> {
+        let new_capacity = self
+            .capacity
+            .checked_mul(2)
+            .ok_or_else(|| candle_core::Error::msg("recurrent state capacity overflow"))?;
+        self.resize(new_capacity)
+    }
+
+    pub(crate) fn reserve(&mut self, min_capacity: usize) -> Result<bool> {
+        if min_capacity <= self.capacity {
+            return Ok(false);
+        }
+        self.resize(min_capacity)?;
+        Ok(true)
     }
 
     /// Allocate a state slot for a new sequence. Returns the slot index.
@@ -454,6 +468,16 @@ impl HybridCache {
             .unwrap_or(0)
     }
 
+    pub(crate) fn reserve_recurrent_capacity(&mut self, min_capacity: usize) -> Result<bool> {
+        let mut grew = false;
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                grew |= pool.reserve(min_capacity)?;
+            }
+        }
+        Ok(grew)
+    }
+
     /// Allocate state slots for a new sequence across all recurrent layers.
     /// Returns the slot index (same for all layers).
     pub fn allocate_seq(&mut self) -> Option<usize> {
@@ -689,6 +713,8 @@ impl HybridCache {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     fn config(layer_types: Vec<HybridLayerType>) -> HybridCacheConfig {
@@ -739,6 +765,27 @@ mod tests {
             assert!(indices.device().same_device(pool.device()));
             assert_eq!(indices.to_vec1::<u32>()?, vec![1, 3]);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn recurrent_capacity_can_be_reserved_before_admission() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent, HybridLayerType::Recurrent]),
+            DType::F32,
+            &devices,
+        )?;
+
+        assert!(cache.reserve_recurrent_capacity(17)?);
+        assert_eq!(cache.recurrent_capacity(), 17);
+        assert!(!cache.reserve_recurrent_capacity(16)?);
+
+        let slots = (0..17)
+            .map(|_| cache.allocate_seq().unwrap())
+            .collect::<HashSet<_>>();
+        assert_eq!(slots.len(), 17);
+        assert_eq!(cache.recurrent_capacity(), 17);
         Ok(())
     }
 }

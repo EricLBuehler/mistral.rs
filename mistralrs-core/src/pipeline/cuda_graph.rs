@@ -553,6 +553,7 @@ impl CudaDecodeGraphMetadataBuffers {
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
         model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+        activation_dtype: DType,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
         let rope_positions =
@@ -562,6 +563,7 @@ impl CudaDecodeGraphMetadataBuffers {
             seqlen_offsets.len(),
             kv_cache,
             model_metadata,
+            activation_dtype,
         )?;
         let buffers = Self {
             slot_mappings,
@@ -975,6 +977,7 @@ where
         block_size,
         kv_cache,
         model_metadata,
+        warmup_logits.dtype(),
     )?;
     let graph_input_ids = input_ids.as_detached_tensor();
     let graph_logits = unsafe {
@@ -1129,6 +1132,7 @@ fn flashinfer_decode_scratch_maps(
     batch: usize,
     kv_cache: &[(Tensor, Tensor)],
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    activation_dtype: DType,
 ) -> candle_core::Result<FlashInferDecodeScratchMaps> {
     let Some(model_metadata) = model_metadata else {
         return Ok((None, None));
@@ -1157,12 +1161,12 @@ fn flashinfer_decode_scratch_maps(
         let num_qo_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
         let entry = specs.entry(location).or_insert((
             key_cache.device().clone(),
-            key_cache.dtype(),
+            activation_dtype,
             num_qo_heads,
             head_dim,
         ));
-        if entry.1 != key_cache.dtype() {
-            candle_core::bail!("FlashInfer graph scratch expects one dtype per device");
+        if entry.1 != activation_dtype {
+            candle_core::bail!("FlashInfer graph scratch expects one activation dtype per device");
         }
         entry.2 = entry.2.max(num_qo_heads);
         entry.3 = entry.3.max(head_dim);

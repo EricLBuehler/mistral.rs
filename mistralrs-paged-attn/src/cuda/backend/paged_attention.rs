@@ -28,6 +28,31 @@ fn align_up(value: usize, alignment: usize) -> usize {
     value.div_ceil(alignment) * alignment
 }
 
+fn validate_kv_cache_scales(
+    cache_dtype: DType,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    op: &str,
+) -> Result<()> {
+    match (cache_dtype, k_scale, v_scale) {
+        (DType::F8E4M3, Some(k_scale), Some(v_scale)) => {
+            if k_scale.dtype() != DType::F32
+                || v_scale.dtype() != DType::F32
+                || k_scale.elem_count() != 1
+                || v_scale.elem_count() != 1
+            {
+                candle::bail!("{op} requires scalar f32 K/V scales for an f8e4m3 cache");
+            }
+        }
+        (DType::F8E4M3, _, _) => {
+            candle::bail!("{op} requires explicit K/V scales for an f8e4m3 cache");
+        }
+        (_, None, None) => {}
+        (_, _, _) => candle::bail!("{op} only accepts K/V scales for an f8e4m3 cache"),
+    }
+    Ok(())
+}
+
 fn workspace_ensure(
     dev: &candle::cuda_backend::CudaDevice,
     bytes: usize,
@@ -83,6 +108,12 @@ impl PagedAttention {
         q_l: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
         let dtype = q.dtype();
+        validate_kv_cache_scales(
+            self.key_cache.dtype(),
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            "paged_attention",
+        )?;
         let cache_dtype = match self.key_cache.dtype() {
             DType::F16 => 0,
             DType::BF16 => 1,
@@ -478,6 +509,7 @@ fn update_cache<
         DType::F8E4M3 => 3,
         dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
     };
+    validate_kv_cache_scales(key_cache.dtype(), k_scale, v_scale, "reshape_and_cache")?;
 
     let (k, k_l) = key.storage_and_layout();
     let k = match &*k {

@@ -64,6 +64,16 @@ copy_blocks_kernel_bf16(int64_t *key_cache_ptrs, int64_t *value_cache_ptrs,
                                        numel_per_block_value);
 }
 
+extern "C" __global__ void
+copy_blocks_kernel_u8(int64_t *key_cache_ptrs, int64_t *value_cache_ptrs,
+                      const int64_t *__restrict__ block_mapping,
+                      const int numel_per_block_key,
+                      const int numel_per_block_value) {
+  copy_blocks_internal_kernel<uint8_t>(key_cache_ptrs, value_cache_ptrs,
+                                       block_mapping, numel_per_block_key,
+                                       numel_per_block_value);
+}
+
 //
 extern "C" void copy_blocks_f32(int64_t *key_cache_ptrs,
                                 int64_t *value_cache_ptrs,
@@ -123,4 +133,24 @@ extern "C" void copy_blocks_bf16(int64_t *key_cache_ptrs,
                             stream>>>(key_cache_ptrs, value_cache_ptrs,
                                       block_mapping, numel_per_block_key,
                                       numel_per_block_value);
+}
+
+extern "C" void copy_blocks_u8(int64_t *key_cache_ptrs,
+                                int64_t *value_cache_ptrs,
+                                const int64_t *__restrict__ block_mapping,
+                                const int num_layers, const int num_pairs,
+                                int numel_per_block_key,
+                                int numel_per_block_value, int64_t stream_) {
+  cudaStream_t stream = (cudaStream_t)stream_;
+  int num_threads = numel_per_block_key;
+  if (numel_per_block_value > num_threads) {
+    num_threads = numel_per_block_value;
+  }
+  if (num_threads > 1024) {
+    num_threads = 1024;
+  }
+  copy_blocks_kernel_u8<<<dim3(num_layers, num_pairs, 1), num_threads, 0,
+                          stream>>>(key_cache_ptrs, value_cache_ptrs,
+                                    block_mapping, numel_per_block_key,
+                                    numel_per_block_value);
 }

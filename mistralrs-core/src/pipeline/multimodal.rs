@@ -3,12 +3,13 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, AdapterKind, AnyMoePipelineMixin, AutoMultimodalLoader, CacheManager,
-    CacheManagerMixin, DecodeGraphPrecaptureCtx, EitherCache, ForwardInputsResult, Gemma3Loader,
-    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, MiniCpmOLoader, ModelCategory,
-    ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader, MultimodalPromptPrefixer,
-    Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader,
-    Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader, VLlamaLoader,
+    get_model_paths, reserve_recurrent_serving_capacity, AdapterKind, AnyMoePipelineMixin,
+    AutoMultimodalLoader, CacheManager, CacheManagerMixin, DecodeGraphPrecaptureCtx, EitherCache,
+    ForwardInputsResult, Gemma3Loader, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
+    MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader,
+    MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader,
+    VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
@@ -716,38 +717,66 @@ impl Loader for MultimodalLoader {
                         )
                     }
                     super::isq_flow::AutoDeviceMapSizing::Checkpoint => {
-                        // Be sure to get the weight pack factor here; we might be loading a prequantized model.
-                        let weight_pack_factor =
-                            QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                        let quantization =
-                            self.config.topology.as_ref().map(|topology| {
+                        let inventory = if self.config.topology.is_none()
+                            && self.lora_adapters.is_none()
+                            && matformer_slicing_config.is_none()
+                        {
+                            let num_layers = self.inner.num_layers(&config)?;
+                            crate::pipeline::loaders::checkpoint_device_map_sizes(
+                                paths.get_weight_filenames(),
+                                num_layers,
+                                dtype,
+                                |name| self.inner.checkpoint_layer_index(&config, name),
+                            )?
+                        } else {
+                            None
+                        };
+                        if let Some(inventory) = inventory {
+                            info!(
+                                model_mib = inventory.total_model_size_in_bytes / (1024 * 1024),
+                                "Using checkpoint tensor inventory for automatic device mapping"
+                            );
+                            (
+                                inventory.layer_sizes_in_bytes,
+                                inventory.non_mapped_size_in_bytes,
+                                inventory.total_model_size_in_bytes,
+                            )
+                        } else {
+                            // Be sure to get the weight pack factor here; we might be loading a prequantized model.
+                            let weight_pack_factor =
+                                QuantizationConfigShim::get_quant_config_pack_factor(
+                                    &config, dtype,
+                                )?;
+                            let quantization = self.config.topology.as_ref().map(|topology| {
                                 AutoDeviceMapQuantization::isq(None, Some(topology))
                             });
-                        let weight_pack_factor =
-                            quantization
-                                .as_ref()
-                                .map_or(weight_pack_factor, |quantization| {
-                                    quantization.conservative_pack_factor(dtype, weight_pack_factor)
-                                });
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            quantization.as_ref(),
-                            matformer_slicing_config.as_ref(),
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
+                            let weight_pack_factor =
+                                quantization
+                                    .as_ref()
+                                    .map_or(weight_pack_factor, |quantization| {
+                                        quantization
+                                            .conservative_pack_factor(dtype, weight_pack_factor)
+                                    });
+                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                quantization.as_ref(),
+                                matformer_slicing_config.as_ref(),
+                            )?;
+                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                            (
+                                layer_sizes_in_bytes,
+                                non_mapped_size_in_bytes,
+                                layer_sizes_sum + non_mapped_size_in_bytes,
+                            )
+                        }
                     }
                 };
 
@@ -1237,6 +1266,17 @@ impl Loader for MultimodalLoader {
         // drain the whole context so the KV sizing and allocation see the real free VRAM.
         #[cfg(feature = "cuda")]
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
+
+        let recurrent_pool_grew = paged_attn_config
+            .map(|config| reserve_recurrent_serving_capacity(model.cache(), config))
+            .transpose()?
+            .unwrap_or(false);
+        #[cfg(feature = "cuda")]
+        if recurrent_pool_grew {
+            super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
+        }
+        #[cfg(not(feature = "cuda"))]
+        let _ = recurrent_pool_grew;
 
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(

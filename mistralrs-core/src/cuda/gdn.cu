@@ -4,6 +4,12 @@
 #include <cstdint>
 #include <cuda_runtime.h>
 
+constexpr int GDN_CHANNEL_BLOCK_SIZE = 256;
+constexpr int GDN_DECODE_VALUE_TILE = 64;
+constexpr int GDN_DECODE_STATE_LOAD_UNROLL = 128;
+constexpr int GDN_DECODE_STATE_UPDATE_TILE_ROWS = 32;
+constexpr int GDN_PACKED_CONV_WIDTH = 4;
+
 // (batch, head) -> row of the state buffer: identity on a gathered [B*H, ...] copy, or through the
 // per-batch slot table when a kernel updates the recurrent state pool in place
 __device__ __forceinline__ size_t gdn_state_row(const int32_t *__restrict__ slot_indices,
@@ -650,6 +656,45 @@ __global__ void causal_conv1d_update_kernel(
   output[b * conv_dim + ch] = (T)result;
 }
 
+template <typename T> struct alignas(8) GdnConvWidth4 {
+  T values[GDN_PACKED_CONV_WIDTH];
+};
+
+template <typename T>
+__global__ void causal_conv1d_update_width4_kernel(
+    const T *__restrict__ x, const T *__restrict__ weight,
+    T *__restrict__ conv_state, T *__restrict__ output, int batch_size,
+    int conv_dim, const int32_t *__restrict__ slot_indices) {
+  const int ch = blockIdx.x * blockDim.x + threadIdx.x;
+  const int b = blockIdx.y;
+
+  if (ch >= conv_dim || b >= batch_size)
+    return;
+
+  const size_t state_row = gdn_state_row(slot_indices, b, 0, 1);
+  const size_t state_idx = state_row * conv_dim + ch;
+  const size_t input_idx = (size_t)b * conv_dim + ch;
+  auto *state = reinterpret_cast<GdnConvWidth4<T> *>(conv_state);
+  const auto *weights = reinterpret_cast<const GdnConvWidth4<T> *>(weight);
+  GdnConvWidth4<T> values = state[state_idx];
+  const GdnConvWidth4<T> channel_weights = weights[ch];
+
+#pragma unroll
+  for (int i = 0; i < GDN_PACKED_CONV_WIDTH - 1; i++) {
+    values.values[i] = values.values[i + 1];
+  }
+  values.values[GDN_PACKED_CONV_WIDTH - 1] = x[input_idx];
+  state[state_idx] = values;
+
+  float acc = 0.0f;
+#pragma unroll
+  for (int i = 0; i < GDN_PACKED_CONV_WIDTH; i++) {
+    acc += (float)values.values[i] * (float)channel_weights.values[i];
+  }
+  const float sig = 1.0f / (1.0f + expf(-acc));
+  output[input_idx] = (T)(acc * sig);
+}
+
 extern "C" void causal_conv1d_update(const void *x, const void *weight,
                                      void *conv_state, void *output,
                                      int batch_size, int conv_dim,
@@ -657,16 +702,27 @@ extern "C" void causal_conv1d_update(const void *x, const void *weight,
                                      const int32_t *slot_indices, int dtype,
                                      int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
-  dim3 block(256);
-  dim3 grid((conv_dim + 255) / 256, batch_size);
+  dim3 block(GDN_CHANNEL_BLOCK_SIZE);
+  dim3 grid((conv_dim + GDN_CHANNEL_BLOCK_SIZE - 1) / GDN_CHANNEL_BLOCK_SIZE,
+            batch_size);
 
-  if (dtype == 0) {
-    // f16
+  if (kernel_size == GDN_PACKED_CONV_WIDTH) {
+    if (dtype == 0) {
+      causal_conv1d_update_width4_kernel<__half><<<grid, block, 0, custream>>>(
+          (const __half *)x, (const __half *)weight, (__half *)conv_state,
+          (__half *)output, batch_size, conv_dim, slot_indices);
+    } else {
+      causal_conv1d_update_width4_kernel<__nv_bfloat16>
+          <<<grid, block, 0, custream>>>(
+              (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
+              (__nv_bfloat16 *)conv_state, (__nv_bfloat16 *)output, batch_size,
+              conv_dim, slot_indices);
+    }
+  } else if (dtype == 0) {
     causal_conv1d_update_kernel<__half><<<grid, block, 0, custream>>>(
         (const __half *)x, (const __half *)weight, (__half *)conv_state,
         (__half *)output, batch_size, conv_dim, kernel_size, slot_indices);
   } else {
-    // bf16
     causal_conv1d_update_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
         (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
         (__nv_bfloat16 *)conv_state, (__nv_bfloat16 *)output, batch_size,
@@ -940,6 +996,7 @@ __global__ void gdn_decode_recurrence_kernel(
   __shared__ float decay_t;
   __shared__ float q_mul;
   __shared__ float k_mul;
+  __shared__ float state_buf[BK * BV];
 
   float q_sum = 0.0f;
   float k_sum = 0.0f;
@@ -985,30 +1042,28 @@ __global__ void gdn_decode_recurrence_kernel(
   if (v_idx >= head_v_dim)
     return;
 
-  float s[BK];
-#pragma unroll
-  for (int j = 0; j < BK; j++) {
-    s[j] = state_bh[j * head_v_dim + v_idx] * decay_t;
-  }
-
   float v_t = (float)row[2 * key_dim + hv * head_v_dim + v_idx];
   float kv_mem = 0.0f;
-#pragma unroll
+#pragma unroll GDN_DECODE_STATE_LOAD_UNROLL
   for (int j = 0; j < BK; j++) {
-    kv_mem = __fmaf_rn(s[j], k_buf[j], kv_mem);
+    const float s = state_bh[j * head_v_dim + v_idx] * decay_t;
+    state_buf[j * BV + tid] = s;
+    kv_mem = __fmaf_rn(s, k_buf[j], kv_mem);
   }
 
   float delta = (v_t - kv_mem) * beta_t;
   float y_t = 0.0f;
-#pragma unroll
-  for (int j = 0; j < BK; j++) {
-    s[j] = __fmaf_rn(k_buf[j], delta, s[j]);
-    y_t = __fmaf_rn(s[j], q_buf[j], y_t);
-  }
-
-#pragma unroll
-  for (int j = 0; j < BK; j++) {
-    state_bh[j * head_v_dim + v_idx] = s[j];
+  static_assert(BK % GDN_DECODE_STATE_UPDATE_TILE_ROWS == 0,
+                "BK must be divisible by the update tile");
+#pragma unroll 1
+  for (int base = 0; base < BK; base += GDN_DECODE_STATE_UPDATE_TILE_ROWS) {
+#pragma unroll GDN_DECODE_STATE_UPDATE_TILE_ROWS
+    for (int offset = 0; offset < GDN_DECODE_STATE_UPDATE_TILE_ROWS; offset++) {
+      const int j = base + offset;
+      const float s = __fmaf_rn(k_buf[j], delta, state_buf[j * BV + tid]);
+      state_bh[j * head_v_dim + v_idx] = s;
+      y_t = __fmaf_rn(s, q_buf[j], y_t);
+    }
   }
   out_bh[v_idx] = (T)y_t;
 }
@@ -1131,7 +1186,7 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
                       int tiled_v_heads, const int32_t *slot_indices, int dtype,
                       int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
-  constexpr int BV = 64;
+  constexpr int BV = GDN_DECODE_VALUE_TILE;
   dim3 grid((head_v_dim + BV - 1) / BV, batch_size * num_v_heads);
   dim3 block(BV);
 

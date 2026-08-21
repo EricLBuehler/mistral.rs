@@ -79,6 +79,7 @@ pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
+    pub(crate) serving_capacity: Option<usize>,
 }
 
 impl PagedAttentionConfig {
@@ -91,7 +92,16 @@ impl PagedAttentionConfig {
             block_size,
             mem_gpu,
             cache_type,
+            serving_capacity: None,
         })
+    }
+
+    pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {
+        if serving_capacity == 0 {
+            anyhow::bail!("paged attention serving capacity must be nonzero")
+        }
+        self.serving_capacity = Some(serving_capacity);
+        Ok(self)
     }
 }
 
@@ -178,6 +188,9 @@ pub fn calculate_cache_config(
     if !SUPPORTED_BLOCK_SIZE.contains(&block_size) {
         anyhow::bail!("Block size must be in {SUPPORTED_BLOCK_SIZE:?}, got {block_size}");
     }
+    cache_type
+        .validate(dtype, config, device, layer_devices)
+        .map_err(anyhow::Error::msg)?;
     let model_dtype = dtype;
     let dtype = cache_type.to_dtype(dtype);
     let dtype_size = dtype.size_in_bytes();

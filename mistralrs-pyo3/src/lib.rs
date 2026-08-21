@@ -1235,6 +1235,9 @@ impl Runner {
             }
             (_, _, _, _, _, _) => None,
         };
+        let cache_config = cache_config
+            .map(|config| config.with_serving_capacity(max_seqs))
+            .transpose()?;
 
         let pipeline = loader
             .load_model_from_hf(
@@ -1264,6 +1267,9 @@ impl Runner {
             if let Some(ref cache_config) = pipeline.blocking_lock().get_metadata().cache_config {
                 SchedulerConfig::PagedAttentionMeta {
                     max_num_seqs: max_seqs,
+                    max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                    max_decode_steps_before_prefill:
+                        mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                     config: cache_config.clone(),
                 }
             } else {

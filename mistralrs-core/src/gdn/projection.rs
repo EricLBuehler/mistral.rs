@@ -45,28 +45,52 @@ impl GdnInputProjection {
                 in_proj_z,
                 in_proj_b,
                 in_proj_a,
-            } => GdnProjection::from_split(
-                in_proj_qkv.forward(x)?,
-                in_proj_z.forward(x)?,
-                in_proj_b.forward(x)?,
-                in_proj_a.forward(x)?,
-                dims,
-                batch_size,
-                seq_len,
-            ),
+            } => {
+                let (mixed_qkv, mixed_z) = shared_qkv_z(x, in_proj_qkv, in_proj_z)?;
+                GdnProjection::from_split(
+                    mixed_qkv,
+                    mixed_z,
+                    in_proj_b.forward(x)?,
+                    in_proj_a.forward(x)?,
+                    dims,
+                    batch_size,
+                    seq_len,
+                )
+            }
             Self::SplitQkvzGroupedBa {
                 in_proj_qkv,
                 in_proj_z,
                 in_proj_ba,
-            } => GdnProjection::from_split_grouped_ba(
-                in_proj_qkv.forward(x)?,
-                in_proj_z.forward(x)?,
-                in_proj_ba.forward(x)?,
-                dims,
-                batch_size,
-                seq_len,
-            ),
+            } => {
+                let (mixed_qkv, mixed_z) = shared_qkv_z(x, in_proj_qkv, in_proj_z)?;
+                GdnProjection::from_split_grouped_ba(
+                    mixed_qkv,
+                    mixed_z,
+                    in_proj_ba.forward(x)?,
+                    dims,
+                    batch_size,
+                    seq_len,
+                )
+            }
         }
+    }
+}
+
+fn shared_qkv_z(
+    x: &Tensor,
+    qkv: &Arc<dyn QuantMethod>,
+    z: &Arc<dyn QuantMethod>,
+) -> Result<(Tensor, Tensor)> {
+    if let Some(outputs) = mistralrs_quant::try_forward_with_shared_quantized_activation(
+        x,
+        &[qkv.as_ref(), z.as_ref()],
+    )? {
+        let [qkv, z]: [Tensor; 2] = outputs.try_into().map_err(|_| {
+            candle_core::Error::msg("shared GDN projection returned the wrong output count")
+        })?;
+        Ok((qkv, z))
+    } else {
+        Ok((qkv.forward(x)?, z.forward(x)?))
     }
 }
 

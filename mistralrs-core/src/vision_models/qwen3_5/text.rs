@@ -1233,6 +1233,9 @@ impl IsqModel for Qwen3_5TextModel {
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {}
 
+#[cfg(feature = "cuda")]
+const SUPPORTS_CUDA_DECODE_GRAPHS: bool = true;
+
 impl NormalModel for Qwen3_5TextModel {
     fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let input_embeds = self.embed_tokens(input_ids)?;
@@ -1316,6 +1319,21 @@ impl NormalModel for Qwen3_5TextModel {
     fn supports_packed_prefill(&self) -> bool {
         true
     }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        SUPPORTS_CUDA_DECODE_GRAPHS
+    }
 }
 
 impl AnyMoeBaseModelMixin for Qwen3_5TextModel {}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::SUPPORTS_CUDA_DECODE_GRAPHS;
+
+    #[test]
+    fn text_architecture_supports_cuda_decode_graphs() {
+        assert!(SUPPORTS_CUDA_DECODE_GRAPHS);
+    }
+}

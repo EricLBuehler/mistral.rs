@@ -75,6 +75,8 @@ pub async fn run_server(
     let mut builder = MistralRsForServerBuilder::new()
         .with_model(model_selected)
         .with_max_seqs(runtime.max_seqs)
+        .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)

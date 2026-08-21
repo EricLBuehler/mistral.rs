@@ -96,5 +96,7 @@ fn split_paged_config(
         MemoryGpuConfig::ContextSize(tokens) => MemoryGpuConfig::ContextSize(share(tokens)),
     };
 
-    PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)
+    let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
+    split.serving_capacity = config.serving_capacity;
+    Ok(split)
 }

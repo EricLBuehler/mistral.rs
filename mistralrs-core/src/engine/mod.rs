@@ -5,6 +5,7 @@ use crate::{
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
         CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx,
+        RECURRENT_GRAPH_PAD_SLOTS,
     },
     prefix_cacher::PrefixCacheManagerV2,
     scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
@@ -53,6 +54,7 @@ use crate::{
 };
 
 mod add_request;
+mod admission;
 pub(crate) mod agentic_loop;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
@@ -166,6 +168,7 @@ pub struct Engine {
     search_callback: Option<Arc<search::SearchCallback>>,
     tool_callbacks: tools::ToolCallbacksWithTools,
     scheduler: Arc<Mutex<dyn Scheduler>>,
+    max_active_sequences: usize,
     id: Arc<Mutex<usize>>,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
@@ -306,6 +309,12 @@ impl Engine {
         } else {
             config
         };
+        let max_active_sequences = match &config {
+            SchedulerConfig::DefaultScheduler {
+                method: DefaultSchedulerMethod::Fixed(max_num_seqs),
+            } => max_num_seqs.get(),
+            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
+        };
 
         let (
             requires_uniform_prompt_batch,
@@ -321,6 +330,23 @@ impl Engine {
                 pipeline.supports_packed_prefill(),
             )
         };
+        let recurrent_capacity = match &config {
+            SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => Some(
+                max_num_seqs
+                    .checked_add(RECURRENT_GRAPH_PAD_SLOTS)
+                    .ok_or_else(|| anyhow::anyhow!("maximum sequence count overflow"))?,
+            ),
+            SchedulerConfig::DefaultScheduler { .. } => None,
+        };
+        if let Some(recurrent_capacity) = recurrent_capacity {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            if pipeline.cache().is_hybrid() {
+                pipeline
+                    .cache()
+                    .hybrid()
+                    .reserve_recurrent_capacity(recurrent_capacity)?;
+            }
+        }
         let scheduler = config.into_scheduler();
         get_mut_arcmutex!(scheduler)
             .set_requires_uniform_prompt_batch(requires_uniform_prompt_batch);
@@ -381,6 +407,7 @@ impl Engine {
             search_callback,
             tool_callbacks,
             scheduler: scheduler.clone(),
+            max_active_sequences,
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,
             prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
@@ -461,6 +488,65 @@ impl Engine {
         Some(request)
     }
 
+    fn admission_class(request: &Request) -> admission::AdmissionClass {
+        match request {
+            Request::Normal(request) => admission::AdmissionClass::Workload {
+                sequences: request.sampling_params.n_choices.max(1),
+            },
+            Request::Tokenize(_) | Request::Detokenize(_) | Request::TerminateAllSeqsNextStep => {
+                admission::AdmissionClass::BypassControl
+            }
+            Request::Terminate => admission::AdmissionClass::Shutdown,
+            Request::ReIsq(_) | Request::Calibration(_) => {
+                admission::AdmissionClass::OrderedControl
+            }
+        }
+    }
+
+    async fn collect_pending_requests(
+        &self,
+        pending: &mut admission::AdmissionQueue<Request>,
+    ) -> bool {
+        let (requests, disconnected) = {
+            let mut rx = self.rx.lock().await;
+            let to_receive = rx.len().min(pending.remaining_capacity());
+            let mut requests = Vec::with_capacity(to_receive);
+            let mut disconnected = false;
+            for _ in 0..to_receive {
+                match rx.try_recv() {
+                    Ok(request) => requests.push(request),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+            disconnected |= rx.is_closed() && rx.is_empty();
+            (requests, disconnected)
+        };
+
+        for request in requests {
+            let Some(request) = self.prepare_request_for_dispatch(request).await else {
+                continue;
+            };
+            let class = Self::admission_class(&request);
+            pending
+                .push(request, class)
+                .expect("pending request capacity changed while collecting ingress");
+        }
+        disconnected
+    }
+
+    async fn dispatch_prepared_request(self: &Arc<Self>, request: Request) -> bool {
+        self.replicate_request_to_daemons(&request);
+        if matches!(request, Request::Terminate) {
+            return false;
+        }
+        self.clone().handle_request(request).await;
+        true
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -468,6 +554,13 @@ impl Engine {
 
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
         let mut last_completion_ids: Vec<usize> = vec![];
+        let max_pending_requests = {
+            let rx = self.rx.lock().await;
+            rx.max_capacity()
+        };
+        let policy =
+            admission::AdmissionPolicy::new(self.max_active_sequences, max_pending_requests);
+        let mut pending = admission::AdmissionQueue::new(policy);
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -484,35 +577,38 @@ impl Engine {
                 break 'lp;
             }
 
-            let mut channel_disconnected = false;
-            loop {
-                let next_request = {
-                    let mut rx = self.rx.lock().await;
-                    rx.try_recv()
-                };
-
-                match next_request {
-                    Ok(request) => {
-                        let Some(request) = self.prepare_request_for_dispatch(request).await else {
-                            continue;
-                        };
-                        self.replicate_request_to_daemons(&request);
-                        if matches!(request, Request::Terminate) {
-                            break 'lp;
-                        }
-                        self.clone().handle_request(request).await;
-                    }
-                    Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        channel_disconnected = true;
-                        break;
-                    }
-                }
-            }
-
-            if channel_disconnected {
+            let channel_disconnected = self.collect_pending_requests(&mut pending).await;
+            if let Some(request) = pending.take_shutdown() {
+                self.replicate_request_to_daemons(&request);
                 break 'lp;
             }
+
+            let mut dispatches = 0;
+            while dispatches < pending.max_dispatches_per_step() {
+                let Some(request) = pending.take_bypass_control() else {
+                    break;
+                };
+                if !self.dispatch_prepared_request(request).await {
+                    break 'lp;
+                }
+                dispatches += 1;
+            }
+
+            while dispatches < pending.max_dispatches_per_step() {
+                let active_sequences = {
+                    let scheduler = get_mut_arcmutex!(self.scheduler);
+                    scheduler.waiting_len() + scheduler.running_len()
+                };
+                let Some(request) = pending.pop_admissible(active_sequences) else {
+                    break;
+                };
+                if !self.dispatch_prepared_request(request).await {
+                    break 'lp;
+                }
+                dispatches += 1;
+            }
+            let pending_metric = u32::try_from(pending.len()).unwrap_or(u32::MAX);
+            metrics::gauge!("mistralrs_requests_pending_admission").set(f64::from(pending_metric));
 
             let (waiting_len, running_len) = {
                 let scheduler = get_mut_arcmutex!(self.scheduler);
@@ -521,6 +617,12 @@ impl Engine {
             let scheduler_idle = waiting_len == 0 && running_len == 0;
 
             if scheduler_idle {
+                if !pending.is_empty() {
+                    continue;
+                }
+                if channel_disconnected {
+                    break 'lp;
+                }
                 if should_terminate() {
                     self.replicate_request_to_daemons(&Request::Terminate);
                     break 'lp;
@@ -547,11 +649,12 @@ impl Engine {
                         let Some(request) = self.prepare_request_for_dispatch(request).await else {
                             continue;
                         };
-                        self.replicate_request_to_daemons(&request);
-                        if matches!(request, Request::Terminate) {
-                            break 'lp;
-                        }
-                        self.clone().handle_request(request).await;
+                        let class = Self::admission_class(&request);
+                        pending
+                            .push(request, class)
+                            .expect("idle admission queue must have capacity");
+                        // Give a concurrently submitted request wave one turn to reach the ingress channel.
+                        tokio::task::yield_now().await;
                         continue;
                     }
                     WaitEvent::Request(None) => break 'lp,
@@ -842,6 +945,7 @@ impl Engine {
                                         .unwrap_or(1)
                                         .max(1),
                                     kv_cache_manager,
+                                    prompt_chunk_size: output.prompt_chunk_size,
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),

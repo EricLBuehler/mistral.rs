@@ -1,6 +1,9 @@
 use candle_core::{DType, IndexOp, Result, Storage, Tensor};
 
-use crate::metal::kernels::{self, PagedAttentionDType};
+use crate::metal::{
+    backend::validate_kv_cache_scales,
+    kernels::{self, PagedAttentionDType},
+};
 
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
@@ -19,6 +22,7 @@ pub fn gather_kv_cache(
             value_cache.dtype()
         );
     }
+    validate_kv_cache_scales(cache_dtype, k_scale, v_scale, "gather_kv_cache")?;
 
     let block_table = block_table.contiguous()?;
     let cu_seq_lens = cu_seq_lens.contiguous()?;

@@ -1153,6 +1153,192 @@ mod tests {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn run_fused_decode_case(
+        dev: &Device,
+        batch_size: usize,
+        num_k_heads: usize,
+        num_v_heads: usize,
+        head_k_dim: usize,
+        head_v_dim: usize,
+        tiled_v_heads: bool,
+        dtype: DType,
+        pooled: bool,
+    ) -> Result<()> {
+        let key_dim = num_k_heads * head_k_dim;
+        let value_dim = num_v_heads * head_v_dim;
+        let conv_dim = 2 * key_dim + value_dim;
+        let mixed_qkv = tensor3(
+            patterned(batch_size * conv_dim, 40, 0.08, 0.01),
+            (batch_size, 1, conv_dim),
+            dev,
+        )?
+        .to_dtype(dtype)?;
+        let b = tensor3(
+            patterned(batch_size * num_v_heads, 41, 0.2, 0.1),
+            (batch_size, 1, num_v_heads),
+            dev,
+        )?
+        .to_dtype(dtype)?;
+        let a = tensor3(
+            patterned(batch_size * num_v_heads, 42, 0.18, -0.04),
+            (batch_size, 1, num_v_heads),
+            dev,
+        )?
+        .to_dtype(dtype)?;
+        let a_log = Tensor::from_vec(patterned(num_v_heads, 43, 0.05, -0.2), (num_v_heads,), dev)?;
+        let dt_bias = Tensor::from_vec(patterned(num_v_heads, 44, 0.1, 0.3), (num_v_heads,), dev)?;
+
+        let capacity = if pooled { batch_size + 2 } else { batch_size };
+        let state = Tensor::from_vec(
+            patterned(
+                capacity * num_v_heads * head_k_dim * head_v_dim,
+                45,
+                0.02,
+                0.0,
+            ),
+            (capacity, num_v_heads, head_k_dim, head_v_dim),
+            dev,
+        )?;
+        let slots = if pooled {
+            Some(Tensor::from_vec(
+                (0..batch_size)
+                    .map(|idx| (capacity - 1 - idx) as u32)
+                    .collect::<Vec<_>>(),
+                (batch_size,),
+                dev,
+            )?)
+        } else {
+            None
+        };
+        let state_slots = GdnStateSlots::from_option(slots.as_ref());
+        let mut fused_state = state.copy()?;
+        let mut reference_state = state.copy()?;
+
+        let fused = fused_decode_recurrence_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            &mut fused_state,
+            batch_size,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+            state_slots,
+        )?;
+        let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            batch_size,
+            1,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+        )?;
+        let reference = gated_delta_rule_recurrence_cuda(
+            RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            },
+            &mut reference_state,
+            state_slots,
+        )?;
+
+        let output_tolerance = if dtype == DType::BF16 { 8.0e-3 } else { 1.0e-3 };
+        assert_close(
+            "fused decode output",
+            &flat(&fused.to_dtype(DType::F32)?)?,
+            &flat(&reference)?,
+            output_tolerance,
+        );
+        assert_close(
+            "fused decode state",
+            &flat(&fused_state)?,
+            &flat(&reference_state)?,
+            2.0e-5,
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false)?;
+        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true)
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn causal_conv1d_width4_update_matches_full_cuda() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let batch_size = 3;
+        let conv_dim = 19;
+        let kernel_size = 4;
+        let x = tensor3(
+            patterned(batch_size * conv_dim, 50, 0.08, 0.01),
+            (batch_size, conv_dim, 1),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let weight = tensor2(
+            patterned(conv_dim * kernel_size, 51, 0.05, -0.01),
+            (conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let state = tensor3(
+            patterned(batch_size * conv_dim * kernel_size, 52, 0.03, 0.0),
+            (batch_size, conv_dim, kernel_size),
+            &dev,
+        )?
+        .to_dtype(DType::BF16)?;
+
+        let update_state_input = state.copy()?;
+        let full_state_input = state.copy()?;
+        let (update, update_state) = causal_conv1d_cuda(
+            &x,
+            &weight,
+            &update_state_input,
+            kernel_size,
+            true,
+            GdnStateSlots::Gathered,
+        )?;
+        let (full, full_state) = causal_conv1d_cuda(
+            &x,
+            &weight,
+            &full_state_input,
+            kernel_size,
+            false,
+            GdnStateSlots::Gathered,
+        )?;
+        assert_close(
+            "width-4 conv output",
+            &flat(&update.to_dtype(DType::F32)?)?,
+            &flat(&full.to_dtype(DType::F32)?)?,
+            0.0,
+        );
+        assert_close(
+            "width-4 conv state",
+            &flat(&update_state.to_dtype(DType::F32)?)?,
+            &flat(&full_state.to_dtype(DType::F32)?)?,
+            0.0,
+        );
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires a CUDA device"]
     fn causal_conv1d_full_continuation_matches_one_shot_cuda() -> Result<()> {

@@ -18,6 +18,8 @@ use crate::{
 pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
 pub(crate) const AUDIO_MODALITY: u8 = 1 << 1;
 pub(crate) const VIDEO_MODALITY: u8 = 1 << 2;
+pub const DEFAULT_MAX_NUM_BATCHED_TOKENS: usize = 4096;
+pub const DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL: usize = 8;
 
 pub(crate) fn modality_signature(sequence: &Sequence) -> u8 {
     let mut signature = 0;
@@ -55,6 +57,8 @@ pub enum SchedulerConfig {
     },
     PagedAttentionMeta {
         max_num_seqs: usize,
+        max_num_batched_tokens: usize,
+        max_decode_steps_before_prefill: usize,
         config: CacheConfig,
     },
 }
@@ -67,9 +71,15 @@ impl SchedulerConfig {
             }
             Self::PagedAttentionMeta {
                 max_num_seqs,
+                max_num_batched_tokens,
+                max_decode_steps_before_prefill,
                 config,
             } => Arc::new(Mutex::new(PagedAttentionScheduler::new(
-                PagedAttentionSchedulerConfig { max_num_seqs },
+                PagedAttentionSchedulerConfig {
+                    max_num_seqs,
+                    max_num_batched_tokens,
+                    max_decode_steps_before_prefill,
+                },
                 config,
             ))),
         }

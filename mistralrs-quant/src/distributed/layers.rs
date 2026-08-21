@@ -14,9 +14,9 @@ use crate::{
     pertensor_fp8::pertensor_fp8_linear_b,
     should_apply_immediate_isq,
     utils::isq::apply_immediate_isq_sharded,
-    AfqLayer, BnbLinear, DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, QuantizedSerde, Shard,
-    ShardedVarBuilder, UnquantLinear,
+    ActivationQuantizationScheme, AfqLayer, BnbLinear, DistributedKind, LoraLinearSpec,
+    LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
 };
 
 use super::Comm;
@@ -188,7 +188,9 @@ impl RowParallelLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 { weight_block_size } => {
+                QuantizedConfig::Fp8 {
+                    weight_block_size, ..
+                } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     if weight_block_size.is_some() {
                         blockwise_fp8_linear_b(
@@ -406,6 +408,26 @@ impl QuantMethod for RowParallelLayer {
         self.weight.end_track_stats()
     }
 
+    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
+        self.weight.activation_quantization_scheme()
+    }
+
+    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
+        self.weight.quantize_activation(a)
+    }
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        let mut xs = self.weight.forward_quantized(a)?;
+        if !self.all_reduce.is_noop() {
+            let xs_contiguous = xs.contiguous()?;
+            xs = self.all_reduce.sum_all_reduce(&xs_contiguous)?;
+        }
+        if let Some(bias) = &self.bias {
+            xs = xs.broadcast_add(bias)?;
+        }
+        Ok(xs)
+    }
+
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -592,7 +614,9 @@ impl ColumnParallelLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 { weight_block_size } => {
+                QuantizedConfig::Fp8 {
+                    weight_block_size, ..
+                } => {
                     // NOTE: no bias for fp8 as it might be parallelized
                     if weight_block_size.is_some() {
                         blockwise_fp8_linear_b(
@@ -995,6 +1019,22 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.end_track_stats()
     }
 
+    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
+        self.weight.activation_quantization_scheme()
+    }
+
+    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
+        self.weight.quantize_activation(a)
+    }
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        let mut xs = self.weight.forward_quantized(a)?;
+        if let Some(bias) = &self.bias {
+            xs = xs.broadcast_add(bias)?;
+        }
+        Ok(xs)
+    }
+
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -1166,7 +1206,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 { weight_block_size } => {
+                QuantizedConfig::Fp8 {
+                    weight_block_size, ..
+                } => {
                     if weight_block_size.is_some() {
                         blockwise_fp8_linear_b(
                             in_dim,
@@ -1308,7 +1350,9 @@ impl ReplicatedLayer {
                 QuantizedConfig::GptqAwq { .. } => {
                     gptq_linear(in_dim, out_dim, quant_conf, vb.clone())?
                 }
-                QuantizedConfig::Fp8 { weight_block_size } => {
+                QuantizedConfig::Fp8 {
+                    weight_block_size, ..
+                } => {
                     if weight_block_size.is_some() {
                         blockwise_fp8_linear_b(
                             in_dim,
@@ -1429,6 +1473,18 @@ impl QuantMethod for ReplicatedLayer {
 
     fn end_track_stats(&self) -> Result<Tensor> {
         self.0.end_track_stats()
+    }
+
+    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
+        self.0.activation_quantization_scheme()
+    }
+
+    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
+        self.0.quantize_activation(a)
+    }
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        self.0.forward_quantized(a)
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
@@ -1570,8 +1626,12 @@ impl PreQuantizedExperts {
             let has_fp8_scales = experts_vb.contains_tensor("gate_up_proj.weight_scale_inv");
 
             if has_fp8_scales {
-                let weight_block_size = match quantization_config {
-                    Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
+                let (weight_block_size, activation_scheme) = match quantization_config {
+                    Some(QuantizedConfig::Fp8 {
+                        weight_block_size,
+                        activation_scheme,
+                        ..
+                    }) => (weight_block_size.clone(), *activation_scheme),
                     _ => unreachable!(),
                 };
 
@@ -1653,12 +1713,27 @@ impl PreQuantizedExperts {
                 let down_scale = down_scale.transpose(1, 2)?.contiguous()?;
 
                 // Create BlockwiseFP8Linear for each projection
-                let fused_gate_proj =
-                    blockwise_fp8_moe(gate_fp8, gate_scale, weight_block_size.clone(), vb.dtype())?;
-                let fused_up_proj =
-                    blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), vb.dtype())?;
-                let fused_down_proj =
-                    blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
+                let fused_gate_proj = blockwise_fp8_moe(
+                    gate_fp8,
+                    gate_scale,
+                    weight_block_size.clone(),
+                    activation_scheme,
+                    vb.dtype(),
+                )?;
+                let fused_up_proj = blockwise_fp8_moe(
+                    up_fp8,
+                    up_scale,
+                    weight_block_size.clone(),
+                    activation_scheme,
+                    vb.dtype(),
+                )?;
+                let fused_down_proj = blockwise_fp8_moe(
+                    down_fp8,
+                    down_scale,
+                    weight_block_size,
+                    activation_scheme,
+                    vb.dtype(),
+                )?;
 
                 (fused_gate_proj, fused_up_proj, fused_down_proj)
             } else {
@@ -1707,8 +1782,12 @@ impl PreQuantizedExperts {
         } else if matches!(&quantization_config, Some(QuantizedConfig::Fp8 { .. })) {
             // Per-expert format with FP8 quantization
             // Keep weights as FP8 using BlockwiseFP8 to leverage native FP8 GEMM in gather_forward
-            let weight_block_size = match quantization_config {
-                Some(QuantizedConfig::Fp8 { weight_block_size }) => weight_block_size.clone(),
+            let (weight_block_size, activation_scheme) = match quantization_config {
+                Some(QuantizedConfig::Fp8 {
+                    weight_block_size,
+                    activation_scheme,
+                    ..
+                }) => (weight_block_size.clone(), *activation_scheme),
                 _ => unreachable!(),
             };
 
@@ -1799,12 +1878,27 @@ impl PreQuantizedExperts {
             let down_scale = Tensor::stack(&down_scale_vec, 0)?;
 
             // Create BlockwiseFP8Linear for each projection
-            let fused_gate_proj =
-                blockwise_fp8_moe(gate_fp8, gate_scale, weight_block_size.clone(), vb.dtype())?;
-            let fused_up_proj =
-                blockwise_fp8_moe(up_fp8, up_scale, weight_block_size.clone(), vb.dtype())?;
-            let fused_down_proj =
-                blockwise_fp8_moe(down_fp8, down_scale, weight_block_size, vb.dtype())?;
+            let fused_gate_proj = blockwise_fp8_moe(
+                gate_fp8,
+                gate_scale,
+                weight_block_size.clone(),
+                activation_scheme,
+                vb.dtype(),
+            )?;
+            let fused_up_proj = blockwise_fp8_moe(
+                up_fp8,
+                up_scale,
+                weight_block_size.clone(),
+                activation_scheme,
+                vb.dtype(),
+            )?;
+            let fused_down_proj = blockwise_fp8_moe(
+                down_fp8,
+                down_scale,
+                weight_block_size,
+                activation_scheme,
+                vb.dtype(),
+            )?;
 
             (fused_gate_proj, fused_up_proj, fused_down_proj)
         } else {
@@ -1901,17 +1995,97 @@ pub fn compute_n_kv_groups(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Arc;
 
     use candle_core::{DType, Device, Tensor};
     use regex::Regex;
 
-    use super::{validate_tp_head_layout, ColumnParallelLayer, ReplicatedLayer, RowParallelLayer};
-    use crate::{
-        create_isq_executor, set_immediate_isq_config, Comm, Id, ImmediateIsqConfig,
-        ImmediateIsqOverride, IsqCaptureMode, IsqExecutorConfig, IsqType, LoraLayerRegistry,
-        LoraLinearSpec, QuantMethod, QuantMethodConfig, QuantizedConfig, QuantizedWeightSource,
-        Shard, ShardedSafeTensors, UnquantLinear,
+    use super::{
+        distributed, validate_tp_head_layout, ColumnParallelLayer, ReplicatedLayer,
+        RowParallelLayer,
     };
+    use crate::{
+        create_isq_executor, set_immediate_isq_config, ActivationQuantizationScheme, Comm, Id,
+        ImmediateIsqConfig, ImmediateIsqOverride, IsqCaptureMode, IsqExecutorConfig, IsqPlanParams,
+        IsqRequest, IsqType, LoraLayerRegistry, LoraLinearSpec, QuantMethod, QuantMethodConfig,
+        QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde,
+        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
+    };
+
+    #[derive(Debug)]
+    struct SharedActivationWeight {
+        output: Tensor,
+    }
+
+    impl QuantizedSerde for SharedActivationWeight {
+        fn name(&self) -> &'static str {
+            "shared-activation-weight"
+        }
+    }
+
+    impl QuantMethod for SharedActivationWeight {
+        fn new(_method: QuantMethodConfig) -> candle_core::Result<Self> {
+            candle_core::bail!("test weight cannot be constructed from a quantization config")
+        }
+
+        fn dequantize_w(&self) -> candle_core::Result<Tensor> {
+            Ok(self.output.clone())
+        }
+
+        fn forward_raw(&self, _a: &Tensor) -> candle_core::Result<Tensor> {
+            Ok(self.output.clone())
+        }
+
+        fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
+            Some(ActivationQuantizationScheme {
+                dtype: DType::F8E4M3,
+                block_shape: [1, 4],
+            })
+        }
+
+        fn quantize_activation(&self, a: &Tensor) -> candle_core::Result<QuantizedActivation> {
+            let scheme = self.activation_quantization_scheme().unwrap();
+            QuantizedActivation::new(
+                Tensor::zeros(a.dims(), scheme.dtype, a.device())?,
+                Tensor::ones((a.elem_count() / 4, 1), DType::F32, a.device())?,
+                a.dims().to_vec(),
+                a.dtype(),
+                scheme,
+            )
+        }
+
+        fn forward_quantized(&self, _a: &QuantizedActivation) -> candle_core::Result<Tensor> {
+            Ok(self.output.clone())
+        }
+
+        fn quantized_act_type(&self) -> Option<DType> {
+            None
+        }
+
+        fn dtype_and_device(&self) -> (DType, Device) {
+            (self.output.dtype(), self.output.device().clone())
+        }
+
+        fn plan_isq(&self, _request: &IsqRequest) -> candle_core::Result<IsqPlanParams> {
+            candle_core::bail!("test weight cannot be quantized")
+        }
+
+        fn add_delta_w(&self, _delta: &Tensor) -> candle_core::Result<Arc<dyn QuantMethod>> {
+            candle_core::bail!("test weight cannot apply deltas")
+        }
+
+        fn apply_isq(
+            self: Arc<Self>,
+            _dtype: Option<IsqType>,
+            _device: Device,
+            _n_quantized: &AtomicUsize,
+            _imatrix_weight: Option<Vec<f32>>,
+            _guard: QuantizeOntoGuard,
+        ) -> candle_core::Result<Arc<dyn QuantMethod>> {
+            Ok(self)
+        }
+    }
 
     struct DenseWeightSource;
 
@@ -2042,6 +2216,55 @@ mod tests {
         let tracked = tracker.get()[0].clone();
         crate::clear_immediate_isq();
         tracked
+    }
+
+    #[test]
+    fn distributed_wrappers_preserve_shared_activation_forwarding() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let output = Tensor::from_vec(vec![1f32, 2.], (1, 2), &device)?;
+        let weight = Arc::new(SharedActivationWeight { output }) as Arc<dyn QuantMethod>;
+        let bias = Tensor::from_vec(vec![3f32, 4.], (2,), &device)?;
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        let activation_input = Tensor::zeros((1, 4), DType::BF16, &device)?;
+
+        let row = RowParallelLayer {
+            weight: weight.clone(),
+            bias: Some(bias.clone()),
+            all_reduce: distributed::SumAllReduce::new(&comm),
+        };
+        let column = ColumnParallelLayer {
+            weight: weight.clone(),
+            bias: Some(bias),
+        };
+        let replicated = ReplicatedLayer(weight);
+
+        let expected_scheme = ActivationQuantizationScheme {
+            dtype: DType::F8E4M3,
+            block_shape: [1, 4],
+        };
+        for layer in [&row as &dyn QuantMethod, &column, &replicated] {
+            assert_eq!(
+                layer.activation_quantization_scheme(),
+                Some(expected_scheme)
+            );
+        }
+
+        let activation = row.quantize_activation(&activation_input)?;
+        assert_eq!(
+            row.forward_quantized(&activation)?.to_vec2::<f32>()?,
+            vec![vec![4., 6.]]
+        );
+        assert_eq!(
+            column.forward_quantized(&activation)?.to_vec2::<f32>()?,
+            vec![vec![4., 6.]]
+        );
+        assert_eq!(
+            replicated
+                .forward_quantized(&activation)?
+                .to_vec2::<f32>()?,
+            vec![vec![1., 2.]]
+        );
+        Ok(())
     }
 
     #[test]

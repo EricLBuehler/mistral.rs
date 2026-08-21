@@ -82,6 +82,7 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
@@ -98,6 +99,7 @@ fn main() -> Result<(), String> {
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let (cuda_major, cuda_minor) = cuda_version_from_build_system();
 
         let header_files = cuda_headers::find(Path::new("kernels")).map_err(|e| e.to_string())?;
         for header_file in &header_files {
@@ -144,6 +146,10 @@ fn main() -> Result<(), String> {
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
         }
+        let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
+        if cutlass_fp8_sm90 {
+            println!("cargo:rustc-cfg=has_cutlass_fp8_sm90_kernels");
+        }
         // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
         if cutlass_moe {
             println!("cargo:rustc-cfg=has_cutlass_moe_kernels");
@@ -166,6 +172,9 @@ fn main() -> Result<(), String> {
         if cc_over_80 && !cutlass_moe {
             excluded_files.push("moe_data.cu");
             excluded_files.push("grouped_mm_*.cu");
+        }
+        if !cutlass_fp8_sm90 {
+            excluded_files.push("*_cutlass_sm90.cu");
         }
         builder = builder.exclude(&excluded_files);
         let cutlass_commit =
@@ -212,7 +221,7 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
 
-        let (major, minor) = cuda_version_from_build_system();
+        let (major, minor) = (cuda_major, cuda_minor);
         println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={major}.{minor}");
         println!(
             "cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={}",

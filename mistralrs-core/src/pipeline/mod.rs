@@ -168,8 +168,6 @@ use self::text_models_inputs_processor::{
     FlashParams, PagedAttentionInputMetadata, PagedAttentionMeta,
 };
 
-pub(crate) const DEFAULT_PAGED_PREFILL_CHUNK_SIZE: usize = 4096;
-
 #[cfg(feature = "cuda")]
 pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
     let mut devices = mapper.get_unique_devices();
@@ -303,6 +301,24 @@ pub use crate::kv_cache::{
     Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
     NormalCacheType,
 };
+
+pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
+
+fn reserve_recurrent_serving_capacity(
+    cache: &EitherCache,
+    paged_attn_config: PagedAttentionConfig,
+) -> Result<bool> {
+    let Some(serving_capacity) = paged_attn_config.serving_capacity else {
+        return Ok(false);
+    };
+    if !cache.is_hybrid() {
+        return Ok(false);
+    }
+    let capacity = serving_capacity
+        .checked_add(RECURRENT_GRAPH_PAD_SLOTS)
+        .ok_or_else(|| candle_core::Error::msg("recurrent serving capacity overflow"))?;
+    Ok(cache.hybrid().reserve_recurrent_capacity(capacity)?)
+}
 
 pub(crate) type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 
@@ -1685,7 +1701,7 @@ pub trait Pipeline:
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
                 {
-                    Some(DEFAULT_PAGED_PREFILL_CHUNK_SIZE)
+                    metadata.prompt_chunk_size
                 } else {
                     None
                 };

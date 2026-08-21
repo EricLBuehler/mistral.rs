@@ -10,6 +10,7 @@ use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 pub(crate) struct PrefixPrefillPlanInput {
     pub device_is_cuda: bool,
     pub dtype: DType,
+    pub cache_dtype: DType,
     pub has_sinks: bool,
     pub has_custom_mask: bool,
     pub causality_known: bool,
@@ -34,6 +35,7 @@ impl PrefixPrefillPlan {
         let _ = (
             input.device_is_cuda,
             input.dtype,
+            input.cache_dtype,
             input.has_sinks,
             input.has_custom_mask,
             input.causality_known,
@@ -48,6 +50,7 @@ impl PrefixPrefillPlan {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         if input.device_is_cuda
             && matches!(input.dtype, DType::F16 | DType::BF16)
+            && input.cache_dtype == input.dtype
             && !input.has_sinks
             && !input.has_custom_mask
             && input.causality_known
@@ -145,6 +148,7 @@ mod tests {
         PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
             device_is_cuda: true,
             dtype: DType::F16,
+            cache_dtype: DType::F16,
             has_sinks: false,
             has_custom_mask: false,
             causality_known: true,
@@ -167,6 +171,25 @@ mod tests {
             prefix_plan(320, false, true),
             PrefixPrefillPlan::GatherSdpa
         ));
+    }
+
+    #[test]
+    fn paged_prefix_gathers_mixed_dtype_cache() {
+        let plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+            device_is_cuda: true,
+            dtype: DType::BF16,
+            cache_dtype: DType::F8E4M3,
+            has_sinks: false,
+            has_custom_mask: false,
+            causality_known: true,
+            head_size: 128,
+            has_softcap: false,
+            has_sliding_window: false,
+            query_layout_is_dense: true,
+            block_size: 32,
+            attention_backend: AttentionBackendKind::FlashInfer,
+        });
+        assert!(matches!(plan, PrefixPrefillPlan::GatherSdpa));
     }
 
     #[test]

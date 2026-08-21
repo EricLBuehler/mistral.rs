@@ -3,7 +3,10 @@ use candle_core::{
     Tensor,
 };
 
-use crate::metal::kernels::{self, PagedAttentionDType};
+use crate::metal::{
+    backend::validate_kv_cache_scales,
+    kernels::{self, PagedAttentionDType},
+};
 
 struct PagedAttention {
     softmax_scale: f32,
@@ -31,6 +34,12 @@ impl candle_core::CustomOp1 for PagedAttention {
     }
 
     fn metal_fwd(&self, q: &MetalStorage, q_l: &Layout) -> Result<(MetalStorage, Shape)> {
+        validate_kv_cache_scales(
+            self.key_cache.dtype(),
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            "paged_attention",
+        )?;
         let ty = match q.dtype() {
             DType::F16 => PagedAttentionDType::F16,
             DType::BF16 => PagedAttentionDType::BF16,
@@ -389,6 +398,7 @@ pub fn reshape_and_cache(
     value_cache: &Tensor,
     slot_mapping: &Tensor,
 ) -> Result<()> {
+    validate_kv_cache_scales(key_cache.dtype(), k_scale, v_scale, "reshape_and_cache")?;
     let kv_ty = match key.dtype() {
         DType::F16 => PagedAttentionDType::F16,
         DType::BF16 => PagedAttentionDType::BF16,

@@ -78,7 +78,10 @@ extern "C" {
         block_size: c_int,
         key_stride: c_int,
         value_stride: c_int,
+        k_scale: f32,
+        v_scale: f32,
         dtype: u32,
+        cache_dtype: u32,
         stream: CUstream,
     );
 
@@ -108,7 +111,10 @@ extern "C" {
         sm_scale: f32,
         window_left: c_int,
         logits_soft_cap: f32,
+        k_scale: f32,
+        v_scale: f32,
         dtype: u32,
+        cache_dtype: u32,
         stream: CUstream,
     ) -> c_int;
 
@@ -125,7 +131,10 @@ extern "C" {
         block_table_stride: c_int,
         num_kv_heads: c_int,
         head_size: c_int,
-        dtype: u32,
+        out_dtype: u32,
+        cache_dtype: u32,
+        k_scale: f32,
+        v_scale: f32,
         stream: CUstream,
     );
 
@@ -361,6 +370,17 @@ extern "C" {
     );
 
     pub fn copy_blocks_f32(
+        key_cache_ptrs: *mut c_void,
+        value_cache_ptrs: *mut c_void,
+        block_mapping: *const c_void,
+        num_layers: i32,
+        num_pairs: i32,
+        numel_per_block_key: i32,
+        numel_per_block_value: i32,
+        stream: i64,
+    );
+
+    pub fn copy_blocks_u8(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,

@@ -135,6 +135,7 @@ pub mod text_models_inputs_processor {
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
         pub kv_cache_manager: Arc<tokio::sync::Mutex<KVCacheManager>>,
+        pub prompt_chunk_size: Option<usize>,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,

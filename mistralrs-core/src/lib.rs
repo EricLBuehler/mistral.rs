@@ -44,6 +44,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
     None => "unknown",
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
 
 mod adapter;
 mod agent_approval;
@@ -195,7 +196,10 @@ pub use sampler::{
     CustomLogitsProcessor, DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens,
     TopLogprob,
 };
-pub use scheduler::{DefaultSchedulerMethod, SchedulerConfig};
+pub use scheduler::{
+    DefaultSchedulerMethod, SchedulerConfig, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+};
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
 pub use speculative::{MtpConfig, SpeculativeConfig};
@@ -1157,7 +1161,7 @@ impl MistralRs {
         config: EngineConfig,
         reboot_state: RebootState,
     ) -> Result<EngineInstance, String> {
-        let (tx, rx) = channel(10_000);
+        let (tx, rx) = channel(DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY);
 
         let pipeline_guard = pipeline.try_lock().unwrap();
         let category = pipeline_guard.category();
