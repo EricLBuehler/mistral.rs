@@ -138,6 +138,19 @@ enum GdnConvInput {
 }
 
 impl GdnProjection {
+    fn split_gate(
+        gate: Tensor,
+        batch_size: usize,
+        seq_len: usize,
+        num_v_heads: usize,
+    ) -> Result<Tensor> {
+        if gate.dims() == [batch_size, seq_len, num_v_heads] {
+            Ok(gate)
+        } else {
+            gate.reshape((batch_size, seq_len, num_v_heads))
+        }
+    }
+
     pub fn from_grouped(
         mixed_qkvz: Tensor,
         mixed_ba: Tensor,
@@ -186,8 +199,8 @@ impl GdnProjection {
     ) -> Result<Self> {
         Ok(Self {
             z: mixed_z,
-            b: mixed_b.reshape((batch_size, seq_len, dims.num_v_heads))?,
-            a: mixed_a.reshape((batch_size, seq_len, dims.num_v_heads))?,
+            b: Self::split_gate(mixed_b, batch_size, seq_len, dims.num_v_heads)?,
+            a: Self::split_gate(mixed_a, batch_size, seq_len, dims.num_v_heads)?,
             conv_input: GdnConvInput::Direct(mixed_qkv),
         })
     }
@@ -250,7 +263,7 @@ mod tests {
     }
 
     #[test]
-    fn split_projection_preserves_strided_qkv_and_z_views() -> Result<()> {
+    fn split_projection_preserves_strided_qkv_z_and_gate_views() -> Result<()> {
         let dev = Device::Cpu;
         let dims = dims();
         let (batch_size, seq_len) = (3, 2);
@@ -268,8 +281,21 @@ mod tests {
             &dev,
         )?
         .narrow(2, 2, dims.value_dim)?;
-        let b = Tensor::zeros((batch_size, seq_len, dims.num_v_heads), qkv.dtype(), &dev)?;
-        let a = b.clone();
+        let packed_gates = Tensor::from_vec(
+            (0..batch_size * seq_len * dims.num_v_heads * 2)
+                .map(|idx| idx as f32)
+                .collect::<Vec<_>>(),
+            (batch_size, seq_len, dims.num_v_heads * 2),
+            &dev,
+        )?;
+        let b = packed_gates.narrow(D::Minus1, 0, dims.num_v_heads)?;
+        let a = packed_gates.narrow(D::Minus1, dims.num_v_heads, dims.num_v_heads)?;
+        assert!(!b.is_contiguous());
+        assert!(!a.is_contiguous());
+        let b_stride = b.stride().to_vec();
+        let a_stride = a.stride().to_vec();
+        let b_offset = b.layout().start_offset();
+        let a_offset = a.layout().start_offset();
 
         let projection =
             GdnProjection::from_split(qkv.clone(), z, b, a, &dims, batch_size, seq_len)?;
@@ -283,6 +309,10 @@ mod tests {
         assert!(!conv_input.is_contiguous());
         assert!(!projection.z.is_contiguous());
         assert!(projection.z.layout().start_offset() > 0);
+        assert_eq!(projection.b.stride(), b_stride);
+        assert_eq!(projection.a.stride(), a_stride);
+        assert_eq!(projection.b.layout().start_offset(), b_offset);
+        assert_eq!(projection.a.layout().start_offset(), a_offset);
         Ok(())
     }
 }
