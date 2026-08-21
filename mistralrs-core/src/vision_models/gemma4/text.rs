@@ -322,52 +322,90 @@ impl Attention {
             (cfg.global_head_dim, global_kv)
         };
 
-        let q_proj = ColumnParallelLayer::new(
-            hidden_sz,
-            num_heads * head_dim,
-            &cfg.quantization_config,
-            bias,
-            comm,
-            vb.pp("q_proj"),
-        )?;
-
         let is_shared = kv_shared_layer_index.is_some();
-        let (k_proj, v_proj, merged_qkv_proj, k_norm, v_norm_rms) = if is_shared {
-            (None, None, None, None, None)
-        } else {
-            let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
-            let k_proj = ColumnParallelLayer::new_with_shard(
+        let (q_proj, k_proj, v_proj, merged_qkv_proj, k_norm, v_norm_rms) = if is_shared {
+            let q_proj = ColumnParallelLayer::new(
                 hidden_sz,
-                num_kv_heads * head_dim,
+                num_heads * head_dim,
                 &cfg.quantization_config,
                 bias,
                 comm,
-                kv_shard,
-                vb.pp("k_proj"),
+                vb.pp("q_proj"),
             )?;
-
+            (q_proj, None, None, None, None, None)
+        } else {
+            let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
             let is_k_eq_v = !sliding && cfg.attention_k_eq_v;
-            let v_proj = if is_k_eq_v {
-                None
-            } else {
-                Some(ColumnParallelLayer::new_with_shard(
-                    hidden_sz,
-                    num_kv_heads * head_dim,
-                    &cfg.quantization_config,
-                    bias,
-                    comm,
-                    kv_shard,
-                    vb.pp("v_proj"),
-                )?)
+            let q_shard = mistralrs_quant::Shard::Simple {
+                dim: 0,
+                rank: comm.rank(),
+                world_size: comm.world_size(),
             };
-            let merged_qkv_proj = if let Some(v_proj) = v_proj.as_ref() {
-                crate::ops::MergedDenseProjection::new(&[
-                    q_proj.clone(),
-                    k_proj.clone(),
-                    v_proj.clone(),
-                ])?
+            let kv_dim = num_kv_heads * head_dim;
+            let (names, dims, shards): (&[&str], &[usize], &[mistralrs_quant::Shard]) = if is_k_eq_v
+            {
+                (
+                    &["q_proj", "k_proj"],
+                    &[num_heads * head_dim, kv_dim],
+                    &[q_shard, kv_shard],
+                )
             } else {
-                crate::ops::MergedDenseProjection::new(&[q_proj.clone(), k_proj.clone()])?
+                (
+                    &["q_proj", "k_proj", "v_proj"],
+                    &[num_heads * head_dim, kv_dim, kv_dim],
+                    &[q_shard, kv_shard, kv_shard],
+                )
+            };
+            let packed = ColumnParallelLayer::new_packed(
+                hidden_sz,
+                dims,
+                names,
+                &cfg.quantization_config,
+                bias,
+                comm,
+                Some(shards),
+                vb.clone(),
+            )?;
+            let (q_proj, k_proj, v_proj, merged_qkv_proj) = match &packed {
+                Some(group) => (
+                    group.constituents[0].clone(),
+                    group.constituents[1].clone(),
+                    group.constituents.get(2).cloned(),
+                    Some(crate::ops::MergedDenseProjection::from_packed(group)),
+                ),
+                None => {
+                    let q_proj = ColumnParallelLayer::new(
+                        hidden_sz,
+                        num_heads * head_dim,
+                        &cfg.quantization_config,
+                        bias,
+                        comm,
+                        vb.pp("q_proj"),
+                    )?;
+                    let k_proj = ColumnParallelLayer::new_with_shard(
+                        hidden_sz,
+                        kv_dim,
+                        &cfg.quantization_config,
+                        bias,
+                        comm,
+                        kv_shard,
+                        vb.pp("k_proj"),
+                    )?;
+                    let v_proj = if is_k_eq_v {
+                        None
+                    } else {
+                        Some(ColumnParallelLayer::new_with_shard(
+                            hidden_sz,
+                            kv_dim,
+                            &cfg.quantization_config,
+                            bias,
+                            comm,
+                            kv_shard,
+                            vb.pp("v_proj"),
+                        )?)
+                    };
+                    (q_proj, k_proj, v_proj, None)
+                }
             };
             let k_norm = RmsNorm::new(
                 head_dim,
@@ -380,6 +418,7 @@ impl Attention {
             let v_norm_weight = Tensor::ones(head_dim, vb.dtype(), v_dev)?;
             let v_norm_rms = RmsNorm::from_w(v_norm_weight, cfg.rms_norm_eps)?;
             (
+                q_proj,
                 Some(k_proj),
                 v_proj,
                 merged_qkv_proj,

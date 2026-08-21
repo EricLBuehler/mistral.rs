@@ -143,7 +143,7 @@ pub use blockwise_fp8::{
 pub use distributed::{
     layers::{
         compute_kv_shard, compute_n_kv_groups, validate_tp_head_layout, ColumnParallelLayer,
-        PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
+        PackedColumnParallel, PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
