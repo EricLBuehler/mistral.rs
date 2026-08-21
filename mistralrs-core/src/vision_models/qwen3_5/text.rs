@@ -10,8 +10,8 @@ use std::{
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
-    ShardedVarBuilder,
+    ColumnParallelLayer, PackedOutputLayout, QuantMethod, QuantizedConfig, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 
 use super::{
@@ -85,6 +85,7 @@ pub(super) struct FullAttention {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    q_gate_grouped: bool,
     pub(super) rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
@@ -128,10 +129,21 @@ impl FullAttention {
         };
         let q_dim = num_heads * head_dim * 2;
         let kv_dim = num_kv_heads * head_dim;
-        let packed = ColumnParallelLayer::new_packed(
+        let q_layout = PackedOutputLayout::rank_local_interleaved_to_grouped(
+            num_heads,
+            &[head_dim, head_dim],
+            comm.world_size(),
+        )?;
+        let output_layouts = [
+            q_layout,
+            PackedOutputLayout::identity(kv_dim),
+            PackedOutputLayout::identity(kv_dim),
+        ];
+        let packed = ColumnParallelLayer::new_packed_with_output_layouts(
             cfg.hidden_size,
             &[q_dim, kv_dim, kv_dim],
             &["q_proj", "k_proj", "v_proj"],
+            &output_layouts,
             &cfg.quantization_config,
             false,
             comm,
@@ -198,6 +210,7 @@ impl FullAttention {
             num_heads: num_heads / comm.world_size(),
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
+            q_gate_grouped: packed.is_some(),
             rotary_emb,
             paged_attn,
             sdpa_params: SdpaParams {
@@ -229,28 +242,31 @@ impl FullAttention {
         } else {
             crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?
         };
-        // Split q_gate into q and gate
-        let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
-        let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
-        let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
-        let gate = gate.reshape((b_sz, seq_len, self.num_heads * self.head_dim))?;
-
-        // Reshape to (batch, heads, seq, head_dim)
-        let (mut q, mut k, v) = if seq_len != 1 {
-            let q = q.transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
+        let q_width = self.num_heads * self.head_dim;
+        let (q, gate) = if self.q_gate_grouped {
+            (
+                q_gate
+                    .narrow(D::Minus1, 0, q_width)?
+                    .unfold(D::Minus1, self.head_dim, self.head_dim)?,
+                q_gate.narrow(D::Minus1, q_width, q_width)?,
+            )
         } else {
-            let q = q.reshape((b_sz, self.num_heads, seq_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            (q, k, v)
+            let q_gate =
+                q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
+            let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
+            let gate = q_gate
+                .narrow(D::Minus1, self.head_dim, self.head_dim)?
+                .reshape((b_sz, seq_len, q_width))?;
+            (q, gate)
         };
+
+        let mut q = q.transpose(1, 2)?;
+        let mut k = k
+            .unfold(D::Minus1, self.head_dim, self.head_dim)?
+            .transpose(1, 2)?;
+        let v = v
+            .unfold(D::Minus1, self.head_dim, self.head_dim)?
+            .transpose(1, 2)?;
 
         let cos_sin = &(
             cos_sin.0.to_device(q.device())?,

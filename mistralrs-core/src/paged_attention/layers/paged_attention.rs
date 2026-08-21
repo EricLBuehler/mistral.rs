@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
+use candle_core::{DType, Device, DeviceLocation, Result, Tensor, D};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
     flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
@@ -77,10 +77,44 @@ fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, us
     }
 }
 
-fn cache_input_is_packed(tensor: &Tensor) -> Result<bool> {
-    let (_, heads, head_size) = tensor.dims3()?;
+fn cache_input_shape(tensor: &Tensor) -> Result<(usize, usize, usize)> {
+    match tensor.dims() {
+        &[tokens, heads, head_size] => Ok((tokens, heads, head_size)),
+        &[batch, seq_len, heads, head_size] => Ok((
+            batch
+                .checked_mul(seq_len)
+                .ok_or_else(|| candle_core::Error::msg("cache input token count overflow"))?,
+            heads,
+            head_size,
+        )),
+        _ => candle_core::bail!(
+            "cache input must have shape [tokens, heads, head_size] or [batch, seq_len, heads, head_size], got {:?}",
+            tensor.shape()
+        ),
+    }
+}
+
+fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
+    let (_, heads, head_size) = cache_input_shape(tensor)?;
+    let dims = tensor.dims();
     let stride = tensor.stride();
-    Ok(stride[2] == 1 && stride[1] == head_size && stride[0] == heads * head_size)
+    let row_stride = match dims {
+        &[_, _, _] => stride[0],
+        &[batch, seq_len, _, _] => {
+            if !cfg!(all(feature = "cuda", target_family = "unix")) {
+                return Ok(false);
+            }
+            let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
+            if batch > 1 && seq_len > 1 && stride[0] != seq_len.saturating_mul(row_stride) {
+                return Ok(false);
+            }
+            row_stride
+        }
+        _ => unreachable!(),
+    };
+    Ok(stride[stride.len() - 1] == 1
+        && stride[stride.len() - 2] == head_size
+        && row_stride >= heads.saturating_mul(head_size))
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -105,17 +139,17 @@ fn write_kv_cache(
     slot_mapping: &Tensor,
 ) -> Result<()> {
     let key_packed;
-    let key = if cache_input_is_packed(key)? {
+    let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = key.contiguous()?;
+        key_packed = key.contiguous()?.reshape(cache_input_shape(key)?)?;
         &key_packed
     };
     let value_packed;
-    let value = if cache_input_is_packed(value)? {
+    let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = value.contiguous()?;
+        value_packed = value.contiguous()?.reshape(cache_input_shape(value)?)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
@@ -865,16 +899,8 @@ impl PagedAttention {
             ))
         })?;
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let k_flat = tensors.key.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
-            let v_flat = tensors.value.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
+            let k_flat = tensors.key.transpose(1, 2)?;
+            let v_flat = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
             let (k_scale, v_scale) = self.cache_scales(key_cache);
@@ -1331,28 +1357,8 @@ impl PagedAttention {
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let (key, value) = if ctx.dims.seq_len > 1 {
-                let k = tensors.key.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                let v = tensors.value.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                (k, v)
-            } else {
-                (
-                    tensors
-                        .key
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                    tensors
-                        .value
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                )
-            };
+            let key = tensors.key.transpose(1, 2)?;
+            let value = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
             let (k_scale, v_scale) = self.cache_scales(key_cache);
@@ -1389,33 +1395,10 @@ impl PagedAttention {
                 .reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?
         };
         let (key, value) = if write_cache {
-            if ctx.dims.seq_len > 1 {
-                (
-                    Some(tensors.key.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            } else {
-                (
-                    Some(tensors.key.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            }
+            (
+                Some(tensors.key.transpose(1, 2)?),
+                Some(tensors.value.transpose(1, 2)?),
+            )
         } else {
             (None, None)
         };
@@ -1853,6 +1836,28 @@ impl PagedAttention {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
+        let packed = Tensor::zeros((2, 3, 16), DType::F32, &Device::Cpu)?;
+        let row_strided = packed.narrow(D::Minus1, 4, 8)?.unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.dims(), &[2, 3, 2, 4]);
+        assert_eq!(row_strided.stride(), &[48, 16, 4, 1]);
+        assert_eq!(cache_input_shape(&row_strided)?, (6, 2, 4));
+        assert_eq!(
+            cache_input_can_write_directly(&row_strided)?,
+            cfg!(all(feature = "cuda", target_family = "unix"))
+        );
+
+        let row_strided = packed
+            .narrow(1, 0, 1)?
+            .squeeze(1)?
+            .narrow(D::Minus1, 4, 8)?
+            .unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.stride(), &[48, 4, 1]);
+        assert!(cache_input_can_write_directly(&row_strided)?);
+        Ok(())
+    }
 
     #[test]
     fn varlen_segments_partition_each_logical_query() {

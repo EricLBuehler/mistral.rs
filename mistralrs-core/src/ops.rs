@@ -2791,10 +2791,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
     }
 
     let (batch, q_heads, seq_len, head_dim) = q.dims4()?;
-    // The fused kernel is intended for prompt/multi-token attention prep.
-    // Decode rows are already cheap in the existing kernels, and this row-wise
-    // reduction launch is slower for seq_len == 1 on current CUDA targets.
-    if seq_len == 1 {
+    if seq_len == 1 && q.is_contiguous() && k.is_none_or(Tensor::is_contiguous) {
         return Ok(None);
     }
 
@@ -4204,12 +4201,6 @@ mod tests {
             f32::from(u16::try_from(token).expect("test vocabulary fits u16")),
             logits[token] * inverse_temperature - global_max - denominator.ln(),
         ]
-    }
-
-    fn unquant(weight: &[[f32; 2]; 2]) -> candle_core::Result<Arc<dyn QuantMethod>> {
-        Ok(Arc::new(UnquantLinear::new(
-            QuantMethodConfig::Unquantized(Linear::new(Tensor::new(weight, &Device::Cpu)?, None)),
-        )?))
     }
 
     #[test]

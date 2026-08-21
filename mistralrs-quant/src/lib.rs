@@ -143,7 +143,8 @@ pub use blockwise_fp8::{
 pub use distributed::{
     layers::{
         compute_kv_shard, compute_n_kv_groups, validate_tp_head_layout, ColumnParallelLayer,
-        PackedColumnParallel, PackedLinear, PreQuantizedExperts, ReplicatedLayer, RowParallelLayer,
+        PackedColumnParallel, PackedLinear, PackedOutputLayout, PreQuantizedExperts,
+        ReplicatedLayer, RowParallelLayer,
     },
     socket::{Client, Server},
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
@@ -1320,6 +1321,7 @@ pub struct QuantizeOntoGuard {
     module_key: Option<Arc<str>>,
     report: Option<QuantizationReport>,
     requested: Option<Arc<str>>,
+    consumer: Option<IsqConsumer>,
 }
 
 /// Real (for Metal) and Fake (for CUDA)
@@ -1341,6 +1343,7 @@ impl QuantizeOntoGuard {
             module_key: None,
             report: None,
             requested: None,
+            consumer: None,
         }
     }
 
@@ -1369,6 +1372,15 @@ impl QuantizeOntoGuard {
 
     pub fn requested(&self) -> Option<&str> {
         self.requested.as_deref()
+    }
+
+    pub fn with_consumer(mut self, consumer: IsqConsumer) -> Self {
+        self.consumer = Some(consumer);
+        self
+    }
+
+    pub fn consumer(&self) -> Option<IsqConsumer> {
+        self.consumer
     }
 
     /// Acquire the quantize drop guard to protect the critical section.

@@ -1,4 +1,4 @@
-use crate::cuda::backend::slice_ptr;
+use crate::cuda::backend::{cache_input_layout, slice_ptr};
 use crate::cuda::ffi;
 use crate::cuda::ffi::{
     paged_attention_v1_bf16, paged_attention_v1_f16, paged_attention_v1_f32,
@@ -541,14 +541,8 @@ fn update_cache<
         _ => candle::bail!("slot_mapping must be a cuda tensor"),
     };
 
-    let k_rank = k_l.stride().len();
-    let v_rank = v_l.stride().len();
     let kc_rank = kc_l.stride().len();
     let vc_rank = vc_l.stride().len();
-
-    if k_rank != 3 || v_rank != 3 {
-        candle::bail!("paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})")
-    }
 
     if kc_rank != 5 {
         candle::bail!(
@@ -623,8 +617,11 @@ fn update_cache<
         (std::ptr::null(), std::ptr::null())
     };
 
-    let (num_tokens, num_heads, head_size) = k_l.shape().dims3()?;
-    if (num_tokens, num_heads, head_size) != v_l.shape().dims3()? {
+    let (num_tokens, num_heads, head_size, key_stride) =
+        cache_input_layout(&k_l, "key", "paged-attention")?;
+    let (value_tokens, value_heads, value_head_size, value_stride) =
+        cache_input_layout(&v_l, "value", "paged-attention")?;
+    if (num_tokens, num_heads, head_size) != (value_tokens, value_heads, value_head_size) {
         candle::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }
 
@@ -653,8 +650,8 @@ fn update_cache<
         )
     }
 
-    let key_stride = k_l.stride()[0] as c_int;
-    let value_stride = v_l.stride()[0] as c_int;
+    let key_stride = c_int::try_from(key_stride).map_err(candle::Error::wrap)?;
+    let value_stride = c_int::try_from(value_stride).map_err(candle::Error::wrap)?;
 
     let (k_ptr, _k_guard) = k.device_ptr(k.stream());
     let (v_ptr, _v_guard) = v.device_ptr(v.stream());
@@ -688,8 +685,8 @@ fn update_cache<
 ///
 /// # Arguments
 ///
-/// * `key` - Key tensor of shape `(num_tokens, num_heads, head_size)`.
-/// * `value` - Value tensor of shape `(num_tokens, num_heads, head_size)`.
+/// * `key` - Key tensor shaped `(num_tokens, num_heads, head_size)` or `(batch, seq_len, num_heads, head_size)`.
+/// * `value` - Value tensor with the same logical shape as `key`.
 /// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads, head_size / x, block_size, x)`
 ///   with `x` being the size of an element in bytes.
 /// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads, head_size, block_size)`.

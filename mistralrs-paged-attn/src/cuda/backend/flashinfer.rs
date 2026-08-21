@@ -1,4 +1,4 @@
-use crate::cuda::backend::slice_ptr;
+use crate::cuda::backend::{cache_input_layout, slice_ptr};
 use crate::cuda::ffi::{
     flashinfer_decode as ffi_flashinfer_decode,
     gather_kv_cache_flashinfer as ffi_gather_kv_cache_flashinfer,
@@ -93,8 +93,13 @@ pub fn reshape_and_cache_flashinfer(
         candle_core::bail!("reshape_and_cache_flashinfer expects i64 slot_mapping");
     }
 
-    let (num_tokens, num_heads, head_size) = key.dims3()?;
-    if value.dims3()? != (num_tokens, num_heads, head_size) {
+    let (key_s, key_l) = key.storage_and_layout();
+    let (value_s, value_l) = value.storage_and_layout();
+    let (num_tokens, num_heads, head_size, key_stride) =
+        cache_input_layout(&key_l, "key", "reshape_and_cache_flashinfer")?;
+    let (value_tokens, value_heads, value_head_size, value_stride) =
+        cache_input_layout(&value_l, "value", "reshape_and_cache_flashinfer")?;
+    if (value_tokens, value_heads, value_head_size) != (num_tokens, num_heads, head_size) {
         candle_core::bail!(
             "reshape_and_cache_flashinfer key/value shape mismatch: {:?} vs {:?}",
             key.shape(),
@@ -119,8 +124,6 @@ pub fn reshape_and_cache_flashinfer(
         );
     }
 
-    let (key_s, key_l) = key.storage_and_layout();
-    let (value_s, value_l) = value.storage_and_layout();
     let (key_cache_s, key_cache_l) = key_cache.storage_and_layout();
     let (value_cache_s, value_cache_l) = value_cache.storage_and_layout();
     let (slot_s, slot_l) = slot_mapping.storage_and_layout();
@@ -215,8 +218,8 @@ pub fn reshape_and_cache_flashinfer(
             num_heads as i32,
             head_size as i32,
             block_size as i32,
-            key_l.stride()[0] as i32,
-            value_l.stride()[0] as i32,
+            i32::try_from(key_stride).map_err(candle_core::Error::wrap)?,
+            i32::try_from(value_stride).map_err(candle_core::Error::wrap)?,
             scales.k,
             scales.v,
             dtype_code(dtype, "reshape_and_cache_flashinfer")?,
