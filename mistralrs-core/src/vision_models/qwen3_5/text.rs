@@ -245,14 +245,15 @@ impl FullAttention {
         let q_width = self.num_heads * self.head_dim;
         let (q, gate) = if self.q_gate_grouped {
             (
-                q_gate
-                    .narrow(D::Minus1, 0, q_width)?
-                    .unfold(D::Minus1, self.head_dim, self.head_dim)?,
+                q_gate.narrow(D::Minus1, 0, q_width)?.unfold(
+                    D::Minus1,
+                    self.head_dim,
+                    self.head_dim,
+                )?,
                 q_gate.narrow(D::Minus1, q_width, q_width)?,
             )
         } else {
-            let q_gate =
-                q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
+            let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
             let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
             let gate = q_gate
                 .narrow(D::Minus1, self.head_dim, self.head_dim)?
@@ -1134,7 +1135,8 @@ impl Qwen3_5TextModel {
 
             let layer_output = match &self.layer_types[i] {
                 LayerType::FullAttention => {
-                    let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i) else {
+                    let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
+                    else {
                         candle_core::bail!(
                             "Hybrid cache layer {i} is not attention for a full-attention layer."
                         );
@@ -1205,11 +1207,7 @@ impl Qwen3_5TextModel {
                         });
                     }
 
-                    gdn_cache.commit(
-                        pool,
-                        &indices,
-                        recurrent_metadata.state_indices_host(),
-                    )?;
+                    gdn_cache.commit(pool, &indices, recurrent_metadata.state_indices_host())?;
                     output
                 }
             };
