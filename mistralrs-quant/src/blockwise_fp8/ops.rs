@@ -2006,6 +2006,203 @@ mod tests {
     }
 
     #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[derive(Clone, Copy)]
+    struct BlockwiseFp8BenchShape {
+        name: &'static str,
+        n: usize,
+        k: usize,
+    }
+
+    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    fn blockwise_fp8_bench_iterations(variable: &str, default: usize) -> Result<usize> {
+        match std::env::var(variable) {
+            Ok(value) => value
+                .parse()
+                .ok()
+                .filter(|value| *value != 0)
+                .ok_or_else(|| {
+                    candle_core::Error::msg(format!("{variable} must be a positive integer"))
+                }),
+            Err(std::env::VarError::NotPresent) => Ok(default),
+            Err(error) => Err(candle_core::Error::msg(format!(
+                "failed to read {variable}: {error}"
+            ))),
+        }
+    }
+
+    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    fn measure_blockwise_fp8_cuda_us<T>(
+        dev: &Device,
+        warmup: usize,
+        iterations: usize,
+        mut launch: impl FnMut() -> Result<T>,
+    ) -> Result<f64> {
+        use candle_core::cuda::cudarc::driver::sys;
+
+        for _ in 0..warmup {
+            drop(launch()?);
+        }
+        dev.synchronize()?;
+
+        let stream = dev.as_cuda_device()?.cuda_stream();
+        let start = stream
+            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+            .map_err(|error| {
+                candle_core::Error::msg(format!("CUDA start event failed: {error}"))
+            })?;
+        for _ in 0..iterations {
+            drop(launch()?);
+        }
+        let end = stream
+            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+            .map_err(|error| candle_core::Error::msg(format!("CUDA end event failed: {error}")))?;
+        end.synchronize().map_err(|error| {
+            candle_core::Error::msg(format!("CUDA event synchronization failed: {error}"))
+        })?;
+        let elapsed_ms = start
+            .elapsed_ms(&end)
+            .map_err(|error| candle_core::Error::msg(format!("CUDA timing failed: {error}")))?;
+        Ok(f64::from(elapsed_ms) * 1_000.0 / iterations as f64)
+    }
+
+    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    fn validate_blockwise_fp8_bench_case(
+        activation_scales: &Tensor,
+        output: &Tensor,
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<f32> {
+        const FP8_E4M3_MAX: f32 = 448.0;
+        const SCALE_TOLERANCE: f32 = 1.0e-7;
+        const OUTPUT_TOLERANCE: f32 = 0.02;
+
+        let expected_scale = 1.0 / FP8_E4M3_MAX;
+        let scale_error = activation_scales
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .map(|scale| (scale - expected_scale).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            scale_error <= SCALE_TOLERANCE,
+            "M={m}, N={n}, K={k}: activation scale error {scale_error}"
+        );
+
+        assert_eq!(output.dims2()?, (m, n));
+        let output_error = output
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?
+            .into_iter()
+            .map(|value| (value - 1.0).abs())
+            .fold(0.0, f32::max);
+        assert!(
+            output_error <= OUTPUT_TOLERANCE,
+            "M={m}, N={n}, K={k}: output error {output_error}"
+        );
+        Ok(output_error)
+    }
+
+    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+    #[test]
+    #[ignore = "requires an SM90 GPU and reports latency to stdout"]
+    fn bench_cutlass_blockwise_fp8_production_shapes_sm90() -> Result<()> {
+        const BLOCK_SIZE: usize = 128;
+        const DEFAULT_WARMUP: usize = 10;
+        const DEFAULT_ITERATIONS: usize = 100;
+        const M_VALUES: [usize; 11] = [1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64];
+        const SHAPES: [BlockwiseFp8BenchShape; 5] = [
+            BlockwiseFp8BenchShape {
+                name: "gdn_qkvz",
+                n: 16_384,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "attention_qkv",
+                n: 14_336,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "output_projection",
+                n: 5_120,
+                k: 6_144,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_gate_up",
+                n: 34_816,
+                k: 5_120,
+            },
+            BlockwiseFp8BenchShape {
+                name: "mlp_down",
+                n: 5_120,
+                k: 17_408,
+            },
+        ];
+
+        let warmup =
+            blockwise_fp8_bench_iterations("MISTRALRS_BLOCKWISE_FP8_BENCH_WARMUP", DEFAULT_WARMUP)?;
+        let iterations = blockwise_fp8_bench_iterations(
+            "MISTRALRS_BLOCKWISE_FP8_BENCH_ITERATIONS",
+            DEFAULT_ITERATIONS,
+        )?;
+        let dev = Device::new_cuda(0)?;
+        println!("shape,m,n,k,quantize_gpu_us,gemm_gpu_us,max_abs_error,warmup,iterations");
+
+        for shape in SHAPES {
+            let weight =
+                Tensor::ones((shape.n, shape.k), DType::F8E4M3, &Device::Cpu)?.to_device(&dev)?;
+            let weight_scales = Tensor::ones(
+                (shape.n / BLOCK_SIZE, shape.k / BLOCK_SIZE),
+                DType::F32,
+                &dev,
+            )?
+            .affine(1.0 / shape.k as f64, 0.0)?;
+            assert!(ops::cutlass_fp8_blockwise_supported(
+                &weight,
+                &weight_scales,
+                &[BLOCK_SIZE, BLOCK_SIZE]
+            ));
+
+            for m in M_VALUES {
+                let input = Tensor::ones((m, shape.k), DType::BF16, &dev)?;
+                let quantize_us = measure_blockwise_fp8_cuda_us(&dev, warmup, iterations, || {
+                    ops::fp8_quantize_activation_cutlass(&input)
+                })?;
+                let (activation, activation_scales) = ops::fp8_quantize_activation_cutlass(&input)?;
+                let gemm_us = measure_blockwise_fp8_cuda_us(&dev, warmup, iterations, || {
+                    ops::fp8_blockwise_matmul_cutlass(
+                        &activation,
+                        &activation_scales,
+                        &weight,
+                        &weight_scales,
+                        DType::BF16,
+                    )
+                })?;
+                let output = ops::fp8_blockwise_matmul_cutlass(
+                    &activation,
+                    &activation_scales,
+                    &weight,
+                    &weight_scales,
+                    DType::BF16,
+                )?;
+                let max_error = validate_blockwise_fp8_bench_case(
+                    &activation_scales,
+                    &output,
+                    m,
+                    shape.n,
+                    shape.k,
+                )?;
+                println!(
+                    "{},{},{},{},{quantize_us:.3},{gemm_us:.3},{max_error:.6},{warmup},{iterations}",
+                    shape.name, m, shape.n, shape.k
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
     #[test]
     fn test_cutlass_blockwise_fp8_cuda_graph() -> Result<()> {
         use candle_core::cuda::cudarc::driver::sys;
