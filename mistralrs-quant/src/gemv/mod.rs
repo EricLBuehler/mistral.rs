@@ -1,7 +1,7 @@
 //! Custom GEMV (General Matrix-Vector multiplication) for decode-phase inference.
 //!
 //! This module provides an optimized GEMV kernel that replaces cuBLAS for
-//! small batch sizes (1-8) where cuBLAS GEMM overhead is significant.
+//! small output workloads where cuBLAS GEMM overhead is significant.
 //!
 //! Key optimizations:
 //! - Vectorized loads (half2, nv_bfloat162, float2)
@@ -30,6 +30,14 @@ use std::sync::LazyLock;
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
+#[cfg(any(feature = "cuda", test))]
+const MAX_GEMV_OUTPUT_ELEMENTS: usize = 4_096;
+
+#[cfg(any(feature = "cuda", test))]
+fn should_use_gemv_shape(batch_size: usize, output_dim: usize) -> bool {
+    batch_size <= MAX_GEMV_BATCH_SIZE
+        && batch_size.saturating_mul(output_dim) <= MAX_GEMV_OUTPUT_ELEMENTS
+}
 
 /// Controller for enabling/disabling custom GEMV kernel.
 pub struct GemvController {
@@ -59,6 +67,7 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
 /// - GEMV is enabled via controller
 /// - Tensors are on CUDA device
 /// - Batch size is 1-8
+/// - Flattened batch times output width is at most 4096
 /// - Data type is supported (BF16, F16, F32)
 /// - K dimension is even (required for vectorized loads)
 #[cfg(feature = "cuda")]
@@ -78,7 +87,8 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         .iter()
         .product::<usize>()
         .max(1);
-    if batch_size > MAX_GEMV_BATCH_SIZE {
+    let output_dim = w.dims().first().copied().unwrap_or(usize::MAX);
+    if !should_use_gemv_shape(batch_size, output_dim) {
         return false;
     }
 
@@ -394,4 +404,142 @@ pub fn gemv(
     _bias: Option<&candle_core::Tensor>,
 ) -> candle_core::Result<candle_core::Tensor> {
     candle_core::bail!("GEMV requires CUDA feature");
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn gemv_shape_policy_tracks_output_work() {
+        for batch_size in [1, 2, 4, 8] {
+            let boundary = MAX_GEMV_OUTPUT_ELEMENTS / batch_size;
+            assert!(should_use_gemv_shape(batch_size, boundary));
+            assert!(!should_use_gemv_shape(batch_size, boundary + 1));
+        }
+    }
+
+    #[test]
+    fn gemv_shape_policy_keeps_tiny_projections() {
+        for batch_size in [1, 2, 4, 8] {
+            assert!(should_use_gemv_shape(batch_size, 96));
+        }
+    }
+
+    #[test]
+    fn gemv_shape_policy_rejects_large_and_unsupported_batches() {
+        assert!(!should_use_gemv_shape(1, 5_120));
+        assert!(!should_use_gemv_shape(8, 248_320));
+        assert!(!should_use_gemv_shape(16, 96));
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::*;
+    use candle_core::{cuda::cudarc::driver::sys, Device};
+    use std::hint::black_box;
+
+    const BENCH_BATCH_SIZES: &[usize] = &[1, 2, 4, 8, 16];
+    const BENCH_OUTPUT_DIMS: &[usize] = &[
+        96, 128, 256, 512, 1_024, 2_048, 4_096, 5_120, 16_384, 248_320,
+    ];
+    const BENCH_INPUT_DIM: usize = 5_120;
+    const BENCH_WARMUP: usize = 5;
+    const BENCH_ITERATIONS: usize = 20;
+    const CORRECTNESS_TOLERANCE: f32 = 32.0;
+
+    fn cuda_error(context: &str, error: impl std::fmt::Display) -> candle_core::Error {
+        candle_core::Error::Msg(format!("{context}: {error}"))
+    }
+
+    fn benchmark_iterations() -> usize {
+        std::env::var("MISTRALRS_GEMV_BENCH_ITERATIONS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(BENCH_ITERATIONS)
+    }
+
+    fn measure_gpu_us(
+        device: &Device,
+        iterations: usize,
+        mut launch: impl FnMut() -> Result<Tensor>,
+    ) -> Result<f64> {
+        for _ in 0..BENCH_WARMUP {
+            black_box(launch()?);
+        }
+        device.synchronize()?;
+
+        let cuda = device.as_cuda_device()?;
+        let stream = cuda.cuda_stream();
+        let start = stream
+            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+            .map_err(|error| cuda_error("CUDA start event failed", error))?;
+        let mut outputs = Vec::with_capacity(iterations);
+        for _ in 0..iterations {
+            outputs.push(launch()?);
+        }
+        let end = stream
+            .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+            .map_err(|error| cuda_error("CUDA end event failed", error))?;
+        end.synchronize()
+            .map_err(|error| cuda_error("CUDA event synchronization failed", error))?;
+        black_box(&outputs);
+
+        let elapsed_ms = start
+            .elapsed_ms(&end)
+            .map_err(|error| cuda_error("CUDA event timing failed", error))?;
+        Ok(f64::from(elapsed_ms) * 1_000.0 / iterations as f64)
+    }
+
+    #[test]
+    #[ignore = "reports the CUDA GEMV/GEMM crossover on the installed GPU"]
+    fn benchmark_bf16_gemv_gemm_crossover() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let iterations = benchmark_iterations();
+        println!("batch,output_dim,input_dim,gemv_us,gemm_us,fastest,selected");
+
+        for &output_dim in BENCH_OUTPUT_DIMS {
+            let weight = Tensor::ones((output_dim, BENCH_INPUT_DIM), DType::BF16, &device)?;
+            let weight_t = weight.t()?;
+            for &batch_size in BENCH_BATCH_SIZES {
+                let input = Tensor::ones((batch_size, BENCH_INPUT_DIM), DType::BF16, &device)?;
+                let gemm_output = input.matmul(&weight_t)?;
+                let gemv_us = if batch_size <= MAX_GEMV_BATCH_SIZE {
+                    let gemv_output = gemv(&input, &weight, None)?;
+                    let max_diff = (gemv_output.to_dtype(DType::F32)?
+                        - gemm_output.to_dtype(DType::F32)?)?
+                    .abs()?
+                    .max_all()?
+                    .to_scalar::<f32>()?;
+                    assert!(
+                        max_diff <= CORRECTNESS_TOLERANCE,
+                        "batch={batch_size} output_dim={output_dim} max_diff={max_diff}"
+                    );
+                    Some(measure_gpu_us(&device, iterations, || {
+                        gemv(&input, &weight, None)
+                    })?)
+                } else {
+                    None
+                };
+                let gemm_us = measure_gpu_us(&device, iterations, || input.matmul(&weight_t))?;
+                let (gemv, fastest) = match gemv_us {
+                    Some(gemv_us) => (
+                        format!("{gemv_us:.3}"),
+                        if gemv_us < gemm_us { "gemv" } else { "gemm" },
+                    ),
+                    None => ("unsupported".to_string(), "gemm"),
+                };
+                let selected = if should_use_gemv_shape(batch_size, output_dim) {
+                    "gemv"
+                } else {
+                    "gemm"
+                };
+                println!(
+                    "{batch_size},{output_dim},{BENCH_INPUT_DIM},{gemv},{gemm_us:.3},{fastest},{selected}"
+                );
+            }
+        }
+        Ok(())
+    }
 }
