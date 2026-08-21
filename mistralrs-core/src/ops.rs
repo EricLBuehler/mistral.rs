@@ -2323,6 +2323,157 @@ pub fn cuda_rms_norm_residual(
     }
 }
 
+#[cfg(feature = "cuda")]
+pub fn cuda_add_rms_norm(
+    input: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f32,
+) -> Result<(Tensor, Tensor)> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if input.shape() != residual.shape() {
+        candle_core::bail!(
+            "cuda_add_rms_norm input/residual shape mismatch: {:?} vs {:?}",
+            input.shape(),
+            residual.shape()
+        );
+    }
+    if input.dtype() != residual.dtype() || input.dtype() != weight.dtype() {
+        candle_core::bail!(
+            "cuda_add_rms_norm dtype mismatch: input {:?}, residual {:?}, weight {:?}",
+            input.dtype(),
+            residual.dtype(),
+            weight.dtype()
+        );
+    }
+    if !matches!(input.dtype(), DType::BF16 | DType::F16 | DType::F32) {
+        candle_core::bail!(
+            "cuda_add_rms_norm only supports BF16/F16/F32, got {:?}",
+            input.dtype()
+        );
+    }
+    if !residual.device().same_device(input.device())
+        || !weight.device().same_device(input.device())
+    {
+        candle_core::bail!("cuda_add_rms_norm tensors must be on the same CUDA device");
+    }
+
+    let ncols = input.dim(D::Minus1)?;
+    if weight.dims1()? != ncols {
+        candle_core::bail!(
+            "cuda_add_rms_norm weight size {} does not match last dim {ncols}",
+            weight.dims1()?
+        );
+    }
+    let elem_count = input.elem_count();
+    if ncols == 0 || elem_count == 0 {
+        candle_core::bail!("cuda_add_rms_norm got empty input");
+    }
+    let nrows = elem_count / ncols;
+    if nrows > i32::MAX as usize || ncols > i32::MAX as usize {
+        candle_core::bail!("cuda_add_rms_norm input is too large: nrows={nrows}, ncols={ncols}");
+    }
+    let nrows_i32 = i32::try_from(nrows).map_err(candle_core::Error::wrap)?;
+    let ncols_i32 = i32::try_from(ncols).map_err(candle_core::Error::wrap)?;
+
+    let input = input.contiguous()?;
+    let residual = residual.contiguous()?;
+    let weight = weight.contiguous()?;
+
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let input_storage = match &*input_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("cuda_add_rms_norm requires CUDA input"),
+    };
+    let (residual_storage, residual_layout) = residual.storage_and_layout();
+    let residual_storage = match &*residual_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("cuda_add_rms_norm requires CUDA residual"),
+    };
+    let (weight_storage, weight_layout) = weight.storage_and_layout();
+    let weight_storage = match &*weight_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("cuda_add_rms_norm requires CUDA weight"),
+    };
+
+    let dev = input_storage.device();
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
+    let shape = input.shape().clone();
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $ffi_fn:ident) => {{
+            let CudaStorageSlice::$variant(src) = &input_storage.slice else {
+                candle_core::bail!("cuda_add_rms_norm input dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(residual_src) = &residual_storage.slice else {
+                candle_core::bail!("cuda_add_rms_norm residual dtype mismatch");
+            };
+            let CudaStorageSlice::$variant(weight_src) = &weight_storage.slice else {
+                candle_core::bail!("cuda_add_rms_norm weight dtype mismatch");
+            };
+
+            let mut residual_out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let mut norm_out = unsafe { dev.alloc::<$ty>(elem_count) }?;
+            let (src_ptr, src_guard) = src.device_ptr(&stream);
+            let (residual_ptr, residual_guard) = residual_src.device_ptr(&stream);
+            let (weight_ptr, weight_guard) = weight_src.device_ptr(&stream);
+            let (residual_out_ptr, residual_out_guard) = residual_out.device_ptr_mut(&stream);
+            let (norm_out_ptr, norm_out_guard) = norm_out.device_ptr_mut(&stream);
+
+            let src_ptr = unsafe { (src_ptr as *const $ty).add(input_layout.start_offset()) };
+            let residual_ptr =
+                unsafe { (residual_ptr as *const $ty).add(residual_layout.start_offset()) };
+            let weight_ptr =
+                unsafe { (weight_ptr as *const $ty).add(weight_layout.start_offset()) };
+
+            unsafe {
+                ffi::$ffi_fn(
+                    src_ptr as *const c_void,
+                    residual_ptr as *const c_void,
+                    weight_ptr as *const c_void,
+                    residual_out_ptr as *mut c_void,
+                    norm_out_ptr as *mut c_void,
+                    nrows_i32,
+                    ncols_i32,
+                    eps,
+                    stream_ptr,
+                );
+            }
+
+            drop(src_guard);
+            drop(residual_guard);
+            drop(weight_guard);
+            drop(residual_out_guard);
+            drop(norm_out_guard);
+
+            let residual_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(residual_out),
+                device: dev.clone(),
+            };
+            let norm_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(norm_out),
+                device: dev.clone(),
+            };
+            Ok((
+                Tensor::from((candle_core::Storage::Cuda(residual_storage), shape.clone())),
+                Tensor::from((candle_core::Storage::Cuda(norm_storage), shape)),
+            ))
+        }};
+    }
+
+    match input.dtype() {
+        DType::BF16 => launch!(BF16, half::bf16, add_rms_norm_bf16),
+        DType::F16 => launch!(F16, half::f16, add_rms_norm_f16),
+        DType::F32 => launch!(F32, f32, add_rms_norm_f32),
+        dtype => candle_core::bail!("cuda_add_rms_norm unsupported dtype {dtype:?}"),
+    }
+}
+
 #[cfg(feature = "metal")]
 pub fn metal_rms_norm_residual(
     input: &Tensor,
@@ -3903,7 +4054,7 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
 /// This is equivalent to:
 /// `act(a) * b`
 ///
-/// With supported dtypes (F16, BF16, F32) and activations (SiLU, GELU, ReLU),
+/// With supported dtypes (F16, BF16, F32) and fused activations,
 /// this uses a fused kernel for better performance by eliminating intermediate
 /// memory allocation. Optimized implementations are available for:
 /// - CUDA: Custom CUDA kernel with vec4 optimization
@@ -3917,6 +4068,7 @@ fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivation
         }
         Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
         Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+        Activation::Sigmoid => Some(mistralrs_quant::GluActivationType::Sigmoid),
         _ => None,
     }
 }
@@ -3933,6 +4085,7 @@ fn candle_glu_activation_type(
         }
         candle_nn::Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
         candle_nn::Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
+        candle_nn::Activation::Sigmoid => Some(mistralrs_quant::GluActivationType::Sigmoid),
         _ => None,
     }
 }
@@ -4141,6 +4294,8 @@ mod tests {
     #[cfg(feature = "cuda")]
     const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
     #[cfg(feature = "cuda")]
+    const CUDA_BF16_ABS_TOLERANCE: f32 = 2e-2;
+    #[cfg(feature = "cuda")]
     const CUDA_LOGPROB_REL_TOLERANCE: f32 = 1e-4;
 
     #[cfg(feature = "cuda")]
@@ -4150,6 +4305,67 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_add_rms_norm_matches_separate_ops() -> candle_core::Result<()> {
+        const ROWS: usize = 2;
+        const COLS: usize = 16;
+        const EPS: f32 = 1e-6;
+
+        let device = Device::new_cuda(0)?;
+        let input = Tensor::from_vec(
+            (0..ROWS * COLS)
+                .map(|index| index as f32 * 0.03125 - 0.4)
+                .collect::<Vec<_>>(),
+            (ROWS, COLS),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let residual = Tensor::from_vec(
+            (0..ROWS * COLS)
+                .map(|index| 0.25 - index as f32 * 0.015625)
+                .collect::<Vec<_>>(),
+            (ROWS, COLS),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let weight = Tensor::from_vec(
+            (0..COLS)
+                .map(|index| 0.75 + index as f32 * 0.01)
+                .collect::<Vec<_>>(),
+            COLS,
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+
+        let expected_sum = (&input + &residual)?;
+        let expected_norm = candle_nn::ops::rms_norm(&expected_sum.contiguous()?, &weight, EPS)?;
+        let (actual_sum, actual_norm) = super::cuda_add_rms_norm(&input, &residual, &weight, EPS)?;
+
+        let expected_sum = expected_sum
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let actual_sum = actual_sum
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        assert_eq!(actual_sum, expected_sum);
+
+        let expected_norm = expected_norm
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let actual_norm = actual_norm
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        for (actual, expected) in actual_norm.into_iter().zip(expected_norm) {
+            assert!((actual - expected).abs() <= CUDA_BF16_ABS_TOLERANCE);
+        }
+        Ok(())
     }
 
     #[cfg(feature = "cuda")]

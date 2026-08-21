@@ -349,6 +349,118 @@ void launch_rms_norm_residual(const void *x, const void *residual,
 }
 
 template <typename T>
+__global__ void add_rms_norm_vec8_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ weight, T *__restrict__ residual_dst,
+    T *__restrict__ norm_dst, const int ncols, const float eps) {
+  using Vec = rms_vec8<T>;
+  __shared__ float reduce[32];
+  const int tid = threadIdx.x;
+  const int vec_cols = ncols / 8;
+  const int row_offset = blockIdx.x * vec_cols;
+
+  const Vec *__restrict__ x_vec = reinterpret_cast<const Vec *>(x);
+  const Vec *__restrict__ residual_vec = reinterpret_cast<const Vec *>(residual);
+  const Vec *__restrict__ weight_vec = reinterpret_cast<const Vec *>(weight);
+  Vec *__restrict__ residual_dst_vec = reinterpret_cast<Vec *>(residual_dst);
+  Vec *__restrict__ norm_dst_vec = reinterpret_cast<Vec *>(norm_dst);
+
+  float sum = 0.0f;
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const Vec x_value = x_vec[idx];
+    const Vec residual_value = residual_vec[idx];
+    Vec out;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      out.data[i] = rms_residual_from_float<T>(
+          rms_residual_to_float(x_value.data[i]) +
+          rms_residual_to_float(residual_value.data[i]));
+      const float value = rms_residual_to_float(out.data[i]);
+      sum += value * value;
+    }
+    residual_dst_vec[idx] = out;
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) + eps);
+
+  for (int col = tid; col < vec_cols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const Vec residual_value = residual_dst_vec[idx];
+    const Vec weight_value = weight_vec[col];
+    Vec out;
+#pragma unroll
+    for (int i = 0; i < 8; ++i) {
+      out.data[i] = rms_residual_from_float<T>(
+          rms_residual_to_float(residual_value.data[i]) * inv_rms *
+          rms_residual_to_float(weight_value.data[i]));
+    }
+    norm_dst_vec[idx] = out;
+  }
+}
+
+template <typename T>
+__global__ void add_rms_norm_kernel(
+    const T *__restrict__ x, const T *__restrict__ residual,
+    const T *__restrict__ weight, T *__restrict__ residual_dst,
+    T *__restrict__ norm_dst, const int ncols, const float eps) {
+  __shared__ float reduce[32];
+  const int tid = threadIdx.x;
+  const int row_offset = blockIdx.x * ncols;
+
+  float sum = 0.0f;
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    const T value = rms_residual_from_float<T>(
+        rms_residual_to_float(x[idx]) + rms_residual_to_float(residual[idx]));
+    residual_dst[idx] = value;
+    const float rounded = rms_residual_to_float(value);
+    sum += rounded * rounded;
+  }
+  const float inv_rms =
+      rsqrtf(rms_block_sum(sum, reduce) / static_cast<float>(ncols) + eps);
+  for (int col = tid; col < ncols; col += blockDim.x) {
+    const int idx = row_offset + col;
+    norm_dst[idx] = rms_residual_from_float<T>(
+        rms_residual_to_float(residual_dst[idx]) * inv_rms *
+        rms_residual_to_float(weight[col]));
+  }
+}
+
+template <typename T>
+void launch_add_rms_norm(const void *x, const void *residual,
+                         const void *weight, void *residual_dst,
+                         void *norm_dst, const int nrows, const int ncols,
+                         const float eps, int64_t stream) {
+  if (nrows <= 0 || ncols <= 0) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  if constexpr (std::is_same<T, __half>::value ||
+                std::is_same<T, __nv_bfloat16>::value) {
+    if (rms_vec8_supported<T>(x, residual, weight, residual_dst, ncols) &&
+        rms_vec8_aligned<T>(norm_dst)) {
+      const int block = rms_vec8_block_size(ncols / 8);
+      add_rms_norm_vec8_kernel<T><<<nrows, block, 0, custream>>>(
+          reinterpret_cast<const T *>(x),
+          reinterpret_cast<const T *>(residual),
+          reinterpret_cast<const T *>(weight),
+          reinterpret_cast<T *>(residual_dst), reinterpret_cast<T *>(norm_dst),
+          ncols, eps);
+      return;
+    }
+  }
+
+  const int block = ncols < 1024 ? 32 : 1024;
+  add_rms_norm_kernel<T><<<nrows, block, 0, custream>>>(
+      reinterpret_cast<const T *>(x), reinterpret_cast<const T *>(residual),
+      reinterpret_cast<const T *>(weight),
+      reinterpret_cast<T *>(residual_dst), reinterpret_cast<T *>(norm_dst),
+      ncols, eps);
+}
+
+template <typename T>
 __global__ void rms_norm_residual_then_rms_norm_vec8_kernel(
     const T *__restrict__ x, const T *__restrict__ residual,
     const T *__restrict__ residual_weight, const T *__restrict__ scale,
@@ -584,6 +696,33 @@ extern "C" void rms_norm_residual_bf16(const void *x, const void *residual,
                                        int64_t stream) {
   launch_rms_norm_residual<__nv_bfloat16>(x, residual, weight, scale, dst,
                                           nrows, ncols, eps, stream);
+}
+
+extern "C" void add_rms_norm_f32(const void *x, const void *residual,
+                                 const void *weight, void *residual_dst,
+                                 void *norm_dst, const int nrows,
+                                 const int ncols, const float eps,
+                                 int64_t stream) {
+  launch_add_rms_norm<float>(x, residual, weight, residual_dst, norm_dst,
+                             nrows, ncols, eps, stream);
+}
+
+extern "C" void add_rms_norm_f16(const void *x, const void *residual,
+                                 const void *weight, void *residual_dst,
+                                 void *norm_dst, const int nrows,
+                                 const int ncols, const float eps,
+                                 int64_t stream) {
+  launch_add_rms_norm<__half>(x, residual, weight, residual_dst, norm_dst,
+                              nrows, ncols, eps, stream);
+}
+
+extern "C" void add_rms_norm_bf16(const void *x, const void *residual,
+                                  const void *weight, void *residual_dst,
+                                  void *norm_dst, const int nrows,
+                                  const int ncols, const float eps,
+                                  int64_t stream) {
+  launch_add_rms_norm<__nv_bfloat16>(x, residual, weight, residual_dst,
+                                     norm_dst, nrows, ncols, eps, stream);
 }
 
 extern "C" void rms_norm_residual_then_rms_norm_f32(

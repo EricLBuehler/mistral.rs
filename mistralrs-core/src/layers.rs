@@ -325,6 +325,10 @@ impl RmsNorm {
         self.eps
     }
 
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
+    }
+
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {
         rms_norm_forward_residual(x, residual, &self.weight, self.eps, None)
     }
@@ -372,6 +376,28 @@ impl RmsNorm {
             next_norm.eps,
         )
     }
+}
+
+fn rms_norm_forward_add(
+    x: &Tensor,
+    residual: &Tensor,
+    weight: &Tensor,
+    eps: f64,
+) -> Result<(Tensor, Tensor)> {
+    #[cfg(feature = "cuda")]
+    if x.device().is_cuda()
+        && residual.device().same_device(x.device())
+        && weight.device().same_device(x.device())
+        && x.dtype() == residual.dtype()
+        && x.dtype() == weight.dtype()
+        && matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32)
+    {
+        return crate::ops::cuda_add_rms_norm(x, residual, weight, eps as f32);
+    }
+
+    let sum = (x + residual)?;
+    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    Ok((sum, normed))
 }
 
 impl Module for RmsNorm {
@@ -504,6 +530,10 @@ impl GemmaRmsNorm {
 
     pub fn eps(&self) -> f64 {
         self.eps
+    }
+
+    pub fn forward_add_rms_norm(&self, x: &Tensor, residual: &Tensor) -> Result<(Tensor, Tensor)> {
+        rms_norm_forward_add(x, residual, &self.weight, self.eps)
     }
 
     pub fn forward_residual(&self, x: &Tensor, residual: &Tensor) -> Result<Tensor> {

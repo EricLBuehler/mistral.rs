@@ -2603,6 +2603,7 @@ pub enum GluActivationType {
     Gelu = 1,
     Relu = 2,
     GeluErf = 3,
+    Sigmoid = 4,
 }
 
 // CPU activation functions for fused GLU
@@ -2628,12 +2629,17 @@ fn cpu_gelu_erf(x: f32) -> f32 {
     x * (1.0 + candle_core::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
 }
 
+fn cpu_sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
 fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
     match activation {
         GluActivationType::Silu => cpu_silu(x),
         GluActivationType::Gelu => cpu_gelu(x),
         GluActivationType::Relu => cpu_relu(x),
         GluActivationType::GeluErf => cpu_gelu_erf(x),
+        GluActivationType::Sigmoid => cpu_sigmoid(x),
     }
 }
 
@@ -3166,6 +3172,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let expected = fused_glu(&gate, &up, activation)
                 .unwrap()
@@ -3217,6 +3224,7 @@ mod tests {
                     GluActivationType::Gelu,
                     GluActivationType::Relu,
                     GluActivationType::GeluErf,
+                    GluActivationType::Sigmoid,
                 ] {
                     let expected = fused_glu(&gate, &up, activation)
                         .unwrap()
@@ -3961,6 +3969,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
@@ -4165,6 +4174,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();

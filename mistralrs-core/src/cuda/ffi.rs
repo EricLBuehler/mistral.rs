@@ -72,6 +72,39 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
+    pub(crate) fn add_rms_norm_f32(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        residual_dst: *mut c_void,
+        norm_dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn add_rms_norm_f16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        residual_dst: *mut c_void,
+        norm_dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
+    pub(crate) fn add_rms_norm_bf16(
+        x: *const c_void,
+        residual: *const c_void,
+        weight: *const c_void,
+        residual_dst: *mut c_void,
+        norm_dst: *mut c_void,
+        nrows: i32,
+        ncols: i32,
+        eps: f32,
+        stream: i64,
+    );
     pub(crate) fn rms_norm_residual_then_rms_norm_f32(
         x: *const c_void,
         residual: *const c_void,

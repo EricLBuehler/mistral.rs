@@ -1654,6 +1654,7 @@ mod tests {
                 GluActivationType::Gelu,
                 GluActivationType::Relu,
                 GluActivationType::GeluErf,
+                GluActivationType::Sigmoid,
             ] {
                 let mut pair = shared_lhs(&[&gate, &up], &xs)?;
                 let up_out = pair.pop().unwrap();
