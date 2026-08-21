@@ -11,12 +11,93 @@ use crate::paged_attention::attention_backend::{
 mod metadata;
 pub(crate) use metadata::{
     decode_split_capacity_pages, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
-    flashinfer_tile_plan, flashinfer_view, make_paged_kv_decode_tensors,
+    flashinfer_tile_plan, flashinfer_view, make_fa3_decode_state, make_paged_kv_decode_tensors,
     make_paged_kv_decode_tensors_from_lens, make_paged_kv_tensors,
 };
 
 // Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.
 pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
+
+pub(crate) const FA3_DECODE_NUM_SPLITS: usize = 32;
+const FA3_DECODE_HEAD_DIM: usize = 256;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum Fa3DecodeView {
+    Logical,
+    Sliding,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct Fa3DecodeScheduleKey {
+    pub device: DeviceLocation,
+    pub view: Fa3DecodeView,
+    pub batch: usize,
+    pub q_heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub page_size: usize,
+    pub num_splits: usize,
+}
+
+impl Fa3DecodeScheduleKey {
+    pub(crate) fn supported(&self) -> bool {
+        self.batch > 0
+            && self.q_heads > 0
+            && self.kv_heads > 0
+            && self.q_heads.is_multiple_of(self.kv_heads)
+            && self.head_dim == FA3_DECODE_HEAD_DIM
+            && self.page_size > 0
+            && self.num_splits == FA3_DECODE_NUM_SPLITS
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Fa3DecodeBuffers {
+    pub query: Tensor,
+    pub scheduler_metadata: Tensor,
+    pub output_accum: Tensor,
+    pub lse_accum: Tensor,
+    pub output_lse: Tensor,
+    pub cu_seqlens_q: Tensor,
+    pub page_table: Tensor,
+    pub seqused_k: Tensor,
+    pub max_pages_per_sequence: usize,
+    pub num_sm: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Fa3DecodeState {
+    schedules: HashMap<Fa3DecodeScheduleKey, Fa3DecodeBuffers>,
+}
+
+impl Fa3DecodeState {
+    pub(crate) fn insert(&mut self, key: Fa3DecodeScheduleKey, buffers: Fa3DecodeBuffers) {
+        self.schedules.insert(key, buffers);
+    }
+
+    pub(crate) fn get(&self, key: &Fa3DecodeScheduleKey) -> Option<&Fa3DecodeBuffers> {
+        self.schedules.get(key)
+    }
+
+    pub(crate) fn schedules(
+        &self,
+    ) -> impl Iterator<Item = (&Fa3DecodeScheduleKey, &Fa3DecodeBuffers)> {
+        self.schedules.iter()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.schedules.is_empty()
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub(crate) struct Fa3DecodePrepare<'a> {
+    pub key: Fa3DecodeScheduleKey,
+    pub paged_kv_indptr: &'a Tensor,
+    pub paged_kv_indices: &'a Tensor,
+    pub paged_kv_last_page_len: &'a Tensor,
+    pub buffers: &'a Fa3DecodeBuffers,
+}
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
@@ -63,6 +144,7 @@ pub struct FlashInferMetadata {
     pub views: FlashInferPagedAttentionViews,
     pub decode_tmp_v: Option<DeviceTensorMap>,
     pub decode_tmp_s: Option<DeviceTensorMap>,
+    pub(crate) fa3_decode: Option<Fa3DecodeState>,
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -148,9 +230,56 @@ impl FlashInferPagedAttentionViews {
             &self.logical
         }
     }
+
+    pub(crate) fn fa3_view(&self, view: Fa3DecodeView) -> &FlashInferPagedAttentionView {
+        match view {
+            Fa3DecodeView::Logical => &self.logical,
+            Fa3DecodeView::Sliding => self.sliding.as_ref().unwrap_or(&self.logical),
+        }
+    }
 }
 
 impl FlashInferMetadata {
+    pub(crate) fn fa3_decode_buffers(
+        &self,
+        key: &Fa3DecodeScheduleKey,
+    ) -> Option<&Fa3DecodeBuffers> {
+        self.fa3_decode.as_ref()?.get(key)
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    pub(crate) fn for_each_fa3_decode_schedule(
+        &self,
+        mut f: impl FnMut(Fa3DecodePrepare<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let Some(state) = self.fa3_decode.as_ref() else {
+            return Ok(());
+        };
+        for (&key, buffers) in state.schedules() {
+            let view = self.views.fa3_view(key.view);
+            f(Fa3DecodePrepare {
+                key,
+                paged_kv_indptr: metadata_tensor(
+                    &view.paged_kv.indptr,
+                    &key.device,
+                    "fa3_paged_kv_indptr",
+                )?,
+                paged_kv_indices: metadata_tensor(
+                    &view.paged_kv.indices,
+                    &key.device,
+                    "fa3_paged_kv_indices",
+                )?,
+                paged_kv_last_page_len: metadata_tensor(
+                    &view.paged_kv.last_page_len,
+                    &key.device,
+                    "fa3_paged_kv_last_page_len",
+                )?,
+                buffers,
+            })?;
+        }
+        Ok(())
+    }
+
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub(crate) fn decode_metadata(
         &self,
@@ -211,7 +340,10 @@ fn metadata_tensor<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::supports_flashinfer_group_size;
+    use super::{
+        supports_flashinfer_group_size, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS,
+    };
+    use candle_core::DeviceLocation;
 
     #[test]
     fn flashinfer_group_size_matches_kernel_instantiations() {
@@ -224,5 +356,26 @@ mod tests {
         }
         assert!(!supports_flashinfer_group_size(14, 0));
         assert!(!supports_flashinfer_group_size(15, 2));
+    }
+
+    #[test]
+    fn fa3_schedule_capability_is_shape_based() {
+        let key = Fa3DecodeScheduleKey {
+            device: DeviceLocation::Cuda { gpu_id: 0 },
+            view: Fa3DecodeView::Logical,
+            batch: 16,
+            q_heads: 32,
+            kv_heads: 4,
+            head_dim: 256,
+            page_size: 32,
+            num_splits: FA3_DECODE_NUM_SPLITS,
+        };
+        assert!(key.supported());
+        assert!(!Fa3DecodeScheduleKey {
+            head_dim: 128,
+            ..key
+        }
+        .supported());
+        assert!(!Fa3DecodeScheduleKey { q_heads: 30, ..key }.supported());
     }
 }

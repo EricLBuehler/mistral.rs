@@ -514,6 +514,7 @@ pub mod text_models_inputs_processor {
                         views: FlashInferPagedAttentionViews { logical, sliding },
                         decode_tmp_v: None,
                         decode_tmp_s: None,
+                        fa3_decode: None,
                     }
                 });
 

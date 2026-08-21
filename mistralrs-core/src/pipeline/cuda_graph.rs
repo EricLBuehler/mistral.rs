@@ -9,8 +9,8 @@ use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
 use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
-        FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
-        FlashInferPagedKv, FlashInferTilePlan,
+        make_fa3_decode_state, Fa3DecodeState, FlashInferMetadata, FlashInferPagedAttentionView,
+        FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
     },
     paged_attention::{AttentionBackendKind, ModelConfigLike},
 };
@@ -51,6 +51,34 @@ pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
 /// The batch buckets captured ahead of time at load.
 pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
     (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
+}
+
+pub(crate) fn ensure_fa3_decode_state(
+    metadata: &mut PagedAttentionInputMetadata,
+    batch: usize,
+    kv_cache: &[(Tensor, Tensor)],
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    activation_dtype: DType,
+) -> candle_core::Result<()> {
+    let Some(flashinfer) = metadata.flashinfer.as_ref() else {
+        return Ok(());
+    };
+    if flashinfer.fa3_decode.is_some() {
+        return Ok(());
+    }
+    let state = make_fa3_decode_state(
+        flashinfer,
+        batch,
+        kv_cache,
+        model_metadata,
+        activation_dtype,
+    )?;
+    metadata
+        .flashinfer
+        .as_mut()
+        .expect("FlashInfer metadata was checked above")
+        .fa3_decode = state;
+    Ok(())
 }
 
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
@@ -484,6 +512,7 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
     flashinfer_decode_tmp_v: Option<HashMap<DeviceLocation, Tensor>>,
     flashinfer_decode_tmp_s: Option<HashMap<DeviceLocation, Tensor>>,
+    fa3_decode: Option<Fa3DecodeState>,
     rope_positions: CudaGraphVarMap,
 }
 
@@ -633,6 +662,21 @@ impl CudaDecodeGraphMetadataBuffers {
             model_metadata,
             activation_dtype,
         )?;
+        let fa3_decode = if let Some(flashinfer) = metadata.flashinfer.as_ref() {
+            if let Some(state) = flashinfer.fa3_decode.clone() {
+                Some(state)
+            } else {
+                make_fa3_decode_state(
+                    flashinfer,
+                    seqlen_offsets.len(),
+                    kv_cache,
+                    model_metadata,
+                    activation_dtype,
+                )?
+            }
+        } else {
+            None
+        };
         let flashinfer_views_alias = flashinfer_views_alias(metadata);
         let mut buffers = Self {
             flashinfer_views_alias,
@@ -705,6 +749,7 @@ impl CudaDecodeGraphMetadataBuffers {
             )?,
             flashinfer_decode_tmp_v,
             flashinfer_decode_tmp_s,
+            fa3_decode,
             rope_positions,
         };
         if flashinfer_views_alias {
@@ -923,6 +968,7 @@ impl CudaDecodeGraphMetadataBuffers {
             views: FlashInferPagedAttentionViews { logical, sliding },
             decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
             decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
+            fa3_decode: self.fa3_decode.clone(),
         })
     }
 
