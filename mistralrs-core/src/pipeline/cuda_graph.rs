@@ -275,13 +275,14 @@ pub(crate) fn install_hybrid_graph_state_indices(
     Ok(vars)
 }
 
-fn copy_state_indices(dst: &CudaGraphVarMap, host: &[u32]) -> candle_core::Result<()> {
-    for var in dst.values() {
-        var.set(&Tensor::from_vec(
-            host.to_vec(),
-            (host.len(),),
-            var.device(),
-        )?)?;
+fn copy_state_indices(
+    dst: &CudaGraphVarMap,
+    host: &[u32],
+    host_staging: &mut CudaGraphHostStagingMap,
+) -> candle_core::Result<()> {
+    for (location, var) in dst {
+        host_staging_buffer(host_staging, "state_indices", *location, var)?
+            .copy_from_u32_slice(host, var)?;
     }
     Ok(())
 }
@@ -938,6 +939,7 @@ pub(crate) struct CudaDecodeGraphEntry {
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     state_indices: Option<CudaGraphVarMap>,
+    state_indices_staging: CudaGraphHostStagingMap,
     _metadata: PagedAttentionInputMetadata,
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
@@ -1009,7 +1011,9 @@ impl CudaDecodeGraphState {
             .metadata_buffers
             .copy_from(&step.metadata, &step.seqlen_offsets, seq_len)?;
         match (&entry.state_indices, &step.state_indices) {
-            (Some(dst), Some(host)) => copy_state_indices(dst, host)?,
+            (Some(dst), Some(host)) => {
+                copy_state_indices(dst, host, &mut entry.state_indices_staging)?
+            }
             (None, None) => {}
             _ => candle_core::bail!(
                 "hybrid state indices changed optional state during CUDA graph replay"
@@ -1134,6 +1138,7 @@ where
         input_ids,
         metadata_buffers,
         state_indices,
+        state_indices_staging: HashMap::new(),
         _metadata: metadata,
         logits: graph_logits,
         spec_state: None,
@@ -1597,6 +1602,63 @@ impl CudaGraphPinnedBuffer {
             .map_err(candle_core::Error::wrap)?;
         Ok(())
     }
+
+    fn copy_from_u32_slice(&mut self, src: &[u32], dst: &Var) -> candle_core::Result<()> {
+        if dst.dtype() != DType::U32 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching u32 state indices");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA state indices");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous state indices");
+        }
+        let CudaGraphPinnedData::U32(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging state index dtype changed");
+        };
+        self.copy_complete
+            .synchronize()
+            .map_err(candle_core::Error::wrap)?;
+        let host = host.as_mut_slice().map_err(candle_core::Error::wrap)?;
+        host.copy_from_slice(src);
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        let dst = dst_storage.as_cuda_slice::<u32>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(&stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(host),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph state index H2D copy failed"));
+        }
+        self.copy_complete
+            .record(&stream)
+            .map_err(candle_core::Error::wrap)?;
+        Ok(())
+    }
+}
+
+fn host_staging_buffer<'a>(
+    host_staging: &'a mut CudaGraphHostStagingMap,
+    name: &'static str,
+    location: DeviceLocation,
+    dst: &Var,
+) -> candle_core::Result<&'a mut CudaGraphPinnedBuffer> {
+    let key = (name, location);
+    Ok(match host_staging.entry(key) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => {
+            entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+        }
+    })
 }
 
 fn copy_var_map(
@@ -1613,14 +1675,7 @@ fn copy_var_map(
             .get(location)
             .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
         if src.device().is_cpu() && dst.device().is_cuda() {
-            let key = (name, *location);
-            let buffer = match host_staging.entry(key) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(CudaGraphPinnedBuffer::new(dst)?)
-                }
-            };
-            buffer.copy_from(src, dst)?;
+            host_staging_buffer(host_staging, name, *location, dst)?.copy_from(src, dst)?;
         } else {
             dst.set(src)?;
         }
@@ -1664,14 +1719,8 @@ fn copy_rope_positions(
     let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
     for (location, dst) in dst {
         if dst.device().is_cuda() {
-            let key = ("rope_positions", *location);
-            let buffer = match host_staging.entry(key) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(CudaGraphPinnedBuffer::new(dst)?)
-                }
-            };
-            buffer.copy_from(&positions, dst)?;
+            host_staging_buffer(host_staging, "rope_positions", *location, dst)?
+                .copy_from(&positions, dst)?;
         } else {
             dst.set(&positions)?;
         }
@@ -1809,6 +1858,25 @@ mod tests {
             .to_vec1::<u32>()?;
         assert_eq!(positions, vec![255]);
         assert!(!buffers.host_staging.is_empty());
+
+        let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
+        let mut state_indices_map = HashMap::from([(location, state_indices)]);
+        let mut state_indices_staging = HashMap::new();
+        copy_state_indices(&state_indices_map, &[3, 5, 7], &mut state_indices_staging)?;
+        copy_state_indices(
+            &state_indices_map,
+            &[11, 13, 17],
+            &mut state_indices_staging,
+        )?;
+        device.synchronize()?;
+        assert_eq!(state_indices_staging.len(), 1);
+        let state_indices = state_indices_map
+            .remove(&location)
+            .unwrap()
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        assert_eq!(state_indices, vec![11, 13, 17]);
         Ok(())
     }
 
