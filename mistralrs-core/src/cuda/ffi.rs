@@ -801,6 +801,7 @@ extern "C" {
         a_batch_stride: i64,
         a_head_stride: i64,
         slot_indices: *const i32,
+        use_cooperative: i32,
         dtype: i32,
         stream: i64,
     );

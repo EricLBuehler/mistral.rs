@@ -5,6 +5,59 @@ use candle_core::{Result, Tensor};
 #[cfg(feature = "cuda")]
 use candle_core::DType;
 
+#[cfg(any(feature = "cuda", test))]
+const GDN_COOPERATIVE_MIN_COMPUTE_MAJOR: i32 = 9;
+#[cfg(any(feature = "cuda", test))]
+const GDN_COOPERATIVE_BATCH_LIMIT: usize = 3;
+#[cfg(any(feature = "cuda", test))]
+const GDN_COOPERATIVE_K_DIM: usize = 128;
+#[cfg(any(feature = "cuda", test))]
+const GDN_COOPERATIVE_V_TILE: usize = 16;
+#[cfg(feature = "cuda")]
+const GDN_COOPERATIVE_VECTOR_ALIGNMENT: usize = 16;
+
+#[cfg(any(feature = "cuda", test))]
+fn use_cooperative_decode_kernel(
+    compute_major: i32,
+    batch_size: usize,
+    head_k_dim: usize,
+    head_v_dim: usize,
+) -> bool {
+    compute_major >= GDN_COOPERATIVE_MIN_COMPUTE_MAJOR
+        && batch_size < GDN_COOPERATIVE_BATCH_LIMIT
+        && head_k_dim == GDN_COOPERATIVE_K_DIM
+        && head_v_dim.is_multiple_of(GDN_COOPERATIVE_V_TILE)
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_compute_major(dev: &candle_core::CudaDevice) -> Result<i32> {
+    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<i32, i32>>> = OnceLock::new();
+    let stream = dev.cuda_stream();
+    let context = stream.context();
+    let device = context.cu_device();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(major) = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(&device)
+        .copied()
+    {
+        return Ok(major);
+    }
+    let major = context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
+        .map_err(candle_core::Error::wrap)?;
+    cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(device, major);
+    Ok(major)
+}
+
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
 /// `[B*H, ...]` copy addressed by batch row; `Pooled` addresses the whole pool `[cap, H, ...]`
 /// through a `[B]` u32 slot table, so the kernels update it in place without gather/scatter copies.
@@ -614,6 +667,7 @@ pub fn fused_decode_recurrence_cuda(
         dtype_code: i32,
     ) -> Result<Tensor> {
         let dev = mixed_qkv.device().as_cuda_device()?;
+        let compute_major = cuda_compute_major(dev)?;
 
         let (mixed_s, mixed_l) = mixed_qkv.storage_and_layout();
         let mixed_s = match &*mixed_s {
@@ -662,6 +716,10 @@ pub fn fused_decode_recurrence_cuda(
             _ => candle::bail!("state must be a cuda tensor"),
         };
         let state_offset = state_l.start_offset();
+        let state_ptr = state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32;
+        let use_cooperative =
+            use_cooperative_decode_kernel(compute_major, batch_size, head_k_dim, head_v_dim)
+                && (state_ptr as usize).is_multiple_of(GDN_COOPERATIVE_VECTOR_ALIGNMENT);
 
         let bh = batch_size * num_v_heads;
         let output_buf = unsafe { dev.alloc::<T>(bh * head_v_dim) }?;
@@ -675,7 +733,7 @@ pub fn fused_decode_recurrence_cuda(
                     a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
                     alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
                     dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
-                    state_s.slice(state_offset..).device_ptr(state_s.stream()).0 as *mut f32,
+                    state_ptr,
                     output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
                     batch_size as i32,
                     num_k_heads as i32,
@@ -688,6 +746,7 @@ pub fn fused_decode_recurrence_cuda(
                     a_batch_stride as i64,
                     a_head_stride as i64,
                     slot_ptr,
+                    i32::from(use_cooperative),
                     dtype_code,
                     stream,
                 );
@@ -994,6 +1053,21 @@ pub fn fused_gdn_gating_cuda(
     _dt_bias: &Tensor,
 ) -> Result<(Tensor, Tensor)> {
     candle_core::bail!("fused_gdn_gating_cuda requires the cuda feature")
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::use_cooperative_decode_kernel;
+
+    #[test]
+    fn cooperative_decode_dispatch_is_arch_shape_and_batch_gated() {
+        assert!(use_cooperative_decode_kernel(9, 1, 128, 128));
+        assert!(use_cooperative_decode_kernel(10, 2, 128, 96));
+        assert!(!use_cooperative_decode_kernel(8, 1, 128, 128));
+        assert!(!use_cooperative_decode_kernel(9, 3, 128, 128));
+        assert!(!use_cooperative_decode_kernel(9, 2, 64, 128));
+        assert!(!use_cooperative_decode_kernel(9, 2, 128, 127));
+    }
 }
 
 #[cfg(all(test, feature = "cuda"))]
@@ -1335,6 +1409,45 @@ mod tests {
             &flat(&reference_state)?,
             2.0e-5,
         );
+
+        let fused_second = fused_decode_recurrence_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            &mut fused_state,
+            batch_size,
+            num_k_heads,
+            num_v_heads,
+            head_k_dim,
+            head_v_dim,
+            tiled_v_heads,
+            state_slots,
+        )?;
+        let reference_second = gated_delta_rule_recurrence_cuda(
+            RecurrenceInputs {
+                q: &q,
+                k: &k,
+                v: &v,
+                g: &g,
+                beta: &beta,
+            },
+            &mut reference_state,
+            state_slots,
+        )?;
+        assert_close(
+            "fused decode second output",
+            &flat(&fused_second.to_dtype(DType::F32)?)?,
+            &flat(&reference_second)?,
+            output_tolerance,
+        );
+        assert_close(
+            "fused decode second state",
+            &flat(&fused_state)?,
+            &flat(&reference_state)?,
+            4.0e-5,
+        );
         Ok(())
     }
 
@@ -1342,9 +1455,12 @@ mod tests {
     #[ignore = "requires a CUDA device"]
     fn fused_decode_recurrence_matches_decomposed_cuda() -> Result<()> {
         let dev = Device::new_cuda(0)?;
+        run_fused_decode_case(&dev, 1, 2, 4, 128, 128, false, DType::F16, false, false)?;
         run_fused_decode_case(&dev, 2, 2, 4, 64, 64, false, DType::F16, false, false)?;
-        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true, false)?;
-        run_fused_decode_case(&dev, 8, 4, 8, 128, 128, false, DType::BF16, false, true)
+        run_fused_decode_case(&dev, 2, 2, 6, 128, 128, true, DType::BF16, true, true)?;
+        run_fused_decode_case(&dev, 8, 4, 8, 128, 128, false, DType::BF16, false, true)?;
+        run_fused_decode_case(&dev, 3, 2, 4, 128, 128, true, DType::BF16, true, true)?;
+        run_fused_decode_case(&dev, 4, 2, 4, 128, 128, false, DType::BF16, false, false)
     }
 
     #[test]
