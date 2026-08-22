@@ -3810,6 +3810,7 @@ dependencies = [
  "derive_more",
  "dirs",
  "either",
+ "encoding_rs",
  "float8",
  "futures",
  "galil-seiferas",
