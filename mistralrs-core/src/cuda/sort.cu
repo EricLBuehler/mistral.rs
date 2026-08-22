@@ -2073,6 +2073,7 @@ __global__ void
 top1_large_stage2_f32_packed(const float *__restrict__ block_values,
                              const uint32_t *__restrict__ block_indices,
                              float *__restrict__ packed_out,
+                             uint32_t *__restrict__ token_ids_out,
                              const int nblocks) {
   const int tid = threadIdx.x;
   const int block_size = blockDim.x;
@@ -2080,7 +2081,12 @@ top1_large_stage2_f32_packed(const float *__restrict__ block_values,
     const size_t row = blockIdx.x;
     block_values += row * static_cast<size_t>(nblocks);
     block_indices += row * static_cast<size_t>(nblocks);
-    packed_out += row * 2;
+    if (packed_out != nullptr) {
+      packed_out += row * 2;
+    }
+    if (token_ids_out != nullptr) {
+      token_ids_out += row;
+    }
   }
 
   float local_max = -INFINITY;
@@ -2120,11 +2126,18 @@ top1_large_stage2_f32_packed(const float *__restrict__ block_values,
     float final_max = warp_reduce_max_with_idx<float>(val, pos, final_pos);
 
     if (tid == 0) {
-      packed_out[0] = row_has_nan ? NAN : final_max;
-      packed_out[1] = row_has_nan ? NAN
-                      : final_pos >= 0
-                          ? static_cast<float>(block_indices[final_pos])
-                          : 0.0f;
+      const uint32_t token_id = row_has_nan
+                                    ? UINT32_MAX
+                                    : final_pos >= 0
+                                          ? block_indices[final_pos]
+                                          : 0;
+      if (packed_out != nullptr) {
+        packed_out[0] = row_has_nan ? NAN : final_max;
+        packed_out[1] = row_has_nan ? NAN : static_cast<float>(token_id);
+      }
+      if (token_ids_out != nullptr) {
+        token_ids_out[0] = token_id;
+      }
     }
   }
 }
@@ -2194,24 +2207,26 @@ topk_large_f32_packed_batched(const float *input, const float *inv_temperatures,
 
 extern "C" void top1_large_f32_packed(const float *input, float *block_values,
                                       uint32_t *block_indices,
-                                      float *packed_out, int ncols,
-                                      int chunk_size, int nblocks,
-                                      int64_t stream) {
+                                      float *packed_out,
+                                      uint32_t *token_ids_out, int ncols,
+                                      int chunk_size, int nblocks, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int block_size = 256;
 
   top1_large_stage1_f32<false, false><<<nblocks, block_size, 0, custream>>>(
       input, block_values, block_indices, nullptr, ncols, chunk_size, nullptr);
   top1_large_stage2_f32_packed<false><<<1, block_size, 0, custream>>>(
-      block_values, block_indices, packed_out, nblocks);
+      block_values, block_indices, packed_out, token_ids_out, nblocks);
 }
 
 extern "C" void top1_large_f32_packed_batched(const float *input,
                                               float *block_values,
                                               uint32_t *block_indices,
-                                              float *packed_out, int nrows,
-                                              int ncols, int chunk_size,
-                                              int nblocks, int64_t stream) {
+                                              float *packed_out,
+                                              uint32_t *token_ids_out,
+                                              int nrows, int ncols,
+                                              int chunk_size, int nblocks,
+                                              int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int block_size = 256;
   const dim3 stage1_grid(nblocks, nrows);
@@ -2219,7 +2234,7 @@ extern "C" void top1_large_f32_packed_batched(const float *input,
   top1_large_stage1_f32<true, false><<<stage1_grid, block_size, 0, custream>>>(
       input, block_values, block_indices, nullptr, ncols, chunk_size, nullptr);
   top1_large_stage2_f32_packed<true><<<nrows, block_size, 0, custream>>>(
-      block_values, block_indices, packed_out, nblocks);
+      block_values, block_indices, packed_out, token_ids_out, nblocks);
 }
 
 extern "C" void categorical_large_f32_packed_batched(
