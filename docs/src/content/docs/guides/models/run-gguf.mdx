@@ -76,7 +76,7 @@ runner = Runner(
 )
 ```
 
-[Full Python example](/mistral.rs/examples/python/gguf/).
+[Full Python example](/examples/python/gguf/).
 
 </TabItem>
 <TabItem label="Rust">
@@ -92,8 +92,8 @@ let model = GgufModelBuilder::new(
 .await?;
 ```
 
-[Full Rust example](/mistral.rs/examples/rust/getting-started/gguf/), or
-[load a local file](/mistral.rs/examples/rust/getting-started/gguf-locally/).
+[Full Rust example](/examples/rust/getting-started/gguf/), or
+[load a local file](/examples/rust/getting-started/gguf-locally/).
 
 </TabItem>
 </Tabs>
@@ -184,9 +184,9 @@ let model = GgufModelBuilder::new(
 
 When loading online, `--tok-model-id` can be omitted if the GGUF identifies its original model.
 Image, audio, and video availability depends on the selected model. See
-[multimodal input](/mistral.rs/guides/models/multimodal-input/) for request examples and
-[GGUF compatibility](/mistral.rs/reference/gguf-support/) for the supported families. The
-[Gemma 4 GGUF server example](/mistral.rs/examples/server/gemma4-gguf/) shows a complete media
+[multimodal input](/guides/models/multimodal-input/) for request examples and
+[GGUF compatibility](/reference/gguf-support/) for the supported families. The
+[Gemma 4 GGUF server example](/examples/server/gemma4-gguf/) shows a complete media
 request.
 
 ## GGUF with dynamic LoRA
@@ -202,12 +202,12 @@ mistralrs serve \
 
 Each request can select a loaded adapter by alias, and base-model requests can run alongside adapted
 requests. Multimodal GGUF applies adapters to the language model; projector, vision, and audio
-adapters are not supported. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) for
+adapters are not supported. See [LoRA adapters](/guides/customize/lora-adapters/) for
 request routing and runtime adapter management.
 
 Dynamic LoRA is rejected for GGUF architectures whose rotary Q/K layout does not match canonical
 adapter weights. This prevents an adapter from loading successfully with the wrong feature order.
-The [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) lists the affected
+The [GGUF compatibility reference](/reference/gguf-support/) lists the affected
 architectures.
 
 ## Requantize with ISQ
@@ -225,7 +225,7 @@ mistralrs run -f /path/model-BF16.gguf --isq q4k
 
 Start with a high-precision or higher-bit source when possible to avoid compounding quantization
 loss. K-quant conversion can also use `--imatrix <path>` or `--calibration-file <path>`. See the
-[quantization guide](/mistral.rs/guides/quantization/quantize-a-model/) for choosing a format and
+[quantization guide](/guides/quantization/quantize-a-model/) for choosing a format and
 collecting importance data.
 
 ## Run offline
@@ -247,7 +247,7 @@ HF_HUB_OFFLINE=1 mistralrs run \
   --tok-model-id /models/original-assets
 ```
 
-See [environment variables](/mistral.rs/reference/environment-variables/) for cache locations and
+See [environment variables](/reference/environment-variables/) for cache locations and
 token configuration.
 
 ## Migrating existing GGUF commands
@@ -270,10 +270,10 @@ ranked projectors, or incomplete GGUF metadata.
 | Message or symptom | What to do |
 |---|---|
 | No GGUF matches `--quant` | Use `-f` to choose an available file, or choose a bit width that the repository publishes. |
-| Unknown or unsupported GGUF architecture | Check [GGUF compatibility](/mistral.rs/reference/gguf-support/) and use a GGUF produced for a supported family. |
+| Unknown or unsupported GGUF architecture | Check [GGUF compatibility](/reference/gguf-support/) and use a GGUF produced for a supported family. |
 | No companion projector was found | Pass `--mmproj`, or use a repository that includes the model's projector. |
-| An architecture is supported only as a multimodal model | Supply its companion projector; see [GGUF compatibility](/mistral.rs/reference/gguf-support/#multimodal-model-families). |
+| An architecture is supported only as a multimodal model | Supply its companion projector; see [GGUF compatibility](/reference/gguf-support/#multimodal-model-families). |
 | Projector selection is ambiguous | Pass the exact projector filename with `--mmproj`. |
 | Original configuration or processor assets are missing | Pass the original model ID or a local asset directory with `--tok-model-id`. |
 | Tokenizer conversion reports an unsupported profile | Supply the original `tokenizer.json` with `-t`, or use `--tok-model-id`. |
-| An IQ GGUF does not load | IQ GGUF formats are not supported yet; choose a supported Q/K quant listed in [GGUF compatibility](/mistral.rs/reference/gguf-support/#storage-formats). |
+| An IQ GGUF does not load | IQ GGUF formats are not supported yet; choose a supported Q/K quant listed in [GGUF compatibility](/reference/gguf-support/#storage-formats). |

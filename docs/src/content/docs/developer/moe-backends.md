@@ -46,5 +46,5 @@ Run `mistralrs doctor` to check cuTile availability for every detected GPU. See 
 
 `CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary instead of resolving it from `PATH`.
 
-See also: [environment variables](/mistral.rs/reference/environment-variables/),
-[cargo features](/mistral.rs/reference/cargo-features/).
+See also: [environment variables](/reference/environment-variables/),
+[cargo features](/reference/cargo-features/).

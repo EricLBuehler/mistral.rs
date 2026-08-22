@@ -1,0 +1,19 @@
+{
+  "name": "mistralrs-landing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "node --check src/main.js && node --check vite.config.js",
+    "test": "npm run build && node --test tests/static-site.test.mjs"
+  },
+  "devDependencies": {
+    "vite": "8.0.13"
+  }
+}

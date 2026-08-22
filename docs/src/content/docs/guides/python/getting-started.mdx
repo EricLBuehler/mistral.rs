@@ -57,19 +57,19 @@ pip install "mistralrs==0.9.2+cuda128.sm89" \
   --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.2
 ```
 
-Look up your GPU's compute capability in [hardware support](/mistral.rs/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/mistral.rs/quickstart/) and follow [cuTile setup](/mistral.rs/developer/moe-backends/).
+Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/quickstart/) and follow [cuTile setup](/developer/moe-backends/).
 
 All install paths expose the same `from mistralrs import ...` API.
 
 ## The pieces
 
-[`Runner`](/mistral.rs/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
+[`Runner`](/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
 
-[`Which`](/mistral.rs/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants cover multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), embeddings (`Which.Embedding`), and LoRA adapters (`Which.Lora`).
+[`Which`](/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants cover multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), embeddings (`Which.Embedding`), and LoRA adapters (`Which.Lora`).
 
-`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
+`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
 
-Full example: [plain](/mistral.rs/examples/python/plain/).
+Full example: [plain](/examples/python/plain/).
 
 ## Streaming tokens
 
@@ -101,7 +101,7 @@ print()
 
 Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `choices[0].delta.content` carries one incremental piece of the reply; it can be `None` (for example on the final chunk, which carries `finish_reason`), which is why the example checks `delta` before printing.
 
-Full example: [streaming](/mistral.rs/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/mistral.rs/guides/python/streaming/).
+Full example: [streaming](/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/guides/python/streaming/).
 
 ## Notes
 
@@ -109,4 +109,4 @@ The Runner keeps the model in memory for the process lifetime. Requests can be s
 
 Chat history is not tracked. Each call to `send_chat_completion_request` is independent; multi-turn conversation means assembling the `messages` list yourself, appending each new user question and prior assistant reply.
 
-The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/mistral.rs/reference/python/).
+The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/reference/python/).

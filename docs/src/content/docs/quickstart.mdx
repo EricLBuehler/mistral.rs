@@ -51,7 +51,7 @@ The install script detects your platform and downloads a matching prebuilt binar
 <details>
 <summary>Install locations, per-platform binaries, and environment variables</summary>
 
-Prebuilt binaries do not require Rust or a CUDA toolkit for standard acceleration. Installer-managed binaries install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` on Unix and launched from `%USERPROFILE%\.local\bin` on Windows. If needed, the installer adds that directory to your shell environment. Optional cuTile acceleration requires NVIDIA's separately installed `tileiras` tool. See [cuTile setup](/mistral.rs/developer/moe-backends/) for the official package commands.
+Prebuilt binaries do not require Rust or a CUDA toolkit for standard acceleration. Installer-managed binaries install to `~/.mistralrs`, with `mistralrs` symlinked into `~/.local/bin` on Unix and launched from `%USERPROFILE%\.local\bin` on Windows. If needed, the installer adds that directory to your shell environment. Optional cuTile acceleration requires NVIDIA's separately installed `tileiras` tool. See [cuTile setup](/developer/moe-backends/) for the official package commands.
 
 Source builds install to the same managed location.
 
@@ -78,7 +78,7 @@ For NVIDIA GPUs, the installer checks `nvidia-smi`, then chooses the matching CU
 | CUDA 12.9+ on GB10 / `sm121` | `cuda129` |
 | CUDA 12.8+ | `cuda128` |
 
-If no artifact matches the GPU or driver, the installer builds from source. See [hardware support](/mistral.rs/reference/hardware-support/) for the full matrix.
+If no artifact matches the GPU or driver, the installer builds from source. See [hardware support](/reference/hardware-support/) for the full matrix.
 
 Install-time environment variables:
 
@@ -87,7 +87,7 @@ Install-time environment variables:
 - `MISTRALRS_INSTALL_NO_NCCL=1` (source builds) skips the `nccl` feature.
 - `MISTRALRS_INSTALL_ALLOW_CUDA_MISMATCH=1` lets a source build continue when local `nvcc` is newer than the CUDA version reported by the NVIDIA driver.
 
-At runtime, `HF_HOME` controls where models are cached (see [environment variables](/mistral.rs/reference/environment-variables/)).
+At runtime, `HF_HOME` controls where models are cached (see [environment variables](/reference/environment-variables/)).
 
 </details>
 
@@ -115,7 +115,7 @@ irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1
 </TabItem>
 </Tabs>
 
-Need a source build instead - to track bleeding-edge `master`, pin a commit, or use a feature set the prebuilts omit? See [Build from source](/mistral.rs/developer/from-source/).
+Need a source build instead - to track bleeding-edge `master`, pin a commit, or use a feature set the prebuilts omit? See [Build from source](/developer/from-source/).
 
 ## Verify the install
 
@@ -131,7 +131,7 @@ mistralrs doctor
 [INFO] Build features: cuda, cudnn, flash-attn
 ```
 
-If your accelerator is missing from build features, rebuild with the right `--features`. For other failures, see [Troubleshooting](/mistral.rs/reference/troubleshooting/).
+If your accelerator is missing from build features, rebuild with the right `--features`. For other failures, see [Troubleshooting](/reference/troubleshooting/).
 
 ## Run your first model
 
@@ -141,7 +141,7 @@ mistralrs run --quant 4 -m Qwen/Qwen3-4B
 
 The first run downloads the weights from Hugging Face into the local cache, then loads the model onto the detected accelerator. `mistralrs` infers the architecture, chat template, and target device from the repository; every inferred choice can be overridden with a flag.
 
-`--quant 4` prefers a prebuilt [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) quantization from `mistralrs-community` when one is published, otherwise quantizes the weights as they load (in-situ). Omit it to load native precision (BF16 for Qwen3-4B, about 8 GB). See [Quantization](/mistral.rs/guides/quantization/quantize-a-model/) for the decision guide.
+`--quant 4` prefers a prebuilt [UQFF (Universal Quantized File Format)](/reference/uqff-format/) quantization from `mistralrs-community` when one is published, otherwise quantizes the weights as they load (in-situ). Omit it to load native precision (BF16 for Qwen3-4B, about 8 GB). See [Quantization](/guides/quantization/quantize-a-model/) for the decision guide.
 
 The model is ready when an empty prompt appears. Type a message and press Enter; the response streams a token at a time.
 
@@ -158,7 +158,7 @@ Commands available at the prompt:
 - `/clear`: clear the chat history
 - `/temperature <float>`, `/topk <int>`, `/topp <float>`: adjust sampling
 
-With multimodal models, include image, audio, or video paths or URLs directly in the prompt. For one-shot use, pass `-i "your prompt"` (optionally with `--image`, `--video`, or `--audio`) to send a single request and exit. The full flag set is in the [CLI reference](/mistral.rs/reference/cli/run/).
+With multimodal models, include image, audio, or video paths or URLs directly in the prompt. For one-shot use, pass `-i "your prompt"` (optionally with `--image`, `--video`, or `--audio`) to send a single request and exit. The full flag set is in the [CLI reference](/reference/cli/run/).
 
 ### Run GGUF models
 
@@ -171,8 +171,8 @@ mistralrs serve -m unsloth/Qwen3.5-4B-GGUF --quant 4
 
 The `.gguf` filename selects the format. mistral.rs uses embedded tokenizer and chat-template
 metadata when present, and discovers configuration and multimodal projector files when the
-repository identifies them unambiguously. See [Run GGUF models](/mistral.rs/guides/models/run-gguf/)
-for loading and serving workflows, or [GGUF support](/mistral.rs/reference/gguf-support/) for the
+repository identifies them unambiguously. See [Run GGUF models](/guides/models/run-gguf/)
+for loading and serving workflows, or [GGUF support](/reference/gguf-support/) for the
 compatibility matrix.
 
 ## Serve an API
@@ -257,15 +257,15 @@ To run inference in-process without a server, use the `mistralrs` crate directly
 </TabItem>
 </Tabs>
 
-The model name `default` is special-cased server-side: it always routes to the server's default model, so clients work without knowing the real model id. `GET /v1/models` lists the real id. Full example: [server chat](/mistral.rs/examples/server/chat/).
+The model name `default` is special-cased server-side: it always routes to the server's default model, so clients work without knowing the real model id. `GET /v1/models` lists the real id. Full example: [server chat](/examples/server/chat/).
 
 Three more things the same process gives you:
 
-- A web UI at `http://localhost:1234/ui` (pass `--no-ui` to disable). See [Web UI](/mistral.rs/guides/serve/with-web-ui/).
-- Anthropic-compatible Messages endpoints at base `http://localhost:1234`. See [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/).
+- A web UI at `http://localhost:1234/ui` (pass `--no-ui` to disable). See [Web UI](/guides/serve/with-web-ui/).
+- Anthropic-compatible Messages endpoints at base `http://localhost:1234`. See [Anthropic Messages API](/guides/serve/anthropic-messages-api/).
 - Interactive API docs at `http://localhost:1234/docs`.
 
-The [OpenAI-compatible API guide](/mistral.rs/guides/serve/openai-compatible-apis/) covers streaming, multiple models, and configuration.
+The [OpenAI-compatible API guide](/guides/serve/openai-compatible-apis/) covers streaming, multiple models, and configuration.
 
 ## Gated models: log in to Hugging Face
 
@@ -308,13 +308,13 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-`with_auto_isq(IsqBits::Four)` is the in-process equivalent of `--isq 4`. See the [Rust SDK guide](/mistral.rs/guides/rust/getting-started/) for streaming, multimodal input, and sampling options.
+`with_auto_isq(IsqBits::Four)` is the in-process equivalent of `--isq 4`. See the [Rust SDK guide](/guides/rust/getting-started/) for streaming, multimodal input, and sampling options.
 
 ## Next steps
 
-- [Run models](/mistral.rs/guides/models/run-any-model/): Hugging Face IDs, local model directories, pipeline detection, and quantization flags.
-- [Run GGUF models](/mistral.rs/guides/models/run-gguf/): local files, Hub artifacts, multimodal input, LoRA, and overrides.
-- [OpenAI-compatible API](/mistral.rs/guides/serve/openai-compatible-apis/): the canonical serving guide.
-- [Quantization](/mistral.rs/guides/quantization/quantize-a-model/): fit larger models on the same hardware.
-- [Agents & tools](/mistral.rs/guides/agents/): tool calling, web search, code execution, shell, OpenAI-compatible Skills, and MCP (Model Context Protocol).
-- [Python SDK](/mistral.rs/guides/python/getting-started/) and [Rust SDK](/mistral.rs/guides/rust/getting-started/): in-process inference without a server.
+- [Run models](/guides/models/run-any-model/): Hugging Face IDs, local model directories, pipeline detection, and quantization flags.
+- [Run GGUF models](/guides/models/run-gguf/): local files, Hub artifacts, multimodal input, LoRA, and overrides.
+- [OpenAI-compatible API](/guides/serve/openai-compatible-apis/): the canonical serving guide.
+- [Quantization](/guides/quantization/quantize-a-model/): fit larger models on the same hardware.
+- [Agents & tools](/guides/agents/): tool calling, web search, code execution, shell, OpenAI-compatible Skills, and MCP (Model Context Protocol).
+- [Python SDK](/guides/python/getting-started/) and [Rust SDK](/guides/rust/getting-started/): in-process inference without a server.

@@ -465,29 +465,29 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. If the architecture is not listed, check the [GGUF compatibility reference](/mistral.rs/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
+3. If the architecture is not listed, check the [GGUF compatibility reference](/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/guides/models/model-family-notes/).
 
-The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/guides/models/model-family-notes/).
 
 "#;
 
 const FOOTER: &str = r#"## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/mistral.rs/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
-| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8` | Built-in `mtp.*` head (`--mtp`), PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
 "#;
 
 fn md_cell(s: &str) -> String {

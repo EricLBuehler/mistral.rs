@@ -4,7 +4,7 @@ description: Compile mistral.rs from a repository checkout with exactly the feat
 ---
 
 :::tip[Most users do not need this]
-The [quickstart install script](/mistral.rs/quickstart/) is the recommended way to install. It downloads a prebuilt binary for your platform; `MISTRALRS_INSTALL_TAG=<tag>` installs a specific release, and `MISTRALRS_INSTALL_FROM_SOURCE=1` makes it build the latest `master` from source for you. Build from a checkout manually only to pin an arbitrary commit, apply a local patch, or use a feature combination the published binaries do not include.
+The [quickstart install script](/quickstart/) is the recommended way to install. It downloads a prebuilt binary for your platform; `MISTRALRS_INSTALL_TAG=<tag>` installs a specific release, and `MISTRALRS_INSTALL_FROM_SOURCE=1` makes it build the latest `master` from source for you. Build from a checkout manually only to pin an arbitrary commit, apply a local patch, or use a feature combination the published binaries do not include.
 :::
 
 ## Platform prerequisites
@@ -32,7 +32,7 @@ cargo build --release --locked --features "cuda nccl flash-attn cudnn" -p mistra
 cargo install --path mistralrs-cli --locked --features "cuda nccl flash-attn cudnn"
 ```
 
-The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/mistral.rs/reference/cargo-features/) for the full list.
+The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/reference/cargo-features/) for the full list.
 
 Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
 
@@ -49,7 +49,7 @@ Common per-platform flag strings:
 | CUDA | `cuda flash-attn cudnn` |
 | CUDA multi-GPU | `cuda flash-attn cudnn nccl` |
 
-The full flag list, per-hardware recommendations, and per-flag effects live in the [cargo features reference](/mistral.rs/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
+The full flag list, per-hardware recommendations, and per-flag effects live in the [cargo features reference](/reference/cargo-features/). Add `nccl` on Linux when NCCL is installed and you want CUDA multi-GPU tensor parallelism.
 
 ## Developing against a local checkout
 

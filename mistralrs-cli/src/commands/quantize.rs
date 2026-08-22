@@ -432,7 +432,7 @@ base_model_relation: quantized
 
 # `{base_model}`, UQFF quantization
 
-Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistralrs_version}. Documentation: [UQFF docs](https://ericlbuehler.github.io/mistral.rs/guides/quantization/uqff/).
+Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistralrs_version}. Documentation: [UQFF docs](https://docs.mistralrs.dev/guides/quantization/uqff/).
 
 1) **Flexible** 🌀: Multiple quantization formats in *one* file format with *one* framework to run them all.
 2) **Versioned**: Embedded semantic-version metadata lets mistral.rs detect incompatible artifacts before loading.
@@ -441,7 +441,7 @@ Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistral
 
 ## Install
 
-Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://ericlbuehler.github.io/mistral.rs/guides/install/)):
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/guides/install/)):
 
 **Linux/macOS:**
 ```

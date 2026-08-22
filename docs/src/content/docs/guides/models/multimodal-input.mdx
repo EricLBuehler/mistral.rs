@@ -5,7 +5,7 @@ description: Multimodal input on every surface - content-part messages, URL form
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Multimodal models accept the OpenAI content-part message format: `content` is a list of typed parts instead of a string. The heavily tested families are Qwen3-VL (image, video) and Gemma 4 (image, audio, video); per-model modality support is in the [supported models reference](/mistral.rs/reference/supported-models/).
+Multimodal models accept the OpenAI content-part message format: `content` is a list of typed parts instead of a string. The heavily tested families are Qwen3-VL (image, video) and Gemma 4 (image, audio, video); per-model modality support is in the [supported models reference](/reference/supported-models/).
 
 <Tabs>
 <TabItem label="CLI">
@@ -38,7 +38,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-[Full example](/mistral.rs/examples/server/qwen3-vl/).
+[Full example](/examples/server/qwen3-vl/).
 
 </TabItem>
 <TabItem label="Python">
@@ -67,7 +67,7 @@ response = runner.send_chat_completion_request(
 print(response.choices[0].message.content)
 ```
 
-[Full example](/mistral.rs/examples/python/qwen3-vl/).
+[Full example](/examples/python/qwen3-vl/).
 
 </TabItem>
 <TabItem label="Rust">
@@ -84,7 +84,7 @@ let messages = MultimodalMessages::new()
 let response = model.send_chat_request(messages).await?;
 ```
 
-`add_audio_message` and `add_video_message` follow the same shape; `add_multimodal_message` mixes all three. [Full example](/mistral.rs/examples/rust/models/multimodal-models/).
+`add_audio_message` and `add_video_message` follow the same shape; `add_multimodal_message` mixes all three. [Full example](/examples/rust/models/multimodal-models/).
 
 </TabItem>
 </Tabs>
@@ -124,15 +124,15 @@ Send video with `--video` on the CLI or a `video_url` part over HTTP/SDKs:
 }
 ```
 
-Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/mistral.rs/guides/models/video-setup/).
+Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/guides/models/video-setup/).
 
 The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
 
-Qwen3-VL, Gemma 4, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/mistral.rs/reference/supported-models/) for per-model modality support. [Full example](/mistral.rs/examples/server/gemma4-video/).
+Qwen3-VL, Gemma 4, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/reference/supported-models/) for per-model modality support. [Full example](/examples/server/gemma4-video/).
 
 ## Audio
 
-Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral accept `audio_url` parts (Voxtral is the dedicated audio-understanding model; see [speech models](/mistral.rs/guides/models/use-speech-models/)).
+Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral accept `audio_url` parts (Voxtral is the dedicated audio-understanding model; see [speech models](/guides/models/use-speech-models/)).
 
 ```json
 {
@@ -144,7 +144,7 @@ Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O,
 }
 ```
 
-WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. [Full example](/mistral.rs/examples/python/phi4mm-audio/).
+WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. [Full example](/examples/python/phi4mm-audio/).
 
 ## In-memory images from Python
 
@@ -184,7 +184,7 @@ messages = [{
 }]
 ```
 
-Which modalities a given model accepts is listed in the [supported models reference](/mistral.rs/reference/supported-models/).
+Which modalities a given model accepts is listed in the [supported models reference](/reference/supported-models/).
 
 ## Preprocessing
 

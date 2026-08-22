@@ -140,7 +140,7 @@ jobs:
       - name: Check for docs/*.md links outside docs/
         run: |
           if grep -rn '(docs/[^)]*\.md' --include='*.md' --exclude-dir=docs .; then
-            echo "::error::Found docs/*.md links outside docs/ directory. Use https://ericlbuehler.github.io/mistral.rs/ URLs instead."
+            echo "::error::Found docs/*.md links outside docs/ directory. Use https://docs.mistralrs.dev/ URLs instead."
             exit 1
           fi
 

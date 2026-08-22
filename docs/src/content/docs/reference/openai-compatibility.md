@@ -3,7 +3,7 @@ title: OpenAI compatibility
 description: Which OpenAI API fields mistralrs implements, which it extends, and which it does not support.
 ---
 
-mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/guides/serve/openai-compatible-apis/).
 
 ## Chat Completions fields
 
@@ -29,10 +29,10 @@ Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v
 ### Implemented with deviation
 
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
-- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
 - `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
-- `response_format` with `json_schema`: supported; output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/mistral.rs/guides/serve/structured-output/).
+- `response_format` with `json_schema`: supported; output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/guides/serve/structured-output/).
 
 ### Silently ignored
 
@@ -79,7 +79,7 @@ Use Responses when the client:
 - needs polling or background processing,
 - needs cancellation.
 
-Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/mistral.rs/guides/serve/coding-agents/).
+Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/guides/serve/coding-agents/).
 
 ### Implemented
 
@@ -136,7 +136,7 @@ curl http://localhost:1234/v1/responses \
   }'
 ```
 
-Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X POST http://localhost:1234/v1/responses/<id>/cancel`. Streaming event names are in the [HTTP API semantics page](/mistral.rs/reference/http-api/#streaming-responses); full schemas in the [generated reference](/mistral.rs/reference/http-api-generated/).
+Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X POST http://localhost:1234/v1/responses/<id>/cancel`. Streaming event names are in the [HTTP API semantics page](/reference/http-api/#streaming-responses); full schemas in the [generated reference](/reference/http-api-generated/).
 
 ## Completions (legacy)
 
@@ -176,7 +176,7 @@ OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` a
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/mistral.rs/guides/models/use-speech-models/).
+Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/guides/models/use-speech-models/).
 
 ## Moderation
 

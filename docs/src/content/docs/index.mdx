@@ -7,7 +7,7 @@ hero:
   tagline: A single binary for local inference, OpenAI-compatible serving, Anthropic-compatible Messages serving, and agentic workloads.
   actions:
     - text: Get started
-      link: /mistral.rs/quickstart/
+      link: /quickstart/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/EricLBuehler/mistral.rs
@@ -22,57 +22,57 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 <CardGrid>
   <LinkCard
     title="Quickstart"
-    href="/mistral.rs/quickstart/"
+    href="/quickstart/"
     description="Install the CLI, chat with a model, and serve an API in ten minutes."
   />
   <LinkCard
     title="Serve an OpenAI-compatible API"
-    href="/mistral.rs/guides/serve/openai-compatible-apis/"
+    href="/guides/serve/openai-compatible-apis/"
     description="Expose a model through OpenAI-compatible endpoints and the Anthropic Messages API."
   />
   <LinkCard
     title="Run models"
-    href="/mistral.rs/guides/models/run-any-model/"
+    href="/guides/models/run-any-model/"
     description="Load Hugging Face models and local checkpoints with automatic architecture detection."
   />
   <LinkCard
     title="Run GGUF models"
-    href="/mistral.rs/guides/models/run-gguf/"
+    href="/guides/models/run-gguf/"
     description="Load a local GGUF file or select an artifact from a Hugging Face repository."
   />
   <LinkCard
     title="Quantize a model"
-    href="/mistral.rs/guides/quantization/quantize-a-model/"
+    href="/guides/quantization/quantize-a-model/"
     description="Fit larger models on the same hardware with prebuilt UQFF (Universal Quantized File Format) files or in-situ quantization."
   />
   <LinkCard
     title="Build agents"
-    href="/mistral.rs/guides/agents/"
+    href="/guides/agents/"
     description="Tool calling, file inputs, web search, code execution, shell, OpenAI-compatible Skills, Model Context Protocol (MCP), and sessions."
   />
   <LinkCard
     title="Use OpenAI-compatible Skills"
-    href="/mistral.rs/guides/agents/skills/"
+    href="/guides/agents/skills/"
     description="Upload Skills, reference them from Responses requests, and run them with shell execution."
   />
   <LinkCard
     title="Attach files to requests"
-    href="/mistral.rs/guides/agents/file-inputs/"
+    href="/guides/agents/file-inputs/"
     description="Use OpenAI-compatible uploads, input_file parts, Chat file parts, and shell/code workdir mounts."
   />
   <LinkCard
     title="Use Python"
-    href="/mistral.rs/guides/python/getting-started/"
+    href="/guides/python/getting-started/"
     description="Call models from Python without running a separate server."
   />
   <LinkCard
     title="Use Rust"
-    href="/mistral.rs/guides/rust/getting-started/"
+    href="/guides/rust/getting-started/"
     description="Embed mistral.rs in a Rust application."
   />
   <LinkCard
     title="Browse examples"
-    href="/mistral.rs/examples/"
+    href="/examples/"
     description="Runnable HTTP, Python, and Rust examples organized by topic."
   />
 </CardGrid>
@@ -84,35 +84,35 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     `mistralrs run -m <model>` works without flags. The binary infers the
     architecture and chat template from the Hugging Face repository, and
     selects the accelerator from the detected hardware.
-    [Quickstart](/mistral.rs/quickstart/)
+    [Quickstart](/quickstart/)
   </Card>
   <Card title="Quantization" icon="puzzle">
     For a GGUF repository, `--quant` selects a matching artifact. For other
     Hugging Face repositories, it loads a prebuilt
-    [UQFF](/mistral.rs/reference/uqff-format/) when available and otherwise
+    [UQFF](/reference/uqff-format/) when available and otherwise
     applies in-situ quantization.
-    [Quantization guide](/mistral.rs/guides/quantization/quantize-a-model/)
+    [Quantization guide](/guides/quantization/quantize-a-model/)
   </Card>
   <Card title="Tuning and diagnostics" icon="seti:config">
     `mistralrs tune` recommends quantization and device mapping from the model
     config and detected hardware, without loading the model. `mistralrs doctor`
     checks hardware, build features, and Hugging Face connectivity.
-    [CLI reference](/mistral.rs/reference/cli/)
+    [CLI reference](/reference/cli/)
   </Card>
   <Card title="Agents" icon="open-book">
     Local agent runtime with a server-side tool loop, file inputs, web search, code
     execution, shell, OpenAI-compatible Skills, MCP, generated media, and sessions.
-    [Agents & tools](/mistral.rs/guides/agents/)
+    [Agents & tools](/guides/agents/)
   </Card>
   <Card title="Multi-GPU" icon="seti:hex">
     Scale a model across GPUs and nodes: NCCL tensor parallelism, layer/P2P
     device mapping, multi-node NCCL, and the ring backend.
-    [Distributed inference](/mistral.rs/guides/perf/distributed-inference/)
+    [Distributed inference](/guides/perf/distributed-inference/)
   </Card>
   <Card title="Web UI" icon="laptop">
     Browser chat with reasoning blocks, tool, code, and shell call
     visualization, and inline search results.
-    [Web UI](/mistral.rs/guides/serve/with-web-ui/)
+    [Web UI](/guides/serve/with-web-ui/)
   </Card>
 </CardGrid>
 
@@ -121,27 +121,27 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 <CardGrid>
   <LinkCard
     title="CLI reference"
-    href="/mistral.rs/reference/cli/"
+    href="/reference/cli/"
     description="Every command and flag, generated from the binary."
   />
   <LinkCard
     title="HTTP API"
-    href="/mistral.rs/reference/http-api/"
+    href="/reference/http-api/"
     description="Endpoints, schemas, and streaming events."
   />
   <LinkCard
     title="Supported models"
-    href="/mistral.rs/reference/supported-models/"
+    href="/reference/supported-models/"
     description="Model families and capability tables."
   />
   <LinkCard
     title="GGUF compatibility"
-    href="/mistral.rs/reference/gguf-support/"
+    href="/reference/gguf-support/"
     description="Supported model families, file formats, and feature combinations."
   />
   <LinkCard
     title="Troubleshooting"
-    href="/mistral.rs/reference/troubleshooting/"
+    href="/reference/troubleshooting/"
     description="Symptom-indexed fixes for build and runtime issues."
   />
 </CardGrid>

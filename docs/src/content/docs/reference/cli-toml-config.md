@@ -3,7 +3,7 @@ title: TOML configuration
 description: Schema for the config file mistralrs from-config reads, with the CLI flag each key maps to.
 ---
 
-`mistralrs from-config -f <path>` reads a TOML file. The top-level `command` field selects `serve` or `run`. Every key maps to a CLI flag of the same subcommand; the mapping is listed per table below. For per-flag semantics, see the [generated CLI reference](/mistral.rs/reference/cli/).
+`mistralrs from-config -f <path>` reads a TOML file. The top-level `command` field selects `serve` or `run`. Every key maps to a CLI flag of the same subcommand; the mapping is listed per table below. For per-flag semantics, see the [generated CLI reference](/reference/cli/).
 
 ## Minimal example
 
@@ -53,9 +53,9 @@ quant = "4"
 | `jinja_explicit` | `-j`, `--jinja-explicit` | not set | Explicit Jinja template override. Per-model `jinja_explicit` also exists. |
 | `matformer_config_path` | `--matformer-config-path` | not set | MatFormer (nested-submodel) slice config (CSV/JSON). |
 | `matformer_slice_name` | `--matformer-slice-name` | not set | MatFormer slice to load. Requires `matformer_config_path`. |
-| `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/mistral.rs/guides/perf/speculative-decoding/) assistant model id or path. |
+| `mtp_model` | `--mtp-model` | not set | [MTP (multi-token prediction)](/guides/perf/speculative-decoding/) assistant model id or path. |
 | `mtp_n_predict` | `--mtp-n-predict` | not set | MTP draft tokens proposed per target step. |
-| `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
+| `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |
 | `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; `embedding-gemma` is the only accepted value. Requires `enable_search` (or `agent`). |
@@ -77,7 +77,7 @@ quant = "4"
 | `host` | `--host` | `0.0.0.0` | Bind address. |
 | `port` | `-p`, `--port` | 1234 | TCP port. |
 | `no_ui` | `--no-ui` | false | Disable the built-in web UI (mounted at `/ui` by default). |
-| `mcp_port` | `--mcp-port` | not set | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at `POST /mcp`). See [serve over MCP](/mistral.rs/guides/agents/expose-as-mcp/). |
+| `mcp_port` | `--mcp-port` | not set | Also expose the loaded model as an MCP server on this port (JSON-RPC 2.0 at `POST /mcp`). See [serve over MCP](/guides/agents/expose-as-mcp/). |
 | `max_tool_rounds` | `--max-tool-rounds` | not set | Default cap on agentic tool loop rounds. Per-request values from the HTTP API override it; the safety cap is 256 when unset. |
 | `tool_dispatch_url` | `--tool-dispatch-url` | not set | URL to POST tool calls to for server-side execution. Only configurable server-side, never per-request. |
 | `disable_access_log` | `--disable-access-log` | false | Disable info-level HTTP access logs. |
@@ -105,7 +105,7 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 
 ## `[sandbox]` section
 
-OS-level isolation for the code-execution subprocess. Mechanics and threat model: [sandbox reference](/mistral.rs/reference/sandbox/).
+OS-level isolation for the code-execution subprocess. Mechanics and threat model: [sandbox reference](/reference/sandbox/).
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
@@ -250,7 +250,7 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `quant` (CLI `--quant`, TOML key `quant`) selects a matching GGUF or [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) artifact when available. Source checkpoints without a matching UQFF use [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` evaluates explicit levels and rejects `quant = "auto"` (`--quant auto`).
+- `quant` (CLI `--quant`, TOML key `quant`) selects a matching GGUF or [UQFF (Universal Quantized File Format)](/reference/uqff-format/) artifact when available. Source checkpoints without a matching UQFF use [ISQ (in-situ quantization)](/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` evaluates explicit levels and rejects `quant = "auto"` (`--quant auto`).
 - `--calibration-file` conflicts with `--imatrix`.
 - Multimodal GGUF repositories select a projector when one compatible candidate can be identified.
   Use `mmproj` (`--mmproj`) to choose explicitly and `tok_model_id` (`--tok-model-id`) to override
@@ -269,5 +269,5 @@ Flag interactions that hold on the command line and as TOML keys:
 
 - **CORS and body limit.** Not exposed as CLI flags or TOML keys. Defaults: any origin; methods `GET`, `POST`, `PUT`, `DELETE`; allowed headers `Content-Type`, `Authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `x-request-id`; exposed headers `x-request-id`; 50 MB request body limit. Configure programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
 - **Authentication.** mistral.rs does not implement authentication. Put a reverse proxy (nginx, Caddy, Traefik) in front for auth and TLS. OpenAI-protocol clients always send `Authorization: Bearer ...` because the OpenAI SDK requires an API key; mistral.rs does not validate the header.
-- **Logging and metrics.** Access logs are written to normal server stdout/stderr by default, with request ids and route/status/latency metadata. `GET /metrics` exposes Prometheus HTTP metrics by default. See [observability](/mistral.rs/guides/deploy/observability/).
+- **Logging and metrics.** Access logs are written to normal server stdout/stderr by default, with request ids and route/status/latency metadata. `GET /metrics` exposes Prometheus HTTP metrics by default. See [observability](/guides/deploy/observability/).
 - **Payload logging.** `-v` enables debug detail and `-vv` trace-level file/cache internals; `RUST_LOG` module filters (e.g. `RUST_LOG=mistralrs_core=debug,tower_http=info`) override both. `-l <path>` logs all requests and responses to a file.

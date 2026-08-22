@@ -42,7 +42,7 @@ Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
 | CUDA 12.8+ | `cuda128-sm{cc}` |
 
 cuTile is available only on the supported CUDA lanes listed above. Install `tileiras` as described
-in [cuTile setup](/mistral.rs/developer/moe-backends/).
+in [cuTile setup](/developer/moe-backends/).
 
 CUDA compute capability variants (SM80+):
 - `80` (A100)
@@ -53,7 +53,7 @@ CUDA compute capability variants (SM80+):
 - `120` (RTX 50)
 - `121` (DGX Spark)
 
-See [hardware support](/mistral.rs/reference/hardware-support/) for the full GPU mapping.
+See [hardware support](/reference/hardware-support/) for the full GPU mapping.
 
 The CPU image is multi-arch. CUDA `90` and `100` tags are multi-arch where both variants appear in the release table, while CUDA `121` is arm64-only for DGX Spark. Docker picks the matching architecture automatically; the other CUDA tags are x86_64 only.
 
@@ -104,7 +104,7 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-13.0-ubi9 \
 
 - `Dockerfile.cuda-13.0-ubi9` builds from source on Red Hat UBI 9 and accepts `CUDA_COMPUTE_CAP` and `WITH_FEATURES`.
 - `Dockerfile.cuda-all` is not a source-build Dockerfile.
-- Release images are cuTile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [cuTile setup](/mistral.rs/developer/moe-backends/) to activate cuTile.
+- Release images are cuTile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [cuTile setup](/developer/moe-backends/) to activate cuTile.
 - Building with `flash-attn` is slow the first time; later builds use the layer cache.
 
 ## Production deployment notes
@@ -122,13 +122,13 @@ The generous `--start-period` matters: first-run model loading can take minutes.
 
 **Resource limits.** Set `--memory` and `--gpus` on `docker run` to bound the container's resources.
 
-**Video input.** Install FFmpeg inside the image when serving video-capable models. See [set up video input](/mistral.rs/guides/models/video-setup/) for the Docker snippet and runtime check.
+**Video input.** Install FFmpeg inside the image when serving video-capable models. See [set up video input](/guides/models/video-setup/) for the Docker snippet and runtime check.
 
 ## Kubernetes
 
 The pieces above translate directly:
 
-- Use a Deployment with a readiness probe hitting `/health` (or a model-aware check; see the [production checklist](/mistral.rs/guides/deploy/production-checklist/)).
+- Use a Deployment with a readiness probe hitting `/health` (or a model-aware check; see the [production checklist](/guides/deploy/production-checklist/)).
 - Mount a PersistentVolumeClaim at `/data` for the Hugging Face cache.
 - Use the NVIDIA device plugin and a `nvidia.com/gpu` resource request for CUDA.
 - Use an initContainer to pre-download weights for fast pod startup.
@@ -137,5 +137,5 @@ There is no official Helm chart. Contributions welcome.
 
 ## See also
 
-- [Production checklist](/mistral.rs/guides/deploy/production-checklist/): operational concerns regardless of container layer.
-- [Serve flag reference](/mistral.rs/reference/cli/serve/): all `mistralrs serve` options.
+- [Production checklist](/guides/deploy/production-checklist/): operational concerns regardless of container layer.
+- [Serve flag reference](/reference/cli/serve/): all `mistralrs serve` options.

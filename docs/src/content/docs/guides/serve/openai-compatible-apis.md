@@ -23,11 +23,11 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-With a single `-m` model, the request `model` is `"default"` (or omitted). In [multi-model serving](/mistral.rs/guides/serve/multiple-models/), use a model id exactly as it appears in `GET /v1/models`.
+With a single `-m` model, the request `model` is `"default"` (or omitted). In [multi-model serving](/guides/serve/multiple-models/), use a model id exactly as it appears in `GET /v1/models`.
 
-Loaded dynamic [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/) also appear in `GET /v1/models`, so vLLM-compatible clients can put the adapter alias in `model`. Chat Completions, Completions, and Responses additionally accept `adapter` as either an alias string or `{"generation":"<generation-id>"}`. Omit `adapter` and select the base model to run without LoRA. LoRA inference responses expose the exact resolved generation as `adapter_generation` for audit and retry routing.
+Loaded dynamic [LoRA adapters](/guides/customize/lora-adapters/) also appear in `GET /v1/models`, so vLLM-compatible clients can put the adapter alias in `model`. Chat Completions, Completions, and Responses additionally accept `adapter` as either an alias string or `{"generation":"<generation-id>"}`. Omit `adapter` and select the base model to run without LoRA. LoRA inference responses expose the exact resolved generation as `adapter_generation` for audit and retry routing.
 
-First time serving a model? The [Quickstart](/mistral.rs/quickstart/) walks through installation, Hugging Face authentication for gated models, and the first run.
+First time serving a model? The [Quickstart](/quickstart/) walks through installation, Hugging Face authentication for gated models, and the first run.
 
 ## OpenAI Python client
 
@@ -46,7 +46,7 @@ print(response.choices[0].message.content)
 
 For a loaded LoRA alias, either set `model="code"` like vLLM or keep the base model explicit and pass `extra_body={"adapter": "code"}`. The latter also accepts an exact generation object.
 
-The `api_key` is required by the client but not validated by the server; see [authentication](/mistral.rs/reference/http-api/#authentication). Set `stream=True` for token-by-token output ([full example](/mistral.rs/examples/server/streaming/)).
+The `api_key` is required by the client but not validated by the server; see [authentication](/reference/http-api/#authentication). Set `stream=True` for token-by-token output ([full example](/examples/server/streaming/)).
 
 ## Endpoints
 
@@ -58,7 +58,7 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `POST /v1/skills` | Upload Skills for OpenAI-compatible Responses or Anthropic-compatible Messages. |
 | `GET /v1/skills` | List uploaded skills. Anthropic headers return Anthropic-shaped list objects. |
 | `GET, POST /v1/skills/{skill_id}/versions` | List or upload versions of an existing skill. |
-| `POST /v1/messages` | [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/) (base URL without `/v1`). |
+| `POST /v1/messages` | [Anthropic Messages API](/guides/serve/anthropic-messages-api/) (base URL without `/v1`). |
 | `POST /v1/completions` | Legacy text completions. |
 | `POST /v1/embeddings` | Embedding generation. |
 | `POST /v1/images/generations` | Image generation. |
@@ -69,7 +69,7 @@ The `api_key` is required by the client but not validated by the server; see [au
 | `GET /v1/lora_adapters` | List loaded LoRA aliases, generations, and capacity. The route is always registered, but the target model must have dynamic LoRA enabled. Use `?model=<model-id>` in a multi-model server. |
 | `POST /v1/unload_lora_adapter` | Unload a LoRA alias. Available only when runtime updating is enabled. |
 
-Every path with full request and response schemas is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/mistral.rs/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
+Every path with full request and response schemas is in the [generated HTTP API reference](/reference/http-api-generated/). Streaming events, authentication, and protocol semantics are in the [HTTP API reference](/reference/http-api/); field-level compatibility notes (including Responses API restrictions) are in [OpenAI compatibility](/reference/openai-compatibility/).
 
 :::caution[Compatibility gaps]
 Most OpenAI-compatible fields work, but a few common ones have limitations:
@@ -81,28 +81,28 @@ Most OpenAI-compatible fields work, but a few common ones have limitations:
 - File inputs support uploaded ids, inline base64/Data URLs, and Responses `file_url`, but binary formats are not converted with OpenAI's private PDF/image/spreadsheet extraction pipeline.
 - `dimensions` (embeddings) - errors rather than truncating.
 
-Full list in [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/).
+Full list in [OpenAI compatibility](/reference/openai-compatibility/).
 :::
 
 A live Swagger UI for the running server is at `http://localhost:1234/docs`.
 
 ## Tools, structured output, and agentic features
 
-OpenAI-compatible function tools work on Chat Completions and Responses, including `strict: true` for JSON-Schema-constrained tool arguments. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+OpenAI-compatible function tools work on Chat Completions and Responses, including `strict: true` for JSON-Schema-constrained tool arguments. See [tool calling](/guides/agents/tool-calling-basics/).
 
-`response_format` with `json_schema` and the `grammar` extension constrain output server-side. See [structured output](/mistral.rs/guides/serve/structured-output/).
+`response_format` with `json_schema` and the `grammar` extension constrain output server-side. See [structured output](/guides/serve/structured-output/).
 
-Start the server with agentic capabilities to use server-side tools and agentic fields. Chat Completions uses `web_search_options` for web search and `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` for code execution. Responses uses hosted tools in the `tools` array for web search, code execution, shell, and [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/).
+Start the server with agentic capabilities to use server-side tools and agentic fields. Chat Completions uses `web_search_options` for web search and `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]` for code execution. Responses uses hosted tools in the `tools` array for web search, code execution, shell, and [OpenAI-compatible Skills](/guides/agents/skills/).
 
 ```bash
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-For tool timelines, generated files, search, code execution, shell, Skills, and session state, see [agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/).
+For tool timelines, generated files, search, code execution, shell, Skills, and session state, see [agentic runtime for apps](/guides/agents/agentic-runtime/).
 
 ## Configuration
 
-`-p/--port` (default 1234) and `--host` (default `0.0.0.0`) control the bind address. `--no-ui` disables the [web UI](/mistral.rs/guides/serve/with-web-ui/) at `/ui`. All flags are in the [CLI reference](/mistral.rs/reference/cli/serve/); the equivalent config file for multi-model, repeatable deployments is the [TOML config reference](/mistral.rs/reference/cli-toml-config/), which also covers CORS, body limits, authentication, and logging.
+`-p/--port` (default 1234) and `--host` (default `0.0.0.0`) control the bind address. `--no-ui` disables the [web UI](/guides/serve/with-web-ui/) at `/ui`. All flags are in the [CLI reference](/reference/cli/serve/); the equivalent config file for multi-model, repeatable deployments is the [TOML config reference](/reference/cli-toml-config/), which also covers CORS, body limits, authentication, and logging.
 
 :::caution
 The default `--host 0.0.0.0` accepts connections from any host on the network. Use `--host 127.0.0.1` to restrict to the local machine, and put authentication in a reverse proxy before exposing the server.
@@ -110,21 +110,21 @@ The default `--host 0.0.0.0` accepts connections from any host on the network. U
 
 ## Examples
 
-Runnable client scripts live in `examples/server/` and render under [server examples](/mistral.rs/examples/):
+Runnable client scripts live in `examples/server/` and render under [server examples](/examples/):
 
 | Example | What it shows |
 |---|---|
-| [chat](/mistral.rs/examples/server/chat/) | Basic Chat Completions request. |
-| [streaming](/mistral.rs/examples/server/streaming/) | Chat Completions streaming. |
-| [tool_calling](/mistral.rs/examples/server/tool-calling/) | OpenAI-compatible function tools. |
-| [allowed_tools](/mistral.rs/examples/server/allowed-tools/) | OpenAI-compatible `allowed_tools` function subset selection. |
-| [openai_response_format](/mistral.rs/examples/server/openai-response-format/) | Structured output via `response_format`. |
-| [responses](/mistral.rs/examples/server/responses/) | Responses API request. |
-| [responses_tools](/mistral.rs/examples/server/responses-tools/) | Responses hosted tools: web search and code interpreter. |
-| [skills](/mistral.rs/examples/server/skills/) | OpenAI-compatible Skills upload and execution. |
-| [responses_vision](/mistral.rs/examples/server/responses-vision/) | Responses API with image input. |
-| [web_search](/mistral.rs/examples/server/web-search/) | Search through OpenAI-compatible request fields. |
-| [anthropic_chat](/mistral.rs/examples/server/anthropic-chat/) | Anthropic Messages request. |
-| [multi_model_chat](/mistral.rs/examples/server/multi-model-chat/) | Routing requests across loaded models. |
+| [chat](/examples/server/chat/) | Basic Chat Completions request. |
+| [streaming](/examples/server/streaming/) | Chat Completions streaming. |
+| [tool_calling](/examples/server/tool-calling/) | OpenAI-compatible function tools. |
+| [allowed_tools](/examples/server/allowed-tools/) | OpenAI-compatible `allowed_tools` function subset selection. |
+| [openai_response_format](/examples/server/openai-response-format/) | Structured output via `response_format`. |
+| [responses](/examples/server/responses/) | Responses API request. |
+| [responses_tools](/examples/server/responses-tools/) | Responses hosted tools: web search and code interpreter. |
+| [skills](/examples/server/skills/) | OpenAI-compatible Skills upload and execution. |
+| [responses_vision](/examples/server/responses-vision/) | Responses API with image input. |
+| [web_search](/examples/server/web-search/) | Search through OpenAI-compatible request fields. |
+| [anthropic_chat](/examples/server/anthropic-chat/) | Anthropic Messages request. |
+| [multi_model_chat](/examples/server/multi-model-chat/) | Routing requests across loaded models. |
 
-For Codex and Claude Code setup, see [coding agents](/mistral.rs/guides/serve/coding-agents/).
+For Codex and Claude Code setup, see [coding agents](/guides/serve/coding-agents/).

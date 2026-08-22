@@ -130,7 +130,7 @@ pub enum AgentToolApprovalDecisionKindPy {
 /// OS-level sandbox policy for the code-execution subprocess.
 /// `None` for `sandbox_policy` on [`CodeExecutionConfig`] disables the
 /// sandbox; constructing a `SandboxPolicy` enables it with the given limits.
-/// See the [sandbox reference](/mistral.rs/reference/sandbox/) for layer
+/// See the [sandbox reference](/reference/sandbox/) for layer
 /// details.
 #[pyclass]
 #[derive(Clone, Debug)]

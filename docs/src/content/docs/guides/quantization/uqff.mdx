@@ -23,7 +23,7 @@ mistralrs run -m <repo> --from-uqff q4k-0.uqff
 ```
 
 `-m <repo>` is required for tokenizer/base resolution. `--from-uqff` accepts a numeric shorthand
-(`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/)
+(`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/reference/quantization-types/)
 type name (`q4k`, `afq8`, etc.) in place of a filename.
 
 For locally-stored UQFF files, `-m` can be the local directory and `--from-uqff` the filename.
@@ -68,8 +68,8 @@ filenames.
 UQFF models work under tensor parallelism: each rank loads only its slice of the quantized
 weights.
 
-Full example: [Rust](/mistral.rs/examples/rust/quantization/uqff/),
-[multimodal](/mistral.rs/examples/rust/quantization/uqff-multimodal/).
+Full example: [Rust](/examples/rust/quantization/uqff/),
+[multimodal](/examples/rust/quantization/uqff-multimodal/).
 
 ## Producing a UQFF
 
@@ -120,12 +120,12 @@ writes both `afq4.uqff` and `q4k.uqff`).
 When `write_uqff` is used from the Rust or Python SDK and the session keeps serving, the
 in-memory model runs as the first requested type.
 
-A [topology](/mistral.rs/guides/perf/topology/) can pin specific layers to a different type
+A [topology](/guides/perf/topology/) can pin specific layers to a different type
 (e.g. keep `lm_head` at `q8_0` in an otherwise Q4K file); pins are preserved in every output
 variant.
 
 Sensitive token embeddings and output heads follow the higher-precision defaults in the
-[quantization type reference](/mistral.rs/reference/quantization-types/). For example, AFQ4 uses
+[quantization type reference](/reference/quantization-types/). For example, AFQ4 uses
 AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
 type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
 precedence. This promotion applies to the language model's embeddings and output head, not its
@@ -172,10 +172,10 @@ mistralrs uqff inspect -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3
 
 K-quant output quality can be improved with an importance matrix: pass `--imatrix <file>`
 (llama.cpp `.imatrix` files work directly) or `--calibration-file <path>` to `quantize`. See
-[imatrix background](/mistral.rs/guides/quantization/quantize-a-model/#imatrix).
+[imatrix background](/guides/quantization/quantize-a-model/#imatrix).
 
-All `quantize` flags: [CLI reference](/mistral.rs/reference/cli/quantize/).
+All `quantize` flags: [CLI reference](/reference/cli/quantize/).
 
 ## Format details
 
-Layout and versioning: [UQFF format reference](/mistral.rs/reference/uqff-format/).
+Layout and versioning: [UQFF format reference](/reference/uqff-format/).

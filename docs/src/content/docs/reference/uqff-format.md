@@ -3,7 +3,7 @@ title: UQFF format
 description: Layout of the UQFF quantized model file format.
 ---
 
-UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/mistral.rs/guides/quantization/uqff/); knowledge of the layout is not required.
+UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/guides/quantization/uqff/); knowledge of the layout is not required.
 
 :::caution
 UQFF 1.x is not compatible with files produced by earlier mistral.rs releases (pre-1.0). Old files will fail with an error; regenerate them with `mistralrs quantize`.
@@ -23,7 +23,7 @@ A loader is pointed at one or more shard files (`from_uqff`); the residual safet
 
 Each `.uqff` shard is a standard safetensors file with named entries. Every quantized layer is self-describing:
 
-- `<key>.weight` - the layer data (raw blocks for GGML-family types, packed tensors for AFQ/MXFP4/FP8, or a native safetensors tensor for unquantized fallback layers; see [quantization types](/mistral.rs/reference/quantization-types/)).
+- `<key>.weight` - the layer data (raw blocks for GGML-family types, packed tensors for AFQ/MXFP4/FP8, or a native safetensors tensor for unquantized fallback layers; see [quantization types](/reference/quantization-types/)).
 - `<key>.weight.format` - a u8 tag naming the quantization family, used to dispatch the deserializer.
 - Family-specific metadata next to it, e.g. `<key>.weight.dtype` and `<key>.weight.shape` for GGML types, `<key>.weight.scales`/`.bits`/`.group_size` for AFQ.
 - `<key>.bias` when the layer has one.
@@ -34,13 +34,13 @@ Safetensors metadata includes informational producer fields: `uqff.producer`, `u
 
 Because every layer self-describes, a single file may mix quantization types. Two cases produce a mixed file:
 
-- Topology-pinned layers (assigned a specific type by a [topology](/mistral.rs/guides/perf/topology/) config) keep their pinned type.
-- Model-declared language token embeddings and output heads use the higher-precision default documented in [quantization types](/mistral.rs/reference/quantization-types/). For example, an `afq4` shard set stores those tensors as AFQ6, while a `q4k` shard set stores them as Q6K. Each loader supplies exact paths, so similarly named auxiliary tensors are not promoted implicitly.
+- Topology-pinned layers (assigned a specific type by a [topology](/guides/perf/topology/) config) keep their pinned type.
+- Model-declared language token embeddings and output heads use the higher-precision default documented in [quantization types](/reference/quantization-types/). For example, an `afq4` shard set stores those tensors as AFQ6, while a `q4k` shard set stores them as Q6K. Each loader supplies exact paths, so similarly named auxiliary tensors are not promoted implicitly.
 - Layers whose shape cannot support the requested type fall back per-layer. For example, AFQ layers whose input dimension is not divisible by the AFQ group size are stored unquantized.
 
 ## Sharding
 
-The writer splits the tensor stream into `<stem>-0.uqff`, `<stem>-1.uqff`, ... with a soft cap of 10 GiB per shard. Multiple [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) types in one run produce one shard set per type (`q4k-0.uqff`, `afq4-0.uqff`, ...) sharing the residual and assets.
+The writer splits the tensor stream into `<stem>-0.uqff`, `<stem>-1.uqff`, ... with a soft cap of 10 GiB per shard. Multiple [ISQ (in-situ quantization)](/reference/quantization-types/) types in one run produce one shard set per type (`q4k-0.uqff`, `afq4-0.uqff`, ...) sharing the residual and assets.
 
 ## Version compatibility
 

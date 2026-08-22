@@ -17,7 +17,7 @@ mistralrs serve --agent -m <model>
 
 `--agent` is the recommended way to run Skills because it turns on the full local agent runtime: web search, Python code execution, and shell execution. Skills require the shell executor, so the minimum server flag is `--enable-shell`; use it only when you want Skills without the other agentic tools.
 
-For executor flags, sandboxing, and approvals, see [shell execution](/mistral.rs/guides/agents/enable-shell/) and [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+For executor flags, sandboxing, and approvals, see [shell execution](/guides/agents/enable-shell/) and [permissions and approvals](/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/guides/agents/file-inputs/).
 
 ## Compatibility surface
 
@@ -99,7 +99,7 @@ response = client.responses.create(
 print(response.output_text)
 ```
 
-[Full server example](/mistral.rs/examples/server/skills/)
+[Full server example](/examples/server/skills/)
 
 To upload a new version of an existing skill, post another zip to `/skills/{skill_id}/versions` with the same `client.post(..., files=...)` pattern. Requests can reference `"version": "latest"` or a specific version.
 
@@ -142,7 +142,7 @@ with urllib.request.urlopen(request) as response:
     print(json.loads(response.read().decode("utf-8")))
 ```
 
-[Full server example](/mistral.rs/examples/server/anthropic-skills/)
+[Full server example](/examples/server/anthropic-skills/)
 
 To list uploaded custom Skills with Anthropic-shaped objects, call
 `GET /v1/skills?source=custom` with `anthropic-version: 2023-06-01` and
@@ -176,7 +176,7 @@ resp = runner.send_chat_completion_request(
 print(resp.choices[0].message.content)
 ```
 
-[Full example](/mistral.rs/examples/python/shell-skills/)
+[Full example](/examples/python/shell-skills/)
 
 </TabItem>
 <TabItem label="Rust SDK">
@@ -203,7 +203,7 @@ let resp = model.send_chat_request(req).await?;
 println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 ```
 
-[Full example](/mistral.rs/examples/rust/advanced/shell-skills/)
+[Full example](/examples/rust/advanced/shell-skills/)
 
 </TabItem>
 </Tabs>
@@ -212,11 +212,11 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 Uploaded skills are stored under `--skills-dir`, which defaults to the system temp directory. Each upload receives a `skill_...` id and version metadata. The server stores the uploaded version once, then copies only the skills referenced by a request into that request's shell session working directory.
 
-The shell working directory is still controlled by `--shell-workdir`; without it, each session uses a per-session temp directory. Session state, tool records, and generated files follow the same lifecycle described in [persist sessions](/mistral.rs/guides/agents/persist-sessions/).
+The shell working directory is still controlled by `--shell-workdir`; without it, each session uses a per-session temp directory. Session state, tool records, and generated files follow the same lifecycle described in [persist sessions](/guides/agents/persist-sessions/).
 
 ## See also
 
-- [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/): exact supported fields and known gaps.
-- [Shell execution](/mistral.rs/guides/agents/enable-shell/): executor configuration and sandboxing.
-- [Build an agent](/mistral.rs/guides/agents/build-an-agent/): combine search, code execution, shell, files, Skills, and sessions.
-- Examples: [server upload](/mistral.rs/examples/server/skills/), [Python local mount](/mistral.rs/examples/python/shell-skills/), [Rust local mount](/mistral.rs/examples/rust/advanced/shell-skills/).
+- [OpenAI compatibility](/reference/openai-compatibility/): exact supported fields and known gaps.
+- [Shell execution](/guides/agents/enable-shell/): executor configuration and sandboxing.
+- [Build an agent](/guides/agents/build-an-agent/): combine search, code execution, shell, files, Skills, and sessions.
+- Examples: [server upload](/examples/server/skills/), [Python local mount](/examples/python/shell-skills/), [Rust local mount](/examples/rust/advanced/shell-skills/).

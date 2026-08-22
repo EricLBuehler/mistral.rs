@@ -17,7 +17,7 @@ If you are upgrading from mistral.rs 0.9.0 or older, see [the migration table](#
 | Legacy LoRA | GGML and Phi3 GGUF | One static adapter configuration | No |
 | X-LoRA | Compatible plain and GGML text models, plus Phi3 GGUF | Learned per-token mixture | No |
 
-For GGUF file and projector selection, see [Run GGUF models](/mistral.rs/guides/models/run-gguf/). The [GGUF support reference](/mistral.rs/reference/gguf-support/) summarizes adapter and multimodal boundaries.
+For GGUF file and projector selection, see [Run GGUF models](/guides/models/run-gguf/). The [GGUF support reference](/reference/gguf-support/) summarizes adapter and multimodal boundaries.
 
 ## Enable and preload LoRA
 
@@ -41,7 +41,7 @@ mistralrs serve \
 ```
 
 The alias, request-routing, and lifecycle APIs below also apply to GGUF. Model files and companion
-projectors follow the [GGUF selection rules](/mistral.rs/guides/models/run-gguf/).
+projectors follow the [GGUF selection rules](/guides/models/run-gguf/).
 
 Aliases are trimmed, case-sensitive, nonempty UTF-8 strings of at most 256 bytes.
 
@@ -136,7 +136,7 @@ let response = model
 </Tabs>
 
 Python and Rust require an exact GGUF filename. The
-[GGUF guide](/mistral.rs/guides/models/run-gguf/) covers automatic CLI selection.
+[GGUF guide](/guides/models/run-gguf/) covers automatic CLI selection.
 
 <Tabs>
 <TabItem label="Python">
@@ -387,7 +387,7 @@ Runtime-loaded aliases do not survive a server restart or model reload; put requ
 | CUDA | Ordinary and routed expert LoRA are supported. |
 | Metal and CPU | Ordinary and routed expert LoRA are supported. |
 | Tensor parallelism | Preloading is supported; live load, replace, and unload are not. |
-| GGUF and GGML | GGUF supports dynamic LoRA for compatible language-model adapters. GGML uses legacy mode. See [GGUF support](/mistral.rs/reference/gguf-support/) for legacy and multimodal boundaries. |
+| GGUF and GGML | GGUF supports dynamic LoRA for compatible language-model adapters. GGML uses legacy mode. See [GGUF support](/reference/gguf-support/) for legacy and multimodal boundaries. |
 | Speculative decoding | Dynamic LoRA attachment is not supported. |
 | Unsupported adapter variants | DoRA, aLoRA, QALoRA, BD-LoRA, Arrow, MonteCLoRA, adapter bias, `modules_to_save`, layer replication, non-expert `target_parameters`, weight tying, trainable-token indices, Megatron configuration, and adapters that modify embeddings or the output head. |
 | Base-transforming initializers | Configurations retaining `pissa`, `pissa_niter_*`, `olora`, `corda`, `loftq`, or `lora_ga` in `init_lora_weights` are rejected. Convert the result to an ordinary LoRA adapter for the original base before loading it. |
@@ -407,7 +407,7 @@ mistralrs bench -m <base-model> --lora code=<adapter-repo> --adapter code \
 
 The CLI benchmark reports TTFT and TPOT for one sequence. Its numbers do not characterize mixed-adapter server batching. Measure production workloads through the HTTP server with the same model, adapter ranks, prompt/decode lengths, concurrency, and sampling settings when comparing against another runtime.
 
-Full examples: [lora](/mistral.rs/examples/python/lora/) (Python), [lora](/mistral.rs/examples/rust/advanced/lora/) (Rust), and [adapter-chat](/mistral.rs/examples/server/adapter-chat/) (HTTP).
+Full examples: [lora](/examples/python/lora/) (Python), [lora](/examples/rust/advanced/lora/) (Rust), and [adapter-chat](/examples/server/adapter-chat/) (HTTP).
 
 ## Migrating from mistral.rs 0.9.0 and older
 
@@ -417,7 +417,7 @@ Dynamic LoRA replaces the ordinary-LoRA API from mistral.rs 0.9.0 and older. The
 |---|---|
 | Plain/safetensors `--lora "repo-a;repo-b"` | Repeat `--lora alias=repo` and select one alias with `--adapter`, the request `adapter` field, or an adapter model ID. |
 | Raw GGUF/GGML `--lora <source>` | For GGUF, use `--lora alias=source` and select the alias dynamically. For GGML or a compatible static GGUF configuration, use `--legacy-lora <source> --legacy-lora-order <ordering-file.json>`; the [ordering JSON](#legacy-raw-lora) is required. |
-| Plain/safetensors TOML `lora = "repo"` | Use the structured `adapter.lora` list shown in the [TOML reference](/mistral.rs/reference/cli-toml-config/). |
+| Plain/safetensors TOML `lora = "repo"` | Use the structured `adapter.lora` list shown in the [TOML reference](/reference/cli-toml-config/). |
 | Raw GGUF/GGML TOML LoRA fields | For GGUF, use the structured dynamic `lora` entries under `[models.adapter]`. Use `legacy_lora` with `legacy_lora_order` for GGML or a compatible static GGUF configuration. |
 | Python `Which.Lora(adapter_model_ids, model_id=...)` | `Which.Lora(model_id, adapters=[LoraAdapter(alias=..., source=...)])`. |
 | Rust `LoraModelBuilder::from_text_model_builder(builder, adapter_ids)` | Start with `LoraModelBuilder::from_text_model_builder(builder)`, then call `with_adapter` or `with_adapter_revision`. |
@@ -482,7 +482,7 @@ Python uses `invalid_lora_generation` when `expected_generation` is not a value 
 
 GGUF supports dynamic LoRA for compatible language-model adapters. Legacy mode remains available
 for GGML and the static GGUF configurations listed in the
-[GGUF support reference](/mistral.rs/reference/gguf-support/).
+[GGUF support reference](/reference/gguf-support/).
 
 Use the ordering JSON published with the raw adapter when one is available. For a single adapter without a supplied file, the minimum shape is:
 
@@ -547,7 +547,7 @@ let model = XLoraModelBuilder::from_text_model_builder(
 </TabItem>
 </Tabs>
 
-Full examples: [xlora-zephyr](/mistral.rs/examples/python/xlora-zephyr/) (Python), [xlora](/mistral.rs/examples/rust/advanced/xlora/) (Rust).
+Full examples: [xlora-zephyr](/examples/python/xlora-zephyr/) (Python), [xlora](/examples/rust/advanced/xlora/) (Rust).
 
 ## AnyMoE
 
@@ -556,6 +556,6 @@ AnyMoE composes several compatible fine-tunes of the same base model into a MoE 
 - It is exposed through the Rust SDK (`AnyMoeModelBuilder`) and the Python SDK (`AnyMoeConfig`, `AnyMoeExpertType`); it is not configurable via the CLI.
 - Expert checkpoints must share the base model architecture, and a small JSON calibration dataset is required to train the router.
 - Dynamic per-request LoRA cannot wrap an AnyMoE pipeline. LoRA-backed AnyMoE experts remain supported through the AnyMoE expert configuration.
-- See the [AnyMoE Python reference](/mistral.rs/reference/python/anymoe/) for configuration fields.
+- See the [AnyMoE Python reference](/reference/python/anymoe/) for configuration fields.
 
-Full examples: [anymoe](/mistral.rs/examples/python/anymoe/) (Python), [anymoe](/mistral.rs/examples/rust/advanced/anymoe/) and [anymoe-lora](/mistral.rs/examples/rust/advanced/anymoe-lora/) (Rust).
+Full examples: [anymoe](/examples/python/anymoe/) (Python), [anymoe](/examples/rust/advanced/anymoe/) and [anymoe-lora](/examples/rust/advanced/anymoe-lora/) (Rust).

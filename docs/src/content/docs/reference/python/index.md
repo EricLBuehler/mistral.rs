@@ -9,7 +9,7 @@ The `mistralrs` Python package exposes the same engine that powers the `mistralr
 
 ## Install
 
-`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.
+`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/guides/python/getting-started/#installing) for install commands and [hardware support](/reference/hardware-support/) for compute capabilities.
 
 ```bash
 pip install mistralrs                                   # CPU / Metal (PyPI)
@@ -22,20 +22,20 @@ pip install "mistralrs==0.9.2+cuda128.sm89" \
 
 | Page | Covers |
 | --- | --- |
-| [Runner](/mistral.rs/reference/python/runner/) | The main entry point. Load a model and send requests. |
-| [Which](/mistral.rs/reference/python/which/) | Variants that select which kind of model to load. |
-| [Requests](/mistral.rs/reference/python/requests/) | Request dataclasses passed to Runner methods. |
-| [Responses](/mistral.rs/reference/python/responses/) | Response and streaming types returned by the engine. |
-| [Enums](/mistral.rs/reference/python/enums/) | Architecture, dtype, and option enums. |
-| [Search](/mistral.rs/reference/python/search/) | Types for web-search tool configuration. |
-| [AnyMoE](/mistral.rs/reference/python/anymoe/) | AnyMoE expert and config types. |
-| [Code and shell execution](/mistral.rs/reference/python/code-execution/) | Configuration for the built-in Python and shell executors. |
-| [Agent approvals](/mistral.rs/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
-| [Files](/mistral.rs/reference/python/files/) | Input files and first-class output files surfaced from agentic runs. |
-| [MCP](/mistral.rs/reference/python/mcp/) | MCP client configuration types. |
-| [Auto-mapping](/mistral.rs/reference/python/automap/) | Hints for automatic device mapping. |
+| [Runner](/reference/python/runner/) | The main entry point. Load a model and send requests. |
+| [Which](/reference/python/which/) | Variants that select which kind of model to load. |
+| [Requests](/reference/python/requests/) | Request dataclasses passed to Runner methods. |
+| [Responses](/reference/python/responses/) | Response and streaming types returned by the engine. |
+| [Enums](/reference/python/enums/) | Architecture, dtype, and option enums. |
+| [Search](/reference/python/search/) | Types for web-search tool configuration. |
+| [AnyMoE](/reference/python/anymoe/) | AnyMoE expert and config types. |
+| [Code and shell execution](/reference/python/code-execution/) | Configuration for the built-in Python and shell executors. |
+| [Agent approvals](/reference/python/agent-approvals/) | Request and decision types for agent action approval callbacks. |
+| [Files](/reference/python/files/) | Input files and first-class output files surfaced from agentic runs. |
+| [MCP](/reference/python/mcp/) | MCP client configuration types. |
+| [Auto-mapping](/reference/python/automap/) | Hints for automatic device mapping. |
 
-See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes.
+See [Python getting started](/guides/python/getting-started/) for a walkthrough and the [Python guides](/guides/python/) for task-oriented recipes.
 
 ---
 

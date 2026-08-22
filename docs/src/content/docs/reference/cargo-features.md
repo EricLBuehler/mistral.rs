@@ -9,11 +9,11 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 
 | Feature | Crates | Purpose |
 |---|---|---|
-| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA CUDA acceleration, including [paged attention](/mistral.rs/guides/perf/paged-attention/). |
+| `cuda` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-server-core` | NVIDIA CUDA acceleration, including [paged attention](/guides/perf/paged-attention/). |
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
 | `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
-| `cutile` | `mistralrs-cli`, `mistralrs-core` | Optional cuTile acceleration for MoE and routed LoRA. Requires CUDA >= 13.2 on Ampere/Ada and Blackwell+, CUDA >= 13.3 on Hopper, and a compatible `tileiras` installation. See [cuTile setup](/mistral.rs/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
+| `cutile` | `mistralrs-cli`, `mistralrs-core` | Optional cuTile acceleration for MoE and routed LoRA. Requires CUDA >= 13.2 on Ampere/Ada and Blackwell+, CUDA >= 13.3 on Hopper, and a compatible `tileiras` installation. See [cuTile setup](/developer/moe-backends/). Not exposed by the top-level `mistralrs` crate. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |

@@ -24,19 +24,19 @@ The UI provides:
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
+See [tool calling](/guides/agents/tool-calling-basics/) for what `--agent` enables and the individual flags behind it.
 
 When the model calls a tool, the UI renders a collapsed block in the conversation. Expanding shows the tool arguments and result. Search blocks display the query and a result count; code-execution blocks display the executed Python and any output or images; shell blocks display the commands, stdout/stderr, and exit status.
 
 The settings drawer controls search, code execution, shell, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
-On Linux and macOS, code and shell execution use the default [OS-level sandbox](/mistral.rs/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/mistral.rs/guides/agents/enable-code-execution/) and [enable shell execution](/mistral.rs/guides/agents/enable-shell/).
+On Linux and macOS, code and shell execution use the default [OS-level sandbox](/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
 
 ## With multimodal models
 
 When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image sends an `image_url` content part (`{"type": "image_url", "image_url": {"url": "..."}}`). Audio and video work the same on supporting models.
 
-Modality support per model is in the [supported models reference](/mistral.rs/reference/supported-models/).
+Modality support per model is in the [supported models reference](/reference/supported-models/).
 
 ## System prompt and sampling
 
