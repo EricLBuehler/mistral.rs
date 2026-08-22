@@ -8,6 +8,7 @@
 use std::sync::atomic::Ordering;
 
 use candle_core::{IndexOp, Result, Tensor};
+use rand::Rng;
 
 use crate::{
     attention::AttentionMask,
@@ -16,11 +17,13 @@ use crate::{
     layers_masker::CausalMaskConfig,
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
-        dflash::DFlashDraftModel, paged_rows::make_paged_rows_metadata,
-        proposer::sample_draft_rows, SpeculativeAttachInfo, SpeculativeBatchPlan,
-        SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState,
-        SpeculativeKvCache, SpeculativePrefillCtx, SpeculativeProposal, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeTargetMixin, TargetAttentionInputs,
+        dflash::{DFlashDraftModel, DFlashProposalBatch, DFlashSamplingInputs},
+        paged_rows::make_paged_rows_metadata,
+        proposer::sample_draft_rows,
+        SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow, SpeculativeConfig,
+        SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache, SpeculativePrefillCtx,
+        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+        SpeculativeTargetMixin, TargetAttentionInputs,
     },
 };
 
@@ -42,8 +45,34 @@ const MROPE_DIMS: usize = 3;
 // Feeds prompt rows whose next token is not known yet; their KV is rewritten before it is ever attended to
 const PLACEHOLDER_TOKEN: u32 = 0;
 
-fn dflash_batch_supports_exact_proposals(is_argmax: impl IntoIterator<Item = bool>) -> bool {
-    is_argmax.into_iter().all(|is_argmax| is_argmax)
+fn dflash_speculative_batch(batch: DFlashProposalBatch) -> Result<SpeculativeProposalBatch> {
+    let proposals = match batch {
+        DFlashProposalBatch::Tokens(tokens) => {
+            tokens.into_iter().map(SpeculativeProposal::new).collect()
+        }
+        #[cfg(feature = "cuda")]
+        DFlashProposalBatch::Sparse {
+            tokens,
+            candidate_ids,
+            candidate_probs,
+        } => {
+            if candidate_ids.dim(0)? != tokens.len() || candidate_probs.dim(0)? != tokens.len() {
+                candle_core::bail!("DFlash sparse proposal batch does not match token rows");
+            }
+            tokens
+                .into_iter()
+                .enumerate()
+                .map(|(row, tokens)| {
+                    SpeculativeProposal::with_sparse_probs(
+                        tokens,
+                        candidate_ids.get(row)?,
+                        candidate_probs.get(row)?,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?
+        }
+    };
+    Ok(SpeculativeProposalBatch::new(proposals))
 }
 
 /// The last prompt position of a sequence: its next token is only known once sampled, so the
@@ -289,11 +318,6 @@ impl Qwen3_5Model {
         if batch == 0 || max_n == 0 {
             return Ok(None);
         }
-        if !dflash_batch_supports_exact_proposals(
-            ctx.sequences.iter().map(|seq| seq.sampler().is_argmax()),
-        ) {
-            return Ok(None);
-        }
         let n_predict = ctx.proposal_len;
         if n_predict == 0 {
             return Ok(None);
@@ -350,28 +374,62 @@ impl Qwen3_5Model {
         if !drafter.contexts_ready_for_draft(ctx.seq_ids) {
             return Ok(None);
         }
+        let sampling_values = if drafter.has_selector()
+            && ctx.sequences.iter().any(|seq| !seq.sampler().is_argmax())
+        {
+            let mut inverse_temperatures = Vec::with_capacity(batch);
+            for seq in ctx.sequences {
+                let Some(temperature) = seq.sampler().temperature() else {
+                    inverse_temperatures.push(0.0);
+                    continue;
+                };
+                let inverse_temperature = (1.0 / temperature) as f32;
+                if !inverse_temperature.is_finite() || inverse_temperature <= 0.0 {
+                    return Ok(None);
+                }
+                inverse_temperatures.push(inverse_temperature);
+            }
+            let mut uniforms = vec![0.0f32; batch * n_predict];
+            let mut rng = ctx.rng.lock().expect("could not lock rng mutex");
+            for (row, inverse_temperature) in inverse_temperatures.iter().enumerate() {
+                if *inverse_temperature > 0.0 {
+                    for uniform in &mut uniforms[row * n_predict..(row + 1) * n_predict] {
+                        *uniform = rng.random();
+                    }
+                }
+            }
+            Some((inverse_temperatures, uniforms))
+        } else {
+            None
+        };
+        let sampling = sampling_values
+            .as_ref()
+            .map(|(inverse_temperatures, uniforms)| DFlashSamplingInputs {
+                inverse_temperatures,
+                uniforms,
+            });
         let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
         let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
-        if let Some(tokens) = drafter.greedy_proposals_cuda_graph(
+        if let Some(proposals) = drafter.proposals_cuda_graph(
             ctx.seq_ids,
             ctx.sampled_tokens,
             ctx.base_lens,
             n_predict,
+            sampling,
             self.text.token_embedding(),
             lm_head,
         )? {
-            let proposals = tokens.into_iter().map(SpeculativeProposal::new).collect();
-            return Ok(Some(SpeculativeProposalBatch::new(proposals)));
+            return dflash_speculative_batch(proposals).map(Some);
         }
         let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
         let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
-        // The lm_head weights are read once for the whole batch; drafts are chosen per sequence
-        let finished = drafter.finish_greedy_drafts(&hidden, ctx.sampled_tokens, lm_head)?;
-        let proposals = finished
-            .into_iter()
-            .map(|(tokens, logits)| SpeculativeProposal::with_logits(tokens, logits))
-            .collect();
-        Ok(Some(SpeculativeProposalBatch::new(proposals)))
+        dflash_speculative_batch(drafter.finish_proposals(
+            &hidden,
+            ctx.sampled_tokens,
+            sampling,
+            lm_head,
+        )?)
+        .map(Some)
     }
 
     fn dflash_prefill(&self, ctx: SpeculativePrefillCtx<'_>) -> Result<()> {
@@ -743,6 +801,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.text.supports_recurrent_speculative_checkpoints()
     }
 
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.dflash.lock().expect("dflash poisoned").is_some()
+    }
+
     fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {
@@ -851,17 +913,5 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             })?;
         self.text.install_spec_graph_state(state);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::dflash_batch_supports_exact_proposals;
-
-    #[test]
-    fn dflash_requires_an_all_greedy_batch() {
-        assert!(dflash_batch_supports_exact_proposals([true, true]));
-        assert!(!dflash_batch_supports_exact_proposals([true, false]));
-        assert!(!dflash_batch_supports_exact_proposals([false]));
     }
 }

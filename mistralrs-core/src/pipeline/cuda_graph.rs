@@ -31,7 +31,7 @@ use crate::pipeline::{
         make_flash_params, DecodePagedRows, DecodePagedRowsGraphKey, FlashParams,
         PagedAttentionInputMetadata, PagedDecodeMetadataRequirements,
     },
-    text_positions_tensor, DecodeGraphPrecaptureCtx,
+    text_positions_tensor, DecodeGraphPrecaptureCtx, RecurrentBatchKind,
 };
 use crate::speculative::SpeculativeGraphState;
 
@@ -544,6 +544,7 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
+    recurrent_batch_kind: RecurrentBatchKind,
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
@@ -587,6 +588,7 @@ enum CudaGraphPinnedData {
     U32(CudaGraphPinnedAllocation<u32>),
     I32(CudaGraphPinnedAllocation<i32>),
     I64(CudaGraphPinnedAllocation<i64>),
+    F32(CudaGraphPinnedAllocation<f32>),
 }
 
 struct CudaGraphPinnedBuffer {
@@ -675,6 +677,7 @@ impl CudaDecodeGraphKey {
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
         block_size: usize,
+        recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Self> {
         let decode_rows = metadata.decode_rows.as_ref().map(|rows| rows.graph_key());
         let mut tensors = Vec::new();
@@ -707,6 +710,7 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
+            recurrent_batch_kind,
             max_context_len: decode_rows
                 .is_none()
                 .then(|| {
@@ -1269,6 +1273,7 @@ impl CudaDecodeGraphLaunch {
                 .as_ref()
                 .expect("continuation must retain decode rows")
                 .block_size,
+            self.key.recurrent_batch_kind,
         )?;
         Ok((key == self.key).then_some(continuation))
     }
@@ -2440,6 +2445,7 @@ impl CudaGraphPinnedBuffer {
             DType::U32 => allocate!(U32, u32),
             DType::I32 => allocate!(I32, i32),
             DType::I64 => allocate!(I64, i64),
+            DType::F32 => allocate!(F32, f32),
             dtype => candle_core::bail!(
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
@@ -2513,6 +2519,7 @@ impl CudaGraphPinnedBuffer {
             DType::U32 => stage_and_copy!(U32, u32),
             DType::I32 => stage_and_copy!(I32, i32),
             DType::I64 => stage_and_copy!(I64, i64),
+            DType::F32 => stage_and_copy!(F32, f32),
             dtype => candle_core::bail!(
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
@@ -2560,6 +2567,50 @@ impl CudaGraphPinnedBuffer {
         if result != sys::CUresult::CUDA_SUCCESS {
             return Err(candle_core::Error::msg(format!("{result:?}"))
                 .context("CUDA graph state index H2D copy failed"));
+        }
+        Ok(())
+    }
+
+    fn copy_from_f32_slice(
+        &mut self,
+        src: &[f32],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if dst.dtype() != DType::F32 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching f32 metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA f32 metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous f32 metadata");
+        }
+        let CudaGraphPinnedData::F32(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging f32 metadata dtype changed");
+        };
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
+        let dst = dst_storage.as_cuda_slice::<f32>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(src),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph f32 metadata H2D copy failed"));
         }
         Ok(())
     }
@@ -2771,6 +2822,24 @@ impl CudaGraphHostStaging {
             }
         };
         buffer.copy_from_u32_slice(src, dst, &stream)
+    }
+
+    pub(crate) fn copy_from_f32_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[f32],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_f32_slice(src, dst, &stream)
     }
 
     #[cfg(all(feature = "flash-attn", target_family = "unix"))]
@@ -3015,11 +3084,22 @@ mod tests {
         let staged = rows.build_graph_staged().unwrap();
         let materialized = rows.build_materialized().unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let staged_key = CudaDecodeGraphKey::new(&input_ids, &staged, 32).unwrap();
-        let materialized_key = CudaDecodeGraphKey::new(&input_ids, &materialized, 32).unwrap();
+        let staged_key =
+            CudaDecodeGraphKey::new(&input_ids, &staged, 32, RecurrentBatchKind::Decode).unwrap();
+        let materialized_key =
+            CudaDecodeGraphKey::new(&input_ids, &materialized, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_eq!(staged_key, materialized_key);
         assert!(staged_key.tensors.is_empty());
         assert!(staged_key.decode_rows.is_some());
+        let speculative_key = CudaDecodeGraphKey::new(
+            &input_ids,
+            &materialized,
+            32,
+            RecurrentBatchKind::SpeculativeDecode,
+        )
+        .unwrap();
+        assert_ne!(staged_key, speculative_key);
 
         let mut next_bucket_rows = (*rows).clone();
         next_bucket_rows.block_tables = vec![(1..=17).collect()];
@@ -3027,7 +3107,9 @@ mod tests {
         next_bucket_rows.context_lens = vec![513];
         next_bucket_rows.full_context_lens = vec![513];
         let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
-        let next_bucket_key = CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32).unwrap();
+        let next_bucket_key =
+            CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_ne!(staged_key, next_bucket_key);
     }
 
@@ -3052,7 +3134,8 @@ mod tests {
         .build()
         .unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32).unwrap();
+        let key =
+            CudaDecodeGraphKey::new(&input_ids, &metadata, 32, RecurrentBatchKind::Decode).unwrap();
         assert!(key
             .tensors
             .iter()
@@ -3513,7 +3596,7 @@ mod tests {
         })
         .build_materialized()?;
         let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
-        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32)?;
+        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32, RecurrentBatchKind::Decode)?;
         let warmup_logits = initial_ids.to_dtype(DType::F32)?;
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {

@@ -15,8 +15,8 @@ pub use dflash::DFlashDraftModel;
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
 pub use policy::{SpeculativeBatchObservation, SpeculativeBatchPlan, SpeculativeGraphPlan};
 pub use proposer::{
-    SpeculativeCommitRow, SpeculativeKvCache, SpeculativePrefillCtx, SpeculativeProposal,
-    SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
-    TargetAttentionInputs, TargetTokenEmbedder,
+    SparseSpeculativeProbs, SpeculativeCommitRow, SpeculativeKvCache, SpeculativePrefillCtx,
+    SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposalDistribution,
+    SpeculativeProposeBatchCtx, SpeculativeProposer, TargetAttentionInputs, TargetTokenEmbedder,
 };
 pub use target::{SpeculativeGraphState, SpeculativeTargetMixin};

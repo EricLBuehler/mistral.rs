@@ -1781,8 +1781,12 @@ impl MultimodalPipeline {
         else {
             return Ok(None);
         };
-        let key =
-            CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
+        let key = CudaDecodeGraphKey::new(
+            &step.input_ids,
+            &step.metadata,
+            cache_config.block_size,
+            recurrent_batch_kind,
+        )?;
         if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
             if let Some(spec_state) = replay.spec_state.as_deref() {
                 if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
@@ -1896,6 +1900,7 @@ impl MultimodalPipeline {
                     &step.input_ids,
                     &step.metadata,
                     cache_config.block_size,
+                    recurrent_batch_kind,
                 )?;
                 if state.contains(&key) {
                     continue;
@@ -2185,6 +2190,10 @@ impl Pipeline for MultimodalPipeline {
         !self.model.has_speculative_proposer()
     }
 
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.model.supports_speculative_prompt_bootstrap()
+    }
+
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
         self.dynamic_lora.clone()
     }
@@ -2433,6 +2442,7 @@ impl Pipeline for MultimodalPipeline {
         &mut self,
         seqs: &mut [&mut Sequence],
         logits: &[Tensor],
+        batched_logits: Option<&Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -2458,6 +2468,7 @@ impl Pipeline for MultimodalPipeline {
                 self,
                 seqs,
                 logits,
+                batched_logits,
                 prefix_cacher,
                 disable_eos_stop,
                 rng,

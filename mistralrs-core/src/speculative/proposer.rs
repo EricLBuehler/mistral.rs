@@ -63,22 +63,88 @@ pub struct TargetAttentionInputs<'a> {
 #[derive(Clone, Debug)]
 pub struct SpeculativeProposal {
     pub tokens: Vec<u32>,
-    pub logits: Option<Tensor>,
+    pub distribution: Option<SpeculativeProposalDistribution>,
+}
+
+#[derive(Clone, Debug)]
+pub enum SpeculativeProposalDistribution {
+    Logits(Tensor),
+    SparseProbs(SparseSpeculativeProbs),
+}
+
+#[derive(Clone, Debug)]
+pub struct SparseSpeculativeProbs {
+    token_ids: Tensor,
+    probs: Tensor,
+}
+
+impl SparseSpeculativeProbs {
+    pub fn new(token_ids: Tensor, probs: Tensor) -> Result<Self> {
+        let [positions, candidates] = token_ids.dims() else {
+            candle_core::bail!(
+                "sparse speculative token ids must have shape [positions, candidates], got {:?}",
+                token_ids.dims()
+            );
+        };
+        if probs.dims() != [*positions, *candidates] {
+            candle_core::bail!(
+                "sparse speculative probability shape {:?} does not match token ids {:?}",
+                probs.dims(),
+                token_ids.dims()
+            );
+        }
+        if *candidates == 0 {
+            candle_core::bail!("sparse speculative probabilities must contain candidates");
+        }
+        Ok(Self {
+            token_ids: token_ids.to_dtype(candle_core::DType::U32)?,
+            probs: probs.to_dtype(candle_core::DType::F32)?,
+        })
+    }
+
+    pub fn positions(&self) -> usize {
+        self.token_ids
+            .dim(0)
+            .expect("validated sparse probability rank")
+    }
+
+    pub fn token_ids(&self) -> &Tensor {
+        &self.token_ids
+    }
+
+    pub fn probs(&self) -> &Tensor {
+        &self.probs
+    }
 }
 
 impl SpeculativeProposal {
     pub fn new(tokens: Vec<u32>) -> Self {
         Self {
             tokens,
-            logits: None,
+            distribution: None,
         }
     }
 
     pub fn with_logits(tokens: Vec<u32>, logits: Tensor) -> Self {
         Self {
             tokens,
-            logits: Some(logits),
+            distribution: Some(SpeculativeProposalDistribution::Logits(logits)),
         }
+    }
+
+    pub fn with_sparse_probs(tokens: Vec<u32>, token_ids: Tensor, probs: Tensor) -> Result<Self> {
+        let sparse = SparseSpeculativeProbs::new(token_ids, probs)?;
+        if sparse.positions() != tokens.len() {
+            candle_core::bail!(
+                "sparse speculative probabilities have {} positions for {} tokens",
+                sparse.positions(),
+                tokens.len()
+            );
+        }
+        Ok(Self {
+            tokens,
+            distribution: Some(SpeculativeProposalDistribution::SparseProbs(sparse)),
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -137,4 +203,34 @@ pub fn sample_draft_rows(
         tokens.push(sampled.token);
     }
     Ok(tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{Device, Tensor};
+
+    use super::{SparseSpeculativeProbs, SpeculativeProposal};
+
+    #[test]
+    fn sparse_probabilities_validate_shape_and_proposal_length() {
+        let ids = Tensor::from_vec(vec![1u32, 2, 3, 4], (2, 2), &Device::Cpu).unwrap();
+        let probs = Tensor::from_vec(vec![0.25f32, 0.75, 0.6, 0.4], (2, 2), &Device::Cpu).unwrap();
+        let proposal =
+            SpeculativeProposal::with_sparse_probs(vec![2, 3], ids.clone(), probs.clone()).unwrap();
+        assert!(proposal.distribution.is_some());
+
+        assert!(
+            SpeculativeProposal::with_sparse_probs(vec![2], ids.clone(), probs.clone()).is_err()
+        );
+        assert!(SparseSpeculativeProbs::new(
+            ids,
+            Tensor::zeros((2, 3), candle_core::DType::F32, &Device::Cpu).unwrap(),
+        )
+        .is_err());
+        assert!(SparseSpeculativeProbs::new(
+            Tensor::zeros((2, 0), candle_core::DType::U32, &Device::Cpu).unwrap(),
+            Tensor::zeros((2, 0), candle_core::DType::F32, &Device::Cpu).unwrap(),
+        )
+        .is_err());
+    }
 }

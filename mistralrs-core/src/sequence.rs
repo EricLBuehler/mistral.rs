@@ -5,6 +5,7 @@ use crate::{
     reasoning_parsers::{ReasoningMode, ReasoningParser},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
+    speculative::SpeculativeProposalDistribution,
     AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, Usage, VideoInput,
 };
 use crate::{
@@ -709,7 +710,7 @@ pub struct Sequence {
 
     // Speculative
     staged_speculative_tokens: Vec<u32>,
-    staged_speculative_logits: Option<Tensor>,
+    staged_speculative_distribution: Option<SpeculativeProposalDistribution>,
 
     // Prefix caching
     prefill_prompt_toks: Option<PrefillTokens>,
@@ -862,7 +863,7 @@ impl Sequence {
             last_logprob: 0.0,
             last_is_done: None,
             staged_speculative_tokens: Vec::new(),
-            staged_speculative_logits: None,
+            staged_speculative_distribution: None,
             scheduling_urgency: 0,
             // Multimodal data
             multimodal: MultimodalData::new(
@@ -1122,22 +1123,38 @@ impl Sequence {
         self.active_staged_speculative_tokens().len()
     }
 
-    pub(crate) fn set_staged_speculative(&mut self, tokens: Vec<u32>, logits: Option<Tensor>) {
+    pub(crate) fn set_staged_speculative(
+        &mut self,
+        tokens: Vec<u32>,
+        distribution: Option<SpeculativeProposalDistribution>,
+    ) {
         self.staged_speculative_tokens = tokens;
-        self.staged_speculative_logits = logits;
+        self.staged_speculative_distribution = distribution;
     }
 
     pub(crate) fn take_staged_speculative_tokens(&mut self) -> Vec<u32> {
         std::mem::take(&mut self.staged_speculative_tokens)
     }
 
-    pub(crate) fn take_staged_speculative_logits(&mut self) -> Option<Tensor> {
-        self.staged_speculative_logits.take()
+    pub(crate) fn take_staged_speculative_distribution(
+        &mut self,
+    ) -> Option<SpeculativeProposalDistribution> {
+        self.staged_speculative_distribution.take()
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn staged_sparse_speculative_distribution(
+        &self,
+    ) -> Option<&crate::speculative::SparseSpeculativeProbs> {
+        match self.staged_speculative_distribution.as_ref() {
+            Some(SpeculativeProposalDistribution::SparseProbs(sparse)) => Some(sparse),
+            Some(SpeculativeProposalDistribution::Logits(_)) | None => None,
+        }
     }
 
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
         self.staged_speculative_tokens.clear();
-        self.staged_speculative_logits = None;
+        self.staged_speculative_distribution = None;
     }
 
     pub fn get_initial_prompt(&self) -> &str {

@@ -306,6 +306,7 @@ impl PagedAttentionScheduler {
 
         let len = rows.len();
         let start = cursor % len;
+        let staged_width = get_mut_arcmutex!(rows[start]).active_staged_speculative_len();
         let mut remaining_tokens = token_budget;
         let mut selected = Vec::with_capacity(len);
         let mut last_selected = start;
@@ -313,6 +314,9 @@ impl PagedAttentionScheduler {
         for offset in 0..len {
             let index = (start + offset) % len;
             let seq = get_mut_arcmutex!(rows[index]);
+            if seq.active_staged_speculative_len() != staged_width {
+                continue;
+            }
             let token_cost = Self::completion_token_cost(&seq);
             drop(seq);
             if token_cost <= remaining_tokens || selected.is_empty() {
@@ -2067,6 +2071,52 @@ mod tests {
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect::<Vec<_>>();
         assert_eq!(second_ids, vec![2, 0]);
+    }
+
+    #[test]
+    fn completion_batches_bootstrap_new_rows_without_dropping_staged_rows() {
+        let mut scheduler = test_scheduler();
+        for id in 0..2 {
+            let seq = test_sequence(id, 4);
+            let mut seq_guard = get_mut_arcmutex!(seq);
+            seq_guard.set_num_computed_tokens(4);
+            seq_guard.set_staged_speculative(vec![10, 11], None);
+            drop(seq_guard);
+            scheduler.running.push_back(seq);
+        }
+        let newcomer = test_sequence(2, 4);
+        get_mut_arcmutex!(newcomer).set_num_computed_tokens(4);
+        scheduler.running.push_back(newcomer.clone());
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let staged = scheduler.schedule(&logger, None);
+        let staged_ids = staged
+            .scheduled
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect::<Vec<_>>();
+        assert_eq!(staged_ids, vec![0, 1]);
+        assert_eq!(
+            scheduler
+                .running
+                .iter()
+                .map(|seq| get_mut_arcmutex!(seq).active_staged_speculative_len())
+                .collect::<Vec<_>>(),
+            vec![2, 2, 0]
+        );
+
+        let bootstrap = scheduler.schedule(&logger, None);
+        assert_eq!(bootstrap.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(bootstrap.scheduled[0]).id(), 2);
+        get_mut_arcmutex!(newcomer).set_staged_speculative(vec![12, 13], None);
+
+        let joined = scheduler.schedule(&logger, None);
+        let joined_ids = joined
+            .scheduled
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect::<Vec<_>>();
+        assert_eq!(joined_ids, vec![0, 1, 2]);
     }
 
     #[test]
