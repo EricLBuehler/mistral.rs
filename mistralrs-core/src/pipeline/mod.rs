@@ -449,6 +449,19 @@ pub(crate) enum RecurrentBatchKind {
     SpeculativeDecode,
 }
 
+pub(crate) fn recurrent_batch_kind_for_input(
+    is_prompt: bool,
+    has_staged_speculative_batch: bool,
+) -> RecurrentBatchKind {
+    if is_prompt {
+        RecurrentBatchKind::Prefill
+    } else if has_staged_speculative_batch {
+        RecurrentBatchKind::SpeculativeDecode
+    } else {
+        RecurrentBatchKind::Decode
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RecurrentMetadata {
     batch_kind: RecurrentBatchKind,
@@ -1349,6 +1362,22 @@ fn should_sample_step(
     !is_prompt || !scheduler_visible_prompt_step || is_final_prompt_chunk
 }
 
+fn should_try_speculative_sampling(
+    is_prompt: bool,
+    scheduler_visible_prompt_step: bool,
+    is_final_prompt_chunk: bool,
+    return_raw_logits: bool,
+    supports_prompt_bootstrap: bool,
+) -> bool {
+    !return_raw_logits
+        && (!is_prompt || supports_prompt_bootstrap)
+        && should_sample_step(
+            is_prompt,
+            scheduler_visible_prompt_step,
+            is_final_prompt_chunk,
+        )
+}
+
 fn prompt_chunk_is_final(
     scheduler_visible_prompt_step: bool,
     scheduler_visible_prompt_is_final: bool,
@@ -1428,6 +1457,10 @@ pub trait Pipeline:
     }
 
     fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        false
+    }
 
     /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
     /// process the chunk. Default: nothing to do.
@@ -2334,19 +2367,23 @@ pub trait Pipeline:
                                 logits
                             })
                             .collect::<Vec<_>>();
-                        if is_prompt
-                            || return_raw_logits
-                            || !self
-                                .try_sample_speculative_causal_gen(
-                                    input_seqs,
-                                    &logits,
-                                    prefix_cacher,
-                                    disable_eos_stop,
-                                    rng.clone(),
-                                    Some(speculative_metadata),
-                                    logger,
-                                )
-                                .await?
+                        if !should_try_speculative_sampling(
+                            is_prompt,
+                            scheduler_visible_prompt_step,
+                            scheduler_visible_prompt_is_final,
+                            return_raw_logits,
+                            is_prompt && self.supports_speculative_prompt_bootstrap(),
+                        ) || !self
+                            .try_sample_speculative_causal_gen(
+                                input_seqs,
+                                &logits,
+                                prefix_cacher,
+                                disable_eos_stop,
+                                rng.clone(),
+                                Some(speculative_metadata),
+                                logger,
+                            )
+                            .await?
                         {
                             self.sample_causal_gen(
                                 input_seqs,
@@ -2513,8 +2550,9 @@ mod tests {
 
     use super::{
         effective_recurrent_checkpoint_lanes, prompt_chunk_is_final,
-        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
-        ForwardCache, LogitsSelection, ModelForwardContext,
+        recurrent_batch_kind_for_input, reserve_recurrent_serving_capacity, resolve_lora_execution,
+        should_sample_step, should_try_speculative_sampling, ForwardCache, LogitsSelection,
+        ModelForwardContext, RecurrentBatchKind,
     };
     use crate::{
         kv_cache::{
@@ -2537,10 +2575,48 @@ mod tests {
     }
 
     #[test]
+    fn speculative_sampling_bootstraps_on_the_final_prompt_chunk() {
+        assert!(!should_try_speculative_sampling(
+            true, true, false, false, true
+        ));
+        assert!(should_try_speculative_sampling(
+            true, true, true, false, true
+        ));
+        assert!(should_try_speculative_sampling(
+            true, false, false, false, true
+        ));
+        assert!(!should_try_speculative_sampling(
+            true, true, true, false, false
+        ));
+        assert!(should_try_speculative_sampling(
+            false, true, false, false, false
+        ));
+        assert!(!should_try_speculative_sampling(
+            true, true, true, true, true
+        ));
+    }
+
+    #[test]
     fn scheduler_visible_prefill_preserves_nonfinal_proposer_state() {
         assert!(!prompt_chunk_is_final(true, false, true));
         assert!(prompt_chunk_is_final(true, true, false));
         assert!(prompt_chunk_is_final(false, false, true));
+    }
+
+    #[test]
+    fn recurrent_batch_kind_tracks_staged_speculative_completions() {
+        assert_eq!(
+            recurrent_batch_kind_for_input(false, true),
+            RecurrentBatchKind::SpeculativeDecode
+        );
+        assert_eq!(
+            recurrent_batch_kind_for_input(false, false),
+            RecurrentBatchKind::Decode
+        );
+        assert_eq!(
+            recurrent_batch_kind_for_input(true, true),
+            RecurrentBatchKind::Prefill
+        );
     }
 
     #[test]

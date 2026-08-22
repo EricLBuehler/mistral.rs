@@ -12,6 +12,7 @@ use crate::{
     device_map::DeviceMapper,
     paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{
+        recurrent_batch_kind_for_input,
         text_models_inputs_processor::{
             self, get_completion_input, get_completion_input_windowed, get_prompt_input,
             PagedAttentionMeta,
@@ -1637,11 +1638,10 @@ impl InputsProcessor for Gemma4ImageProcessor {
             }),
             paged_attn_meta,
             flash_meta,
-            recurrent_batch_kind: if is_prompt {
-                crate::pipeline::RecurrentBatchKind::Prefill
-            } else {
-                crate::pipeline::RecurrentBatchKind::Decode
-            },
+            recurrent_batch_kind: recurrent_batch_kind_for_input(
+                is_prompt,
+                crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+            ),
             adapter_leases: crate::vision_models::adapter_leases(input_seqs, &seq_indices),
         });
         Ok(InputProcessorOutput {

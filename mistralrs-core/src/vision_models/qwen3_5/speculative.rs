@@ -743,6 +743,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.text.supports_recurrent_speculative_checkpoints()
     }
 
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.dflash.lock().expect("dflash poisoned").is_some()
+    }
+
     fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {

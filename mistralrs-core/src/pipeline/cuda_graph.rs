@@ -31,7 +31,7 @@ use crate::pipeline::{
         make_flash_params, DecodePagedRows, DecodePagedRowsGraphKey, FlashParams,
         PagedAttentionInputMetadata, PagedDecodeMetadataRequirements,
     },
-    text_positions_tensor, DecodeGraphPrecaptureCtx,
+    text_positions_tensor, DecodeGraphPrecaptureCtx, RecurrentBatchKind,
 };
 use crate::speculative::SpeculativeGraphState;
 
@@ -544,6 +544,7 @@ pub(crate) struct CudaDecodeGraphKey {
     device: DeviceLocation,
     input_shape: Vec<usize>,
     input_dtype: DType,
+    recurrent_batch_kind: RecurrentBatchKind,
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
@@ -675,6 +676,7 @@ impl CudaDecodeGraphKey {
         input_ids: &Tensor,
         metadata: &PagedAttentionInputMetadata,
         block_size: usize,
+        recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Self> {
         let decode_rows = metadata.decode_rows.as_ref().map(|rows| rows.graph_key());
         let mut tensors = Vec::new();
@@ -707,6 +709,7 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
+            recurrent_batch_kind,
             max_context_len: decode_rows
                 .is_none()
                 .then(|| {
@@ -1269,6 +1272,7 @@ impl CudaDecodeGraphLaunch {
                 .as_ref()
                 .expect("continuation must retain decode rows")
                 .block_size,
+            self.key.recurrent_batch_kind,
         )?;
         Ok((key == self.key).then_some(continuation))
     }
@@ -3015,11 +3019,22 @@ mod tests {
         let staged = rows.build_graph_staged().unwrap();
         let materialized = rows.build_materialized().unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let staged_key = CudaDecodeGraphKey::new(&input_ids, &staged, 32).unwrap();
-        let materialized_key = CudaDecodeGraphKey::new(&input_ids, &materialized, 32).unwrap();
+        let staged_key =
+            CudaDecodeGraphKey::new(&input_ids, &staged, 32, RecurrentBatchKind::Decode).unwrap();
+        let materialized_key =
+            CudaDecodeGraphKey::new(&input_ids, &materialized, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_eq!(staged_key, materialized_key);
         assert!(staged_key.tensors.is_empty());
         assert!(staged_key.decode_rows.is_some());
+        let speculative_key = CudaDecodeGraphKey::new(
+            &input_ids,
+            &materialized,
+            32,
+            RecurrentBatchKind::SpeculativeDecode,
+        )
+        .unwrap();
+        assert_ne!(staged_key, speculative_key);
 
         let mut next_bucket_rows = (*rows).clone();
         next_bucket_rows.block_tables = vec![(1..=17).collect()];
@@ -3027,7 +3042,9 @@ mod tests {
         next_bucket_rows.context_lens = vec![513];
         next_bucket_rows.full_context_lens = vec![513];
         let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
-        let next_bucket_key = CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32).unwrap();
+        let next_bucket_key =
+            CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32, RecurrentBatchKind::Decode)
+                .unwrap();
         assert_ne!(staged_key, next_bucket_key);
     }
 
@@ -3052,7 +3069,8 @@ mod tests {
         .build()
         .unwrap();
         let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
-        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32).unwrap();
+        let key =
+            CudaDecodeGraphKey::new(&input_ids, &metadata, 32, RecurrentBatchKind::Decode).unwrap();
         assert!(key
             .tensors
             .iter()
@@ -3513,7 +3531,7 @@ mod tests {
         })
         .build_materialized()?;
         let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
-        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32)?;
+        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32, RecurrentBatchKind::Decode)?;
         let warmup_logits = initial_ids.to_dtype(DType::F32)?;
         let entry = capture_cuda_decode_graph(
             CudaDecodeGraphCaptureCtx {
