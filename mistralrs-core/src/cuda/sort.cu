@@ -1497,11 +1497,25 @@ __device__ __forceinline__ float block_reduce_sum_f32(float val) {
 
 // Large-vocabulary top-k for token sampling. The MoE top-k kernel above stages
 // a full row in shared memory, which is not viable for 100k+ vocabularies. This
-// kernel scans fixed-size chunks, emits per-chunk top-k candidates, and
-// computes each chunk's contribution to the full softmax denominator.
-template <bool BATCHED>
-__global__ void topk_large_stage1_f32(
-    const float *__restrict__ input, float *__restrict__ block_values,
+// kernel scans fixed-size chunks, emits per-chunk top-k candidates, and can
+// compute each chunk's contribution to the full softmax denominator.
+template <typename T> __device__ __forceinline__ float topk_to_float(T x) {
+  return static_cast<float>(x);
+}
+
+template <> __device__ __forceinline__ float topk_to_float<__half>(__half x) {
+  return __half2float(x);
+}
+
+template <>
+__device__ __forceinline__ float
+topk_to_float<__nv_bfloat16>(__nv_bfloat16 x) {
+  return __bfloat162float(x);
+}
+
+template <typename T, bool BATCHED, bool COMPUTE_SOFTMAX>
+__global__ void topk_large_stage1(
+    const T *__restrict__ input, float *__restrict__ block_values,
     uint32_t *__restrict__ block_indices, float *__restrict__ block_maxes,
     float *__restrict__ block_sums, const int ncols, const int k,
     const int chunk_size, const float *__restrict__ inv_temperatures,
@@ -1514,11 +1528,11 @@ __global__ void topk_large_stage1_f32(
     input += row * static_cast<size_t>(ncols);
     block_values += row * candidate_stride;
     block_indices += row * candidate_stride;
-    block_maxes += row * block_stride;
-    block_sums += row * block_stride;
+    if constexpr (COMPUTE_SOFTMAX) {
+      block_maxes += row * block_stride;
+      block_sums += row * block_stride;
+    }
   }
-  const float inv_temperature =
-      BATCHED ? inv_temperatures[row] : scalar_inv_temperature;
   const int start = chunk * chunk_size;
   const int end = min(start + chunk_size, ncols);
   const int width = max(0, end - start);
@@ -1538,7 +1552,7 @@ __global__ void topk_large_stage1_f32(
     int local_idx = -1;
 
     for (int local = tid; local < width; local += block_size) {
-      const float candidate = input[start + local];
+      const float candidate = topk_to_float(input[start + local]);
       if (!s_used[local] && candidate == candidate && candidate > local_max) {
         local_max = candidate;
         local_idx = start + local;
@@ -1580,22 +1594,26 @@ __global__ void topk_large_stage1_f32(
     __syncthreads();
   }
 
-  const float block_max =
-      width > 0 ? block_values[chunk * k] * inv_temperature : -INFINITY;
-  float local_sum = 0.0f;
-  for (int local = tid; local < width; local += block_size) {
-    const float candidate = input[start + local];
-    if (candidate != candidate) {
-      local_sum = NAN;
-    } else if (block_max != -INFINITY) {
-      local_sum += expf(candidate * inv_temperature - block_max);
+  if constexpr (COMPUTE_SOFTMAX) {
+    const float inv_temperature =
+        BATCHED ? inv_temperatures[row] : scalar_inv_temperature;
+    const float block_max =
+        width > 0 ? block_values[chunk * k] * inv_temperature : -INFINITY;
+    float local_sum = 0.0f;
+    for (int local = tid; local < width; local += block_size) {
+      const float candidate = topk_to_float(input[start + local]);
+      if (candidate != candidate) {
+        local_sum = NAN;
+      } else if (block_max != -INFINITY) {
+        local_sum += expf(candidate * inv_temperature - block_max);
+      }
     }
-  }
 
-  const float block_sum = block_reduce_sum_f32(local_sum);
-  if (tid == 0) {
-    block_maxes[chunk] = block_max;
-    block_sums[chunk] = block_sum;
+    const float block_sum = block_reduce_sum_f32(local_sum);
+    if (tid == 0) {
+      block_maxes[chunk] = block_max;
+      block_sums[chunk] = block_sum;
+    }
   }
 }
 
@@ -1705,7 +1723,7 @@ __global__ void topk_large_stage2_f32(
   }
 }
 
-template <bool BATCHED>
+template <bool BATCHED, bool COMPUTE_SOFTMAX>
 __global__ void topk_large_stage2_f32_packed(
     const float *__restrict__ block_values,
     const uint32_t *__restrict__ block_indices,
@@ -1717,12 +1735,15 @@ __global__ void topk_large_stage2_f32_packed(
   if constexpr (BATCHED) {
     const size_t row = blockIdx.x;
     const size_t candidate_offset = row * static_cast<size_t>(n_candidates);
-    const size_t block_offset = row * static_cast<size_t>(nblocks);
     block_values += candidate_offset;
     block_indices += candidate_offset;
-    block_maxes += block_offset;
-    block_sums += block_offset;
-    packed_out += row * static_cast<size_t>(2 * k + 2);
+    if constexpr (COMPUTE_SOFTMAX) {
+      const size_t block_offset = row * static_cast<size_t>(nblocks);
+      block_maxes += block_offset;
+      block_sums += block_offset;
+    }
+    packed_out +=
+        row * static_cast<size_t>(2 * k + (COMPUTE_SOFTMAX ? 2 : 0));
   }
 
   extern __shared__ char smem[];
@@ -1733,49 +1754,51 @@ __global__ void topk_large_stage2_f32_packed(
   }
   __syncthreads();
 
-  float local_global_max = -INFINITY;
-  for (int block = tid; block < nblocks; block += block_size) {
-    local_global_max = fmaxf(local_global_max, block_maxes[block]);
-  }
-
-  int unused_idx;
-  float warp_global_max =
-      warp_reduce_max_with_idx<float>(local_global_max, tid, unused_idx);
-
-  __shared__ float warp_maxes[32];
   const int warp_id = tid / 32;
   const int lane_id = tid % 32;
   const int num_warps = (block_size + 31) / 32;
 
-  if (lane_id == 0) {
-    warp_maxes[warp_id] = warp_global_max;
-  }
-  __syncthreads();
-
-  __shared__ float s_global_max;
-  if (tid < 32) {
-    float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
-    int final_idx;
-    float final_max = warp_reduce_max_with_idx<float>(val, tid, final_idx);
-    if (tid == 0) {
-      s_global_max = final_max;
-    }
-  }
-  __syncthreads();
-
-  float local_denom = 0.0f;
-  if (s_global_max != -INFINITY) {
+  if constexpr (COMPUTE_SOFTMAX) {
+    float local_global_max = -INFINITY;
     for (int block = tid; block < nblocks; block += block_size) {
-      local_denom +=
-          block_sums[block] * expf(block_maxes[block] - s_global_max);
+      local_global_max = fmaxf(local_global_max, block_maxes[block]);
     }
+
+    int unused_idx;
+    float warp_global_max =
+        warp_reduce_max_with_idx<float>(local_global_max, tid, unused_idx);
+
+    __shared__ float warp_maxes[32];
+    if (lane_id == 0) {
+      warp_maxes[warp_id] = warp_global_max;
+    }
+    __syncthreads();
+
+    __shared__ float s_global_max;
+    if (tid < 32) {
+      float val = (tid < num_warps) ? warp_maxes[tid] : -INFINITY;
+      int final_idx;
+      float final_max = warp_reduce_max_with_idx<float>(val, tid, final_idx);
+      if (tid == 0) {
+        s_global_max = final_max;
+      }
+    }
+    __syncthreads();
+
+    float local_denom = 0.0f;
+    if (s_global_max != -INFINITY) {
+      for (int block = tid; block < nblocks; block += block_size) {
+        local_denom +=
+            block_sums[block] * expf(block_maxes[block] - s_global_max);
+      }
+    }
+    const float denom = block_reduce_sum_f32(local_denom);
+    if (tid == 0) {
+      packed_out[2 * k] = denom;
+      packed_out[2 * k + 1] = s_global_max;
+    }
+    __syncthreads();
   }
-  const float denom = block_reduce_sum_f32(local_denom);
-  if (tid == 0) {
-    packed_out[2 * k] = denom;
-    packed_out[2 * k + 1] = s_global_max;
-  }
-  __syncthreads();
 
   for (int ki = 0; ki < k; ++ki) {
     float local_max = -INFINITY;
@@ -2154,7 +2177,8 @@ extern "C" void topk_large_f32(const float *input, float *block_values,
   const size_t stage2_smem =
       static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
 
-  topk_large_stage1_f32<false><<<nblocks, block_size, stage1_smem, custream>>>(
+  topk_large_stage1<float, false, true>
+      <<<nblocks, block_size, stage1_smem, custream>>>(
       input, block_values, block_indices, block_maxes, block_sums, ncols, k,
       chunk_size, nullptr, inv_temperature);
   topk_large_stage2_f32<<<1, block_size, stage2_smem, custream>>>(
@@ -2174,12 +2198,37 @@ extern "C" void topk_large_f32_packed(const float *input, float *block_values,
   const size_t stage2_smem =
       static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
 
-  topk_large_stage1_f32<false><<<nblocks, block_size, stage1_smem, custream>>>(
+  topk_large_stage1<float, false, true>
+      <<<nblocks, block_size, stage1_smem, custream>>>(
       input, block_values, block_indices, block_maxes, block_sums, ncols, k,
       chunk_size, nullptr, inv_temperature);
-  topk_large_stage2_f32_packed<false><<<1, block_size, stage2_smem, custream>>>(
+  topk_large_stage2_f32_packed<false, true>
+      <<<1, block_size, stage2_smem, custream>>>(
       block_values, block_indices, block_maxes, block_sums, packed_out, nblocks,
       k);
+}
+
+template <typename T>
+void launch_topk_large_packed_batched(
+    const T *input, const float *inv_temperatures, float *block_values,
+    uint32_t *block_indices, float *block_maxes, float *block_sums,
+    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
+    int64_t stream) {
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int block_size = 256;
+  const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);
+  const size_t stage2_smem =
+      static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
+  const dim3 stage1_grid(nblocks, nrows);
+
+  topk_large_stage1<T, true, true>
+      <<<stage1_grid, block_size, stage1_smem, custream>>>(
+          input, block_values, block_indices, block_maxes, block_sums, ncols, k,
+          chunk_size, inv_temperatures, 0.0f);
+  topk_large_stage2_f32_packed<true, true>
+      <<<nrows, block_size, stage2_smem, custream>>>(
+          block_values, block_indices, block_maxes, block_sums, packed_out,
+          nblocks, k);
 }
 
 extern "C" void
@@ -2188,6 +2237,38 @@ topk_large_f32_packed_batched(const float *input, const float *inv_temperatures,
                               float *block_maxes, float *block_sums,
                               float *packed_out, int nrows, int ncols, int k,
                               int chunk_size, int nblocks, int64_t stream) {
+  launch_topk_large_packed_batched(
+      input, inv_temperatures, block_values, block_indices, block_maxes,
+      block_sums, packed_out, nrows, ncols, k, chunk_size, nblocks, stream);
+}
+
+extern "C" void topk_large_bf16_packed_batched(
+    const __nv_bfloat16 *input, const float *inv_temperatures,
+    float *block_values, uint32_t *block_indices, float *block_maxes,
+    float *block_sums, float *packed_out, int nrows, int ncols, int k,
+    int chunk_size, int nblocks, int64_t stream) {
+  launch_topk_large_packed_batched(
+      input, inv_temperatures, block_values, block_indices, block_maxes,
+      block_sums, packed_out, nrows, ncols, k, chunk_size, nblocks, stream);
+}
+
+extern "C" void
+topk_large_f16_packed_batched(const __half *input,
+                              const float *inv_temperatures,
+                              float *block_values, uint32_t *block_indices,
+                              float *block_maxes, float *block_sums,
+                              float *packed_out, int nrows, int ncols, int k,
+                              int chunk_size, int nblocks, int64_t stream) {
+  launch_topk_large_packed_batched(
+      input, inv_temperatures, block_values, block_indices, block_maxes,
+      block_sums, packed_out, nrows, ncols, k, chunk_size, nblocks, stream);
+}
+
+template <typename T>
+void launch_topk_large_ranked_packed_batched(
+    const T *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
+    int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   constexpr int block_size = 256;
   const size_t stage1_smem = static_cast<size_t>(chunk_size) * sizeof(bool);
@@ -2195,14 +2276,40 @@ topk_large_f32_packed_batched(const float *input, const float *inv_temperatures,
       static_cast<size_t>(nblocks) * static_cast<size_t>(k) * sizeof(bool);
   const dim3 stage1_grid(nblocks, nrows);
 
-  topk_large_stage1_f32<true>
+  topk_large_stage1<T, true, false>
       <<<stage1_grid, block_size, stage1_smem, custream>>>(
-          input, block_values, block_indices, block_maxes, block_sums, ncols, k,
-          chunk_size, inv_temperatures, 0.0f);
-  topk_large_stage2_f32_packed<true>
+          input, block_values, block_indices, nullptr, nullptr, ncols, k,
+          chunk_size, nullptr, 0.0f);
+  topk_large_stage2_f32_packed<true, false>
       <<<nrows, block_size, stage2_smem, custream>>>(
-          block_values, block_indices, block_maxes, block_sums, packed_out,
-          nblocks, k);
+          block_values, block_indices, nullptr, nullptr, packed_out, nblocks, k);
+}
+
+extern "C" void topk_large_ranked_f32_packed_batched(
+    const float *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
+    int64_t stream) {
+  launch_topk_large_ranked_packed_batched(
+      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      chunk_size, nblocks, stream);
+}
+
+extern "C" void topk_large_ranked_bf16_packed_batched(
+    const __nv_bfloat16 *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
+    int64_t stream) {
+  launch_topk_large_ranked_packed_batched(
+      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      chunk_size, nblocks, stream);
+}
+
+extern "C" void topk_large_ranked_f16_packed_batched(
+    const __half *input, float *block_values, uint32_t *block_indices,
+    float *packed_out, int nrows, int ncols, int k, int chunk_size, int nblocks,
+    int64_t stream) {
+  launch_topk_large_ranked_packed_batched(
+      input, block_values, block_indices, packed_out, nrows, ncols, k,
+      chunk_size, nblocks, stream);
 }
 
 extern "C" void top1_large_f32_packed(const float *input, float *block_values,

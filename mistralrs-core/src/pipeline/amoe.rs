@@ -329,6 +329,7 @@ impl Pipeline for AnyMoePipeline {
         &mut self,
         input_seqs: &mut [&mut Sequence],
         logits: &[Tensor],
+        batched_logits: Option<&Tensor>,
         prefix_cacher: &mut PrefixCacheManagerV2,
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -339,6 +340,7 @@ impl Pipeline for AnyMoePipeline {
             .try_sample_speculative_causal_gen(
                 input_seqs,
                 logits,
+                batched_logits,
                 prefix_cacher,
                 disable_eos_stop,
                 rng,
