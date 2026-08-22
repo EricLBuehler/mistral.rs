@@ -12,17 +12,25 @@ use crate::sequence::{Sequence, SequenceState};
 use crate::IntervalLogger;
 
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
-use super::proposer::{SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
+use super::proposer::{
+    SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposalDistribution,
+    SpeculativeProposeBatchCtx,
+};
 use super::staging::{staged_batch_state, StagedBatchState};
-use super::verifier::{finish_verified_step, VerificationInput, VerificationOutcome};
+use super::verifier::{
+    finish_verified_step, DeviceVerification, VerificationInput, VerificationOutcome,
+};
 #[cfg(feature = "cuda")]
-use super::verifier::{greedy_device_verify_batch, GreedyDeviceVerifyInput};
+use super::verifier::{
+    greedy_device_verify_batch, sparse_rejection_device_verify_batch, GreedyDeviceVerifyInput,
+    SparseRejectionVerifyInput,
+};
 use super::{SpeculativeBatchObservation, SpeculativeBatchPlan};
 
 struct PreparedVerification {
     base_len: usize,
     proposal: Vec<u32>,
-    proposal_logits: Option<Tensor>,
+    proposal_distribution: Option<SpeculativeProposalDistribution>,
 }
 
 pub trait SpeculativePipelineExt: Pipeline {
@@ -66,6 +74,7 @@ pub async fn try_sample_speculative_causal_gen<P, C>(
     target: &mut P,
     seqs: &mut [&mut Sequence],
     logits: &[Tensor],
+    batched_logits: Option<&Tensor>,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -76,6 +85,9 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
+    #[cfg(not(feature = "cuda"))]
+    let _ = batched_logits;
+
     if !target.has_speculative_proposer() || seqs.is_empty() || logits.len() != seqs.len() {
         clear_staged_speculative_tokens(seqs);
         return Ok(false);
@@ -88,6 +100,7 @@ where
                 target,
                 seqs,
                 logits,
+                batched_logits,
                 staged_len,
                 prefix_cacher,
                 disable_eos_stop,
@@ -231,6 +244,7 @@ async fn verify_staged_batch<P, C>(
     target: &mut P,
     seqs: &mut [&mut Sequence],
     logits: &[Tensor],
+    batched_logits: Option<&Tensor>,
     staged_len: usize,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
@@ -242,6 +256,9 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
+    #[cfg(not(feature = "cuda"))]
+    let _ = batched_logits;
+
     let mut prepared = Vec::with_capacity(seqs.len());
     let mut cache_guards: Vec<Option<C::Guard>> = Vec::with_capacity(seqs.len());
     for seq in seqs.iter_mut() {
@@ -251,7 +268,7 @@ where
             continue;
         };
         let proposal = seq.take_staged_speculative_tokens();
-        let proposal_logits = seq.take_staged_speculative_logits();
+        let proposal_distribution = seq.take_staged_speculative_distribution();
         if proposal.len() != staged_len {
             if !proposal.is_empty() {
                 metrics::counter!("mistralrs_speculative_staged_drops_total").increment(1);
@@ -270,12 +287,12 @@ where
         prepared.push(Some(PreparedVerification {
             base_len,
             proposal,
-            proposal_logits,
+            proposal_distribution,
         }));
     }
 
     #[cfg(feature = "cuda")]
-    let mut device_tokens = {
+    let mut device_verifications = {
         let active_indices = prepared
             .iter()
             .enumerate()
@@ -292,15 +309,43 @@ where
         let mut aligned = std::iter::repeat_with(|| None)
             .take(seqs.len())
             .collect::<Vec<_>>();
-        for (idx, tokens) in active_indices.into_iter().zip(verified) {
-            aligned[idx] = tokens;
+        for (idx, tokens) in active_indices.iter().copied().zip(verified) {
+            aligned[idx] = tokens.map(DeviceVerification::TargetTokens);
+        }
+        let mut sparse_indices = Vec::new();
+        let mut sparse_inputs = Vec::new();
+        for &idx in &active_indices {
+            if aligned[idx].is_some() {
+                continue;
+            }
+            let Some(prepared) = prepared[idx].as_ref() else {
+                continue;
+            };
+            let Some(distribution) = prepared.proposal_distribution.as_ref() else {
+                continue;
+            };
+            sparse_indices.push(idx);
+            sparse_inputs.push(SparseRejectionVerifyInput {
+                seq: seqs[idx],
+                logits: &logits[idx],
+                proposal: &prepared.proposal,
+                distribution,
+            });
+        }
+        let batched_target_logits = batched_logits.filter(|_| {
+            sparse_indices.len() == seqs.len() && sparse_indices.iter().copied().eq(0..seqs.len())
+        });
+        let sparse_verified =
+            sparse_rejection_device_verify_batch(&sparse_inputs, batched_target_logits, &rng)?;
+        for (idx, verification) in sparse_indices.into_iter().zip(sparse_verified) {
+            aligned[idx] = verification;
         }
         aligned
     };
     #[cfg(not(feature = "cuda"))]
-    let mut device_tokens = std::iter::repeat_with(|| None)
+    let mut device_verifications = std::iter::repeat_with(|| None)
         .take(seqs.len())
-        .collect::<Vec<Option<Vec<u32>>>>();
+        .collect::<Vec<Option<DeviceVerification>>>();
 
     let mut outcomes: Vec<Option<VerificationOutcome>> = Vec::with_capacity(seqs.len());
     let mut cache_outcomes: Vec<Option<SpeculativeCacheOutcome>> = Vec::with_capacity(seqs.len());
@@ -316,10 +361,10 @@ where
             VerificationInput {
                 verify_logits: logits.clone(),
                 proposal: prepared.proposal,
-                proposal_logits: prepared.proposal_logits,
+                proposal_distribution: prepared.proposal_distribution,
                 base_len: prepared.base_len,
                 anchor_to_emit: None,
-                device_tokens: device_tokens[idx].take(),
+                device_verification: device_verifications[idx].take(),
             },
             prefix_cacher,
             disable_eos_stop,
@@ -526,7 +571,7 @@ where
 
     for (idx, proposal) in active_indices.iter().zip(proposal_batch.proposals) {
         if proposal.tokens.len() == proposal_len {
-            seqs[*idx].set_staged_speculative(proposal.tokens, proposal.logits);
+            seqs[*idx].set_staged_speculative(proposal.tokens, proposal.distribution);
         } else {
             seqs[*idx].clear_staged_speculative_tokens();
         }

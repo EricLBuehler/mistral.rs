@@ -1492,6 +1492,7 @@ pub trait Pipeline:
         &mut self,
         _input_seqs: &mut [&mut Sequence],
         _logits: &[Tensor],
+        _batched_logits: Option<&Tensor>,
         _prefix_cacher: &mut PrefixCacheManagerV2,
         _disable_eos_stop: bool,
         _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
@@ -1637,9 +1638,7 @@ pub trait Pipeline:
                         && self.device().is_cuda()
                         && ((self.supports_batched_cuda_sampling()
                             && sampling::can_sample_batch_cuda(input_seqs))
-                            || crate::speculative::verifier::can_batch_greedy_device_verify(
-                                input_seqs,
-                            ));
+                            || crate::speculative::verifier::can_batch_device_verify(input_seqs));
                     let start = Instant::now();
                     let raw_logits = self
                         .forward_inputs(inputs, return_raw_logits)?
@@ -1741,6 +1740,7 @@ pub trait Pipeline:
                                 .try_sample_speculative_causal_gen(
                                     input_seqs,
                                     &logits,
+                                    None,
                                     prefix_cacher,
                                     disable_eos_stop,
                                     rng.clone(),
@@ -2117,7 +2117,7 @@ pub trait Pipeline:
                             && self.device().is_cuda()
                             && ((self.supports_batched_cuda_sampling()
                                 && sampling::can_sample_batch_cuda(input_seqs))
-                                || crate::speculative::verifier::can_batch_greedy_device_verify(
+                                || crate::speculative::verifier::can_batch_device_verify(
                                     input_seqs,
                                 ));
                         if self.cache().is_hybrid() {
@@ -2289,6 +2289,7 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                let mut speculative_batched_logits = None;
                 if let Some(batched_causal_logits) = batched_causal_logits {
                     #[cfg(feature = "cuda")]
                     let mut batched_causal_logits = batched_causal_logits;
@@ -2347,6 +2348,7 @@ pub trait Pipeline:
                             logits: batched_causal_logits.i(seq_idx)?,
                         });
                     }
+                    speculative_batched_logits = Some(batched_causal_logits);
                 }
                 let logits = logits
                     .into_iter()
@@ -2377,6 +2379,7 @@ pub trait Pipeline:
                             .try_sample_speculative_causal_gen(
                                 input_seqs,
                                 &logits,
+                                speculative_batched_logits.as_ref(),
                                 prefix_cacher,
                                 disable_eos_stop,
                                 rng.clone(),
