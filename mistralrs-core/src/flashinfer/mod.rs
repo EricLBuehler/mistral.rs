@@ -1,5 +1,11 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "cuda")]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::Result;
 use candle_core::{DeviceLocation, Tensor};
@@ -187,6 +193,8 @@ pub struct FlashInferMetadata {
     pub decode_tmp_s: Option<DeviceTensorMap>,
     #[cfg_attr(not(all(feature = "cuda", target_family = "unix")), allow(dead_code))]
     pub(crate) fa3_decode: Option<Fa3DecodeState>,
+    #[cfg(feature = "cuda")]
+    pub(crate) decode_tile_plan_used: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -282,6 +290,19 @@ impl FlashInferPagedAttentionViews {
 }
 
 impl FlashInferMetadata {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn track_decode_tile_plan(mut self) -> Self {
+        self.decode_tile_plan_used = Some(Arc::new(AtomicBool::new(false)));
+        self
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn decode_tile_plan_was_used(&self) -> bool {
+        self.decode_tile_plan_used
+            .as_ref()
+            .is_some_and(|used| used.load(Ordering::Relaxed))
+    }
+
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub(crate) fn fa3_decode_buffers(
         &self,
@@ -329,6 +350,9 @@ impl FlashInferMetadata {
         device: &DeviceLocation,
         sliding_window: Option<usize>,
     ) -> Result<FlashInferDecodeMetadata<'_>> {
+        if let Some(used) = self.decode_tile_plan_used.as_ref() {
+            used.store(true, Ordering::Relaxed);
+        }
         let view = self.views.select(sliding_window);
         Ok(FlashInferDecodeMetadata {
             paged_kv_indptr: metadata_tensor(&view.paged_kv.indptr, device, "paged_kv_indptr")?,
