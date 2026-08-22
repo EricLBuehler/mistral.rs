@@ -79,6 +79,9 @@ pub(super) enum MoEExpertsBackend {
     /// CUTLASS grouped GEMM over raw ENK tensors (CUDA bf16, GeLU); universal sm_80+ fallback.
     #[cfg(feature = "cuda")]
     Cutlass,
+    /// CUDA WNA16 grouped MoE kernels for AWQ/GPTQ expert tensors.
+    #[cfg(feature = "cuda")]
+    Wna16,
     /// Gather-based (Metal, CPU, ISQ, pre-quantized).
     Fast,
 }
@@ -90,6 +93,8 @@ pub(super) struct BackendChoice {
     pub dtype: DType,
     pub loading_isq: bool,
     pub quantized: bool,
+    #[allow(dead_code)]
+    pub quantization_config: Option<QuantizedConfig>,
     pub immediate_isq: bool,
     #[cfg_attr(not(feature = "cutile"), allow(dead_code))]
     pub act: Activation,
@@ -108,6 +113,7 @@ impl BackendChoice {
             dtype,
             loading_isq,
             quantized: quantization_config.is_some(),
+            quantization_config: quantization_config.clone(),
             immediate_isq: mistralrs_quant::get_immediate_isq().is_some(),
             act,
         }
@@ -189,6 +195,8 @@ impl MoEExpertsBackend {
             "cutile" => Self::Cutile,
             #[cfg(feature = "cuda")]
             "cutlass" => Self::Cutlass,
+            #[cfg(feature = "cuda")]
+            "wna16" => Self::Wna16,
             _ => return None,
         })
     }
@@ -233,7 +241,20 @@ impl MoEExpertsBackend {
                     }
                     return Ok(Self::Cutlass);
                 }
+                #[cfg(feature = "cuda")]
+                Self::Wna16 => {
+                    if !c.device.is_cuda() {
+                        candle_core::bail!("MISTRALRS_MOE_BACKEND=wna16 requires a CUDA device");
+                    }
+                    return Ok(Self::Wna16);
+                }
             }
+        }
+        #[cfg(feature = "cuda")]
+        if c.device.is_cuda()
+            && matches!(c.quantization_config, Some(QuantizedConfig::GptqAwq { .. }))
+        {
+            return Ok(Self::Wna16);
         }
         if c.device.is_cuda()
             && !c.quantized
@@ -298,6 +319,7 @@ mod tests {
             dtype,
             loading_isq: false,
             quantized: false,
+            quantization_config: None,
             immediate_isq: false,
             act,
         }

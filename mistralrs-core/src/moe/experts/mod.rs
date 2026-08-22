@@ -23,11 +23,11 @@ pub use config::{prelog_moe_backend, ExpertProj, ExpertProjNames, MoEExpertsConf
 
 #[cfg(feature = "cutile")]
 use backends::CutileExpertsWeights;
-#[cfg(feature = "cuda")]
-use backends::CutlassExpertsWeights;
 use backends::{
     experts_are_prequantized, FastExpertsWeights, FusedExpertsWeights, StackedExpertWeights,
 };
+#[cfg(feature = "cuda")]
+use backends::{CutlassExpertsWeights, Wna16ExpertsWeights};
 use checkpoint::ExpertCheckpoint;
 use config::{BackendChoice, MoEExpertsBackend};
 use forward::{MoEForward, MoEForwardConfig, MoEForwardShape};
@@ -50,6 +50,8 @@ enum MoEExpertsBackendImpl {
     Cutile(CutileExpertsWeights),
     #[cfg(feature = "cuda")]
     Cutlass(CutlassExpertsWeights),
+    #[cfg(feature = "cuda")]
+    Wna16(Wna16ExpertsWeights),
     Fast(FastExpertsWeights),
 }
 
@@ -65,6 +67,10 @@ impl MoEExpertsBackendImpl {
             Self::Cutlass(w) => w
                 .forward_impl(forward, config)
                 .map_err(|err| err.context("moe experts cutlass")),
+            #[cfg(feature = "cuda")]
+            Self::Wna16(w) => w
+                .forward_impl(forward, config)
+                .map_err(|err| err.context("moe experts wna16")),
             Self::Fast(w) => w.forward_impl(forward, config),
         }
     }
@@ -137,6 +143,15 @@ impl MoEExperts {
                     &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
                 )?)
             }
+            #[cfg(feature = "cuda")]
+            MoEExpertsBackend::Wna16 => MoEExpertsBackendImpl::Wna16(Wna16ExpertsWeights::load(
+                cfg,
+                experts_vb.clone(),
+                comm,
+                quantization_config
+                    .as_ref()
+                    .expect("WNA16 requires quantization config"),
+            )?),
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
                     MoEExpertsBackendImpl::Fast(FastExpertsWeights::load_prequantized(
@@ -211,6 +226,15 @@ impl MoEExperts {
                     &ExpertCheckpoint::new(cfg, experts_vb.clone(), comm)?,
                 )?)
             }
+            #[cfg(feature = "cuda")]
+            MoEExpertsBackend::Wna16 => MoEExpertsBackendImpl::Wna16(Wna16ExpertsWeights::load(
+                cfg,
+                experts_vb.clone(),
+                comm,
+                quantization_config
+                    .as_ref()
+                    .expect("WNA16 requires quantization config"),
+            )?),
             MoEExpertsBackend::Fast => {
                 if experts_are_prequantized(quantization_config, &experts_vb) {
                     candle_core::bail!(
