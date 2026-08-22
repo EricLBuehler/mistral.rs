@@ -33,6 +33,7 @@ tokio.workspace = true
 image.workspace = true
 reqwest.workspace = true
 base64.workspace = true
+cap-std.workspace = true
 url.workspace = true
 data-url.workspace = true
 anyhow.workspace = true
