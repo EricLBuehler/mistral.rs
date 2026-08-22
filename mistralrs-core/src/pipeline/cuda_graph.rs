@@ -44,6 +44,8 @@ pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
+const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
+const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
@@ -61,6 +63,13 @@ pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
 /// The batch buckets captured ahead of time at load.
 pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
     (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
+}
+
+pub(crate) fn cuda_graph_startup_capture_allowed(
+    has_speculative_proposer: bool,
+    q_len: usize,
+) -> bool {
+    q_len > 0 && (q_len == 1 || !has_speculative_proposer)
 }
 
 pub(crate) fn prepare_fa3_decode_schedules(
@@ -1094,6 +1103,106 @@ impl CudaDecodeGraphMetadataBuffers {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct CudaGraphSpecStateUsage {
+    bytes: HashMap<DeviceLocation, usize>,
+    device_totals: HashMap<DeviceLocation, usize>,
+}
+
+impl CudaGraphSpecStateUsage {
+    fn from_state(state: &dyn SpeculativeGraphState) -> candle_core::Result<Self> {
+        let mut usage = Self::default();
+        for tensor in state.tensors() {
+            let location = tensor.device().location();
+            let bytes = tensor
+                .elem_count()
+                .saturating_mul(tensor.dtype().size_in_bytes());
+            usage
+                .bytes
+                .entry(location)
+                .and_modify(|total| *total = total.saturating_add(bytes))
+                .or_insert(bytes);
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                usage.device_totals.entry(location)
+            {
+                let Device::Cuda(device) = tensor.device() else {
+                    candle_core::bail!("CUDA graph speculative state expected CUDA tensors");
+                };
+                let (_, total) = device
+                    .cuda_stream()
+                    .context()
+                    .mem_get_info()
+                    .map_err(candle_core::Error::wrap)?;
+                entry.insert(total);
+            }
+        }
+        Ok(usage)
+    }
+
+    fn total_bytes(&self) -> usize {
+        self.bytes
+            .values()
+            .fold(0usize, |total, bytes| total.saturating_add(*bytes))
+    }
+}
+
+fn default_spec_state_budget(total: usize) -> usize {
+    total.saturating_mul(CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT) / 100
+}
+
+fn configured_spec_state_budget(total: usize) -> usize {
+    std::env::var(CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(|| default_spec_state_budget(total))
+}
+
+fn spec_state_eviction_plan(
+    existing: &[CudaGraphSpecStateUsage],
+    incoming: &CudaGraphSpecStateUsage,
+    budgets: &HashMap<DeviceLocation, usize>,
+) -> Vec<usize> {
+    let mut totals = incoming.bytes.clone();
+    for usage in existing {
+        for (location, bytes) in &usage.bytes {
+            totals
+                .entry(*location)
+                .and_modify(|total| *total = total.saturating_add(*bytes))
+                .or_insert(*bytes);
+        }
+    }
+
+    let mut retained = vec![true; existing.len()];
+    let mut evictions = Vec::new();
+    loop {
+        let over_budget = totals
+            .iter()
+            .filter_map(|(location, bytes)| {
+                (*bytes > budgets.get(location).copied().unwrap_or(usize::MAX)).then_some(*location)
+            })
+            .collect::<Vec<_>>();
+        if over_budget.is_empty() {
+            break;
+        }
+        let Some((idx, usage)) = existing.iter().enumerate().find(|(idx, usage)| {
+            retained[*idx]
+                && over_budget
+                    .iter()
+                    .any(|location| usage.bytes.get(location).is_some_and(|bytes| *bytes > 0))
+        }) else {
+            break;
+        };
+        retained[idx] = false;
+        evictions.push(idx);
+        for (location, bytes) in &usage.bytes {
+            totals
+                .entry(*location)
+                .and_modify(|total| *total = total.saturating_sub(*bytes));
+        }
+    }
+    evictions
+}
+
 pub(crate) struct CudaDecodeGraphEntry {
     generation: u64,
     replay_epoch: u64,
@@ -1107,6 +1216,7 @@ pub(crate) struct CudaDecodeGraphEntry {
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
+    spec_state_usage: CudaGraphSpecStateUsage,
 }
 
 pub struct CudaDecodeGraphLaunch {
@@ -1183,8 +1293,11 @@ impl CudaDecodeGraphEntry {
     pub(crate) fn with_spec_state(
         mut self,
         spec_state: Option<Box<dyn SpeculativeGraphState>>,
+        usage: Option<CudaGraphSpecStateUsage>,
     ) -> Self {
+        assert_eq!(spec_state.is_some(), usage.is_some());
         self.spec_state = spec_state.map(Arc::from);
+        self.spec_state_usage = usage.unwrap_or_default();
         self
     }
 
@@ -1228,6 +1341,7 @@ pub(crate) struct CudaDecodeGraphReplay {
 #[derive(Default)]
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
+    spec_state_budgets: HashMap<DeviceLocation, usize>,
     disabled: bool,
     suspended: bool,
 }
@@ -1330,12 +1444,47 @@ impl CudaDecodeGraphState {
         )
     }
 
+    pub(crate) fn prepare_spec_state_admission(
+        &mut self,
+        spec_state: &dyn SpeculativeGraphState,
+    ) -> candle_core::Result<CudaGraphSpecStateUsage> {
+        let usage = CudaGraphSpecStateUsage::from_state(spec_state)?;
+        self.evict_for_spec_state(&usage);
+        Ok(usage)
+    }
+
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
+        self.evict_for_spec_state(&entry.spec_state_usage);
         if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             self.entries.remove(0);
         }
         entry.generation = self.allocate_generation();
         self.entries.push(entry);
+    }
+
+    fn evict_for_spec_state(&mut self, incoming: &CudaGraphSpecStateUsage) {
+        for (location, total) in &incoming.device_totals {
+            self.spec_state_budgets
+                .entry(*location)
+                .or_insert_with(|| configured_spec_state_budget(*total));
+        }
+        let usages = self
+            .entries
+            .iter()
+            .map(|entry| entry.spec_state_usage.clone())
+            .collect::<Vec<_>>();
+        let mut evictions = spec_state_eviction_plan(&usages, incoming, &self.spec_state_budgets);
+        if !evictions.is_empty() {
+            tracing::debug!(
+                entries = evictions.len(),
+                incoming_bytes = incoming.total_bytes(),
+                "Evicting CUDA graphs to stay within the speculative state budget"
+            );
+            evictions.sort_unstable();
+            for idx in evictions.into_iter().rev() {
+                self.entries.remove(idx);
+            }
+        }
     }
 
     fn allocate_generation(&mut self) -> u64 {
@@ -1459,6 +1608,7 @@ where
         _metadata: metadata,
         logits,
         spec_state: None,
+        spec_state_usage: CudaGraphSpecStateUsage::default(),
     })
 }
 
@@ -2353,6 +2503,16 @@ fn copy_rope_positions(
 mod tests {
     use super::*;
 
+    fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
+        CudaGraphSpecStateUsage {
+            bytes: bytes
+                .iter()
+                .map(|(gpu_id, bytes)| (DeviceLocation::Cuda { gpu_id: *gpu_id }, *bytes))
+                .collect(),
+            device_totals: HashMap::new(),
+        }
+    }
+
     #[test]
     fn batch_buckets_are_exact_then_power_of_two() {
         assert_eq!(cuda_graph_batch_bucket(0), None);
@@ -2378,6 +2538,14 @@ mod tests {
             cuda_graph_precapture_batches().collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5, 6, 7, 8, 16]
         );
+    }
+
+    #[test]
+    fn startup_precapture_defers_speculative_multi_token_widths() {
+        assert!(cuda_graph_startup_capture_allowed(true, 1));
+        assert!(!cuda_graph_startup_capture_allowed(true, 4));
+        assert!(!cuda_graph_startup_capture_allowed(true, 8));
+        assert!(cuda_graph_startup_capture_allowed(false, 8));
     }
 
     #[test]
@@ -2599,6 +2767,58 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_copy_supports_dense_row_source() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let cuda_device = device.as_cuda_device()?;
+        let stream = cuda_device.cuda_stream();
+        prepare_cuda_graph_memory_pool(&stream)?;
+
+        let input = Var::from_tensor(&Tensor::from_vec(
+            (1u16..=16).map(f32::from).collect::<Vec<_>>(),
+            (2, 2, 4),
+            &device,
+        )?)?;
+        let output = Var::from_tensor(&Tensor::zeros((2, 2, 2), DType::F32, &device)?)?;
+        let source = input.as_detached_tensor().narrow(2, 1, 2)?;
+        assert!(!source.is_contiguous());
+
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        crate::cuda::graph::copy_tensor(&source, &output.as_detached_tensor())?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        graph.launch()?;
+        stream.synchronize()?;
+        assert_eq!(
+            output.as_detached_tensor().to_vec3::<f32>()?,
+            vec![
+                vec![vec![2.0, 3.0], vec![6.0, 7.0]],
+                vec![vec![10.0, 11.0], vec![14.0, 15.0]],
+            ]
+        );
+
+        input.set(&Tensor::from_vec(
+            (1u16..=16).rev().map(f32::from).collect::<Vec<_>>(),
+            (2, 2, 4),
+            &device,
+        )?)?;
+        graph.launch()?;
+        stream.synchronize()?;
+        assert_eq!(
+            output.as_detached_tensor().to_vec3::<f32>()?,
+            vec![
+                vec![vec![15.0, 14.0], vec![11.0, 10.0]],
+                vec![vec![7.0, 6.0], vec![3.0, 2.0]],
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn graph_suspension_does_not_clear_permanent_disable() {
         let mut state = CudaDecodeGraphState::default();
         state.suspend();
@@ -2621,6 +2841,42 @@ mod tests {
         state.resume();
         let third = state.allocate_generation();
         assert!(first < second && second < third);
+    }
+
+    #[test]
+    fn speculative_state_budget_is_four_percent_by_default() {
+        assert_eq!(default_spec_state_budget(100), 4);
+        assert_eq!(default_spec_state_budget(98_000), 3_920);
+    }
+
+    #[test]
+    fn speculative_state_budget_evicts_lru_entries_per_device() {
+        let gpu0 = DeviceLocation::Cuda { gpu_id: 0 };
+        let gpu1 = DeviceLocation::Cuda { gpu_id: 1 };
+        let budgets = HashMap::from([(gpu0, 100), (gpu1, 100)]);
+        let existing = vec![
+            spec_usage(&[]),
+            spec_usage(&[(0, 40)]),
+            spec_usage(&[(1, 60)]),
+        ];
+
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(1, 50)]), &budgets),
+            vec![2]
+        );
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(0, 120)]), &budgets),
+            vec![1]
+        );
+        let existing = vec![
+            spec_usage(&[(0, 30)]),
+            spec_usage(&[(0, 50)]),
+            spec_usage(&[(0, 10)]),
+        ];
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(0, 60)]), &budgets),
+            vec![0, 1]
+        );
     }
 
     #[test]

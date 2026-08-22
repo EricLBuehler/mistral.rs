@@ -9,6 +9,15 @@ extern "C" {
         n: i64,
         stream: i64,
     ) -> i32;
+    pub(crate) fn cuda_graph_copy_2d_bytes(
+        src: *const c_void,
+        dst: *mut c_void,
+        width: i64,
+        height: i64,
+        src_pitch: i64,
+        dst_pitch: i64,
+        stream: i64,
+    ) -> i32;
     pub(crate) fn apply_sparse_penalties_f32(
         x: *const c_void,
         dst: *mut c_void,

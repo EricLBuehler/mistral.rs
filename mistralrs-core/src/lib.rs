@@ -202,7 +202,7 @@ pub use scheduler::{
 };
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
-pub use speculative::{MtpConfig, SpeculativeConfig};
+pub use speculative::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
 use toml_selector::{TomlLoaderArgs, TomlSelector};

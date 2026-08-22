@@ -3979,8 +3979,10 @@ dependencies = [
  "pyo3",
  "pyo3-build-config",
  "reqwest 0.13.1",
+ "safetensors 0.8.0",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "url",
 ]

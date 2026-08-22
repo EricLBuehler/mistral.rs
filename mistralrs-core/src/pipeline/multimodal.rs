@@ -51,11 +51,11 @@ use crate::pipeline::chat_template::{
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
-    cuda_graph_batch_bucket, cuda_graph_precapture_batches, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
-    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    cuda_graph_batch_bucket, cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed,
+    hybrid_graph_slots, install_hybrid_graph_state_indices, prepare_cuda_graph_memory_pool,
+    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay,
+    CudaDecodeGraphReplayInput, CudaDecodeGraphState, CudaGraphDecodeStep,
+    CudaGraphDecodeStepInputs, CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1282,6 +1282,7 @@ impl Loader for MultimodalLoader {
         let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
             let cache_config = calculate_cache_config(
                 paged_attn_config.mem_gpu,
+                paged_attn_config.base_device_memory_reservation_bytes,
                 paged_attn_config.block_size,
                 dtype,
                 paged_attn_config.cache_type,
@@ -1523,6 +1524,10 @@ impl MetadataMixin for MultimodalPipeline {
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .clear();
             warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
         }
         #[cfg(not(feature = "cuda"))]
@@ -1793,7 +1798,12 @@ impl MultimodalPipeline {
             return Ok(());
         };
         let speculative = self.model.has_speculative_proposer();
-        let options = self.model.speculative_proposal_len_options();
+        let options = self
+            .model
+            .speculative_proposal_len_options()
+            .into_iter()
+            .filter(|n| cuda_graph_startup_capture_allowed(speculative, 1 + n))
+            .collect::<Vec<_>>();
         let max_option = options.iter().copied().max().unwrap_or(0);
         // Non-max depths exist only for the adaptive controller, which is gated to small batches;
         // capturing them for every bucket would multiply the decode-scratch footprint for nothing.
@@ -1968,17 +1978,46 @@ impl MultimodalPipeline {
         let warm_spec_state = speculative
             .then(|| self.model.take_speculative_graph_state())
             .flatten();
+        let spec_state_usage = match warm_spec_state.as_deref() {
+            Some(warm) => match state.prepare_spec_state_admission(warm) {
+                Ok(usage) => Some(usage),
+                Err(err) => {
+                    restore_live_state_indices();
+                    self.model.install_speculative_graph_state(warm)?;
+                    self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
+                    return Err(err);
+                }
+            },
+            None => None,
+        };
         let persistent_spec_tensors = warm_spec_state
             .as_ref()
             .map(|warm| {
                 warm.tensors()
                     .iter()
-                    .map(|tensor| unsafe {
-                        Tensor::empty(tensor.shape(), tensor.dtype(), tensor.device())
+                    .map(|tensor| {
+                        if tensor.is_contiguous() {
+                            Ok(tensor.clone())
+                        } else {
+                            unsafe {
+                                Tensor::empty(tensor.shape(), tensor.dtype(), tensor.device())
+                            }
+                        }
                     })
                     .collect::<candle_core::Result<Vec<_>>>()
             })
-            .transpose()?;
+            .transpose();
+        let persistent_spec_tensors = match persistent_spec_tensors {
+            Ok(tensors) => tensors,
+            Err(err) => {
+                restore_live_state_indices();
+                if let Some(warm) = warm_spec_state.as_deref() {
+                    self.model.install_speculative_graph_state(warm)?;
+                }
+                self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
+                return Err(err);
+            }
+        };
         let mut graph_spec_state = None;
 
         let capture_result = capture_cuda_decode_graph(
@@ -2022,7 +2061,9 @@ impl MultimodalPipeline {
                         );
                     }
                     for (src, dst) in produced.iter().zip(persistent) {
-                        crate::cuda::graph::copy_tensor(src, dst)?;
+                        if src.id() != dst.id() {
+                            crate::cuda::graph::copy_tensor(src, dst)?;
+                        }
                     }
                     graph_spec_state = Some(captured.with_tensors(persistent.clone())?);
                 }
@@ -2036,7 +2077,7 @@ impl MultimodalPipeline {
         match capture_result {
             Ok(entry) => {
                 self.restore_hybrid_recurrent_state(warmup_recurrent_snapshots.as_deref())?;
-                state.insert(entry.with_spec_state(graph_spec_state));
+                state.insert(entry.with_spec_state(graph_spec_state, spec_state_usage));
             }
             Err(err) => {
                 self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;

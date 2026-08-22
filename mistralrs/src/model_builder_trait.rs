@@ -442,6 +442,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
     let device_map_setting =
         builder
@@ -502,6 +508,12 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -633,6 +645,12 @@ pub async fn build_text_pipeline(
     .build(builder.loader_type.clone())?;
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -765,6 +783,12 @@ pub async fn build_multimodal_pipeline(
     .build(builder.loader_type.clone());
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -908,6 +932,12 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -1333,6 +1363,12 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(

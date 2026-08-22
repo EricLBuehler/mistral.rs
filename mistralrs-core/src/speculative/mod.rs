@@ -9,7 +9,7 @@ pub(crate) mod staging;
 pub mod target;
 pub mod verifier;
 
-pub use config::{MtpConfig, SpeculativeConfig};
+pub use config::{reserve_external_mtp_memory, MtpConfig, SpeculativeConfig};
 pub use dflash::DFlashDraftModel;
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
 pub use proposer::{

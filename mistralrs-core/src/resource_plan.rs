@@ -98,5 +98,35 @@ fn split_paged_config(
 
     let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
     split.serving_capacity = config.serving_capacity;
+    split.base_device_memory_reservation_bytes = config.base_device_memory_reservation_bytes;
     Ok(split)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PagedCacheType;
+
+    #[test]
+    fn split_preserves_base_device_memory_reservation() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?
+        .with_serving_capacity(16)?
+        .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?;
+
+        let split = split_paged_config(config, 1, 2)?;
+        assert_eq!(split.serving_capacity, Some(16));
+        assert_eq!(
+            split.base_device_memory_reservation_bytes,
+            4 * 1024 * 1024 * 1024
+        );
+        assert!(matches!(
+            split.mem_gpu,
+            MemoryGpuConfig::Utilization(value) if value == 0.45
+        ));
+        Ok(())
+    }
 }

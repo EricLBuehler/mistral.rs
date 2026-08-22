@@ -33,16 +33,17 @@ use util::{
 
 use candle_core::{Device, Result};
 use mistralrs_core::{
-    initialize_logging, paged_attn_supported, parse_isq_value, AgentToolApprovalHandler,
-    AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse, CompletionResponse, Constraint,
-    DefaultSchedulerMethod, DetokenizationRequest, DeviceLayerMapMetadata, DeviceMapMetadata,
-    DeviceMapSetting, DiffusionGenerationParams, DiffusionLoaderBuilder, DrySamplingParams,
-    EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
-    GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
-    LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
-    LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    MistralRsError, MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder,
-    NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
+    initialize_logging, paged_attn_supported, parse_isq_value, reserve_external_mtp_memory,
+    AgentToolApprovalHandler, AnyMoeLoader, AutoDeviceMapParams, ChatCompletionResponse,
+    CompletionResponse, Constraint, DefaultSchedulerMethod, DetokenizationRequest,
+    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, DiffusionGenerationParams,
+    DiffusionLoaderBuilder, DrySamplingParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig,
+    GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig,
+    ImageGenerationResponse, ImageGenerationResponseFormat, LlguidanceGrammar, Loader,
+    LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy, LoraAdapterSpec,
+    LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder, MistralRsError, MtpConfig,
+    MultimodalLoaderBuilder, MultimodalSpecificConfig, NormalLoaderBuilder, NormalRequest,
+    NormalSpecificConfig, PagedAttentionConfig, PagedCacheType, Request as _Request,
     RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig, SearchEmbeddingModel,
     SpeculativeConfig, SpeechLoader, StopTokens, TokenSource, TokenizationRequest, Tool, Topology,
     UqffWriteConfig,
@@ -905,6 +906,7 @@ fn build_constraint(grammar: Option<&str>, grammar_type: Option<&str>) -> PyApiR
 
     Ok(constraint)
 }
+
 #[pymethods]
 impl Runner {
     #[new]
@@ -1238,6 +1240,10 @@ impl Runner {
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
             .transpose()?;
+        let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
+        let cache_config =
+            reserve_external_mtp_memory(cache_config, mtp_config.as_ref(), &dtype, device)
+                .map_err(PyApiErr::from)?;
 
         let pipeline = loader
             .load_model_from_hf(
@@ -1252,13 +1258,10 @@ impl Runner {
             )
             .map_err(PyApiErr::from)?;
 
-        if let Some(mtp_model) = mtp_model {
+        if let Some(mtp_config) = mtp_config {
             pipeline
                 .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(mistralrs_core::MtpConfig::new(
-                    mtp_model,
-                    mtp_n_predict,
-                )))
+                .attach_speculative(SpeculativeConfig::Mtp(mtp_config))
                 .map_err(|e| PyApiErr::from(&e))?;
         }
 
@@ -3228,6 +3231,55 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::WebSearchUserLocation>()?;
     m.add_class::<mistralrs_core::ApproximateUserLocation>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod mtp_reservation_tests {
+    use std::collections::HashMap;
+
+    use safetensors::{serialize_to_file, tensor::Dtype as SafeDtype, tensor::TensorView};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn external_mtp_checkpoint_bytes_are_added_to_the_cache_reservation() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model.safetensors");
+        let data = [0u8; 2];
+        serialize_to_file(
+            HashMap::from([("weight", TensorView::new(SafeDtype::BF16, vec![1], &data)?)]),
+            None,
+            &path,
+        )?;
+        let mtp_config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
+        let cache_config = PagedAttentionConfig::new(
+            None,
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?
+        .with_base_device_memory_reservation(usize::MAX - data.len())?;
+
+        let cache_config = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&mtp_config),
+            &candle_core::DType::BF16,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
+        let error = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&mtp_config),
+            &candle_core::DType::BF16,
+            &Device::Cpu,
+        )
+        .expect_err("adding the checkpoint twice should overflow");
+
+        assert!(error
+            .to_string()
+            .contains("paged attention device memory reservation overflow"));
+        Ok(())
+    }
 }
 
 #[cfg(test)]

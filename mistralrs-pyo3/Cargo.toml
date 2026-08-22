@@ -41,6 +41,10 @@ itertools.workspace = true
 [build-dependencies]
 pyo3-build-config.workspace = true
 
+[dev-dependencies]
+safetensors.workspace = true
+tempfile.workspace = true
+
 [features]
 default = []
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]

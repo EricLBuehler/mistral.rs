@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig, ModelSelected,
-    MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory, AutoDeviceMapParams,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
+    LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig,
+    ModelSelected, MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest,
+    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -741,16 +741,21 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = init_cache_config(
-            self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
-            self.paged_cache_type,
-            !paged_attn,
-        )?
-        .map(|config| config.with_serving_capacity(self.max_seqs))
-        .transpose()?;
+        let cache_config = reserve_external_mtp_memory(
+            init_cache_config(
+                self.paged_attn_block_size,
+                self.paged_attn_gpu_mem,
+                self.paged_attn_gpu_mem_usage,
+                self.paged_ctxt_len,
+                self.paged_cache_type,
+                !paged_attn,
+            )?
+            .map(|config| config.with_serving_capacity(self.max_seqs))
+            .transpose()?,
+            self.mtp_config.as_ref(),
+            &dtype,
+            &device,
+        )?;
 
         // Clone values needed for loader config before they're moved
         let model_for_config = model.clone();
@@ -923,7 +928,7 @@ impl MistralRsForServerBuilder {
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
         .transpose()?;
-        let paged_kv_plan = plan_paged_kv(
+        let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
                 .iter()
@@ -934,6 +939,10 @@ impl MistralRsForServerBuilder {
                 .collect::<Vec<_>>(),
             Default::default(),
         )?;
+        if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
+            *first =
+                reserve_external_mtp_memory(*first, self.mtp_config.as_ref(), &dtype, &device)?;
+        }
         let first_cache_config = paged_kv_plan.paged_attn[0];
 
         let isq = first_model

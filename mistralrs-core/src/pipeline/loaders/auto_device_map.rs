@@ -28,6 +28,18 @@ fn device_cap(avail_bytes: usize, dev: &Device) -> usize {
     }
 }
 
+fn saturating_memory_sum<const N: usize>(parts: [usize; N]) -> usize {
+    parts
+        .into_iter()
+        .fold(0usize, |total, part| total.saturating_add(part))
+}
+
+fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
+    parts
+        .into_iter()
+        .try_fold(0usize, |total, part| total.checked_add(part))
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum NonMappedSubModel {
     Vision,
@@ -223,6 +235,9 @@ pub fn get_device_layers(
 
     let model_cfg = loader.model_config(config)?;
     let has_paged_attn = paged_attn_config.is_some();
+    let base_device_memory_reservation_bytes = paged_attn_config
+        .as_ref()
+        .map_or(0, |config| config.base_device_memory_reservation_bytes);
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
             // For MbAmount, clamp to available memory so the capacity check
@@ -251,9 +266,13 @@ pub fn get_device_layers(
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
                     let cap = device_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
-                    let budget_mb = ((cap as f64 * f as f64) as usize)
-                        .saturating_sub(remaining + act_overhead)
-                        / (1024 * 1024);
+                    let occupied = saturating_memory_sum([
+                        remaining,
+                        act_overhead,
+                        base_device_memory_reservation_bytes,
+                    ]);
+                    let budget_mb =
+                        ((cap as f64 * f as f64) as usize).saturating_sub(occupied) / (1024 * 1024);
                     MemoryGpuConfig::MbAmount(budget_mb)
                 }
                 // ContextSize passes through to calculate_cache_config.
@@ -263,12 +282,19 @@ pub fn get_device_layers(
                 "Reserving {} MB for activations (predicted).",
                 b_to_mb!(non_mapped_max.max(mapped_max))
             );
+            if base_device_memory_reservation_bytes > 0 {
+                info!(
+                    "Reserving {} MB on the primary device for post-load model components.",
+                    base_device_memory_reservation_bytes.div_ceil(1024 * 1024)
+                );
+            }
             // The budget derived here is the only one that accounts for the activation reserve, so
             // it has to be what the pipelines load with. Recomputing there drops the reserve.
             cfg.mem_gpu = effective_mem_gpu;
 
             let cache = calculate_cache_config(
                 effective_mem_gpu,
+                cfg.base_device_memory_reservation_bytes,
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 cfg.cache_type,
@@ -356,6 +382,20 @@ pub fn get_device_layers(
 
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
         let cap = device_cap(avail_bytes, &dev);
+        if ordinal == 0
+            && !checked_memory_sum([
+                non_mapped_max.max(mapped_max),
+                non_mapped_size_in_bytes,
+                base_device_memory_reservation_bytes,
+            ])
+            .is_some_and(|required| required <= cap)
+        {
+            anyhow::bail!(
+                "Primary device {} cannot fit its fixed model components, activations, and post-load reservation within {} MB of usable capacity.",
+                dev.device_pretty_repr(),
+                b_to_mb!(cap),
+            );
+        }
 
         // Algorithm is to check the following:
         // 1) (no mapping) if *everything* fits on the first dev (non mapped and mapped)
@@ -365,30 +405,47 @@ pub fn get_device_layers(
         //   - otherwise, must hold the mapped act
         let remaining_kv_bytes = (layer..num_layers).map(kv_bytes_for_layer).sum::<usize>();
         let required_whole_capacity = if ordinal == 0 {
-            remaining + non_mapped_max.max(mapped_max) + remaining_kv_bytes + extra_kv_bytes
+            checked_memory_sum([
+                remaining,
+                non_mapped_max.max(mapped_max),
+                remaining_kv_bytes,
+                extra_kv_bytes,
+                base_device_memory_reservation_bytes,
+            ])
         } else {
-            remaining + mapped_max + remaining_kv_bytes
+            checked_memory_sum([remaining, mapped_max, remaining_kv_bytes])
         };
 
-        let layers_on_dev = if cap >= required_whole_capacity {
+        let layers_on_dev = if required_whole_capacity.is_some_and(|required| cap >= required) {
             remaining = 0;
             num_layers - layer
         } else {
             let mut used = mapped_max;
-            let mut used_weight_bytes = 0;
+            let mut used_weight_bytes = 0usize;
             let mut count = 0;
             if ordinal == 0 {
-                used = used.max(non_mapped_max) + non_mapped_size_in_bytes + extra_kv_bytes;
-                used_weight_bytes += non_mapped_size_in_bytes;
+                used = checked_memory_sum([
+                    used.max(non_mapped_max),
+                    non_mapped_size_in_bytes,
+                    extra_kv_bytes,
+                    base_device_memory_reservation_bytes,
+                ])
+                .unwrap_or(usize::MAX);
+                used_weight_bytes = used_weight_bytes.saturating_add(non_mapped_size_in_bytes);
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
-                let delta = sz + kv_bytes_for_layer(layer + count);
-                if used + delta > cap {
+                let Some(delta) = sz.checked_add(kv_bytes_for_layer(layer + count)) else {
+                    break;
+                };
+                let Some(next_used) = used.checked_add(delta) else {
+                    break;
+                };
+                if next_used > cap {
                     break;
                 }
                 layer_sizes_in_bytes.pop();
-                used += delta;
-                used_weight_bytes += sz;
+                used = next_used;
+                used_weight_bytes = used_weight_bytes.saturating_add(sz);
                 count += 1;
             }
             if count > 0 {
@@ -500,5 +557,17 @@ mod tests {
             }
             AutoDeviceMapParams::Text { .. } => panic!("expected multimodal parameters"),
         }
+    }
+
+    #[test]
+    fn memory_sum_saturates_capacity_accounting_overflow() {
+        assert_eq!(saturating_memory_sum([usize::MAX - 2, 1, 1]), usize::MAX);
+        assert_eq!(saturating_memory_sum([usize::MAX, 1]), usize::MAX);
+    }
+
+    #[test]
+    fn checked_memory_sum_distinguishes_max_from_overflow() {
+        assert_eq!(checked_memory_sum([usize::MAX - 1, 1]), Some(usize::MAX));
+        assert_eq!(checked_memory_sum([usize::MAX, 1]), None);
     }
 }

@@ -1,10 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
+use candle_core::{DType, Device};
 use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 
-use crate::pipeline::{
-    hf::{build_api, get_file, list_repo_files, try_get_file},
-    TokenSource,
+use crate::{
+    paged_attention::PagedAttentionConfig,
+    pipeline::{
+        hf::{build_api, get_file, list_repo_files, try_get_file},
+        TokenSource,
+    },
+    utils::normal::TryIntoDType,
 };
 
 #[derive(Clone, Debug)]
@@ -60,6 +68,53 @@ impl MtpConfig {
             resolve_hf_mtp_path(model)
         }
     }
+
+    /// Returns a conservative runtime weight footprint for an external assistant checkpoint.
+    pub fn external_weight_size_in_bytes(&self, target_dtype: DType) -> candle_core::Result<usize> {
+        if self.is_builtin() {
+            return Ok(0);
+        }
+        let path = self.resolve_path()?;
+        let mut weight_paths = fs::read_dir(&path)
+            .map_err(|err| {
+                candle_core::Error::msg(format!("failed to list {}: {err}", path.display()))
+            })?
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().is_some_and(|ext| ext == "safetensors"))
+            .collect::<Vec<_>>();
+        weight_paths.sort();
+        crate::pipeline::checkpoint_runtime_size(&weight_paths, target_dtype)
+            .map_err(candle_core::Error::msg)?
+            .ok_or_else(|| {
+                candle_core::Error::msg(format!(
+                    "MTP model directory {} has no safetensors weights",
+                    path.display()
+                ))
+            })
+    }
+}
+
+/// Adds an external assistant's runtime weight footprint to a paged-cache memory reservation.
+pub fn reserve_external_mtp_memory(
+    cache_config: Option<PagedAttentionConfig>,
+    mtp_config: Option<&MtpConfig>,
+    dtype: &dyn TryIntoDType,
+    device: &Device,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    let Some(cache_config) = cache_config else {
+        return Ok(None);
+    };
+    let Some(mtp_config) = mtp_config else {
+        return Ok(Some(cache_config));
+    };
+    if mtp_config.is_builtin() {
+        return Ok(Some(cache_config));
+    }
+    let dtype = dtype.try_into_dtype(&[device])?;
+    let bytes = mtp_config.external_weight_size_in_bytes(dtype)?;
+    Ok(Some(
+        cache_config.with_base_device_memory_reservation(bytes)?,
+    ))
 }
 
 fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
@@ -98,4 +153,56 @@ fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
     config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
         candle_core::Error::Msg(format!("config path has no parent: {config_path:?}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use safetensors::{serialize_to_file, tensor::Dtype as SafeDtype, tensor::TensorView};
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn external_weight_size_uses_runtime_dtype() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("model.safetensors");
+        let data = vec![0u8; 8];
+        serialize_to_file(
+            HashMap::from([(
+                "layers.0.weight",
+                TensorView::new(SafeDtype::BF16, vec![4], &data)?,
+            )]),
+            None,
+            &path,
+        )?;
+        let config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
+
+        assert_eq!(config.external_weight_size_in_bytes(DType::F32)?, 16);
+        let cache_config = crate::PagedAttentionConfig::new(
+            None,
+            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::PagedCacheType::Auto,
+        )?
+        .with_base_device_memory_reservation(usize::MAX - 16)?;
+        let cache_config = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&config),
+            &DType::F32,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
+        let error = reserve_external_mtp_memory(
+            Some(cache_config),
+            Some(&config),
+            &DType::F32,
+            &Device::Cpu,
+        )
+        .expect_err("adding the checkpoint twice should overflow");
+        assert!(error
+            .to_string()
+            .contains("paged attention device memory reservation overflow"));
+        Ok(())
+    }
 }

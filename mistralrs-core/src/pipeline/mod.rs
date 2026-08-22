@@ -55,6 +55,7 @@ pub use isq::{
     UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
+pub(crate) use loaders::checkpoint_runtime_size;
 pub use loaders::{
     AdapterKind, AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader,
     AutoMultimodalLoader, AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader,

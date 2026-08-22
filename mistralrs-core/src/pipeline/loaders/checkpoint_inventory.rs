@@ -92,6 +92,33 @@ fn runtime_tensor_bytes(name: &str, view: &TensorView<'_>, target_dtype: DType) 
     Ok(stored_bytes.max(runtime_bytes))
 }
 
+pub(crate) fn checkpoint_runtime_size(
+    paths: &[PathBuf],
+    target_dtype: DType,
+) -> Result<Option<usize>> {
+    if paths.is_empty()
+        || paths
+            .iter()
+            .any(|path| path.extension().and_then(|ext| ext.to_str()) != Some("safetensors"))
+    {
+        return Ok(None);
+    }
+
+    let safetensors = unsafe {
+        mistralrs_quant::safetensors::MmapedSafetensors::multi_unique(paths)
+            .context("reading checkpoint tensor inventory")?
+    };
+    safetensors
+        .tensors()
+        .into_iter()
+        .try_fold(0usize, |total, (name, view)| {
+            total
+                .checked_add(runtime_tensor_bytes(&name, &view, target_dtype)?)
+                .context("checkpoint runtime size overflow")
+        })
+        .map(Some)
+}
+
 pub(crate) fn checkpoint_device_map_sizes(
     paths: &[PathBuf],
     num_layers: usize,
@@ -208,11 +235,20 @@ mod tests {
         ]);
         serialize_to_file(tensors, None, &path)?;
 
-        let sizes =
-            checkpoint_device_map_sizes(&[path], 2, DType::BF16, standard_layer_index)?.unwrap();
+        let sizes = checkpoint_device_map_sizes(
+            std::slice::from_ref(&path),
+            2,
+            DType::BF16,
+            standard_layer_index,
+        )?
+        .unwrap();
         assert_eq!(sizes.layer_sizes_in_bytes, [24, 24]);
         assert_eq!(sizes.non_mapped_size_in_bytes, 8);
         assert_eq!(sizes.total_model_size_in_bytes, 56);
+        assert_eq!(
+            checkpoint_runtime_size(std::slice::from_ref(&path), DType::BF16)?,
+            Some(56)
+        );
         Ok(())
     }
 

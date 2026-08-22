@@ -53,7 +53,9 @@ pub(crate) fn block_aligned_sliding_window_start(
 
 #[cfg(test)]
 mod tests {
-    use super::block_aligned_sliding_window_start;
+    use super::{
+        block_aligned_sliding_window_start, MemoryGpuConfig, PagedAttentionConfig, PagedCacheType,
+    };
 
     #[test]
     fn sliding_window_retains_prior_window_and_whole_query() {
@@ -73,6 +75,24 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn base_device_reservation_rejects_additive_overflow() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::MbAmount(1),
+            PagedCacheType::Auto,
+        )?
+        .with_base_device_memory_reservation(usize::MAX)?;
+
+        let error = config
+            .with_base_device_memory_reservation(1)
+            .expect_err("reservation addition should overflow");
+        assert!(error
+            .to_string()
+            .contains("paged attention device memory reservation overflow"));
+        Ok(())
+    }
 }
 
 /// All memory counts in MB. Default for block size is 32.
@@ -82,6 +102,7 @@ pub struct PagedAttentionConfig {
     pub(crate) mem_gpu: MemoryGpuConfig,
     pub(crate) cache_type: PagedCacheType,
     pub(crate) serving_capacity: Option<usize>,
+    pub(crate) base_device_memory_reservation_bytes: usize,
 }
 
 impl PagedAttentionConfig {
@@ -95,6 +116,7 @@ impl PagedAttentionConfig {
             mem_gpu,
             cache_type,
             serving_capacity: None,
+            base_device_memory_reservation_bytes: 0,
         })
     }
 
@@ -103,6 +125,15 @@ impl PagedAttentionConfig {
             anyhow::bail!("paged attention serving capacity must be nonzero")
         }
         self.serving_capacity = Some(serving_capacity);
+        Ok(self)
+    }
+
+    /// Reserves primary-device memory for components loaded after the paged cache is sized.
+    pub fn with_base_device_memory_reservation(mut self, bytes: usize) -> anyhow::Result<Self> {
+        self.base_device_memory_reservation_bytes = self
+            .base_device_memory_reservation_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| anyhow::anyhow!("paged attention device memory reservation overflow"))?;
         Ok(self)
     }
 }
@@ -176,6 +207,7 @@ macro_rules! ctxt_to_blocks {
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_cache_config(
     mem_gpu: MemoryGpuConfig,
+    base_device_memory_reservation_bytes: usize,
     block_size: Option<usize>,
     dtype: DType,
     cache_type: PagedCacheType,
@@ -204,8 +236,16 @@ pub fn calculate_cache_config(
 
     let mut min_mem_gpu = usize::MAX;
     let mut affine_reserved_mb = 0usize;
+    let base_device_memory_reservation_mb =
+        base_device_memory_reservation_bytes.div_ceil(SIZE_IN_MB);
+    let primary_device = device.location();
     for dev in layer_devices {
         let device = dev.as_ref().unwrap_or(device);
+        let reserved_mb = if device.location() == primary_device {
+            base_device_memory_reservation_mb
+        } else {
+            0
+        };
         // Weight loading enqueues stream-ordered frees without draining; sync so the memory
         // reading and the cache allocation right after this see the real free VRAM.
         if device.is_cuda() {
@@ -245,6 +285,7 @@ pub fn calculate_cache_config(
                     let used = (memory.total() - memory.available()) as f32 / SIZE_IN_MB as f32;
                     (total * f - used).max(0.0) as usize
                 }
+                .saturating_sub(reserved_mb)
             }
             MemoryGpuConfig::ContextSize(toks) => {
                 // ContextSize is demand-driven (bytes needed for N tokens), not a memory budget, so model weight does not apply here.
@@ -263,6 +304,11 @@ pub fn calculate_cache_config(
     }
     if affine_reserved_mb > 0 && !silent {
         info!("Reserving {affine_reserved_mb} MB per GPU for packed GGUF affine weights.");
+    }
+    if base_device_memory_reservation_mb > 0 && !silent {
+        info!(
+            "Reserving {base_device_memory_reservation_mb} MB on the primary device for post-load model components."
+        );
     }
 
     // On Metal (unified memory), cap KV cache to what the model can actually use.

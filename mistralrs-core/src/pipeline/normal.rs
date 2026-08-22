@@ -173,6 +173,7 @@ pub(crate) fn build_normal_pipeline(
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
         let cache_config = calculate_cache_config(
             paged_attn_config.mem_gpu,
+            paged_attn_config.base_device_memory_reservation_bytes,
             paged_attn_config.block_size,
             dtype,
             paged_attn_config.cache_type,
@@ -1566,6 +1567,10 @@ impl MetadataMixin for NormalPipeline {
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
+            self.cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned")
+                .clear();
             warn!("CUDA decode graph precapture failed, graphs will be captured lazily: {err}");
         }
         #[cfg(not(feature = "cuda"))]
