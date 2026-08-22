@@ -1,5 +1,6 @@
 mod cache;
 mod context_attention_mla;
+mod fa3;
 mod flash_attn_sinks;
 mod flashinfer;
 mod gather_kv;
@@ -13,6 +14,10 @@ use candle_core::cuda::cudarc::{
 };
 use candle_core::{Layout, Result};
 pub use context_attention_mla::context_attention_fwd_mla;
+pub use fa3::{
+    fa3_fp8_decode, fa3_prepare_decode_metadata, Fa3DecodeMetadata, Fa3DecodeParams,
+    Fa3DecodeSchedule, USE_FA3_FP8_PAGED,
+};
 pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
 pub use flashinfer::{
     flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
