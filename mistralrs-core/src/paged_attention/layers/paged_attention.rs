@@ -66,6 +66,17 @@ impl Fa3DecodeCandidate {
     }
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct FlashInferDecodeCall<'call, 'ctx> {
+    ctx: &'call PagedForwardCtx<'ctx>,
+    query: &'call Tensor,
+    key_cache: &'call Tensor,
+    value_cache: &'call Tensor,
+    dev: &'call DeviceLocation,
+    attention_mask: &'call AttentionMask,
+}
+
 #[derive(Clone, Copy)]
 struct CacheScales<'a> {
     #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -767,6 +778,17 @@ pub struct PagedAttention {
     fp8_v_scale: Tensor,
 }
 
+#[allow(dead_code)]
+impl PagedAttention {
+    pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
+        self.fp8_attention_scales
+    }
+
+    pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
+        self.fp8_attention_scales_calibrated
+    }
+}
+
 impl PagedAttention {
     pub fn new(head_dim: usize, device: &Device, alibi_slopes: Option<Vec<f32>>) -> Result<Self> {
         Self::new_with_fp8_attention_scales(head_dim, device, alibi_slopes, None)
@@ -796,34 +818,9 @@ impl PagedAttention {
         })
     }
 
-    #[allow(dead_code)]
-    pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
-        self.fp8_attention_scales
-    }
-
-    #[allow(dead_code)]
-    pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
-        self.fp8_attention_scales_calibrated
-    }
-
-    #[allow(dead_code)]
-    pub fn fp8_q_scale(&self) -> &Tensor {
-        &self.fp8_q_scale
-    }
-
-    #[allow(dead_code)]
-    pub fn fp8_k_scale(&self) -> &Tensor {
-        &self.fp8_k_scale
-    }
-
-    #[allow(dead_code)]
-    pub fn fp8_v_scale(&self) -> &Tensor {
-        &self.fp8_v_scale
-    }
-
-    #[allow(dead_code)]
-    pub fn fp8_q_scale_value(&self) -> f32 {
-        self.fp8_attention_scales.q
+    #[cfg(test)]
+    fn fp8_scale_tensors(&self) -> [&Tensor; 3] {
+        [&self.fp8_q_scale, &self.fp8_k_scale, &self.fp8_v_scale]
     }
 
     fn cache_scales<'a>(&'a self, key_cache: &Tensor) -> CacheScales<'a> {
@@ -1547,15 +1544,14 @@ impl PagedAttention {
                 tensors.attention_mask,
             ),
             #[cfg(all(feature = "cuda", target_family = "unix"))]
-            DecodePlan::FlashInfer(plan) => self.run_flashinfer_decode(
+            DecodePlan::FlashInfer(_) => self.run_flashinfer_decode(FlashInferDecodeCall {
                 ctx,
-                &query,
-                key_cache_ref,
-                value_cache_ref,
-                &dev,
-                tensors.attention_mask,
-                plan,
-            ),
+                query: &query,
+                key_cache: key_cache_ref,
+                value_cache: value_cache_ref,
+                dev: &dev,
+                attention_mask: tensors.attention_mask,
+            }),
             DecodePlan::PagedAttention => {
                 self.run_standard_paged_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev)
             }
@@ -1687,15 +1683,15 @@ impl PagedAttention {
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    fn try_run_fa3_decode(
-        &self,
-        ctx: &PagedForwardCtx<'_>,
-        query: &Tensor,
-        key_cache: &Tensor,
-        value_cache: &Tensor,
-        dev: &DeviceLocation,
-        attention_mask: &AttentionMask,
-    ) -> Result<Option<Tensor>> {
+    fn try_run_fa3_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Option<Tensor>> {
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            attention_mask,
+        } = call;
         let (_, kv_heads, page_size, head_dim) = key_cache.dims4()?;
         let key = Fa3DecodeScheduleKey {
             device: *dev,
@@ -1762,21 +1758,18 @@ impl PagedAttention {
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    fn run_flashinfer_decode(
-        &self,
-        ctx: &PagedForwardCtx<'_>,
-        query: &Tensor,
-        key_cache: &Tensor,
-        value_cache: &Tensor,
-        dev: &DeviceLocation,
-        attention_mask: &AttentionMask,
-        _flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
-    ) -> Result<Tensor> {
-        if let Some(output) =
-            self.try_run_fa3_decode(ctx, query, key_cache, value_cache, dev, attention_mask)?
-        {
+    fn run_flashinfer_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Tensor> {
+        if let Some(output) = self.try_run_fa3_decode(call)? {
             return Ok(output);
         }
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            ..
+        } = call;
         let fi_meta = ctx
             .input_metadata
             .flashinfer
@@ -2114,10 +2107,10 @@ mod tests {
             PagedAttention::new_with_fp8_attention_scales(128, &Device::Cpu, None, Some(scales))?;
         assert_eq!(attention.fp8_attention_scales(), scales);
         assert!(attention.has_calibrated_fp8_attention_scales());
-        assert_eq!(attention.fp8_q_scale_value(), scales.q);
-        assert_eq!(attention.fp8_q_scale().to_scalar::<f32>()?, scales.q);
-        assert_eq!(attention.fp8_k_scale().to_scalar::<f32>()?, scales.k);
-        assert_eq!(attention.fp8_v_scale().to_scalar::<f32>()?, scales.v);
+        let [q_scale, k_scale, v_scale] = attention.fp8_scale_tensors();
+        assert_eq!(q_scale.to_scalar::<f32>()?, scales.q);
+        assert_eq!(k_scale.to_scalar::<f32>()?, scales.k);
+        assert_eq!(v_scale.to_scalar::<f32>()?, scales.v);
         #[cfg(all(feature = "cuda", target_family = "unix"))]
         {
             let fp8_cache = Tensor::zeros((1,), DType::F8E4M3, &Device::Cpu)?;

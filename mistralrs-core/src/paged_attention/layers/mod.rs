@@ -23,6 +23,7 @@ pub mod paged_attention {
         fp8_v_scale: Tensor,
     }
 
+    #[allow(dead_code)]
     impl PagedAttention {
         pub fn new(
             _head_dim: usize,
@@ -41,34 +42,12 @@ pub mod paged_attention {
             candle_core::bail!("Paged attention requires the CUDA or Metal feature flags.");
         }
 
-        #[allow(dead_code)]
         pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
             self.fp8_attention_scales
         }
 
-        #[allow(dead_code)]
         pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
             self.fp8_attention_scales_calibrated
-        }
-
-        #[allow(dead_code)]
-        pub fn fp8_q_scale(&self) -> &Tensor {
-            &self.fp8_q_scale
-        }
-
-        #[allow(dead_code)]
-        pub fn fp8_k_scale(&self) -> &Tensor {
-            &self.fp8_k_scale
-        }
-
-        #[allow(dead_code)]
-        pub fn fp8_v_scale(&self) -> &Tensor {
-            &self.fp8_v_scale
-        }
-
-        #[allow(dead_code)]
-        pub fn fp8_q_scale_value(&self) -> f32 {
-            self.fp8_attention_scales.q
         }
 
         #[allow(clippy::too_many_arguments)]
