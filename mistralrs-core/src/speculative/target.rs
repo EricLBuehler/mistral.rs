@@ -41,6 +41,10 @@ pub trait SpeculativeTargetMixin {
         false
     }
 
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        false
+    }
+
     fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         None
     }

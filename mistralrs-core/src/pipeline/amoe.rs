@@ -308,6 +308,23 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).attach_speculative(config)
     }
 
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+        get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids);
+    }
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_speculative_prompt_bootstrap()
+    }
+
+    fn speculative_prompt_chunk(
+        &mut self,
+        seqs: &[&mut Sequence],
+        chunk: &crate::pipeline::SpeculativePromptChunk,
+        metadata: &crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).speculative_prompt_chunk(seqs, chunk, metadata)
+    }
+
     async fn try_sample_speculative_causal_gen(
         &mut self,
         input_seqs: &mut [&mut Sequence],

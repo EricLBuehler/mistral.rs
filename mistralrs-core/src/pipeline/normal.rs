@@ -1669,6 +1669,7 @@ impl NormalPipeline {
         position_ids: &[usize],
         paged_attn_meta: Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)>,
         flash_meta: &FlashParams,
+        recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         if !cuda_decode_graphs_enabled() || !self.model.supports_cuda_decode_graphs() {
             return Ok(None);
@@ -1734,8 +1735,12 @@ impl NormalPipeline {
         else {
             return Ok(None);
         };
-        let key =
-            CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
+        let key = CudaDecodeGraphKey::new(
+            &step.input_ids,
+            &step.metadata,
+            cache_config.block_size,
+            recurrent_batch_kind,
+        )?;
         if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
             return Ok(Some(replay));
         }
@@ -1747,6 +1752,7 @@ impl NormalPipeline {
             kv_cache.as_slice(),
             flash_meta,
             cache_config.block_size,
+            recurrent_batch_kind,
         )?;
         Ok(Some(CudaDecodeGraphReplay {
             logits,
@@ -1806,8 +1812,12 @@ impl NormalPipeline {
             else {
                 continue;
             };
-            let key =
-                CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
+            let key = CudaDecodeGraphKey::new(
+                &step.input_ids,
+                &step.metadata,
+                cache_config.block_size,
+                RecurrentBatchKind::Decode,
+            )?;
             if state.contains(&key) {
                 continue;
             }
@@ -1818,6 +1828,7 @@ impl NormalPipeline {
                 kv_cache.as_slice(),
                 &inputs.flash_meta,
                 cache_config.block_size,
+                RecurrentBatchKind::Decode,
             )?;
             captured += 1;
         }
@@ -1840,6 +1851,7 @@ impl NormalPipeline {
         kv_cache: &[(Tensor, Tensor)],
         flash_meta: &FlashParams,
         block_size: usize,
+        recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Tensor> {
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
@@ -1867,8 +1879,8 @@ impl NormalPipeline {
                 Some((kv_cache, &metadata)),
                 flash_meta,
             )
-            .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
-            .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
+            .with_recurrent_batch_kind(recurrent_batch_kind)
+            .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
             step.input_ids.device().synchronize()?;
             let live_logits = step.narrow_rows(&warmup_logits)?;
@@ -1896,8 +1908,8 @@ impl NormalPipeline {
                         Some((kv_cache, graph_metadata)),
                         flash_meta,
                     )
-                    .with_recurrent_batch_kind(RecurrentBatchKind::Decode)
-                    .with_recurrent_metadata(self.recurrent_metadata(RecurrentBatchKind::Decode));
+                    .with_recurrent_batch_kind(recurrent_batch_kind)
+                    .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
                     self.model.forward(graph_input_ids, &mut ctx)
                 },
             )?;
@@ -2036,6 +2048,10 @@ impl Pipeline for NormalPipeline {
         !self.model.has_speculative_proposer()
     }
 
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.model.supports_speculative_prompt_bootstrap()
+    }
+
     fn supports_packed_prefill(&self) -> bool {
         self.model.supports_packed_prefill()
             && self.metadata.cache_engine.is_some()
@@ -2117,6 +2133,7 @@ impl Pipeline for NormalPipeline {
                         &position_ids,
                         paged_attn_meta.as_ref().map(|(a, b)| (a.clone(), b)),
                         &flash_meta,
+                        recurrent_batch_kind,
                     ) {
                         Ok(Some(replay)) => {
                             return Ok(ForwardStepResult::cuda_decode(

@@ -83,7 +83,7 @@ pub mod text_models_inputs_processor {
             block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
             AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
-        pipeline::RecurrentBatchKind,
+        pipeline::{recurrent_batch_kind_for_input, RecurrentBatchKind},
         sequence::Sequence,
         AdapterLease,
     };
@@ -2589,6 +2589,10 @@ pub mod text_models_inputs_processor {
                     seq_indices,
                 })
             } else {
+                let recurrent_batch_kind = recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                );
                 let metadata = get_completion_input(
                     input_seqs
                         .iter()
@@ -2626,7 +2630,7 @@ pub mod text_models_inputs_processor {
                     paged_attn_meta,
                     flash_meta,
                     flash_meta_full: None,
-                    recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    recurrent_batch_kind,
                     adapter_leases,
                 });
                 Ok(InputProcessorOutput {

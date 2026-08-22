@@ -1781,8 +1781,12 @@ impl MultimodalPipeline {
         else {
             return Ok(None);
         };
-        let key =
-            CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
+        let key = CudaDecodeGraphKey::new(
+            &step.input_ids,
+            &step.metadata,
+            cache_config.block_size,
+            recurrent_batch_kind,
+        )?;
         if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
             if let Some(spec_state) = replay.spec_state.as_deref() {
                 if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
@@ -1896,6 +1900,7 @@ impl MultimodalPipeline {
                     &step.input_ids,
                     &step.metadata,
                     cache_config.block_size,
+                    recurrent_batch_kind,
                 )?;
                 if state.contains(&key) {
                     continue;
@@ -2183,6 +2188,10 @@ impl Pipeline for MultimodalPipeline {
 
     fn supports_batched_cuda_sampling(&self) -> bool {
         !self.model.has_speculative_proposer()
+    }
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        self.model.supports_speculative_prompt_bootstrap()
     }
 
     fn adapter_runtime(&self) -> Option<Arc<DynamicLoraRuntime>> {
