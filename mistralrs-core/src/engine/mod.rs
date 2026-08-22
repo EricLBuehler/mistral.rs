@@ -864,6 +864,9 @@ impl Engine {
                     }
                 }
                 SchedulerOutput::PagedAttention { mut output } => {
+                    let block_size = scheduler.block_size().unwrap();
+                    let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
+                    drop(scheduler);
                     if !output.scheduled.is_empty() {
                         let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
 
@@ -904,14 +907,11 @@ impl Engine {
                         let res = {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
-                            let block_size = scheduler.block_size().unwrap();
-
                             if guards_mut.is_empty() {
                                 Ok(Duration::ZERO)
                             } else {
                                 let pipeline_metadata = pipeline.get_metadata();
                                 let model_metadata = pipeline_metadata.model_metadata.as_ref();
-                                let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
                                 let max_paged_context_len = {
                                     let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
                                     kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
@@ -944,7 +944,7 @@ impl Engine {
                                         .map(|metadata| metadata.k_head_dim())
                                         .unwrap_or(1)
                                         .max(1),
-                                    kv_cache_manager,
+                                    kv_cache_manager: kv_cache_manager.clone(),
                                     prompt_chunk_size: output.prompt_chunk_size,
                                     prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                                     has_noncausal_mm_context: false,
@@ -1018,7 +1018,6 @@ impl Engine {
                                 && pipeline.cache().is_hybrid()
                                 && prefix_cacher.accepts_paged_recurrent_prefix()
                             {
-                                let block_size = scheduler.block_size().unwrap();
                                 let hybrid_cache = pipeline.cache().hybrid();
 
                                 for seq in guards_mut.iter() {
@@ -1092,6 +1091,7 @@ impl Engine {
                             }
                         }
                     }
+                    scheduler = get_mut_arcmutex!(self.scheduler);
                 }
             }
 

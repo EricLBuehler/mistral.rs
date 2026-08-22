@@ -551,8 +551,71 @@ pub async fn sample_and_add_toks(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::PerSequence(logits_seq),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+pub async fn sample_and_add_toks_batched(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: Tensor,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::Batched(logits),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+enum CausalLogitsBatch {
+    PerSequence(Vec<Tensor>),
+    Batched(Tensor),
+}
+
+impl CausalLogitsBatch {
+    fn len(&self) -> Result<usize> {
+        match self {
+            Self::PerSequence(logits) => Ok(logits.len()),
+            Self::Batched(logits) => logits.dim(0),
+        }
+    }
+
+    fn into_cpu_rows(self) -> Result<Vec<Tensor>> {
+        match self {
+            Self::PerSequence(logits) => coalesce_batch_logits_to_cpu(logits),
+            Self::Batched(logits) => {
+                let batch = logits.dim(0)?;
+                let logits = logits.to_device(&candle_core::Device::Cpu)?;
+                (0..batch).map(|idx| logits.i(idx)).collect()
+            }
+        }
+    }
+}
+
+async fn sample_and_add_toks_inner(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: CausalLogitsBatch,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
     let seqs_len = seqs.len();
-    debug_assert_eq!(logits_seq.len(), seqs_len);
+    debug_assert_eq!(logits.len()?, seqs_len);
 
     let use_async_pool = seqs_len > 1;
     let metadata = this.get_metadata();
@@ -560,10 +623,10 @@ pub async fn sample_and_add_toks(
     let max_model_len = metadata.max_seq_len;
     let eos_toks = metadata.eos_tok.clone();
 
-    let sampled_vec = match try_sample_batch_cuda(&logits_seq, seqs, &rng)? {
+    let sampled_vec = match try_sample_batch_cuda(&logits, seqs, &rng)? {
         Some(sampled) => sampled,
         None => {
-            let logits_seq = coalesce_batch_logits_to_cpu(logits_seq)?;
+            let logits_seq = logits.into_cpu_rows()?;
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
                 .map(|(logits_per_seq, seq)| {
                     let return_logprobs = seq.return_logprobs();
@@ -645,6 +708,20 @@ fn stack_final_logits(logits: &[Tensor]) -> Result<Tensor> {
         .to_dtype(DType::F32)
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn final_batched_logits(logits: &Tensor) -> Result<Tensor> {
+    let dims = logits.dims();
+    if dims.len() < 2 || dims[1..dims.len() - 1].iter().any(|&dim| dim != 1) {
+        candle_core::bail!(
+            "batched causal logits must have shape [batch, ..., vocab] with singleton middle dimensions, got {dims:?}"
+        );
+    }
+    logits
+        .contiguous()?
+        .reshape((dims[0], dims[dims.len() - 1]))?
+        .to_dtype(DType::F32)
+}
+
 fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
     if logits.len() <= 1 || logits.iter().all(|logits| logits.device().is_cpu()) {
         return Ok(logits);
@@ -657,16 +734,27 @@ fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
 
 #[cfg(feature = "cuda")]
 fn try_sample_batch_cuda(
-    logits: &[Tensor],
+    logits: &CausalLogitsBatch,
     seqs: &[&mut Sequence],
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
-    if logits.is_empty()
-        || logits.len() != seqs.len()
-        || logits.iter().any(|logits| !logits.device().is_cuda())
-    {
-        return Ok(None);
-    }
+    let logits = match logits {
+        CausalLogitsBatch::PerSequence(logits) => {
+            if logits.is_empty()
+                || logits.len() != seqs.len()
+                || logits.iter().any(|logits| !logits.device().is_cuda())
+            {
+                return Ok(None);
+            }
+            stack_final_logits(logits)?
+        }
+        CausalLogitsBatch::Batched(logits) => {
+            if logits.dim(0)? != seqs.len() || !logits.device().is_cuda() {
+                return Ok(None);
+            }
+            final_batched_logits(logits)?
+        }
+    };
 
     let mut samplers_and_plans = Vec::with_capacity(seqs.len());
     let mut sampling_logprob_required = false;
@@ -689,20 +777,18 @@ fn try_sample_batch_cuda(
     if samplers_and_plans
         .iter()
         .any(|(_, plan)| matches!(plan.kind, CudaBatchSamplingKind::Categorical) != categorical)
-        || logits.len() == 1 && !categorical
+        || seqs.len() == 1 && !categorical
     {
         return Ok(None);
     }
 
-    let logits = stack_final_logits(logits)?;
     let all_argmax = samplers_and_plans
         .iter()
         .all(|(_, plan)| plan.kind.is_argmax());
     if all_argmax && !sampling_logprob_required {
-        let output = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?;
-        let packed = output.packed.to_vec2::<f32>()?;
+        let packed = samplers_and_plans[0].0.sample_cuda_top1_batch(&logits)?;
         let sampled = std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(&row))
+            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(row.as_slice()))
             .collect();
         return Ok(Some(sampled));
     }
@@ -762,7 +848,7 @@ fn try_sample_batch_cuda(
 
 #[cfg(not(feature = "cuda"))]
 fn try_sample_batch_cuda(
-    _logits: &[Tensor],
+    _logits: &CausalLogitsBatch,
     _seqs: &[&mut Sequence],
     _rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
@@ -1016,6 +1102,26 @@ mod tests {
         assert_eq!(
             packed,
             vec![vec![8.0, 9.0, 10.0, 11.0], vec![0.0, 1.0, 2.0, 3.0]]
+        );
+    }
+
+    #[test]
+    fn final_batched_logits_flattens_singleton_axes() {
+        let logits = Tensor::from_vec(
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            (2, 1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+
+        let packed = final_batched_logits(&logits)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        assert_eq!(
+            packed,
+            vec![vec![0.0, 1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0, 7.0]]
         );
     }
 }

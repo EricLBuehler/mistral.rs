@@ -59,7 +59,7 @@ use crate::pipeline::cuda_graph::{
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
-use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::sampling::{sample_and_add_toks, sample_and_add_toks_batched};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
@@ -1709,9 +1709,8 @@ impl MultimodalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
-        // The captured forward runs on a Var copy with canonical strides; kernels bake dims/strides into
-        // their parameter vectors, so the warmup must see the exact same layout
-        let input_ids = &input_ids.force_contiguous()?;
+        // Captured kernels require canonical strides, but an already contiguous input needs no copy.
+        let input_ids = &input_ids.contiguous()?;
 
         let mut state = self
             .cuda_decode_graph
@@ -2307,6 +2306,30 @@ impl Pipeline for MultimodalPipeline {
 
         crate::speculative::driver::clear_staged_speculative_tokens(seqs);
         Ok(false)
+    }
+
+    async fn try_sample_causal_gen_batched(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: &Tensor,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<bool, candle_core::Error> {
+        if self.model.has_speculative_proposer() {
+            return Ok(false);
+        }
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        sample_and_add_toks_batched(
+            self,
+            seqs,
+            logits.clone(),
+            prefix_cacher,
+            disable_eos_stop,
+            rng,
+        )
+        .await?;
+        Ok(true)
     }
 
     async fn sample_causal_gen(

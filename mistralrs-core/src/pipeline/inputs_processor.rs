@@ -1442,7 +1442,8 @@ pub mod text_models_inputs_processor {
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
         let flash_attn = crate::using_flash_attn();
-        let mut seqs_tensors = Vec::new();
+        let mut input_tokens = Vec::new();
+        let mut input_width = None;
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
@@ -1481,7 +1482,14 @@ pub mod text_models_inputs_processor {
                 seqlens_k.push(effective_context_len as u32);
             }
 
-            seqs_tensors.push(Tensor::new(ctxt, device)?.unsqueeze(0)?);
+            match input_width {
+                Some(width) if width != query_len => {
+                    anyhow::bail!("completion input rows must have one query width")
+                }
+                None => input_width = Some(query_len),
+                Some(_) => {}
+            }
+            input_tokens.extend(ctxt);
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
                 let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
@@ -1548,7 +1556,9 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        let flash_meta = if flash_attn {
+        let paged_single_token_decode = paged_attn_metadata.is_some()
+            && context_lens.iter().all(|&(_, query_len)| query_len == 1);
+        let flash_meta = if flash_attn && !paged_single_token_decode {
             make_flash_params(
                 device,
                 mapper,
@@ -1585,7 +1595,11 @@ pub mod text_models_inputs_processor {
         };
 
         Ok(InputMetadata {
-            input: Tensor::cat(&seqs_tensors, 0).unwrap(),
+            input: Tensor::from_vec(
+                input_tokens,
+                (input_seqs.len(), input_width.unwrap_or_default()),
+                device,
+            )?,
             positions: seqlen_offsets,
             context_lens,
             position_ids,

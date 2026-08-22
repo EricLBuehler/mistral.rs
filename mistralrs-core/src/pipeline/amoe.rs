@@ -331,6 +331,19 @@ impl Pipeline for AnyMoePipeline {
             .await
     }
 
+    async fn try_sample_causal_gen_batched(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: &Tensor,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<bool, candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .try_sample_causal_gen_batched(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await
+    }
+
     async fn sample_causal_gen(
         &self,
         seqs: &mut [&mut Sequence],

@@ -675,6 +675,12 @@ impl Sampler {
         })
     }
 
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sample_cuda_top1_batch(&self, logits: &Tensor) -> Result<Vec<[f32; 2]>> {
+        let mut cache = self.top1_cache.lock().unwrap();
+        crate::ops::cuda_top1_logits_f32_packed_batched_cached(logits, &mut cache)
+    }
+
     fn get_top_logprobs(&self, probs: &[f32]) -> Result<Vec<TopLogprob>> {
         let k = self.top_n_logprobs.min(probs.len());
         if k == 0 {

@@ -1281,12 +1281,14 @@ pub(crate) fn cuda_categorical_logits_f32_packed_batched(
 
 #[cfg(feature = "cuda")]
 pub struct CudaTop1LogitsWorkspace {
+    nrows: usize,
     ncols: usize,
     nblocks: usize,
     location: candle_core::DeviceLocation,
     block_values: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
     block_indices: candle_core::cuda_backend::cudarc::driver::CudaSlice<u32>,
     packed: candle_core::cuda_backend::cudarc::driver::CudaSlice<f32>,
+    packed_host: candle_core::cuda_backend::cudarc::driver::PinnedHostSlice<f32>,
 }
 
 #[cfg(feature = "cuda")]
@@ -1311,63 +1313,90 @@ fn final_logits_row(input: &Tensor) -> Result<Tensor> {
 }
 
 #[cfg(feature = "cuda")]
-#[allow(clippy::cast_possible_truncation)]
-pub fn cuda_top1_logits_f32_cached(
+fn cuda_top1_logits_f32_packed_cached_inner<'a>(
     input: &Tensor,
-    cache: &mut Option<CudaTop1LogitsWorkspace>,
-) -> Result<[f32; 2]> {
+    nrows: usize,
+    ncols: usize,
+    cache: &'a mut Option<CudaTop1LogitsWorkspace>,
+    op: &'static str,
+) -> Result<&'a [f32]> {
     use candle_core::backend::{BackendDevice, BackendStorage};
     use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
     use candle_core::cuda_backend::CudaStorageSlice;
 
-    let input = final_logits_row(input)?;
     if input.dtype() != DType::F32 {
-        candle_core::bail!("cuda_top1_logits_f32_cached requires F32 logits");
+        candle_core::bail!("{op} requires F32 logits");
     }
-
-    let ncols = input.elem_count();
-    if ncols == 0 {
-        candle_core::bail!("cuda_top1_logits_f32_cached got empty logits");
+    if !input.is_contiguous() {
+        return Err(candle_core::Error::RequiresContiguous { op });
+    }
+    if nrows == 0 || ncols == 0 {
+        candle_core::bail!("{op} requires non-empty logits");
     }
     if ncols > CUDA_TOPK_MAX_EXACT_PACKED_VOCAB {
         candle_core::bail!(
-            "cuda_top1_logits_f32_cached vocabulary size {ncols} cannot be represented exactly by packed F32 indices"
+            "{op} vocabulary size {ncols} cannot be represented exactly by packed F32 indices"
+        );
+    }
+    if nrows > CUDA_TOPK_MAX_GRID_Y {
+        candle_core::bail!("{op} batch is too large for a 2D CUDA launch: {nrows}");
+    }
+    let expected_elems = nrows
+        .checked_mul(ncols)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{op} input size overflow")))?;
+    if input.elem_count() != expected_elems {
+        candle_core::bail!(
+            "{op} expected {nrows} rows of {ncols} logits, got {} elements",
+            input.elem_count()
         );
     }
 
     let nblocks = ncols.div_ceil(CUDA_TOPK_CHUNK_SIZE);
+    let workspace_elems = nrows
+        .checked_mul(nblocks)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{op} workspace overflow")))?;
+    let packed_elems = nrows
+        .checked_mul(CUDA_TOP1_PACKED_WIDTH)
+        .ok_or_else(|| candle_core::Error::Msg(format!("{op} output overflow")))?;
 
     let (storage, layout) = input.storage_and_layout();
     let storage = match &*storage {
         candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_top1_logits_f32_cached requires CUDA tensor"),
+        _ => candle_core::bail!("{op} requires CUDA logits"),
+    };
+    let CudaStorageSlice::F32(input_slice) = &storage.slice else {
+        candle_core::bail!("{op} only supports F32 logits");
     };
 
     let dev = storage.device();
     let location = dev.location();
     let needs_alloc = cache.as_ref().is_none_or(|workspace| {
-        workspace.ncols != ncols || workspace.nblocks != nblocks || workspace.location != location
+        workspace.nrows != nrows
+            || workspace.ncols != ncols
+            || workspace.nblocks != nblocks
+            || workspace.location != location
     });
     if needs_alloc {
         *cache = Some(CudaTop1LogitsWorkspace {
+            nrows,
             ncols,
             nblocks,
             location,
-            block_values: unsafe { dev.alloc::<f32>(nblocks) }?,
-            block_indices: unsafe { dev.alloc::<u32>(nblocks) }?,
-            packed: unsafe { dev.alloc::<f32>(2) }?,
+            block_values: unsafe { dev.alloc::<f32>(workspace_elems) }?,
+            block_indices: unsafe { dev.alloc::<u32>(workspace_elems) }?,
+            packed: unsafe { dev.alloc::<f32>(packed_elems) }?,
+            packed_host: unsafe {
+                dev.cuda_stream()
+                    .context()
+                    .alloc_pinned::<f32>(packed_elems)
+            }
+            .map_err(candle_core::Error::wrap)?,
         });
     }
 
     let stream = dev.cuda_stream();
-    let stream_raw = stream.cu_stream() as i64;
-
-    let (src_ptr, src_guard) = match &storage.slice {
-        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
-        _ => candle_core::bail!("cuda_top1_logits_f32_cached only supports F32"),
-    };
-    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
-
+    let (input_ptr, input_guard) = input_slice.device_ptr(&stream);
+    let input_ptr = unsafe { (input_ptr as *const f32).add(layout.start_offset()) };
     let workspace = cache
         .as_mut()
         .expect("CUDA top-1 workspace was allocated above");
@@ -1376,26 +1405,71 @@ pub fn cuda_top1_logits_f32_cached(
     let (packed_ptr, packed_guard) = workspace.packed.device_ptr_mut(&stream);
 
     unsafe {
-        ffi::top1_large_f32_packed(
-            src_ptr,
-            block_values_ptr as *mut f32,
-            block_indices_ptr as *mut u32,
-            packed_ptr as *mut f32,
-            ncols as i32,
-            CUDA_TOPK_CHUNK_SIZE as i32,
-            nblocks as i32,
-            stream_raw,
-        );
+        if nrows == 1 {
+            ffi::top1_large_f32_packed(
+                input_ptr,
+                block_values_ptr as *mut f32,
+                block_indices_ptr as *mut u32,
+                packed_ptr as *mut f32,
+                i32::try_from(ncols).map_err(candle_core::Error::wrap)?,
+                i32::try_from(CUDA_TOPK_CHUNK_SIZE).map_err(candle_core::Error::wrap)?,
+                i32::try_from(nblocks).map_err(candle_core::Error::wrap)?,
+                stream.cu_stream() as i64,
+            );
+        } else {
+            ffi::top1_large_f32_packed_batched(
+                input_ptr,
+                block_values_ptr as *mut f32,
+                block_indices_ptr as *mut u32,
+                packed_ptr as *mut f32,
+                i32::try_from(nrows).map_err(candle_core::Error::wrap)?,
+                i32::try_from(ncols).map_err(candle_core::Error::wrap)?,
+                i32::try_from(CUDA_TOPK_CHUNK_SIZE).map_err(candle_core::Error::wrap)?,
+                i32::try_from(nblocks).map_err(candle_core::Error::wrap)?,
+                stream.cu_stream() as i64,
+            );
+        }
     }
 
-    drop(src_guard);
+    drop(input_guard);
     drop(block_values_guard);
     drop(block_indices_guard);
     drop(packed_guard);
 
-    dev.synchronize()?;
-    let packed = dev.clone_dtoh(&workspace.packed)?;
+    dev.memcpy_dtoh(&workspace.packed, &mut workspace.packed_host)?;
+    workspace
+        .packed_host
+        .as_slice()
+        .map_err(candle_core::Error::wrap)
+}
+
+#[cfg(feature = "cuda")]
+pub fn cuda_top1_logits_f32_cached(
+    input: &Tensor,
+    cache: &mut Option<CudaTop1LogitsWorkspace>,
+) -> Result<[f32; CUDA_TOP1_PACKED_WIDTH]> {
+    const OP: &str = "cuda_top1_logits_f32_cached";
+    let input = final_logits_row(input)?;
+    let ncols = input.elem_count();
+    let packed = cuda_top1_logits_f32_packed_cached_inner(&input, 1, ncols, cache, OP)?;
     Ok([packed[0], packed[1]])
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn cuda_top1_logits_f32_packed_batched_cached(
+    input: &Tensor,
+    cache: &mut Option<CudaTop1LogitsWorkspace>,
+) -> Result<Vec<[f32; CUDA_TOP1_PACKED_WIDTH]>> {
+    const OP: &str = "cuda_top1_logits_f32_packed_batched_cached";
+    let [batch, vocab] = input.dims() else {
+        candle_core::bail!("{OP} requires logits with shape [batch, vocab]");
+    };
+    let (batch, vocab) = (*batch, *vocab);
+    let packed = cuda_top1_logits_f32_packed_cached_inner(input, batch, vocab, cache, OP)?;
+    Ok(packed
+        .chunks_exact(CUDA_TOP1_PACKED_WIDTH)
+        .map(|row| [row[0], row[1]])
+        .collect())
 }
 
 #[allow(dead_code)]
@@ -4614,6 +4688,23 @@ mod tests {
         let output = super::cuda_topk_logits_f32_packed_batched(&logits, 2, &inverse_temperatures)?;
         let packed = output.packed.to_device(&Device::Cpu)?.to_vec2::<f32>()?;
         assert!(packed[0][2 * output.k].is_nan());
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_cached_batched_top1_tracks_batch_shape() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let mut workspace = None;
+        let first = Tensor::new(&[[1.0f32, 4.0, 3.0], [8.0, 2.0, 5.0]], &device)?;
+        let actual = super::cuda_top1_logits_f32_packed_batched_cached(&first, &mut workspace)?;
+        assert_eq!(actual, vec![[4.0, 1.0], [8.0, 0.0]]);
+        assert_eq!(workspace.as_ref().unwrap().nrows, 2);
+
+        let second = Tensor::new(&[[0.0f32, -2.0, 7.0]], &device)?;
+        let actual = super::cuda_top1_logits_f32_packed_batched_cached(&second, &mut workspace)?;
+        assert_eq!(actual, vec![[7.0, 2.0]]);
+        assert_eq!(workspace.as_ref().unwrap().nrows, 1);
         Ok(())
     }
 

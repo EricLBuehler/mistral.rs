@@ -42,7 +42,7 @@ use crate::pipeline::isq::{
 };
 use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
-use crate::pipeline::sampling::sample_and_add_toks;
+use crate::pipeline::sampling::{sample_and_add_toks, sample_and_add_toks_batched};
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
@@ -1672,8 +1672,8 @@ impl NormalPipeline {
         let Some(cache_config) = self.metadata.cache_config.as_ref() else {
             return Ok(None);
         };
-        // Kernels bake dims/strides into parameter vectors: warm up on the same canonical layout the Var copy has
-        let input_ids = &input_ids.force_contiguous()?;
+        // Captured kernels require canonical strides, but an already contiguous input needs no copy.
+        let input_ids = &input_ids.contiguous()?;
 
         let mut state = self
             .cuda_decode_graph
@@ -2167,6 +2167,30 @@ impl Pipeline for NormalPipeline {
 
         crate::speculative::driver::clear_staged_speculative_tokens(seqs);
         Ok(false)
+    }
+
+    async fn try_sample_causal_gen_batched(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: &Tensor,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<bool, candle_core::Error> {
+        if self.model.has_speculative_proposer() {
+            return Ok(false);
+        }
+        crate::speculative::driver::clear_staged_speculative_tokens(seqs);
+        sample_and_add_toks_batched(
+            self,
+            seqs,
+            logits.clone(),
+            prefix_cacher,
+            disable_eos_stop,
+            rng,
+        )
+        .await?;
+        Ok(true)
     }
 
     async fn sample_causal_gen(

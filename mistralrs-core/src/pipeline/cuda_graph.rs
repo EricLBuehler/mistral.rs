@@ -434,6 +434,7 @@ enum CudaGraphPinnedData {
 
 struct CudaGraphPinnedBuffer {
     data: CudaGraphPinnedData,
+    initialized: bool,
 }
 
 struct CudaGraphCopyCompletion {
@@ -1612,7 +1613,10 @@ impl CudaGraphPinnedBuffer {
                 "CUDA graph host staging does not support metadata dtype {dtype:?}"
             ),
         };
-        Ok(Self { data })
+        Ok(Self {
+            data,
+            initialized: false,
+        })
     }
 
     fn copy_from(
@@ -1649,7 +1653,12 @@ impl CudaGraphPinnedBuffer {
                 };
                 let src = src_storage.as_slice::<$ty>()?;
                 let src = &src[src_offset..src_offset + len];
-                host.as_mut_slice().copy_from_slice(src);
+                let host_slice = host.as_mut_slice();
+                if self.initialized && host_slice == src {
+                    return Ok(());
+                }
+                host_slice.copy_from_slice(src);
+                self.initialized = true;
                 let dst = dst_storage.as_cuda_slice::<$ty>()?;
                 let dst = dst.slice(dst_offset..dst_offset + len);
                 let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
@@ -1699,7 +1708,12 @@ impl CudaGraphPinnedBuffer {
         let CudaGraphPinnedData::U32(host) = &mut self.data else {
             candle_core::bail!("CUDA graph host staging state index dtype changed");
         };
-        host.as_mut_slice().copy_from_slice(src);
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
         let dst = dst_storage.as_cuda_slice::<u32>()?;
         let dst_offset = dst_layout.start_offset();
         let dst = dst.slice(dst_offset..dst_offset + src.len());

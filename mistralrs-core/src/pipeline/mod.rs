@@ -1758,7 +1758,13 @@ pub trait Pipeline:
                 let should_chunk = chunk_plans
                     .as_ref()
                     .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
-                let (logits, raw_out_logits, embedding_logits, mut exec_duration) = {
+                let (
+                    mut logits,
+                    batched_causal_logits,
+                    raw_out_logits,
+                    embedding_logits,
+                    mut exec_duration,
+                ) = {
                     let inputs_iter = if let (Some(chunk_plans), true) = (chunk_plans, should_chunk)
                     {
                         let originals = input_seqs
@@ -1880,6 +1886,7 @@ pub trait Pipeline:
                     };
 
                     let mut logits = vec![None; input_seqs.len()];
+                    let mut batched_causal_logits = None;
                     let len_inputs = inputs_iter.len();
                     let mut raw_out_logits = vec![vec![None; len_inputs]; input_seqs.len()];
                     let mut embedding_logits = vec![None; input_seqs.len()];
@@ -1960,6 +1967,23 @@ pub trait Pipeline:
                             )?;
                         }
 
+                        let keep_batched_causal_logits = !is_prompt
+                            && preserve_causal_generation
+                            && len_inputs == 1
+                            && seq_indices.len() == input_seqs.len()
+                            && seq_indices.iter().copied().eq(0..input_seqs.len());
+                        let raw_logits = if keep_batched_causal_logits {
+                            match raw_logits {
+                                ForwardInputsResult::CausalGeneration { logits } => {
+                                    batched_causal_logits = Some(logits);
+                                    continue;
+                                }
+                                raw_logits => raw_logits,
+                            }
+                        } else {
+                            raw_logits
+                        };
+
                         for (logit_idx, seq_idx) in seq_indices.into_iter().enumerate() {
                             if let ForwardInputsResult::RawLogits { logits } = &raw_logits {
                                 raw_out_logits[seq_idx][i] =
@@ -1974,7 +1998,13 @@ pub trait Pipeline:
                             }
                         }
                     }
-                    (logits, raw_out_logits, embedding_logits, exec_duration)
+                    (
+                        logits,
+                        batched_causal_logits,
+                        raw_out_logits,
+                        embedding_logits,
+                        exec_duration,
+                    )
                 };
 
                 if raw_out_logits[0][0].is_some() {
@@ -2015,6 +2045,26 @@ pub trait Pipeline:
                 }
 
                 let start = Instant::now();
+                if let Some(batched_causal_logits) = batched_causal_logits {
+                    if self
+                        .try_sample_causal_gen_batched(
+                            input_seqs,
+                            &batched_causal_logits,
+                            prefix_cacher,
+                            disable_eos_stop,
+                            rng.clone(),
+                        )
+                        .await?
+                    {
+                        exec_duration += start.elapsed();
+                        return Ok(exec_duration);
+                    }
+                    for (seq_idx, logits) in logits.iter_mut().enumerate() {
+                        *logits = Some(ForwardInputsResult::CausalGeneration {
+                            logits: batched_causal_logits.i(seq_idx)?,
+                        });
+                    }
+                }
                 let logits = logits
                     .into_iter()
                     .map(|logits| logits.expect("missing forward result"))
@@ -2160,6 +2210,17 @@ pub trait Pipeline:
                 Ok(exec_duration)
             }
         }
+    }
+
+    async fn try_sample_causal_gen_batched(
+        &self,
+        _seqs: &mut [&mut Sequence],
+        _logits: &Tensor,
+        _prefix_cacher: &mut PrefixCacheManagerV2,
+        _disable_eos_stop: bool,
+        _rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<bool, candle_core::Error> {
+        Ok(false)
     }
 
     async fn sample_causal_gen(
