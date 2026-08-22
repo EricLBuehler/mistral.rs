@@ -2,10 +2,11 @@ use crate::{
     distributed,
     paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
     pipeline::{
+        execution::StepSubmissionKind,
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
         text_models_inputs_processor::PagedAttentionMeta,
-        CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx,
-        RECURRENT_GRAPH_PAD_SLOTS,
+        CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx, StepLookahead,
+        StepSubmission, RECURRENT_GRAPH_PAD_SLOTS,
     },
     prefix_cacher::PrefixCacheManagerV2,
     scheduler::{DefaultSchedulerMethod, PagedPrefixCacheValidator, Scheduler, SchedulerOutput},
@@ -56,11 +57,22 @@ use crate::{
 mod add_request;
 mod admission;
 pub(crate) mod agentic_loop;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_decode;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
 mod logger;
 mod tool_dispatch;
+
+#[cfg(feature = "cuda")]
+use self::cuda_decode::CudaDecodeCompletionWorker;
+#[cfg(feature = "cuda")]
+use crate::pipeline::execution::{
+    submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
+};
+#[cfg(feature = "cuda")]
+use crate::sequence::Sequence;
 
 pub enum EngineInstruction {
     Terminate,
@@ -182,6 +194,43 @@ pub struct Engine {
     pub(crate) file_store: crate::files::FileStore,
     // Re-runs the decode graph precapture after the recurrent pool grows and drops every graph
     pub(crate) graph_precapture_ctx: Option<DecodeGraphPrecaptureCtx>,
+    #[cfg(feature = "cuda")]
+    cuda_decode_enabled: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct CudaDecodeBatchLease {
+    rows: Vec<Arc<std::sync::Mutex<Sequence>>>,
+    sequence_ids: Box<[usize]>,
+    tail: CudaDecodeTail,
+    started: Instant,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaDecodeBatchLease {
+    fn new(
+        rows: Vec<Arc<std::sync::Mutex<Sequence>>>,
+        tail: CudaDecodeTail,
+    ) -> candle_core::Result<Self> {
+        if tail.batch_size()? != rows.len() {
+            candle_core::bail!(
+                "CUDA decode tail has {} rows for a leased batch of {}",
+                tail.batch_size()?,
+                rows.len()
+            );
+        }
+        let sequence_ids = rows
+            .iter()
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Ok(Self {
+            rows,
+            sequence_ids,
+            tail,
+            started: Instant::now(),
+        })
+    }
 }
 
 struct HybridPagedPrefixValidator {
@@ -369,6 +418,9 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
+        #[cfg(feature = "cuda")]
+        let cuda_decode_enabled =
+            has_paged_attention && get_mut_arcmutex!(pipeline).device().is_cuda();
         let graph_precapture_ctx = if no_kv_cache {
             None
         } else {
@@ -433,6 +485,8 @@ impl Engine {
             session_store,
             file_store,
             graph_precapture_ctx,
+            #[cfg(feature = "cuda")]
+            cuda_decode_enabled,
         })
     }
 
@@ -556,6 +610,155 @@ impl Engine {
         true
     }
 
+    #[cfg(feature = "cuda")]
+    async fn complete_cuda_step(
+        &self,
+        worker: &CudaDecodeCompletionWorker,
+        submission: CudaStepSubmission,
+    ) -> candle_core::Result<CudaStepCompletion> {
+        let (current, pending) = submission.into_parts();
+        let completion = worker.submit(current).await?;
+        pending.finish(completion.await?)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn account_cuda_decode_rows(&self, rows: &[Arc<std::sync::Mutex<Sequence>>]) {
+        for row in rows {
+            get_mut_arcmutex!(row).advance_num_computed_tokens(1);
+        }
+        self.logger.add_tokens_processed(rows.len());
+    }
+
+    #[cfg(feature = "cuda")]
+    fn drain_cuda_decode_batch(&self, lease: CudaDecodeBatchLease) -> candle_core::Result<()> {
+        let CudaDecodeBatchLease { rows, tail, .. } = lease;
+        tail.drain()?;
+        self.account_cuda_decode_rows(&rows);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    async fn continue_cuda_decode_batch(
+        &self,
+        lease: CudaDecodeBatchLease,
+        worker: &CudaDecodeCompletionWorker,
+        allow_lookahead: bool,
+    ) -> candle_core::Result<Option<CudaDecodeBatchLease>> {
+        let CudaDecodeBatchLease {
+            rows,
+            sequence_ids,
+            tail,
+            started,
+        } = lease;
+        let commit_rows = rows
+            .iter()
+            .map(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn())
+            .collect::<Vec<_>>();
+        if !commit_rows.iter().any(|commit| *commit) {
+            tail.drain()?;
+            self.account_cuda_decode_rows(&rows);
+            return Ok(None);
+        }
+
+        for (row, commit) in rows.iter().zip(&commit_rows) {
+            if *commit {
+                get_mut_arcmutex!(row).start_completion_timing();
+            }
+        }
+
+        let submission = {
+            let mut guards = rows
+                .iter()
+                .map(|seq| seq.lock().unwrap())
+                .collect::<Vec<_>>();
+            let guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+            let lookahead = if allow_lookahead {
+                StepLookahead::OneToken
+            } else {
+                StepLookahead::Disabled
+            };
+            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+            match submit_decode_tail(&mut *pipeline, &guards_mut, tail, Duration::ZERO, lookahead)?
+            {
+                CudaTailSubmission::Submitted(submission) => submission,
+                CudaTailSubmission::Unsupported(mut unsupported) => {
+                    unsupported.synchronize()?;
+                    candle_core::bail!(
+                        "leased CUDA decode batch no longer supports resident completion"
+                    );
+                }
+            }
+        };
+
+        let has_next_tail = submission.has_tail();
+        if has_next_tail {
+            let mut scheduler = get_mut_arcmutex!(self.scheduler);
+            scheduler.record_decode_continuation();
+        }
+        let mut completion = self.complete_cuda_step(worker, submission).await?;
+
+        let step_duration = started.elapsed();
+        let completion = {
+            let mut guards = rows
+                .iter()
+                .map(|seq| seq.lock().unwrap())
+                .collect::<Vec<_>>();
+            let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+            for seq in &mut guards_mut {
+                seq.advance_num_computed_tokens(1);
+            }
+            self.logger.add_tokens_processed(guards_mut.len());
+
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            if crate::pipeline::sampling::greedy_batch_will_finish(
+                &*pipeline,
+                &guards_mut,
+                completion.token_ids(),
+                &commit_rows,
+                self.disable_eos_stop,
+            )? {
+                completion.synchronize_tail()?;
+            }
+            let completion = completion
+                .finish(
+                    &*pipeline,
+                    &mut guards_mut,
+                    &commit_rows,
+                    &mut *get_mut_arcmutex!(self.prefix_cacher),
+                    self.disable_eos_stop,
+                )
+                .await?;
+            for (seq, commit) in guards_mut.iter_mut().zip(&commit_rows) {
+                if *commit {
+                    seq.finish_completion_timing(step_duration);
+                }
+            }
+            completion
+        };
+
+        let Some(mut next_tail) = completion.into_cuda_tail() else {
+            return Ok(None);
+        };
+        let any_live = rows
+            .iter()
+            .any(|seq| !get_mut_arcmutex!(seq).is_finished_paged_attn());
+        if !any_live {
+            next_tail.synchronize()?;
+            self.account_cuda_decode_rows(&rows);
+            return Ok(None);
+        }
+
+        debug_assert!(has_next_tail);
+        debug_assert_eq!(
+            sequence_ids.as_ref(),
+            rows.iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>()
+                .as_slice()
+        );
+        CudaDecodeBatchLease::new(rows, next_tail).map(Some)
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
@@ -570,6 +773,20 @@ impl Engine {
         let policy =
             admission::AdmissionPolicy::new(self.max_active_sequences, max_pending_requests);
         let mut pending = admission::AdmissionQueue::new(policy);
+        #[cfg(feature = "cuda")]
+        let cuda_completion_worker = if self.cuda_decode_enabled {
+            match CudaDecodeCompletionWorker::new() {
+                Ok(worker) => Some(worker),
+                Err(err) => {
+                    tracing::warn!("Failed to start the CUDA decode completion worker: {err}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        #[cfg(feature = "cuda")]
+        let mut cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -582,12 +799,28 @@ impl Engine {
             };
 
             if should_terminate() {
+                #[cfg(feature = "cuda")]
+                if let Some(lease) = cuda_decode_lease.take() {
+                    if let Err(err) = self.drain_cuda_decode_batch(lease) {
+                        tracing::warn!("Failed to drain the CUDA decode tail: {err}");
+                    }
+                }
                 self.replicate_request_to_daemons(&Request::Terminate);
                 break 'lp;
             }
 
             let channel_disconnected = self.collect_pending_requests(&mut pending).await;
+            #[cfg(feature = "cuda")]
+            let decode_batch_leased = cuda_decode_lease.is_some();
+            #[cfg(not(feature = "cuda"))]
+            let decode_batch_leased = false;
             if let Some(request) = pending.take_shutdown() {
+                #[cfg(feature = "cuda")]
+                if let Some(lease) = cuda_decode_lease.take() {
+                    if let Err(err) = self.drain_cuda_decode_batch(lease) {
+                        tracing::warn!("Failed to drain the CUDA decode tail: {err}");
+                    }
+                }
                 self.replicate_request_to_daemons(&request);
                 break 'lp;
             }
@@ -608,7 +841,12 @@ impl Engine {
                     let scheduler = get_mut_arcmutex!(self.scheduler);
                     scheduler.waiting_len() + scheduler.running_len()
                 };
-                let Some(request) = pending.pop_admissible(active_sequences) else {
+                let request = if decode_batch_leased {
+                    pending.pop_admissible_workload(active_sequences)
+                } else {
+                    pending.pop_admissible(active_sequences)
+                };
+                let Some(request) = request else {
                     break;
                 };
                 if !self.dispatch_prepared_request(request).await {
@@ -675,6 +913,63 @@ impl Engine {
 
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
                 self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
+                #[cfg(feature = "cuda")]
+                if let Some(lease) = cuda_decode_lease.take() {
+                    let leased_rows = lease.rows.clone();
+                    let result = self.drain_cuda_decode_batch(lease);
+                    let mut guards = leased_rows
+                        .iter()
+                        .map(|seq| seq.lock().unwrap())
+                        .collect::<Vec<_>>();
+                    let mut guards_mut =
+                        guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+                    handle_pipeline_forward_error!(
+                        "CUDA decode cancellation drain",
+                        result,
+                        &mut guards_mut,
+                        self.pipeline,
+                        'lp,
+                        self.prefix_cacher
+                    );
+                }
+            }
+
+            #[cfg(feature = "cuda")]
+            if let Some(lease) = cuda_decode_lease.take() {
+                let leased_rows = lease.rows.clone();
+                let allow_lookahead = !pending.blocks_decode_continuation() && {
+                    let scheduler = get_mut_arcmutex!(self.scheduler);
+                    scheduler.can_continue_decode_batch(&lease.sequence_ids)
+                };
+                let result = self
+                    .continue_cuda_decode_batch(
+                        lease,
+                        cuda_completion_worker
+                            .as_ref()
+                            .expect("CUDA decode lease requires a completion worker"),
+                        allow_lookahead,
+                    )
+                    .await;
+                let mut guards = leased_rows
+                    .iter()
+                    .map(|seq| seq.lock().unwrap())
+                    .collect::<Vec<_>>();
+                let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+                cuda_decode_lease = handle_pipeline_forward_error!(
+                    "resident CUDA decode step",
+                    result,
+                    &mut guards_mut,
+                    self.pipeline,
+                    'lp,
+                    self.prefix_cacher
+                );
+                drop(guards_mut);
+                drop(guards);
+                if cuda_decode_lease.is_none() {
+                    let mut scheduler = get_mut_arcmutex!(self.scheduler);
+                    self.free_finished_scheduler_sequences(&mut *scheduler);
+                }
+                continue 'lp;
             }
 
             let run_start = Instant::now();
@@ -875,10 +1170,29 @@ impl Engine {
                 SchedulerOutput::PagedAttention { mut output } => {
                     let block_size = scheduler.block_size().unwrap();
                     let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
+                    let is_prompt = output
+                        .scheduled
+                        .first()
+                        .is_some_and(|seq| get_mut_arcmutex!(seq).is_prompt());
+                    #[cfg(feature = "cuda")]
+                    let step_lookahead = if !is_prompt
+                        && cuda_completion_worker.is_some()
+                        && !pending.blocks_decode_continuation()
+                        && scheduler.can_continue_decode_batch(
+                            &output
+                                .scheduled
+                                .iter()
+                                .map(|seq| *get_mut_arcmutex!(seq).id())
+                                .collect::<Vec<_>>(),
+                        ) {
+                        StepLookahead::OneToken
+                    } else {
+                        StepLookahead::Disabled
+                    };
+                    #[cfg(not(feature = "cuda"))]
+                    let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
                     if !output.scheduled.is_empty() {
-                        let is_prompt = get_mut_arcmutex!(output.scheduled[0]).is_prompt();
-
                         for seq in output.scheduled.iter() {
                             let mut seq_guard = get_mut_arcmutex!(seq);
                             if is_prompt {
@@ -929,7 +1243,7 @@ impl Engine {
                             let mut pipeline = get_mut_arcmutex!(self.pipeline);
 
                             if guards_mut.is_empty() {
-                                Ok(Duration::ZERO)
+                                Ok(StepSubmission::ready(Duration::ZERO))
                             } else {
                                 let pipeline_metadata = pipeline.get_metadata();
                                 let model_metadata = pipeline_metadata.model_metadata.as_ref();
@@ -1000,7 +1314,7 @@ impl Engine {
                                 );
 
                                 pipeline
-                                    .step(
+                                    .submit_step(
                                         &mut guards_mut,
                                         is_prompt,
                                         return_raw_logits,
@@ -1009,12 +1323,13 @@ impl Engine {
                                         rng.clone(),
                                         CacheBackendMetadata::PagedAttention { metadata },
                                         self.logger.as_ref(),
+                                        step_lookahead,
                                     )
                                     .await
                             }
                         };
 
-                        let step_exec_time = handle_pipeline_forward_error!(
+                        let submission = handle_pipeline_forward_error!(
                             "step",
                             res,
                             &mut guards_mut,
@@ -1022,9 +1337,157 @@ impl Engine {
                             'lp,
                             self.prefix_cacher
                         );
+                        drop(guards_mut);
+                        drop(guards);
+
+                        #[cfg(feature = "cuda")]
+                        if submission.cuda_has_tail() {
+                            let mut scheduler = get_mut_arcmutex!(self.scheduler);
+                            scheduler.record_decode_continuation();
+                        }
+
+                        let step_exec_time = match submission.into_inner() {
+                            StepSubmissionKind::Ready(completion) => completion.duration(),
+                            #[cfg(feature = "cuda")]
+                            StepSubmissionKind::Cuda(submission) => {
+                                let completion_result = self
+                                    .complete_cuda_step(
+                                        cuda_completion_worker.as_ref().expect(
+                                            "CUDA decode submission requires a completion worker",
+                                        ),
+                                        submission,
+                                    )
+                                    .await;
+                                let mut completion_guards = output
+                                    .scheduled
+                                    .iter()
+                                    .map(|seq| seq.lock().unwrap())
+                                    .collect::<Vec<_>>();
+                                let mut completion_guards_mut = completion_guards
+                                    .iter_mut()
+                                    .map(|seq| &mut **seq)
+                                    .collect::<Vec<_>>();
+                                let mut completion = handle_pipeline_forward_error!(
+                                    "CUDA decode completion",
+                                    completion_result,
+                                    &mut completion_guards_mut,
+                                    self.pipeline,
+                                    'lp,
+                                    self.prefix_cacher
+                                );
+
+                                for ((seq, before), scheduled) in completion_guards_mut
+                                    .iter_mut()
+                                    .zip(num_computed_before_step.iter().copied())
+                                    .zip(scheduled_token_counts.iter().copied())
+                                {
+                                    if seq.num_computed_tokens() == before {
+                                        seq.advance_num_computed_tokens(scheduled);
+                                    }
+                                }
+                                let commit_rows = completion_guards_mut
+                                    .iter()
+                                    .map(|seq| !seq.is_finished_paged_attn())
+                                    .collect::<Vec<_>>();
+                                let finish_result: candle_core::Result<_> = async {
+                                    let pipeline = get_mut_arcmutex!(self.pipeline);
+                                    if crate::pipeline::sampling::greedy_batch_will_finish(
+                                        &*pipeline,
+                                        &completion_guards_mut,
+                                        completion.token_ids(),
+                                        &commit_rows,
+                                        self.disable_eos_stop,
+                                    )? {
+                                        completion.synchronize_tail()?;
+                                    }
+                                    completion
+                                        .finish(
+                                            &*pipeline,
+                                            &mut completion_guards_mut,
+                                            &commit_rows,
+                                            &mut *get_mut_arcmutex!(self.prefix_cacher),
+                                            self.disable_eos_stop,
+                                        )
+                                        .await
+                                }
+                                .await;
+                                let completion = handle_pipeline_forward_error!(
+                                    "CUDA decode finalize",
+                                    finish_result,
+                                    &mut completion_guards_mut,
+                                    self.pipeline,
+                                    'lp,
+                                    self.prefix_cacher
+                                );
+                                let duration = run_start.elapsed();
+                                let tail = completion.into_cuda_tail();
+                                let any_live = completion_guards_mut
+                                    .iter()
+                                    .any(|seq| !seq.is_finished_paged_attn());
+                                drop(completion_guards_mut);
+                                drop(completion_guards);
+
+                                if let Some(tail) = tail {
+                                    if any_live {
+                                        let lease_result = CudaDecodeBatchLease::new(
+                                            output.scheduled.clone(),
+                                            tail,
+                                        );
+                                        let mut error_guards = output
+                                            .scheduled
+                                            .iter()
+                                            .map(|seq| seq.lock().unwrap())
+                                            .collect::<Vec<_>>();
+                                        let mut error_guards_mut = error_guards
+                                            .iter_mut()
+                                            .map(|seq| &mut **seq)
+                                            .collect::<Vec<_>>();
+                                        cuda_decode_lease = Some(handle_pipeline_forward_error!(
+                                            "CUDA decode lease",
+                                            lease_result,
+                                            &mut error_guards_mut,
+                                            self.pipeline,
+                                            'lp,
+                                            self.prefix_cacher
+                                        ));
+                                    } else {
+                                        let drain_result = tail.drain();
+                                        let mut error_guards = output
+                                            .scheduled
+                                            .iter()
+                                            .map(|seq| seq.lock().unwrap())
+                                            .collect::<Vec<_>>();
+                                        let mut error_guards_mut = error_guards
+                                            .iter_mut()
+                                            .map(|seq| &mut **seq)
+                                            .collect::<Vec<_>>();
+                                        handle_pipeline_forward_error!(
+                                            "CUDA decode tail drain",
+                                            drain_result,
+                                            &mut error_guards_mut,
+                                            self.pipeline,
+                                            'lp,
+                                            self.prefix_cacher
+                                        );
+                                        drop(error_guards_mut);
+                                        drop(error_guards);
+                                        self.account_cuda_decode_rows(&output.scheduled);
+                                    }
+                                }
+                                duration
+                            }
+                        };
+
+                        let mut guards = output
+                            .scheduled
+                            .iter()
+                            .map(|seq| seq.lock().unwrap())
+                            .collect::<Vec<_>>();
+                        let mut guards_mut =
+                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
                         for ((seq, before), scheduled) in guards_mut
                             .iter_mut()
-                            .zip(num_computed_before_step)
+                            .zip(num_computed_before_step.iter().copied())
                             .zip(scheduled_token_counts.iter().copied())
                         {
                             if seq.num_computed_tokens() == before {
@@ -1145,6 +1608,11 @@ impl Engine {
                 }
             }
 
+            #[cfg(feature = "cuda")]
+            if cuda_decode_lease.is_none() {
+                self.free_finished_scheduler_sequences(&mut *scheduler);
+            }
+            #[cfg(not(feature = "cuda"))]
             self.free_finished_scheduler_sequences(&mut *scheduler);
         }
     }

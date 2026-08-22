@@ -242,12 +242,49 @@ impl PagedAttentionScheduler {
         if !has_completion {
             return false;
         }
-        let has_prompt = self
+        let running_prompt_tokens = self
             .running
             .iter()
-            .any(|seq| get_mut_arcmutex!(seq).is_prompt())
-            || !self.waiting.is_empty();
+            .filter_map(|seq| {
+                let seq = get_mut_arcmutex!(seq);
+                seq.is_prompt().then(|| seq.num_uncomputed_tokens())
+            })
+            .sum::<usize>();
+        if running_prompt_tokens > 0 && running_prompt_tokens <= self.config.max_num_batched_tokens
+        {
+            return false;
+        }
+
+        let has_running_prompt = running_prompt_tokens > 0;
+        let has_waiting_prompt = !self.waiting.is_empty();
+        if !has_running_prompt
+            && has_waiting_prompt
+            && self.running.len() < self.config.max_num_seqs
+            && self.waiting_prompt_fits_free_blocks()
+            && self.decode_steps_since_prefill > 0
+        {
+            return false;
+        }
+
+        let has_prompt = has_running_prompt || has_waiting_prompt;
         !has_prompt || self.decode_steps_since_prefill < self.config.max_decode_steps_before_prefill
+    }
+
+    fn waiting_prompt_fits_free_blocks(&self) -> bool {
+        let Some(prompt) = self.waiting.front() else {
+            return false;
+        };
+        let prompt_blocks = get_mut_arcmutex!(prompt)
+            .get_toks()
+            .len()
+            .div_ceil(self.block_size);
+        let decode_reserve = self
+            .running
+            .iter()
+            .filter(|seq| get_mut_arcmutex!(seq).is_completion())
+            .count();
+        prompt_blocks.saturating_add(decode_reserve)
+            <= get_mut_arcmutex!(self.kv_cache_manager).num_free_blocks()
     }
 
     fn completion_token_cost(seq: &Sequence) -> usize {
@@ -256,32 +293,88 @@ impl PagedAttentionScheduler {
             .max(1)
     }
 
-    fn select_completion_batch(&mut self) -> Vec<Arc<Mutex<Sequence>>> {
-        if self.running.is_empty() {
-            return Vec::new();
+    fn completion_batch_indices(
+        rows: &[Arc<Mutex<Sequence>>],
+        cursor: usize,
+        token_budget: usize,
+    ) -> (Vec<usize>, usize) {
+        if rows.is_empty() {
+            return (Vec::new(), cursor);
         }
 
-        let len = self.running.len();
-        let start = self.completion_cursor % len;
-        let mut remaining_tokens = self.config.max_num_batched_tokens;
-        let mut scheduled = Vec::with_capacity(len);
-        let mut last_scheduled = start;
+        let len = rows.len();
+        let start = cursor % len;
+        let mut remaining_tokens = token_budget;
+        let mut selected = Vec::with_capacity(len);
+        let mut last_selected = start;
 
         for offset in 0..len {
             let index = (start + offset) % len;
-            let seq = self.running[index].clone();
-            let seq_guard = get_mut_arcmutex!(seq);
-            let token_cost = Self::completion_token_cost(&seq_guard);
-            drop(seq_guard);
-            if token_cost <= remaining_tokens || scheduled.is_empty() {
+            let seq = get_mut_arcmutex!(rows[index]);
+            let token_cost = Self::completion_token_cost(&seq);
+            drop(seq);
+            if token_cost <= remaining_tokens || selected.is_empty() {
                 remaining_tokens = remaining_tokens.saturating_sub(token_cost);
-                scheduled.push(seq);
-                last_scheduled = index;
+                selected.push(index);
+                last_selected = index;
             }
         }
 
-        self.completion_cursor = (last_scheduled + 1) % len;
-        scheduled
+        (selected, (last_selected + 1) % len)
+    }
+
+    fn live_completion_rows(&self) -> Vec<Arc<Mutex<Sequence>>> {
+        let mut rows = self
+            .running
+            .iter()
+            .filter(|seq| get_mut_arcmutex!(seq).is_completion())
+            .cloned()
+            .collect::<Vec<_>>();
+        rows.sort_by_key(|seq| get_mut_arcmutex!(seq).timestamp());
+        rows
+    }
+
+    fn can_continue_decode_batch_inner(
+        &self,
+        sequence_ids: &[usize],
+        terminate_all_pending: bool,
+    ) -> bool {
+        if sequence_ids.is_empty() || terminate_all_pending || !self.completion_is_due() {
+            return false;
+        }
+
+        let rows = self.live_completion_rows();
+        let (selected, _) = Self::completion_batch_indices(
+            &rows,
+            self.completion_cursor,
+            self.config.max_num_batched_tokens,
+        );
+        selected.len() == sequence_ids.len()
+            && selected
+                .iter()
+                .zip(sequence_ids)
+                .all(|(&index, id)| *get_mut_arcmutex!(rows[index]).id() == *id)
+    }
+
+    fn record_decode_step(&mut self) {
+        self.decode_steps_since_prefill = self
+            .decode_steps_since_prefill
+            .saturating_add(1)
+            .min(self.config.max_decode_steps_before_prefill);
+    }
+
+    fn select_completion_batch(&mut self) -> Vec<Arc<Mutex<Sequence>>> {
+        let rows = self.running.iter().cloned().collect::<Vec<_>>();
+        let (selected, next_cursor) = Self::completion_batch_indices(
+            &rows,
+            self.completion_cursor,
+            self.config.max_num_batched_tokens,
+        );
+        self.completion_cursor = next_cursor;
+        selected
+            .into_iter()
+            .map(|index| rows[index].clone())
+            .collect()
     }
 
     fn finish_ignored_sequence(
@@ -774,6 +867,16 @@ impl PagedAttentionScheduler {
                     get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Canceled))
                 });
             TERMINATE_ALL_NEXT_STEP.store(false, Ordering::SeqCst);
+            self.running.extend(prompt_running);
+            logger.set_num_running(self.running.len());
+            logger.set_num_waiting(self.waiting.len());
+            self.publish_kv_block_metrics();
+            return PagedAttentionSchedulerOutput {
+                scheduled: Vec::new(),
+                num_cached_tokens: Vec::new(),
+                prompt_chunk_size: None,
+                scheduled_prompt_chunks: None,
+            };
         }
 
         // Eagerly cache any newly-full blocks so other requests can hit the prefix cache
@@ -825,10 +928,7 @@ impl PagedAttentionScheduler {
             }
         }
 
-        self.decode_steps_since_prefill = self
-            .decode_steps_since_prefill
-            .saturating_add(1)
-            .min(self.config.max_decode_steps_before_prefill);
+        self.record_decode_step();
         let scheduled = self.select_completion_batch();
         self.running.extend(prompt_running);
         logger.set_num_running(self.running.len());
@@ -1035,6 +1135,24 @@ impl Scheduler for PagedAttentionScheduler {
     ) {
         self.scheduler_visible_prompt_chunks = enabled;
         self.prompt_chunks_require_block_alignment = require_block_alignment;
+    }
+
+    fn can_continue_decode_batch(&self, sequence_ids: &[usize]) -> bool {
+        self.can_continue_decode_batch_inner(
+            sequence_ids,
+            TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst),
+        )
+    }
+
+    fn record_decode_continuation(&mut self) {
+        let rows = self.live_completion_rows();
+        let (_, next_cursor) = Self::completion_batch_indices(
+            &rows,
+            self.completion_cursor,
+            self.config.max_num_batched_tokens,
+        );
+        self.completion_cursor = next_cursor;
+        self.record_decode_step();
     }
 }
 
@@ -1714,7 +1832,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_batch_gets_a_completion_turn_before_refill() {
+    fn underfilled_decode_gets_one_completion_turn_before_refill() {
         let mut scheduler = test_scheduler();
         let running = test_sequence(0, 4);
         get_mut_arcmutex!(running).set_state(SequenceState::RunningPrompt);
@@ -1726,18 +1844,70 @@ mod tests {
         scheduler.waiting.push_back(waiting);
 
         let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
-        for _ in 0..scheduler.config.max_decode_steps_before_prefill {
-            let completion = scheduler.schedule(&logger, None);
-            assert_eq!(completion.scheduled.len(), 1);
-            assert!(!get_mut_arcmutex!(completion.scheduled[0]).is_prompt());
-            assert_eq!(scheduler.waiting.len(), 1);
-        }
+        let completion = scheduler.schedule(&logger, None);
+        assert_eq!(completion.scheduled.len(), 1);
+        assert!(!get_mut_arcmutex!(completion.scheduled[0]).is_prompt());
+        assert_eq!(scheduler.waiting.len(), 1);
 
         let prompt = scheduler.schedule(&logger, None);
 
         assert_eq!(prompt.scheduled.len(), 1);
         assert!(get_mut_arcmutex!(prompt.scheduled[0]).is_prompt());
         assert!(scheduler.waiting.is_empty());
+    }
+
+    #[test]
+    fn running_prompt_tail_within_budget_finishes_before_decode() {
+        let mut scheduler = test_scheduler();
+        let completion = test_sequence(0, 8);
+        get_mut_arcmutex!(completion).set_num_computed_tokens(8);
+        scheduler.running.push_back(completion);
+
+        let prompt = test_sequence(1, 12);
+        {
+            let mut prompt = get_mut_arcmutex!(prompt);
+            prompt.set_state(SequenceState::RunningPrompt);
+            prompt.set_prefix_cache_len(8);
+            prompt.set_num_computed_tokens(8);
+        }
+        scheduler.running.push_back(prompt);
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 1);
+        assert!(get_mut_arcmutex!(output.scheduled[0]).is_prompt());
+    }
+
+    #[test]
+    fn incompatible_prompt_tails_drain_within_one_token_budget() {
+        let mut scheduler = test_scheduler();
+        scheduler.config.max_num_batched_tokens = 8;
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.running.push_back(test_sequence(0, 8));
+
+        for (id, len) in [(1, 10), (2, 11)] {
+            let prompt = test_sequence(id, len);
+            {
+                let mut prompt = get_mut_arcmutex!(prompt);
+                prompt.set_state(SequenceState::RunningPrompt);
+                prompt.set_prefix_cache_len(8);
+                prompt.set_num_computed_tokens(8);
+            }
+            scheduler.running.push_back(prompt);
+        }
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let first = scheduler.schedule(&logger, None);
+        assert_eq!(first.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(first.scheduled[0]).id(), 1);
+        get_mut_arcmutex!(first.scheduled[0]).set_num_computed_tokens(10);
+
+        let second = scheduler.schedule(&logger, None);
+        assert_eq!(second.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(second.scheduled[0]).id(), 2);
+        assert!(get_mut_arcmutex!(second.scheduled[0]).is_prompt());
     }
 
     #[test]
@@ -1849,6 +2019,110 @@ mod tests {
             .map(|seq| *get_mut_arcmutex!(seq).id())
             .collect::<Vec<_>>();
         assert_eq!(second_ids, vec![2, 0]);
+    }
+
+    #[test]
+    fn resident_decode_continuation_requires_exact_live_batch() {
+        let mut scheduler = test_scheduler();
+        scheduler.running.push_back(test_sequence(0, 4));
+        scheduler.running.push_back(test_sequence(1, 4));
+
+        let cursor = scheduler.completion_cursor;
+        let decode_steps = scheduler.decode_steps_since_prefill;
+        assert!(scheduler.can_continue_decode_batch(&[0, 1]));
+        assert!(!scheduler.can_continue_decode_batch(&[1, 0]));
+        assert!(!scheduler.can_continue_decode_batch(&[0]));
+        assert!(!scheduler.can_continue_decode_batch(&[0, 1, 2]));
+        assert_eq!(scheduler.completion_cursor, cursor);
+        assert_eq!(scheduler.decode_steps_since_prefill, decode_steps);
+
+        get_mut_arcmutex!(scheduler.running[1])
+            .set_state(SequenceState::Done(StopReason::Canceled));
+        assert!(!scheduler.can_continue_decode_batch(&[0, 1]));
+    }
+
+    #[test]
+    fn resident_decode_continuation_respects_prompt_fairness() {
+        let mut scheduler = test_scheduler();
+        for id in 0..scheduler.config.max_num_seqs {
+            scheduler.running.push_back(test_sequence(id, 4));
+        }
+        let waiting = test_sequence(scheduler.config.max_num_seqs, 4);
+        get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(waiting);
+        scheduler.decode_steps_since_prefill = scheduler.config.max_decode_steps_before_prefill - 1;
+        let sequence_ids = (0..scheduler.config.max_num_seqs).collect::<Vec<_>>();
+
+        assert!(scheduler.can_continue_decode_batch(&sequence_ids));
+        let before = scheduler.decode_steps_since_prefill;
+        scheduler.record_decode_continuation();
+        assert_eq!(scheduler.decode_steps_since_prefill, before + 1);
+        assert!(!scheduler.can_continue_decode_batch(&sequence_ids));
+    }
+
+    #[test]
+    fn underfilled_resident_decode_yields_after_one_turn() {
+        let mut scheduler = test_scheduler();
+        scheduler.running.push_back(test_sequence(0, 4));
+        let waiting = test_sequence(1, 4);
+        get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(waiting);
+        scheduler.decode_steps_since_prefill = 1;
+
+        let cursor = scheduler.completion_cursor;
+        let steps = scheduler.decode_steps_since_prefill;
+        assert!(!scheduler.can_continue_decode_batch(&[0]));
+        assert_eq!(scheduler.completion_cursor, cursor);
+        assert_eq!(scheduler.decode_steps_since_prefill, steps);
+    }
+
+    #[test]
+    fn kv_blocked_prompt_does_not_interrupt_resident_decode() {
+        let mut scheduler = test_scheduler();
+        scheduler.running.push_back(test_sequence(0, 4));
+        let waiting = test_sequence(1, 4);
+        get_mut_arcmutex!(waiting).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(waiting);
+        scheduler.decode_steps_since_prefill = 1;
+        {
+            let mut kv_manager = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            let free_tokens = kv_manager.num_free_blocks() * scheduler.block_size;
+            assert!(kv_manager.allocate_slots(99, free_tokens, &[]).is_some());
+            assert_eq!(kv_manager.num_free_blocks(), 0);
+        }
+
+        assert!(scheduler.can_continue_decode_batch(&[0]));
+    }
+
+    #[test]
+    fn resident_decode_continuation_stops_for_pending_termination() {
+        let mut scheduler = test_scheduler();
+        scheduler.running.push_back(test_sequence(0, 4));
+
+        assert!(scheduler.can_continue_decode_batch_inner(&[0], false));
+        assert!(!scheduler.can_continue_decode_batch_inner(&[0], true));
+    }
+
+    #[test]
+    fn resident_decode_continuation_preserves_subset_rotation() {
+        let mut scheduler = test_scheduler();
+        scheduler.config.max_num_batched_tokens = 2;
+        for id in 0..3 {
+            let seq = test_sequence(id, 4);
+            get_mut_arcmutex!(seq).set_num_computed_tokens(4);
+            scheduler.running.push_back(seq);
+        }
+
+        assert!(scheduler.can_continue_decode_batch(&[0, 1]));
+        assert_eq!(scheduler.completion_cursor, 0);
+        scheduler.record_decode_continuation();
+        assert_eq!(scheduler.completion_cursor, 2);
+        assert!(!scheduler.can_continue_decode_batch(&[0, 1]));
+        assert!(scheduler.can_continue_decode_batch(&[2, 0]));
+
+        scheduler.record_decode_continuation();
+        assert_eq!(scheduler.completion_cursor, 1);
+        assert!(scheduler.can_continue_decode_batch(&[1, 2]));
     }
 
     #[test]

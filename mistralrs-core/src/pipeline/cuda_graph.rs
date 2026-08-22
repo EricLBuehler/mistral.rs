@@ -1128,6 +1128,7 @@ impl CudaDecodeGraphLaunch {
         &self.graph_stream
     }
 
+    #[cfg(test)]
     pub(crate) fn generation(&self) -> u64 {
         self.generation
     }

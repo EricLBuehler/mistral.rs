@@ -146,4 +146,10 @@ pub trait Scheduler: Send + Sync {
         _require_block_alignment: bool,
     ) {
     }
+
+    fn can_continue_decode_batch(&self, _sequence_ids: &[usize]) -> bool {
+        false
+    }
+
+    fn record_decode_continuation(&mut self) {}
 }

@@ -335,25 +335,11 @@ pub(crate) struct CudaTop1BatchSubmission {
 
 #[cfg(feature = "cuda")]
 impl CudaTop1BatchSubmission {
-    pub(crate) fn device_tokens(&self) -> &Tensor {
-        self.submission
-            .as_ref()
-            .expect("CUDA top-1 submission was already completed")
-            .device_tokens()
-    }
-
     pub(crate) fn batch_size(&self) -> usize {
         self.submission
             .as_ref()
             .expect("CUDA top-1 submission was already completed")
             .batch_size()
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        self.submission
-            .as_ref()
-            .expect("CUDA top-1 submission was already completed")
-            .is_complete()
     }
 
     pub(crate) fn wait_on(
@@ -820,6 +806,14 @@ impl Sampler {
             cache: self.top1_cache.clone(),
             submission: Some(submission),
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_top1_batch_owned(
+        &self,
+        logits: &Tensor,
+    ) -> Result<CudaTop1BatchSubmission> {
+        self.submit_cuda_top1_batch(logits, false)
     }
 
     #[cfg(feature = "cuda")]

@@ -1331,23 +1331,20 @@ pub(crate) struct CudaTop1Submission {
     slot: usize,
     generation: u64,
     nrows: usize,
-    device_tokens: Tensor,
+    _device_tokens: Tensor,
     device_ready: std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaEvent>,
     host_complete: std::sync::Arc<candle_core::cuda_backend::cudarc::driver::CudaEvent>,
 }
 
 #[cfg(feature = "cuda")]
 impl CudaTop1Submission {
+    #[cfg(test)]
     pub(crate) fn device_tokens(&self) -> &Tensor {
-        &self.device_tokens
+        &self._device_tokens
     }
 
     pub(crate) fn batch_size(&self) -> usize {
         self.nrows
-    }
-
-    pub(crate) fn is_complete(&self) -> bool {
-        self.host_complete.is_complete()
     }
 
     pub(crate) fn wait(&self) -> Result<()> {
@@ -1758,7 +1755,7 @@ fn cuda_top1_logits_f32_submit_inner(
         slot: slot_index,
         generation,
         nrows,
-        device_tokens,
+        _device_tokens: device_tokens,
         device_ready: slot.device_ready.clone(),
         host_complete: slot.host_complete.clone(),
     })
@@ -2004,6 +2001,7 @@ pub fn cuda_top1_logits_f32_cached(
 }
 
 #[cfg(feature = "cuda")]
+#[cfg(test)]
 pub(crate) fn cuda_top1_logits_f32_packed_batched_cached(
     input: &Tensor,
     cache: &mut Option<CudaTop1LogitsWorkspace>,

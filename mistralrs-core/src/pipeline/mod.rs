@@ -8,6 +8,7 @@ pub(crate) mod cuda_graph;
 pub use cuda_graph::CudaDecodeGraphLaunch;
 mod diffusion;
 mod embedding;
+pub(crate) mod execution;
 mod ggml;
 mod gguf;
 pub(crate) mod hf;
@@ -41,6 +42,8 @@ use chat_template::ChatTemplate;
 pub use diffusion::{DiffusionLoader, DiffusionLoaderBuilder};
 pub(crate) use embedding::EmbeddingLoadContext;
 pub use embedding::{EmbeddingLoader, EmbeddingLoaderBuilder, EmbeddingSpecificConfig};
+#[doc(hidden)]
+pub use execution::{StepLookahead, StepSubmission};
 pub use ggml::{GGMLLoader, GGMLLoaderBuilder, GGMLSpecificConfig};
 pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 use image::DynamicImage;
@@ -1488,6 +1491,38 @@ pub trait Pipeline:
         backend_metadata: CacheBackendMetadata,
         logger: &IntervalLogger,
     ) -> Result<Duration, candle_core::Error> {
+        let completion = self
+            .submit_step(
+                input_seqs,
+                is_prompt,
+                return_raw_logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                backend_metadata,
+                logger,
+                StepLookahead::Disabled,
+            )
+            .await?
+            .into_ready()
+            .expect("lookahead-disabled pipeline step must complete eagerly");
+        Ok(completion.duration())
+    }
+
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_step(
+        &mut self,
+        input_seqs: &mut [&mut Sequence],
+        is_prompt: bool,
+        return_raw_logits: bool,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        backend_metadata: CacheBackendMetadata,
+        logger: &IntervalLogger,
+        lookahead: StepLookahead,
+    ) -> Result<StepSubmission, candle_core::Error> {
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {
@@ -1591,7 +1626,7 @@ pub trait Pipeline:
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
-                    return Ok(exec_duration);
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
                 if embedding_logits[0].is_some() {
                     let start = Instant::now();
@@ -1612,7 +1647,7 @@ pub trait Pipeline:
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
-                    return Ok(exec_duration);
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
 
                 let start = Instant::now();
@@ -1761,7 +1796,7 @@ pub trait Pipeline:
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
 
-                Ok(exec_duration)
+                Ok(StepSubmission::ready(exec_duration))
             }
             CacheBackendMetadata::PagedAttention { mut metadata } => {
                 let block_size = metadata.block_size;
@@ -1838,6 +1873,18 @@ pub trait Pipeline:
                     || chunk_plans
                         .as_ref()
                         .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
+                let cuda_decode_lookahead = lookahead.is_enabled()
+                    && !is_prompt
+                    && !return_raw_logits
+                    && self.device().is_cuda()
+                    && self.supports_batched_cuda_sampling()
+                    && sampling::can_submit_greedy_batch_cuda_seqs(input_seqs)
+                    && sampling::can_launch_one_token_lookahead(
+                        input_seqs,
+                        self.get_metadata().max_seq_len,
+                    );
+                #[cfg(feature = "cuda")]
+                let mut batched_cuda_decode = None;
                 let (
                     mut logits,
                     batched_causal_logits,
@@ -2002,7 +2049,8 @@ pub trait Pipeline:
                             seq_indices,
                         } = inputs.map_err(candle_core::Error::msg)?;
 
-                        let preserve_causal_generation = input_seqs.len() > 1
+                        let preserve_causal_generation = (input_seqs.len() > 1
+                            || cuda_decode_lookahead)
                             && !return_raw_logits
                             && self.device().is_cuda()
                             && self.supports_batched_cuda_sampling()
@@ -2047,8 +2095,22 @@ pub trait Pipeline:
                                 .set_state_indices_with_host(Some(state_indices), Some(indices));
                         }
                         let start = Instant::now();
-                        let raw_logits = self
-                            .forward_inputs(inputs, return_raw_logits)?
+                        #[cfg(feature = "cuda")]
+                        let forward = if cuda_decode_lookahead {
+                            self.forward_step(inputs, return_raw_logits)?
+                        } else {
+                            ForwardStepResult::eager(
+                                self.forward_inputs(inputs, return_raw_logits)?,
+                            )
+                        };
+                        #[cfg(not(feature = "cuda"))]
+                        let forward = ForwardStepResult::eager(
+                            self.forward_inputs(inputs, return_raw_logits)?,
+                        );
+                        #[cfg(feature = "cuda")]
+                        let mut cuda_decode = forward.cuda_decode;
+                        let raw_logits = forward
+                            .output
                             .into_cpu_for_batch(input_seqs.len(), preserve_causal_generation)?;
                         if let Some(prompt_chunk) = prompt_chunk.as_ref() {
                             self.speculative_prompt_chunk(
@@ -2081,6 +2143,10 @@ pub trait Pipeline:
                         let raw_logits = if keep_batched_causal_logits {
                             match raw_logits {
                                 ForwardInputsResult::CausalGeneration { logits, .. } => {
+                                    #[cfg(feature = "cuda")]
+                                    {
+                                        batched_cuda_decode = cuda_decode.take();
+                                    }
                                     batched_causal_logits = Some(logits);
                                     continue;
                                 }
@@ -2126,7 +2192,7 @@ pub trait Pipeline:
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
-                    return Ok(exec_duration);
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
                 if embedding_logits[0].is_some() {
                     let start = Instant::now();
@@ -2147,18 +2213,45 @@ pub trait Pipeline:
                     let end = Instant::now();
                     exec_duration += end.duration_since(start);
 
-                    return Ok(exec_duration);
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
                 if !should_sample_step(
                     is_prompt,
                     scheduler_visible_prompt_step,
                     scheduler_visible_prompt_is_final,
                 ) {
-                    return Ok(exec_duration);
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
 
                 let start = Instant::now();
                 if let Some(batched_causal_logits) = batched_causal_logits {
+                    #[cfg(feature = "cuda")]
+                    let mut batched_causal_logits = batched_causal_logits;
+                    #[cfg(feature = "cuda")]
+                    if cuda_decode_lookahead {
+                        let forward = ForwardStepResult::cuda_decode(
+                            ForwardInputsResult::CausalGeneration {
+                                logits: batched_causal_logits,
+                            },
+                            batched_cuda_decode.take(),
+                        );
+                        match execution::submit_forward_lookahead(
+                            self,
+                            input_seqs,
+                            forward,
+                            exec_duration,
+                        )? {
+                            Ok(submission) => return Ok(StepSubmission::cuda(submission)),
+                            Err(forward) => {
+                                let ForwardInputsResult::CausalGeneration { logits } =
+                                    forward.output
+                                else {
+                                    unreachable!("CUDA lookahead changed the forward result type")
+                                };
+                                batched_causal_logits = logits;
+                            }
+                        }
+                    }
                     if self
                         .try_sample_causal_gen_batched(
                             input_seqs,
@@ -2182,7 +2275,7 @@ pub trait Pipeline:
                             }
                         }
                         exec_duration += start.elapsed();
-                        return Ok(exec_duration);
+                        return Ok(StepSubmission::ready(exec_duration));
                     }
                     for (seq_idx, logits) in logits.iter_mut().enumerate() {
                         *logits = Some(ForwardInputsResult::CausalGeneration {
@@ -2341,7 +2434,7 @@ pub trait Pipeline:
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
 
-                Ok(exec_duration)
+                Ok(StepSubmission::ready(exec_duration))
             }
         }
     }

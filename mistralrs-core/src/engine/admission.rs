@@ -71,6 +71,16 @@ impl<T> AdmissionQueue<T> {
         self.policy.max_dispatches_per_step()
     }
 
+    #[cfg(any(feature = "cuda", test))]
+    pub(super) fn blocks_decode_continuation(&self) -> bool {
+        !self.bypass_controls.is_empty()
+            || !self.shutdown.is_empty()
+            || self
+                .ordered
+                .iter()
+                .any(|pending| matches!(pending.class, AdmissionClass::OrderedControl))
+    }
+
     pub(super) fn push(&mut self, request: T, class: AdmissionClass) -> Result<(), T> {
         if self.len() == self.policy.max_pending_requests {
             return Err(request);
@@ -107,6 +117,18 @@ impl<T> AdmissionQueue<T> {
             | AdmissionClass::Shutdown => true,
         };
         admissible.then(|| self.ordered.pop_front().unwrap().request)
+    }
+
+    pub(super) fn pop_admissible_workload(&mut self, active_sequences: usize) -> Option<T> {
+        let pending = self.ordered.front()?;
+        let AdmissionClass::Workload { sequences } = pending.class else {
+            return None;
+        };
+        let sequences = sequences.max(1);
+        let available = self.policy.available_sequences(active_sequences);
+        (sequences <= available
+            || active_sequences == 0 && sequences > self.policy.max_active_sequences)
+            .then(|| self.ordered.pop_front().unwrap().request)
     }
 
     pub(super) fn len(&self) -> usize {
@@ -230,5 +252,18 @@ mod tests {
 
         assert_eq!(queue.push(request, class), Err(2));
         assert_eq!(queue.remaining_capacity(), 0);
+    }
+
+    #[test]
+    fn controls_stop_resident_decode_continuation() {
+        let mut queue = AdmissionQueue::new(AdmissionPolicy::new(2, 8));
+        let (request, class) = workload(0);
+        queue.push(request, class).unwrap();
+        assert!(!queue.blocks_decode_continuation());
+
+        queue.push(10, AdmissionClass::OrderedControl).unwrap();
+        assert!(queue.blocks_decode_continuation());
+        assert_eq!(queue.pop_admissible_workload(0), Some(0));
+        assert_eq!(queue.pop_admissible_workload(0), None);
     }
 }
