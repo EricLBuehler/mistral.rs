@@ -28,7 +28,10 @@ use crate::{
     },
     layers_masker::PastKvLenCache,
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
@@ -89,6 +92,32 @@ pub struct Config {
     pub quantization_config: Option<QuantizedConfig>,
     #[serde(default, rename = "_mistralrs_gdn_v_head_layout")]
     gdn_v_head_layout: GdnVHeadLayout,
+    #[serde(default)]
+    pub rope_scaling: Option<Qwen35YarnScaling>,
+}
+
+/// YaRN rope scaling for the Qwen3.5-family partial rotary, mirroring
+/// llama.cpp's `--rope-scaling yarn` semantics.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Qwen35YarnScaling {
+    #[serde(default = "default_yarn_rope_type")]
+    pub rope_type: String,
+    pub factor: f64,
+    pub original_max_position_embeddings: usize,
+    pub beta_fast: f64,
+    pub beta_slow: f64,
+    #[serde(default = "default_yarn_mscale")]
+    pub mscale: f64,
+    #[serde(default = "default_yarn_mscale")]
+    pub mscale_all_dim: f64,
+}
+
+fn default_yarn_rope_type() -> String {
+    "yarn".to_string()
+}
+
+fn default_yarn_mscale() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone)]
@@ -766,14 +795,37 @@ impl Model {
                     .unwrap_or(&normal_loading_metadata.real_device);
                 if let std::collections::hash_map::Entry::Vacant(e) = ropes.entry(device.location())
                 {
-                    let rope = RotaryEmbedding::new_partial(
-                        cfg.rope_theta as f32,
-                        rot_dim,
-                        cfg.max_position_embeddings,
-                        device,
-                        is_gptx,
-                        vb_m.dtype(),
-                    )?;
+                    let rope = match &cfg.rope_scaling {
+                        Some(scaling) if scaling.rope_type == "yarn" => {
+                            RotaryEmbedding::new_partial_yarn(
+                                cfg.rope_theta as f32,
+                                rot_dim,
+                                cfg.max_position_embeddings,
+                                scaling.original_max_position_embeddings,
+                                scaling.factor as f32,
+                                scaling.mscale as f32,
+                                scaling.mscale_all_dim as f32,
+                                scaling.beta_fast as f32,
+                                scaling.beta_slow as f32,
+                                device,
+                                vb_m.dtype(),
+                            )?
+                        }
+                        Some(scaling) => {
+                            candle_core::bail!(
+                                "Unsupported rope scaling type `{}` for Qwen3-Next",
+                                scaling.rope_type
+                            )
+                        }
+                        None => RotaryEmbedding::new_partial(
+                            cfg.rope_theta as f32,
+                            rot_dim,
+                            cfg.max_position_embeddings,
+                            device,
+                            is_gptx,
+                            vb_m.dtype(),
+                        )?,
+                    };
                     e.insert(Arc::new(rope));
                 }
             }
@@ -1195,6 +1247,16 @@ impl NormalModel for Model {
         &self.cfg
     }
 
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(HybridPagedKvCacheConfig::new(
+            self.cfg.clone(),
+            self.layer_types
+                .iter()
+                .map(|ty| matches!(ty, LayerType::FullAttention))
+                .collect(),
+        ))
+    }
+
     fn supports_packed_prefill(&self) -> bool {
         true
     }
@@ -1216,7 +1278,7 @@ mod tests {
 
     use super::{
         gdn_input_projection_kind, packed_gdn_segments, validate_packed_gdn_state_rows,
-        GdnInputProjectionKind, PackedGdnSegment,
+        Config, GdnInputProjectionKind, LayerType, PackedGdnSegment,
     };
 
     struct ProjectionWeightSource(HashSet<String>);
@@ -1271,9 +1333,46 @@ mod tests {
             .pp("model.layers.0.linear_attn"))
     }
 
+    fn config_for_test() -> Config {
+        serde_json::from_value(serde_json::json!({
+            "vocab_size": 32000,
+            "hidden_size": 2048,
+            "intermediate_size": 512,
+            "num_hidden_layers": 40,
+            "num_attention_heads": 16,
+            "num_key_value_heads": 2,
+            "hidden_act": "silu",
+            "max_position_embeddings": 262144,
+            "head_dim": 256,
+            "linear_key_head_dim": 128,
+            "linear_value_head_dim": 128,
+            "linear_num_key_heads": 16,
+            "linear_num_value_heads": 32,
+            "moe_intermediate_size": 512,
+            "shared_expert_intermediate_size": 512,
+            "num_experts_per_tok": 8,
+            "num_experts": 90,
+            "full_attention_interval": 4,
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn gdn_projection_kind_reads_residual_and_weight_source_tensors() -> Result<()> {
-        let split = [
+    fn hybrid_layer_types_mask_only_the_10_full_attention_layers() {
+        let cfg = config_for_test();
+        let types = cfg.layer_types();
+        assert_eq!(types.len(), 40);
+        let full = types
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| matches!(ty, LayerType::FullAttention))
+            .map(|(idx, _)| idx)
+            .collect::<Vec<_>>();
+        assert_eq!(full, vec![3, 7, 11, 15, 19, 23, 27, 31, 35, 39]);
+    }
+
+    #[test]
+    fn gdn_projection_kind_reads_residual_and_weight_source_tensors() -> Result<()> {        let split = [
             "in_proj_qkv.weight",
             "in_proj_z.weight",
             "in_proj_b.weight",

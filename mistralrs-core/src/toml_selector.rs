@@ -9,7 +9,7 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     LoraAdapterSpec, LoraRuntimeConfig, ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    Topology, UqffWriteConfig, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
+    RopeOverride, Topology, UqffWriteConfig, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 fn default_one() -> usize {
@@ -238,6 +238,10 @@ pub enum TomlModelSelected {
 
         /// Name of the Matryoshka Transformer slice to use.
         matformer_slice_name: Option<String>,
+
+        /// YaRN rope override for long-context serving.
+        #[serde(default)]
+        rope_override: Option<RopeOverride>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -943,6 +947,7 @@ fn loader_from_selected(
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
+            rope_override,
         } => {
             let mut builder = GGUFLoaderBuilder::new(
                 args.chat_template,
@@ -963,6 +968,7 @@ fn loader_from_selected(
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
+                    rope_override,
                 },
                 args.no_kv_cache,
                 args.jinja_explicit,

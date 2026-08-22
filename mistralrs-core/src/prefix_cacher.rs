@@ -339,6 +339,9 @@ impl PrefixCacheManagerV2 {
 
     /// Add a recurrent-state snapshot for a paged-attention block-hash prefix key.
     /// This is used by hybrid models to restore recurrent states alongside paged KV prefix hits.
+    /// Snapshots are parked in host memory: each one holds every recurrent layer's F32 state
+    /// (~63 MB for Qwen3-Next's 30 GDN layers), so keeping them resident on the GPU would
+    /// accumulate ~1 GB of VRAM per cache fill and starve prefill transients.
     pub fn add_paged_recurrent_prefix(
         &mut self,
         key: Vec<BlockHash>,
@@ -358,6 +361,19 @@ impl PrefixCacheManagerV2 {
                 .paged_recurrent_bytes
                 .saturating_sub(Self::snapshot_bytes(&prev));
         }
+
+        let mut snapshots = snapshots;
+        for snapshot in &mut snapshots {
+            let Ok(conv_state) = snapshot.conv_state.to_device(&Device::Cpu) else {
+                return;
+            };
+            let Ok(recurrent_state) = snapshot.recurrent_state.to_device(&Device::Cpu) else {
+                return;
+            };
+            snapshot.conv_state = conv_state;
+            snapshot.recurrent_state = recurrent_state;
+        }
+
         self.paged_recurrent_bytes += Self::snapshot_bytes(&snapshots);
         self.paged_recurrent_caches.insert(key, snapshots);
 
@@ -377,7 +393,7 @@ impl PrefixCacheManagerV2 {
         {
             self.paged_recurrent_reported = true;
             info!(
-                "Recurrent prefix cache full at {} entries, {} MB. Adjust with `--prefix-cache-n`.",
+                "Recurrent prefix cache full at {} entries, {} MB host RAM. Adjust with `--prefix-cache-n`.",
                 self.paged_recurrent_caches.len(),
                 self.paged_recurrent_bytes / (1024 * 1024),
             );

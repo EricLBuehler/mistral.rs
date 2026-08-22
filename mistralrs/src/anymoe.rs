@@ -124,6 +124,7 @@ impl AnyMoeModelBuilder {
                     hf_cache_path: base.hf_cache_path.clone(),
                     matformer_config_path: base.matformer_config_path.clone(),
                     matformer_slice_name: base.matformer_slice_name.clone(),
+                    rope_override: None,
                 };
 
                 maybe_initialize_logging(base.with_logging);

@@ -88,6 +88,8 @@ impl PagedAttention {
             DType::BF16 => 1,
             DType::F32 => 2,
             DType::F8E4M3 => 3,
+            // F4 lives in packed U8 storage.
+            DType::U8 => 4,
             dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
         };
 
@@ -147,11 +149,15 @@ impl PagedAttention {
         let q = q.as_cuda_slice::<T>()?;
         let (kc_ptr, _kc_guard) = if cache_dtype == 3 {
             slice_ptr(kc.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
+        } else if cache_dtype == 4 {
+            slice_ptr(kc.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
             slice_ptr(kc.as_cuda_slice::<T>()?, kc_l.start_offset())
         };
         let (vc_ptr, _vc_guard) = if cache_dtype == 3 {
             slice_ptr(vc.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
+        } else if cache_dtype == 4 {
+            slice_ptr(vc.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
             slice_ptr(vc.as_cuda_slice::<T>()?, vc_l.start_offset())
         };
@@ -240,15 +246,24 @@ impl PagedAttention {
         }
 
         let (num_blocks, num_kv_heads, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
-        if head_size_kc != head_size / x {
+        if cache_dtype == 4 {
+            if head_size_kc != head_size / 32
+                || (num_blocks, num_kv_heads, head_size / 2, block_size)
+                    != vc_l.shape().dims4()?
+            {
+                candle::bail!(
+                    "shape mismatch for F4 caches: key_cache {:?}, value_cache {:?}",
+                    kc_l.shape(),
+                    vc_l.shape()
+                );
+            }
+        } else if head_size_kc != head_size / x {
             candle::bail!(
                 "shape mismatch value_cache {:?}, expected {:?}",
                 vc_l.shape(),
                 (num_blocks, num_kv_heads, head_size / x, block_size, x)
             )
-        }
-
-        if (num_blocks, num_kv_heads, head_size, block_size) != vc_l.shape().dims4()? {
+        } else if (num_blocks, num_kv_heads, head_size, block_size) != vc_l.shape().dims4()? {
             candle::bail!(
                 "shape mismatch key_cache {:?} and value_cache {:?}",
                 kc_l.shape(),
@@ -476,6 +491,8 @@ fn update_cache<
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
+        // F4 lives in packed U8 storage (see F4-KV-STORAGE-ASSESSMENT.md).
+        DType::U8 => 4,
         dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
     };
 
@@ -539,7 +556,7 @@ fn update_cache<
     let v = v.as_cuda_slice::<T>()?;
     let s = s.as_cuda_slice::<i64>()?;
 
-    // For FP8 cache, we need to get as u8 slices instead
+    // For quantized caches, get u8 slices instead
     let ((kc_ptr, _kc_guard), (vc_ptr, _vc_guard)) = if cache_dtype == 3 {
         if !crate::cuda::USE_FP8 {
             candle::bail!("FP8 is not supported on this system.");
@@ -547,6 +564,13 @@ fn update_cache<
 
         let kc = kc.as_cuda_slice::<F8E4M3>()?;
         let vc = vc.as_cuda_slice::<F8E4M3>()?;
+        (
+            slice_ptr(kc, kc_l.start_offset()),
+            slice_ptr(vc, vc_l.start_offset()),
+        )
+    } else if cache_dtype == 4 {
+        let kc = kc.as_cuda_slice::<u8>()?;
+        let vc = vc.as_cuda_slice::<u8>()?;
         (
             slice_ptr(kc, kc_l.start_offset()),
             slice_ptr(vc, vc_l.start_offset()),
@@ -597,20 +621,37 @@ fn update_cache<
     }
 
     let (num_blocks, num_heads_kc, head_size_kc, block_size, x) = kc_l.shape().dims5()?;
-    if num_heads_kc != num_heads || head_size_kc != head_size / x {
-        candle::bail!(
-            "shape mismatch value_cache {:?}, expected {:?}",
-            vc_l.shape(),
-            (num_blocks, num_heads, head_size / x, block_size, x)
-        )
-    }
+    if cache_dtype == 4 {
+        // F4: 32 values per 16-byte cell row; value head dim halved (packed).
+        if num_heads_kc != num_heads
+            || head_size_kc != head_size / 32
+            || (num_blocks, num_heads, head_size / 2, block_size)
+                != vc_l.shape().dims4()?
+        {
+            candle::bail!(
+                "shape mismatch for F4 caches: key_cache {:?}, value_cache {:?}, expected key ({num_blocks}, {num_heads}, {}, {block_size}, 16) and value ({num_blocks}, {num_heads}, {}, {block_size})",
+                kc_l.shape(),
+                vc_l.shape(),
+                head_size / 32,
+                head_size / 2
+            )
+        }
+    } else {
+        if num_heads_kc != num_heads || head_size_kc != head_size / x {
+            candle::bail!(
+                "shape mismatch value_cache {:?}, expected {:?}",
+                vc_l.shape(),
+                (num_blocks, num_heads, head_size / x, block_size, x)
+            )
+        }
 
-    if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
-        candle::bail!(
-            "shape mismatch key_cache {:?} and value_cache {:?}",
-            kc_l.shape(),
-            vc_l.shape()
-        )
+        if (num_blocks, num_heads, head_size, block_size) != vc_l.shape().dims4()? {
+            candle::bail!(
+                "shape mismatch key_cache {:?} and value_cache {:?}",
+                kc_l.shape(),
+                vc_l.shape()
+            )
+        }
     }
 
     if (num_tokens) != s_l.shape().dims1()? {

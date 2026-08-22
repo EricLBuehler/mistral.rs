@@ -750,6 +750,7 @@ fn convert_gguf_source(
         hf_cache_path: device.hf_cache.clone(),
         matformer_config_path: None,
         matformer_slice_name: None,
+        rope_override: None,
     })
 }
 

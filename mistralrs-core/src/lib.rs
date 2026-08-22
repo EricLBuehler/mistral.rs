@@ -70,6 +70,8 @@ mod search;
 
 mod model_selected;
 pub use model_selected::ModelSelected;
+mod rope_override;
+pub use rope_override::RopeOverride;
 pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_selected_model_dtype};
 
 mod amoe;

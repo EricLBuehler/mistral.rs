@@ -856,6 +856,7 @@ pub async fn build_gguf_pipeline(
         hf_cache_path: builder.hf_cache_path.clone(),
         matformer_config_path: builder.matformer_config_path.clone(),
         matformer_slice_name: builder.matformer_slice_name.clone(),
+        rope_override: None,
     };
 
     maybe_initialize_logging(builder.with_logging);
@@ -985,6 +986,7 @@ pub async fn build_gguf_pipeline(
             hf_cache_path: builder.hf_cache_path.clone(),
             matformer_config_path: builder.matformer_config_path.clone(),
             matformer_slice_name: builder.matformer_slice_name.clone(),
+            rope_override: None,
         },
         token_source: builder.token_source.clone(),
         hf_revision: builder.hf_revision.clone(),

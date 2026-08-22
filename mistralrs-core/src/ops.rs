@@ -37,7 +37,7 @@ fn cuda_topk(input: &Tensor, k: usize) -> Result<TopKOutput> {
     use candle_core::cuda_backend::CudaStorageSlice;
     use std::ffi::c_void;
 
-    let input = final_logits_row(input)?;
+    let input = input.contiguous()?;
     let dims = input.dims();
     let ncols = *dims
         .last()

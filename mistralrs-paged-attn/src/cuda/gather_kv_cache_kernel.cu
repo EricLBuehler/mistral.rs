@@ -93,21 +93,66 @@ __global__ void gather_kv_cache_kernel(
     const int head_idx = i / head_size;
     const int d = i % head_size;
 
-    // K: [block_id, head_idx, d/x, slot, d%x]
-    const int x_idx = d / x;
-    const int x_offset = d % x;
-    const int64_t k_src_idx = static_cast<int64_t>(block_id) * k_block_stride +
-                              head_idx * k_head_stride +
-                              x_idx * block_size * x + slot * x + x_offset;
+    if constexpr (kv_dt == Fp8KVCacheDataType::kF4) {
+      // F4: K byte layout [block, head, hd/32, bs, 16], V byte layout
+      // [block, head, hd/2, bs]; both caches use a hd*bs/2 block stride.
+      const int64_t f4_block_stride =
+          static_cast<int64_t>(num_kv_heads) * head_size * block_size / 2;
+      const int64_t k_head_stride_f4 =
+          static_cast<int64_t>(head_size / 32) * block_size * 16;
+      const int64_t v_head_stride_f4 =
+          static_cast<int64_t>(head_size / 2) * block_size;
 
-    // V: [block_id, head_idx, d, slot]
-    const int64_t v_src_idx = static_cast<int64_t>(block_id) * v_block_stride +
-                              head_idx * v_head_stride + d * block_size + slot;
+      const int64_t k_byte =
+          static_cast<int64_t>(block_id) * f4_block_stride +
+          head_idx * k_head_stride_f4 + (d / 32) * block_size * 16 +
+          slot * 16 + (d % 32) / 2;
+      const float kscale =
+          k_scale[((static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
+                       (head_size / 32) +
+                   d / 32) *
+                      block_size +
+                  slot];
+      const uint8_t kb = key_cache[k_byte];
+      const uint8_t knib = (d % 2 == 0) ? (kb & 0x0F) : ((kb >> 4) & 0x0F);
+      k_out[out_base + i] = (out_t)(((float)((int)knib - 8)) * kscale);
 
-    if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
+      const int64_t v_byte = static_cast<int64_t>(block_id) * f4_block_stride +
+                             head_idx * v_head_stride_f4 + (d / 2) * block_size +
+                             slot;
+      const float vscale =
+          v_scale[(static_cast<int64_t>(block_id) * num_kv_heads + head_idx) *
+                      block_size +
+                  slot];
+      const uint8_t vb = value_cache[v_byte];
+      const uint8_t vnib = (d % 2 == 0) ? (vb & 0x0F) : ((vb >> 4) & 0x0F);
+      v_out[out_base + i] = (out_t)(((float)((int)vnib - 8)) * vscale);
+    } else if constexpr (kv_dt == Fp8KVCacheDataType::kAuto) {
+      // K: [block_id, head_idx, d/x, slot, d%x]
+      const int x_idx = d / x;
+      const int x_offset = d % x;
+      const int64_t k_src_idx = static_cast<int64_t>(block_id) * k_block_stride +
+                                head_idx * k_head_stride +
+                                x_idx * block_size * x + slot * x + x_offset;
+
+      // V: [block_id, head_idx, d, slot]
+      const int64_t v_src_idx = static_cast<int64_t>(block_id) * v_block_stride +
+                                head_idx * v_head_stride + d * block_size + slot;
+
       k_out[out_base + i] = key_cache[k_src_idx];
       v_out[out_base + i] = value_cache[v_src_idx];
     } else {
+      // K: [block_id, head_idx, d/x, slot, d%x]
+      const int x_idx = d / x;
+      const int x_offset = d % x;
+      const int64_t k_src_idx = static_cast<int64_t>(block_id) * k_block_stride +
+                                head_idx * k_head_stride +
+                                x_idx * block_size * x + slot * x + x_offset;
+
+      // V: [block_id, head_idx, d, slot]
+      const int64_t v_src_idx = static_cast<int64_t>(block_id) * v_block_stride +
+                                head_idx * v_head_stride + d * block_size + slot;
+
       k_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
           key_cache[k_src_idx], *k_scale);
       v_out[out_base + i] = fp8::scaled_convert<out_t, cache_t, kv_dt>(
@@ -150,7 +195,17 @@ extern "C" void gather_kv_cache(
   dim3 grid(num_tokens);
   dim3 block(std::min(num_kv_heads * head_size, 512));
 
-  if (cache_dtype == 3) {
+  if (cache_dtype == 4) {
+    // F4 cache -> dequantize to out_dtype
+    if (out_dtype == 0) {
+      CALL_GATHER_KV_CACHE(uint16_t, uint8_t, vllm::Fp8KVCacheDataType::kF4);
+    } else if (out_dtype == 1) {
+      CALL_GATHER_KV_CACHE(__nv_bfloat16, uint8_t,
+                           vllm::Fp8KVCacheDataType::kF4);
+    } else if (out_dtype == 2) {
+      CALL_GATHER_KV_CACHE(float, uint8_t, vllm::Fp8KVCacheDataType::kF4);
+    }
+  } else if (cache_dtype == 3) {
     // FP8 E4M3 cache -> dequantize to out_dtype
     if (out_dtype == 0) {
       CALL_GATHER_KV_CACHE(uint16_t, uint8_t,

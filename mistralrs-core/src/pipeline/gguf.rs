@@ -38,6 +38,7 @@ use crate::kv_cache::FullCacheManager;
 use crate::lora::Ordering;
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 use crate::pipeline::hf::{build_api, get_file, list_repo_files};
+use crate::RopeOverride;
 use crate::pipeline::loaders::{stamp_qk_rope_layout, DeviceMappedModelLoader};
 use crate::pipeline::multimodal::{
     MultimodalLoaderBuilder, MultimodalSpecificConfig, PreparedMultimodalSource,
@@ -174,6 +175,7 @@ pub struct GGUFSpecificConfig {
     pub hf_cache_path: Option<PathBuf>,
     pub matformer_config_path: Option<PathBuf>,
     pub matformer_slice_name: Option<String>,
+    pub rope_override: Option<RopeOverride>,
 }
 
 impl GGUFSpecificConfig {
@@ -652,7 +654,12 @@ impl GGUFLoader {
                 validate_normal_config_tensor_inventory(&config, &tensor_names)?;
                 config
             }
-            None => synthesize_normal_config(&loader_type, archive.metadata(), &tensor_names)?,
+            None => synthesize_normal_config(
+                &loader_type,
+                archive.metadata(),
+                &tensor_names,
+                self.config.rope_override.as_ref(),
+            )?,
         };
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         let bindings = build_normal_bindings(&archive, &loader_type, descriptor.architecture)?;

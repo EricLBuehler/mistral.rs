@@ -54,6 +54,7 @@ impl GgufLoraModelBuilder {
             hf_cache_path: self.gguf_model.hf_cache_path,
             matformer_config_path: self.gguf_model.matformer_config_path,
             matformer_slice_name: self.gguf_model.matformer_slice_name,
+            rope_override: None,
         };
 
         maybe_initialize_logging(self.gguf_model.with_logging);

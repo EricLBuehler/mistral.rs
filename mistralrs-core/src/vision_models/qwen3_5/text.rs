@@ -32,7 +32,10 @@ use crate::{
     },
     layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa},
     layers_masker::{CausalMaskConfig, PastKvLenCache},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
@@ -1311,6 +1314,13 @@ impl NormalModel for Qwen3_5TextModel {
 
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(HybridPagedKvCacheConfig::new(
+            self.cfg.clone(),
+            self.paged_kv_layers(),
+        ))
     }
 
     fn supports_packed_prefill(&self) -> bool {

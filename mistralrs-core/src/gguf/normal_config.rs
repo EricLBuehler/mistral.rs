@@ -1,7 +1,7 @@
 use super::normal_registry::{schema_for, CanonicalGgufArchitecture, GgufDescriptor};
 #[cfg(test)]
 use super::normal_registry::{NativeModelAdapter, NORMAL_MODEL_ADAPTERS};
-use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, NormalLoaderType};
+use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, NormalLoaderType, RopeOverride};
 use candle_core::quantized::gguf_file::Value as GgufValue;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use std::{collections::HashMap, error::Error, fmt, num::TryFromIntError};
@@ -154,8 +154,9 @@ pub(crate) fn synthesize_normal_config(
     loader: &NormalLoaderType,
     metadata: &HashMap<String, GgufValue>,
     tensor_names: &[String],
+    rope_override: Option<&RopeOverride>,
 ) -> SynthesisResult<String> {
-    let value = synthesize_normal_config_value(loader, metadata, tensor_names)?;
+    let value = synthesize_normal_config_value(loader, metadata, tensor_names, rope_override)?;
     serde_json::to_string(&value).map_err(|error| {
         NormalConfigSynthesisError::new(format!(
             "Failed to serialize synthesized `{loader}` config: {error}"
@@ -163,11 +164,91 @@ pub(crate) fn synthesize_normal_config(
     })
 }
 
+fn supports_rope_override(loader: &NormalLoaderType) -> bool {
+    matches!(
+        loader,
+        NormalLoaderType::Qwen3Next | NormalLoaderType::Qwen3_5
+    )
+}
+
+// A forced YaRN override must win over any scaling metadata the GGUF already
+// carries; the registered builder otherwise rejects the checkpoint.
+fn neutralize_rope_scaling_metadata(
+    metadata: &HashMap<String, GgufValue>,
+) -> HashMap<String, GgufValue> {
+    let mut neutralized = metadata.clone();
+    if let Some(architecture) = metadata
+        .get("general.architecture")
+        .and_then(|value| match value {
+            GgufValue::String(value) => Some(value.clone()),
+            _ => None,
+        })
+    {
+        neutralized.insert(
+            format!("{architecture}.rope.scaling.type"),
+            GgufValue::String("none".to_string()),
+        );
+    }
+    neutralized
+}
+
+fn apply_rope_override(
+    loader: &NormalLoaderType,
+    value: JsonValue,
+    rope_override: Option<&RopeOverride>,
+) -> SynthesisResult<JsonValue> {
+    let Some(rope_override) = rope_override else {
+        return Ok(value);
+    };
+    if !supports_rope_override(loader) {
+        return Ok(value);
+    }
+    let mut object = value.as_object().cloned().ok_or_else(|| {
+        NormalConfigSynthesisError::new(format!(
+            "Synthesized `{loader}` config must be a JSON object"
+        ))
+    })?;
+    let native_ctx = object
+        .get("max_position_embeddings")
+        .and_then(JsonValue::as_u64)
+        .map(|value| value as usize)
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "Synthesized `{loader}` config has no `max_position_embeddings`"
+            ))
+        })?;
+    object.insert(
+        "max_position_embeddings".to_string(),
+        json!(rope_override.resolved_target_ctx(native_ctx)),
+    );
+    object.insert(
+        "rope_scaling".to_string(),
+        json!({
+            "rope_type": "yarn",
+            "factor": rope_override.scale,
+            "original_max_position_embeddings": rope_override.resolved_orig_ctx(native_ctx),
+            "beta_fast": rope_override.beta_fast,
+            "beta_slow": rope_override.beta_slow,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+        }),
+    );
+    Ok(JsonValue::Object(object))
+}
+
 pub(crate) fn synthesize_normal_config_value(
     loader: &NormalLoaderType,
     metadata: &HashMap<String, GgufValue>,
     tensor_names: &[String],
+    rope_override: Option<&RopeOverride>,
 ) -> SynthesisResult<JsonValue> {
+    let owned_metadata;
+    let metadata = if rope_override.is_some() && supports_rope_override(loader) {
+        owned_metadata = neutralize_rope_scaling_metadata(metadata);
+        &owned_metadata
+    } else {
+        metadata
+    };
     let view = MetadataView::new(loader, metadata, tensor_names)?;
     let builder = NORMAL_CONFIG_BUILDERS
         .iter()
@@ -178,6 +259,7 @@ pub(crate) fn synthesize_normal_config_value(
             ))
         })?;
     let value = (builder.build)(&view)?;
+    let value = apply_rope_override(loader, value, rope_override)?;
     with_reload_identity(loader, value)
 }
 
@@ -2868,7 +2950,7 @@ mod tests {
     fn every_loader_synthesizes_a_native_config() {
         for loader in NormalLoaderType::iter() {
             let (_, metadata, tensors) = default_fixture(&loader);
-            let config = synthesize_normal_config_value(&loader, &metadata, &tensors)
+            let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None)
                 .unwrap_or_else(|error| panic!("failed to synthesize `{loader}` fixture: {error}"));
             assert_eq!(
                 config["architectures"],
@@ -2897,7 +2979,7 @@ mod tests {
         insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 32);
         insert_u32(&mut metadata, architecture, "ssm.inner_size", 4_096);
 
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(config["intermediate_size"], 512);
         assert_eq!(config["head_dim"], 256);
         assert_eq!(config["partial_rotary_factor"], 0.25);
@@ -2938,7 +3020,7 @@ mod tests {
         insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 32);
         insert_u32(&mut metadata, architecture, "ssm.inner_size", 4_096);
 
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(config["vocab_size"], 248_320);
         assert_eq!(config["hidden_size"], 2_560);
         assert_eq!(config["intermediate_size"], 9_216);
@@ -2965,7 +3047,7 @@ mod tests {
         let architecture = CanonicalGgufArchitecture::Qwen35;
         let (mut metadata, tensors) = fixture(&loader, architecture);
         insert_u32(&mut metadata, architecture, "full_attention_interval", 0);
-        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap_err();
         assert!(error.to_string().contains("full attention interval"));
 
         insert_u32(&mut metadata, architecture, "full_attention_interval", 4);
@@ -2975,7 +3057,7 @@ mod tests {
             "rope.dimension_sections",
             &[11, 0, 21, 0],
         );
-        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap_err();
         assert!(error.to_string().contains("three non-zero MRoPE sections"));
 
         insert_u32_array(
@@ -2986,7 +3068,7 @@ mod tests {
         );
         insert_u32(&mut metadata, architecture, "ssm.group_count", 3);
         insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 8);
-        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap_err();
         assert!(error.to_string().contains("incompatible GDN head counts"));
     }
 
@@ -3013,7 +3095,7 @@ mod tests {
             let (mut metadata, tensors) = fixture(&loader, architecture);
             metadata.remove(&format!("{}.expert_weights_norm", architecture.as_str()));
 
-            let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+            let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
             assert_eq!(
                 config["norm_topk_prob"], true,
                 "{loader} with {architecture}"
@@ -3023,18 +3105,83 @@ mod tests {
     }
 
     #[test]
+    fn qwen35moe_yarn_override_extends_context_and_synthesizes_rope_scaling() {
+        let loader = NormalLoaderType::Qwen3Next;
+        let architecture = CanonicalGgufArchitecture::Qwen35Moe;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        insert_u32(&mut metadata, architecture, "context_length", 262_144);
+        metadata.remove(&format!("{}.feed_forward_length", architecture.as_str()));
+        insert_u32(&mut metadata, architecture, "attention.key_length", 256);
+        insert_u32(&mut metadata, architecture, "rope.dimension_count", 64);
+        insert_u32(&mut metadata, architecture, "ssm.state_size", 128);
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 16);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 32);
+        insert_u32(&mut metadata, architecture, "ssm.inner_size", 4_096);
+
+        let scale = 320_000.0 / 262_144.0;
+        let override_ = RopeOverride::yarn(scale, Some(262_144), None);
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, Some(&override_))
+            .unwrap();
+        assert_eq!(config["max_position_embeddings"], 320_000);
+        assert_eq!(config["rope_scaling"]["rope_type"], "yarn");
+        assert_eq!(config["rope_scaling"]["factor"], scale);
+        assert_eq!(config["rope_scaling"]["original_max_position_embeddings"], 262_144);
+        assert_eq!(config["rope_scaling"]["beta_fast"], 32.0);
+        assert_eq!(config["rope_scaling"]["beta_slow"], 1.0);
+        let native: models::qwen3_next::Config = serde_json::from_value(config.clone()).unwrap();
+        let scaling = native.rope_scaling.expect("rope_scaling must deserialize");
+        assert_eq!(scaling.rope_type, "yarn");
+        assert_eq!(scaling.factor, scale as f64);
+        assert_eq!(scaling.original_max_position_embeddings, 262_144);
+    }
+
+    #[test]
+    fn qwen35moe_yarn_override_wins_over_gguf_scaling_metadata() {
+        // A checkpoint that already carries scaling metadata must still load when
+        // the user forces --rope-scaling yarn: the rejection is bypassed.
+        let loader = NormalLoaderType::Qwen3Next;
+        let architecture = CanonicalGgufArchitecture::Qwen35Moe;
+        let (mut metadata, tensors) = fixture(&loader, architecture);
+        insert_u32(&mut metadata, architecture, "context_length", 262_144);
+        metadata.remove(&format!("{}.feed_forward_length", architecture.as_str()));
+        insert_u32(&mut metadata, architecture, "attention.key_length", 256);
+        insert_u32(&mut metadata, architecture, "rope.dimension_count", 64);
+        insert_u32(&mut metadata, architecture, "ssm.state_size", 128);
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 16);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 32);
+        insert_u32(&mut metadata, architecture, "ssm.inner_size", 4_096);
+        insert_string(
+            &mut metadata,
+            architecture,
+            "rope.scaling.type",
+            "yarn",
+        );
+
+        // Without the override the builder rejects the scaled GGUF.
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None)
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot reconstruct"));
+
+        let override_ = RopeOverride::yarn(320_000.0 / 262_144.0, Some(262_144), None);
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, Some(&override_))
+            .unwrap();
+        assert_eq!(config["max_position_embeddings"], 320_000);
+        assert_eq!(config["rope_scaling"]["rope_type"], "yarn");
+    }
+
+    #[test]
     fn llama_linear_rope_and_baked_factor_gate_are_explicit() {
         let loader = NormalLoaderType::Llama;
         let (architecture, mut metadata, mut tensors) = default_fixture(&loader);
         insert_string(&mut metadata, architecture, "rope.scaling.type", "linear");
         insert_f32(&mut metadata, architecture, "rope.scaling.factor", 2.0);
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(config["rope_scaling"]["rope_type"], "linear");
         assert_eq!(config["rope_scaling"]["factor"], 2.0);
         assert_native_config_deserializes(&loader, config);
 
         tensors.push("rope_freqs.weight".to_string());
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert!(config["rope_scaling"].is_null());
         assert_native_config_deserializes(&loader, config);
     }
@@ -3058,7 +3205,7 @@ mod tests {
                     .collect(),
             ),
         );
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(
             config["layer_types"],
             json!([
@@ -3078,7 +3225,8 @@ mod tests {
             "attention.sliding_window",
             1_024,
         );
-        let error = synthesize_normal_config_value(&qwen3, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&qwen3, &metadata, &tensors, None)
+            .unwrap_err();
         assert!(error.to_string().contains("layer policy"));
     }
 
@@ -3086,7 +3234,7 @@ mod tests {
     fn qwen_moe_inventory_marks_dense_layers() {
         let loader = NormalLoaderType::Qwen3Moe;
         let (_, metadata, tensors) = default_fixture(&loader);
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(config["mlp_only_layers"], json!([0]));
         assert_eq!(config["num_experts"], 8);
         assert_eq!(config["num_experts_per_tok"], 2);
@@ -3111,7 +3259,7 @@ mod tests {
                 .into_iter()
                 .map(str::to_string),
         );
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(
             config["layer_types"],
             json!(["attention", "mamba", "attention", "mamba"])
@@ -3123,7 +3271,7 @@ mod tests {
         let loader = NormalLoaderType::Lfm2;
         let (_, metadata, tensors) = default_fixture(&loader);
         assert!(!tensors.iter().any(|tensor| tensor == "output_norm.weight"));
-        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap();
         assert_eq!(
             config["layer_types"],
             json!(["full_attention", "conv", "full_attention", "conv"])
@@ -3137,14 +3285,14 @@ mod tests {
         let loader = NormalLoaderType::Qwen3Next;
         let (architecture, mut metadata, tensors) = default_fixture(&loader);
         metadata.remove(&format!("{}.ssm.time_step_rank", architecture.as_str()));
-        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap_err();
         assert!(error.to_string().contains("ssm.time_step_rank"));
         assert!(error.to_string().contains("original Hugging Face config"));
 
         let loader = NormalLoaderType::Lfm2;
         let (architecture, mut metadata, tensors) = default_fixture(&loader);
         metadata.remove(&format!("{}.shortconv.l_cache", architecture.as_str()));
-        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors, None).unwrap_err();
         assert!(error.to_string().contains("shortconv.l_cache"));
     }
 

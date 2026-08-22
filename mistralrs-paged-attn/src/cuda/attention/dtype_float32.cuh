@@ -240,6 +240,13 @@ inline __device__ void from_float(float2& dst, float2 src) {
   dst = src;
 }
 
+inline __device__ void from_float(float4& dst, Float4_ src) {
+  dst.x = src.x.x;
+  dst.y = src.x.y;
+  dst.z = src.y.x;
+  dst.w = src.y.y;
+}
+
 inline __device__ void from_float(float4& dst, float4 src) {
   dst = src;
 }

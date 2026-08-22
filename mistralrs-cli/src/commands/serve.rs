@@ -657,6 +657,7 @@ fn convert_text_model(
             hf_cache_path: device.hf_cache.clone(),
             matformer_config_path: matformer.config_path.clone(),
             matformer_slice_name: matformer.slice_name.clone(),
+            rope_override: format_opts.rope_override(),
         }),
 
         (ModelFormat::Gguf, false, true, false) => Ok(ModelSelected::LoraGGUF {

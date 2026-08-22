@@ -55,7 +55,12 @@ pub fn gather_kv_cache(
     let head_size_over_x = k_dims.2;
     let block_size = k_dims.3;
     let x = k_dims.4;
-    let head_size = head_size_over_x * x;
+    // F4 packs 32 values per 16-byte row; the row count is bytes-per-head/32.
+    let head_size = if cache_dtype == DType::U8 {
+        head_size_over_x * 32
+    } else {
+        head_size_over_x * x
+    };
 
     // num_tokens = cu_seq_lens[-1], num_seqs = len(cu_seq_lens) - 1
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
@@ -96,8 +101,10 @@ pub fn gather_kv_cache(
         DType::BF16 => 1,
         DType::F32 => 2,
         DType::F8E4M3 => 3,
+        // F4 lives in packed U8 storage.
+        DType::U8 => 4,
         other => candle_core::bail!(
-            "gather_kv_cache only supports f16, bf16, f32, f8e4m3 cache (got {other:?})"
+            "gather_kv_cache only supports f16, bf16, f32, f8e4m3, f4 cache (got {other:?})"
         ),
     };
 
@@ -117,6 +124,8 @@ pub fn gather_kv_cache(
         // Get cache pointers - handle FP8 vs regular dtype
         let (kc_ptr, _kc_guard) = if cache_dtype_code == 3 {
             slice_ptr(kc_s.as_cuda_slice::<F8E4M3>()?, kc_l.start_offset())
+        } else if cache_dtype_code == 4 {
+            slice_ptr(kc_s.as_cuda_slice::<u8>()?, kc_l.start_offset())
         } else {
             match cache_dtype {
                 DType::F16 => slice_ptr(kc_s.as_cuda_slice::<half::f16>()?, kc_l.start_offset()),
@@ -127,6 +136,8 @@ pub fn gather_kv_cache(
         };
         let (vc_ptr, _vc_guard) = if cache_dtype_code == 3 {
             slice_ptr(vc_s.as_cuda_slice::<F8E4M3>()?, vc_l.start_offset())
+        } else if cache_dtype_code == 4 {
+            slice_ptr(vc_s.as_cuda_slice::<u8>()?, vc_l.start_offset())
         } else {
             match cache_dtype {
                 DType::F16 => slice_ptr(vc_s.as_cuda_slice::<half::f16>()?, vc_l.start_offset()),

@@ -16,3 +16,6 @@ docs/node_modules/
 docs/dist/
 docs/.astro/
 out/
+/bin
+/graphify-out
+/graphify-rs-out
