@@ -5,8 +5,8 @@ import starlightOpenAPI, { openAPISidebarGroups } from 'starlight-openapi';
 // Deployed at https://ericlbuehler.github.io/mistral.rs/
 // Adjust `site` + `base` if we move to docs.mistral.rs.
 export default defineConfig({
-  site: 'https://ericlbuehler.github.io',
-  base: '/mistral.rs',
+  site: 'https://docs.mistralrs.dev',
+  base: '/',
   // Allow access over Tailscale.
   vite: { preview: { allowedHosts: ['.ts.net'] } },
   redirects: {
