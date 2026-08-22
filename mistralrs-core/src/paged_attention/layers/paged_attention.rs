@@ -3,13 +3,16 @@ use std::{collections::HashMap, sync::Once};
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
-    FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales, DEFAULT_FP8_KV_CACHE_SCALES,
+    fa3_fp8_decode, flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
+    DEFAULT_FP8_KV_CACHE_SCALES,
 };
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::attention::sliding_window_left;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::flashinfer::{Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
@@ -24,6 +27,44 @@ use crate::{
 };
 
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct Fa3DecodeCandidate {
+    key: Fa3DecodeScheduleKey,
+    sequence_length: usize,
+    query_dtype: DType,
+    query_contiguous: bool,
+    key_cache_dtype: DType,
+    value_cache_dtype: DType,
+    mask_is_none: bool,
+    shapes_match: bool,
+    has_alibi: bool,
+    has_sinks: bool,
+    has_softcap: bool,
+    has_sliding_window: bool,
+    has_noncausal_mm_context: bool,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeCandidate {
+    fn schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
+        (self.sequence_length == 1
+            && self.query_dtype == DType::BF16
+            && self.query_contiguous
+            && self.key_cache_dtype == DType::F8E4M3
+            && self.value_cache_dtype == DType::F8E4M3
+            && self.mask_is_none
+            && self.shapes_match
+            && !self.has_alibi
+            && !self.has_sinks
+            && !self.has_softcap
+            && !self.has_sliding_window
+            && !self.has_noncausal_mm_context
+            && self.key.supported())
+        .then_some(self.key)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct CacheScales<'a> {
@@ -721,7 +762,6 @@ pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
     fp8_attention_scales: Fp8AttentionScales,
     fp8_attention_scales_calibrated: bool,
-    #[allow(dead_code)]
     fp8_q_scale: Tensor,
     fp8_k_scale: Tensor,
     fp8_v_scale: Tensor,
@@ -1507,9 +1547,15 @@ impl PagedAttention {
                 tensors.attention_mask,
             ),
             #[cfg(all(feature = "cuda", target_family = "unix"))]
-            DecodePlan::FlashInfer(plan) => {
-                self.run_flashinfer_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev, plan)
-            }
+            DecodePlan::FlashInfer(plan) => self.run_flashinfer_decode(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+                plan,
+            ),
             DecodePlan::PagedAttention => {
                 self.run_standard_paged_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev)
             }
@@ -1641,6 +1687,81 @@ impl PagedAttention {
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn try_run_fa3_decode(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        query: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        dev: &DeviceLocation,
+        attention_mask: &AttentionMask,
+    ) -> Result<Option<Tensor>> {
+        let (_, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        let key = Fa3DecodeScheduleKey {
+            device: *dev,
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+            num_splits: FA3_DECODE_NUM_SPLITS,
+        };
+        let Some(key) = (Fa3DecodeCandidate {
+            key,
+            sequence_length: ctx.dims.seq_len,
+            query_dtype: query.dtype(),
+            query_contiguous: query.is_contiguous(),
+            key_cache_dtype: key_cache.dtype(),
+            value_cache_dtype: value_cache.dtype(),
+            mask_is_none: attention_mask.is_none(),
+            shapes_match: value_cache.dims4()? == key_cache.dims4()?
+                && query.dims3()? == (ctx.dims.batch_size, ctx.dims.attention_heads, head_dim),
+            has_alibi: ctx.alibi_slopes.is_some(),
+            has_sinks: ctx.sdpa_params.sinks.is_some(),
+            has_softcap: ctx.sdpa_params.softcap.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+            has_noncausal_mm_context: ctx.has_noncausal_mm_context(),
+        })
+        .schedule_key() else {
+            return Ok(None);
+        };
+        let Some(buffers) = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .and_then(|metadata| metadata.fa3_decode_buffers(&key))
+        else {
+            return Ok(None);
+        };
+        let output = fa3_fp8_decode(Fa3DecodeParams {
+            query,
+            quantized_query: &buffers.query,
+            key_cache,
+            value_cache,
+            page_table: &buffers.page_table,
+            seqused_k: &buffers.seqused_k,
+            cu_seqlens_q: &buffers.cu_seqlens_q,
+            scheduler_metadata: &buffers.scheduler_metadata,
+            output_accum: &buffers.output_accum,
+            lse_accum: &buffers.lse_accum,
+            output_lse: &buffers.output_lse,
+            q_descale: &self.fp8_q_scale,
+            k_descale: &self.fp8_k_scale,
+            v_descale: &self.fp8_v_scale,
+            schedule: buffers.schedule(key)?,
+            softmax_scale: ctx.sdpa_params.softmax_scale,
+        })
+        .map_err(|err| {
+            err.context(format!(
+                "FA3 FP8 decode failed: batch={} qo_heads={} kv_heads={} head_size={} page_size={}",
+                ctx.dims.batch_size, ctx.dims.attention_heads, kv_heads, head_dim, page_size,
+            ))
+        })?;
+        Ok(Some(output))
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     fn run_flashinfer_decode(
         &self,
         ctx: &PagedForwardCtx<'_>,
@@ -1648,8 +1769,14 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         dev: &DeviceLocation,
+        attention_mask: &AttentionMask,
         _flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
     ) -> Result<Tensor> {
+        if let Some(output) =
+            self.try_run_fa3_decode(ctx, query, key_cache, value_cache, dev, attention_mask)?
+        {
+            return Ok(output);
+        }
         let fi_meta = ctx
             .input_metadata
             .flashinfer
@@ -1895,6 +2022,86 @@ impl PagedAttention {
 mod tests {
     use super::*;
     use candle_core::D;
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
+        Fa3DecodeCandidate {
+            key: Fa3DecodeScheduleKey {
+                device: DeviceLocation::Cuda { gpu_id: 0 },
+                view: Fa3DecodeView::Logical,
+                batch: 8,
+                q_heads: 16,
+                kv_heads: 4,
+                head_dim: 256,
+                page_size: 32,
+                num_splits: FA3_DECODE_NUM_SPLITS,
+            },
+            sequence_length: 1,
+            query_dtype: DType::BF16,
+            query_contiguous: true,
+            key_cache_dtype: DType::F8E4M3,
+            value_cache_dtype: DType::F8E4M3,
+            mask_is_none: true,
+            shapes_match: true,
+            has_alibi: false,
+            has_sinks: false,
+            has_softcap: false,
+            has_sliding_window: false,
+            has_noncausal_mm_context: false,
+        }
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_candidate_requires_supported_full_decode() {
+        let supported = supported_fa3_decode_candidate();
+        assert_eq!(supported.schedule_key(), Some(supported.key));
+
+        macro_rules! reject {
+            ($field:ident, $value:expr) => {{
+                let mut candidate = supported;
+                candidate.$field = $value;
+                assert!(candidate.schedule_key().is_none());
+            }};
+        }
+
+        reject!(sequence_length, 2);
+        reject!(query_dtype, DType::F16);
+        reject!(query_contiguous, false);
+        reject!(key_cache_dtype, DType::BF16);
+        reject!(value_cache_dtype, DType::BF16);
+        reject!(mask_is_none, false);
+        reject!(shapes_match, false);
+        reject!(has_alibi, true);
+        reject!(has_sinks, true);
+        reject!(has_softcap, true);
+        reject!(has_sliding_window, true);
+        reject!(has_noncausal_mm_context, true);
+
+        let mut unsupported_shape = supported;
+        unsupported_shape.key.head_dim = 128;
+        assert!(unsupported_shape.schedule_key().is_none());
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_schedule_lookup_is_exact() {
+        let candidate = supported_fa3_decode_candidate();
+        let schedules = HashMap::from([(candidate.key, ())]);
+        assert!(schedules.get(&candidate.schedule_key().unwrap()).is_some());
+
+        let mut different_batch = candidate;
+        different_batch.key.batch /= 2;
+        assert!(schedules
+            .get(&different_batch.schedule_key().unwrap())
+            .is_none());
+
+        let mut different_heads = candidate;
+        different_heads.key.q_heads /= 2;
+        assert!(schedules
+            .get(&different_heads.schedule_key().unwrap())
+            .is_none());
+    }
 
     #[test]
     fn owns_validated_fp8_attention_scales() -> Result<()> {

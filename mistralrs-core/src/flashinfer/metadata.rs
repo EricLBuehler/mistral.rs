@@ -1,12 +1,20 @@
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
+#[cfg(feature = "cuda")]
+use candle_core::DType;
+use candle_core::{Device, Tensor};
 
+#[cfg(feature = "cuda")]
+use super::Fa3DecodeState;
 use super::{
-    DeviceTensorMap, Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeState, Fa3DecodeView,
-    FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
-    FlashInferPagedKv, FlashInferTilePlan, FA3_DECODE_NUM_SPLITS,
+    DeviceTensorMap, FlashInferMetadata, FlashInferPagedAttentionView,
+    FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
 };
-use crate::paged_attention::{AttentionBackendKind, ModelConfigLike};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::paged_attention::AttentionBackendKind;
+#[cfg(feature = "cuda")]
+use crate::paged_attention::ModelConfigLike;
 
 // Split-KV decode chunks each (sequence, kv head) context so the grid reaches about this many
 // blocks per SM; grids that are already full keep one 2048-token chunk and skip the partial merge.
@@ -295,7 +303,7 @@ pub(crate) fn make_fa3_decode_state(
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
     activation_dtype: DType,
 ) -> candle_core::Result<Option<Fa3DecodeState>> {
-    if activation_dtype != DType::BF16 || batch == 0 {
+    if !mistralrs_paged_attn::USE_FA3_FP8_PAGED || activation_dtype != DType::BF16 || batch == 0 {
         return Ok(None);
     }
     let Some(model_metadata) = model_metadata else {
@@ -305,8 +313,9 @@ pub(crate) fn make_fa3_decode_state(
     let mut state = Fa3DecodeState::default();
     let layer_count = model_metadata.num_layers().min(kv_cache.len());
     for (layer_idx, (key_cache, value_cache)) in kv_cache.iter().enumerate().take(layer_count) {
-        if model_metadata.attention_backend_kind_for_layer(layer_idx)
-            != AttentionBackendKind::FlashInfer
+        if !model_metadata.layer_has_paged_kv_cache(layer_idx)
+            || model_metadata.attention_backend_kind_for_layer(layer_idx)
+                != AttentionBackendKind::FlashInfer
             || key_cache.dtype() != DType::F8E4M3
             || value_cache.dtype() != DType::F8E4M3
         {
@@ -316,53 +325,39 @@ pub(crate) fn make_fa3_decode_state(
             continue;
         };
         let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
-        if value_cache.dims4()? != (num_pages, kv_heads, page_size, head_dim)
+        if num_pages == 0
+            || value_cache.dims4()? != (num_pages, kv_heads, page_size, head_dim)
             || value_cache.device().location() != key_cache.device().location()
         {
             continue;
         }
         let q_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
-        for (view_kind, view) in std::iter::once((Fa3DecodeView::Logical, &metadata.views.logical))
-            .chain(
-                metadata
-                    .views
-                    .sliding
-                    .as_ref()
-                    .map(|view| (Fa3DecodeView::Sliding, view)),
-            )
-        {
-            let key = Fa3DecodeScheduleKey {
-                device: key_cache.device().location(),
-                view: view_kind,
-                batch,
-                q_heads,
-                kv_heads,
-                head_dim,
-                page_size,
-                num_splits: FA3_DECODE_NUM_SPLITS,
-            };
-            if !key.supported() || state.get(&key).is_some() {
-                continue;
-            }
-            let Some(max_pages_per_sequence) = fa3_view_capacity(view, &key)? else {
-                continue;
-            };
-            state.insert(
-                key,
-                allocate_fa3_decode_buffers(
-                    key_cache.device(),
-                    key,
-                    max_pages_per_sequence,
-                    num_sm,
-                )?,
-            );
+        let key = Fa3DecodeScheduleKey {
+            device: key_cache.device().location(),
+            view: Fa3DecodeView::Logical,
+            batch,
+            q_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+            num_splits: FA3_DECODE_NUM_SPLITS,
+        };
+        if !key.supported() || state.get(&key).is_some() {
+            continue;
         }
+        let Some(max_pages_per_sequence) = fa3_view_capacity(&metadata.views.logical, &key)? else {
+            continue;
+        };
+        state.insert(
+            key,
+            allocate_fa3_decode_buffers(key_cache.device(), key, max_pages_per_sequence, num_sm)?,
+        );
     }
 
     Ok((!state.is_empty()).then_some(state))
 }
 
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(all(feature = "cuda", not(target_family = "unix")))]
 pub(crate) fn make_fa3_decode_state(
     _metadata: &FlashInferMetadata,
     _batch: usize,
@@ -470,6 +465,7 @@ fn allocate_fa3_decode_buffers(
     })
 }
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
 fn fa3_scheduler_metadata_len(batch: usize) -> usize {
     2 * batch.div_ceil(4) * 4 + 1
 }
@@ -493,6 +489,7 @@ mod tests {
         assert!(decode_split_pages(32, 1, 4, 8192) >= decode_split_capacity_pages(32));
     }
 
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
     #[test]
     fn fa3_scheduler_metadata_covers_rounded_batch_rows_and_semaphore() {
         assert_eq!(fa3_scheduler_metadata_len(1), 9);

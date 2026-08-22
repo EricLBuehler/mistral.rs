@@ -53,32 +53,26 @@ pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
     (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
 }
 
-pub(crate) fn ensure_fa3_decode_state(
-    metadata: &mut PagedAttentionInputMetadata,
-    batch: usize,
-    kv_cache: &[(Tensor, Tensor)],
-    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
-    activation_dtype: DType,
+pub(crate) fn prepare_fa3_decode_schedules(
+    metadata: &PagedAttentionInputMetadata,
 ) -> candle_core::Result<()> {
     let Some(flashinfer) = metadata.flashinfer.as_ref() else {
         return Ok(());
     };
-    if flashinfer.fa3_decode.is_some() {
-        return Ok(());
-    }
-    let state = make_fa3_decode_state(
-        flashinfer,
-        batch,
-        kv_cache,
-        model_metadata,
-        activation_dtype,
-    )?;
-    metadata
-        .flashinfer
-        .as_mut()
-        .expect("FlashInfer metadata was checked above")
-        .fa3_decode = state;
-    Ok(())
+    flashinfer.for_each_fa3_decode_schedule(|prepare| {
+        mistralrs_paged_attn::fa3_prepare_decode_metadata(
+            mistralrs_paged_attn::Fa3DecodeMetadata {
+                paged_kv_indptr: prepare.paged_kv_indptr,
+                paged_kv_indices: prepare.paged_kv_indices,
+                paged_kv_last_page_len: prepare.paged_kv_last_page_len,
+                page_table: &prepare.buffers.page_table,
+                seqused_k: &prepare.buffers.seqused_k,
+                cu_seqlens_q: &prepare.buffers.cu_seqlens_q,
+                scheduler_metadata: &prepare.buffers.scheduler_metadata,
+            },
+            prepare.buffers.schedule(prepare.key)?,
+        )
+    })
 }
 
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
@@ -482,6 +476,7 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) kv_cache: &'a [(Tensor, Tensor)],
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
     pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+    pub(crate) activation_dtype: DType,
     pub(crate) warmup_logits: &'a Tensor,
     pub(crate) state_indices: Option<CudaGraphVarMap>,
     pub(crate) real_batch: usize,
@@ -662,21 +657,20 @@ impl CudaDecodeGraphMetadataBuffers {
             model_metadata,
             activation_dtype,
         )?;
-        let fa3_decode = if let Some(flashinfer) = metadata.flashinfer.as_ref() {
-            if let Some(state) = flashinfer.fa3_decode.clone() {
-                Some(state)
-            } else {
+        let fa3_decode = metadata
+            .flashinfer
+            .as_ref()
+            .map(|flashinfer| {
                 make_fa3_decode_state(
                     flashinfer,
                     seqlen_offsets.len(),
                     kv_cache,
                     model_metadata,
                     activation_dtype,
-                )?
-            }
-        } else {
-            None
-        };
+                )
+            })
+            .transpose()?
+            .flatten();
         let flashinfer_views_alias = flashinfer_views_alias(metadata);
         let mut buffers = Self {
             flashinfer_views_alias,
@@ -1142,6 +1136,7 @@ where
         kv_cache,
         metadata,
         model_metadata,
+        activation_dtype,
         warmup_logits,
         state_indices,
         real_batch,
@@ -1159,7 +1154,7 @@ where
         block_size,
         kv_cache,
         model_metadata,
-        warmup_logits.dtype(),
+        activation_dtype,
     )?;
     let graph_input_ids = input_ids.as_detached_tensor();
     let graph_logits = unsafe {
@@ -1183,6 +1178,12 @@ where
         return Err(
             candle_core::Error::msg(err.to_string()).context("CUDA graph begin capture failed")
         );
+    }
+
+    if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
+        end_cuda_capture_discard(&stream);
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(err.context("FA3 decode preparation capture failed"));
     }
 
     let logits = match forward(&graph_input_ids, &metadata) {

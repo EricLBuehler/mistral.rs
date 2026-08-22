@@ -1986,6 +1986,7 @@ impl MultimodalPipeline {
                 kv_cache,
                 metadata: &metadata,
                 model_metadata: self.metadata.model_metadata.as_deref(),
+                activation_dtype: self.metadata.activation_dtype,
                 warmup_logits: &warmup_logits,
                 state_indices: state_index_buffers,
                 real_batch: step.real_batch,
