@@ -426,6 +426,10 @@ fn parse_arch(s: &str) -> Result<mistralrs_core::NormalLoaderType, String> {
     s.parse()
 }
 
+fn parse_speech_arch(s: &str) -> Result<SpeechLoaderType, String> {
+    s.parse()
+}
+
 fn parse_dtype(s: &str) -> Result<mistralrs_core::ModelDType, String> {
     s.parse()
 }
@@ -518,6 +522,14 @@ pub enum ModelType {
 
         #[command(flatten)]
         device: DeviceOptions,
+
+        /// Speech architecture (`dia` or `pockettts`). Auto-detected from the model id if omitted.
+        #[arg(long = "speech-arch", value_parser = parse_speech_arch)]
+        arch: Option<SpeechLoaderType>,
+
+        /// Speaker voice for pocket-tts (a stock name like `alba`). Ignored by Dia.
+        #[arg(long)]
+        voice: Option<String>,
     },
 
     /// Embedding model

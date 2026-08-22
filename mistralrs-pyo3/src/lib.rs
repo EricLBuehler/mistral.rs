@@ -867,6 +867,7 @@ fn parse_which(
             dac_model_id,
             arch: arch.into(),
             cfg: None,
+            voice: None,
         }),
     })
 }

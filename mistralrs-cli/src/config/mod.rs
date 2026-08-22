@@ -90,6 +90,13 @@ pub struct ModelEntry {
     pub tokenizer: Option<PathBuf>,
     #[serde(default)]
     pub arch: Option<NormalLoaderType>,
+    /// Speech architecture (`dia` or `pockettts`). Only meaningful for `kind = "speech"`.
+    /// Auto-detected from `model_id` when omitted.
+    #[serde(default)]
+    pub speech_arch: Option<SpeechLoaderType>,
+    /// Speaker voice for pocket-tts (a stock name like `alba`). Only meaningful for `kind = "speech"`.
+    #[serde(default)]
+    pub voice: Option<String>,
     #[serde(default)]
     pub dtype: ModelDType,
     #[serde(default)]
@@ -147,6 +154,14 @@ pub fn load_cli_config(path: &Path) -> Result<CliConfig> {
         toml::from_str(&contents).context("Failed to parse TOML config file")?;
     validate_config(&config)?;
     Ok(config)
+}
+
+pub(crate) fn detect_speech_arch(model_id: &str) -> SpeechLoaderType {
+    if model_id.to_lowercase().contains("pocket") {
+        SpeechLoaderType::PocketTts
+    } else {
+        SpeechLoaderType::Dia
+    }
 }
 
 fn validate_config(config: &CliConfig) -> Result<()> {
@@ -277,7 +292,15 @@ impl ModelEntry {
                 multimodal: self.multimodal.clone(),
             },
             ModelKind::Diffusion => ModelType::Diffusion { model, device },
-            ModelKind::Speech => ModelType::Speech { model, device },
+            ModelKind::Speech => ModelType::Speech {
+                arch: Some(
+                    self.speech_arch
+                        .unwrap_or_else(|| detect_speech_arch(&self.model_id)),
+                ),
+                voice: self.voice.clone(),
+                model,
+                device,
+            },
             ModelKind::Embedding => ModelType::Embedding {
                 model,
                 format: self.format.clone(),

@@ -1086,6 +1086,7 @@ pub async fn build_speech_pipeline(
         dac_model_id: builder.dac_model_id.clone(),
         arch: builder.loader_type,
         cfg: builder.cfg,
+        voice: builder.voice.clone(),
     };
 
     let device = resolve_device(builder.force_cpu, None)?;
@@ -1110,6 +1111,7 @@ pub async fn build_speech_pipeline(
             model_id: builder.model_id.clone(),
             dac_model_id: builder.dac_model_id.clone(),
             arch: builder.loader_type,
+            voice: builder.voice.clone(),
             dtype: builder.dtype,
         },
         token_source: builder.token_source.clone(),
