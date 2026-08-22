@@ -678,6 +678,22 @@ extern "C" {
         num_heads: i32,
         stream: i64,
     );
+    pub(crate) fn vmajor_warp_gated_delta_rule_recurrence(
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
+        g: *const f32,
+        beta: *const f32,
+        state: *mut f32,
+        output: *mut f32,
+        bh: i32,
+        seq_len: i32,
+        k_dim: i32,
+        v_dim: i32,
+        slot_indices: *const i32,
+        num_heads: i32,
+        stream: i64,
+    );
     // Chunked GDN recurrence for prefill (processes tokens in BT=64 chunks)
     pub(crate) fn chunked_gated_delta_rule_recurrence(
         q: *const f32,

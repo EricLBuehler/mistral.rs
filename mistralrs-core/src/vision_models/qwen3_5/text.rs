@@ -563,6 +563,7 @@ pub(super) struct GdnLayerStash {
     pub(super) projected: GdnForwardStash,
     pub(super) conv_state: Tensor,
     pub(super) recurrent_state: Tensor,
+    pub(super) state_layout: crate::kv_cache::RecurrentStateLayout,
 }
 
 /// Snapshot of the proposer-facing outputs of one target forward (see `SpeculativeGraphState`).
@@ -841,11 +842,11 @@ impl Qwen3_5TextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
                 recurrent_dtype: Some(DType::F32),
             },
         };
@@ -936,12 +937,14 @@ impl Qwen3_5TextModel {
                     .recurrent_state
                     .narrow(0, batch_idx, 1)?
                     .contiguous()?,
+                state_layout: layer.state_layout,
                 slots: None,
             };
             gdn.advance_state_from_stash(&layer.projected, batch_idx, keep_rows, &mut cache)?;
             snapshots.push(crate::kv_cache::RecurrentStateSnapshot {
                 conv_state: cache.conv_state,
                 recurrent_state: cache.recurrent_state,
+                state_layout: cache.state_layout,
             });
         }
         drop(stash_guard);
@@ -1185,6 +1188,7 @@ impl Qwen3_5TextModel {
                         GdnLayerCache::gathered(
                             pool.gather_conv_state(&indices)?,
                             pool.gather_recurrent_state(&indices)?,
+                            pool.state_layout(),
                         )
                     } else {
                         GdnLayerCache::checkout(pool, &indices)?
@@ -1210,6 +1214,7 @@ impl Qwen3_5TextModel {
                             projected,
                             conv_state,
                             recurrent_state,
+                            state_layout: pool.state_layout(),
                         });
                     }
 

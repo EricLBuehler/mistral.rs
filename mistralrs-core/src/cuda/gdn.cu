@@ -23,6 +23,10 @@ constexpr int GDN_DECODE_PIPELINED_WARPS = GDN_DECODE_PIPELINED_THREADS / 32;
 constexpr int GDN_DECODE_PIPELINED_VALUES_PER_WARP = 4;
 constexpr int GDN_DECODE_KERNEL_COOPERATIVE = 1;
 constexpr int GDN_DECODE_KERNEL_PIPELINED = 2;
+constexpr int GDN_DECODE_KERNEL_VALUE_MAJOR_4 = 3;
+constexpr int GDN_DECODE_KERNEL_VALUE_MAJOR_32 = 4;
+constexpr int GDN_DECODE_VALUE_MAJOR_K = 128;
+constexpr int GDN_DECODE_VALUE_MAJOR_V = 128;
 constexpr int GDN_PACKED_CONV_WIDTH = 4;
 
 // (batch, head) -> row of the state buffer: identity on a gathered [B*H, ...] copy, or through the
@@ -271,7 +275,7 @@ __device__ __forceinline__ float gdn_warp_sum(float x) {
   return __shfl_sync(0xffffffff, x, 0, WARP_SIZE);
 }
 
-template <int BK, int NUM_WARPS>
+template <int BK, int NUM_WARPS, bool VALUE_MAJOR = false>
 __global__ __launch_bounds__(
     32 * NUM_WARPS,
     2) void gated_delta_rule_recurrence_kernel_warp(const float *__restrict__ q,
@@ -312,7 +316,11 @@ __global__ __launch_bounds__(
 #pragma unroll
   for (int r = 0; r < ROWS_PER_LANE; r++) {
     const int row = r * WARP_SIZE + lane;
-    s[r] = state_bh[row * v_dim + v_idx];
+    if constexpr (VALUE_MAJOR) {
+      s[r] = state_bh[v_idx * BK + row];
+    } else {
+      s[r] = state_bh[row * v_dim + v_idx];
+    }
   }
 
   for (int t = 0; t < seq_len; t++) {
@@ -351,7 +359,11 @@ __global__ __launch_bounds__(
 #pragma unroll
   for (int r = 0; r < ROWS_PER_LANE; r++) {
     const int row = r * WARP_SIZE + lane;
-    state_bh[row * v_dim + v_idx] = s[r];
+    if constexpr (VALUE_MAJOR) {
+      state_bh[v_idx * BK + row] = s[r];
+    } else {
+      state_bh[row * v_dim + v_idx] = s[r];
+    }
   }
 }
 
@@ -381,6 +393,24 @@ extern "C" void warp_gated_delta_rule_recurrence(const float *q, const float *k,
     gated_delta_rule_recurrence(q, k, v, g, beta, state, output, bh, seq_len,
                                 k_dim, v_dim, slot_indices, num_heads, stream);
   }
+}
+
+extern "C" void vmajor_warp_gated_delta_rule_recurrence(
+    const float *q, const float *k, const float *v, const float *g,
+    const float *beta, float *state, float *output, int bh, int seq_len,
+    int k_dim, int v_dim, const int32_t *slot_indices, int num_heads,
+    int64_t stream) {
+  if (k_dim != 128 || v_dim != 128) {
+    return;
+  }
+
+  const cudaStream_t custream = (cudaStream_t)stream;
+  constexpr int NUM_WARPS = 4;
+  dim3 grid((v_dim + NUM_WARPS - 1) / NUM_WARPS, bh);
+  dim3 block(32, NUM_WARPS);
+  gated_delta_rule_recurrence_kernel_warp<128, NUM_WARPS, true>
+      <<<grid, block, 0, custream>>>(q, k, v, g, beta, state, output, seq_len,
+                                     v_dim, slot_indices, num_heads);
 }
 
 // ============================================================================
@@ -995,6 +1025,144 @@ __device__ __forceinline__ float gdn_warp_sum(float value) {
     value += __shfl_down_sync(0xffffffff, value, offset);
   }
   return value;
+}
+
+__device__ __forceinline__ float4
+gdn_load_bf16x4(const __nv_bfloat16 *__restrict__ src) {
+  const uint2 packed = *reinterpret_cast<const uint2 *>(src);
+  const __nv_bfloat162 lo =
+      *reinterpret_cast<const __nv_bfloat162 *>(&packed.x);
+  const __nv_bfloat162 hi =
+      *reinterpret_cast<const __nv_bfloat162 *>(&packed.y);
+  const float2 lo_f = __bfloat1622float2(lo);
+  const float2 hi_f = __bfloat1622float2(hi);
+  return make_float4(lo_f.x, lo_f.y, hi_f.x, hi_f.y);
+}
+
+template <int BV>
+__global__ __launch_bounds__(32) void gdn_decode_recurrence_kernel_value_major(
+    const __nv_bfloat16 *__restrict__ mixed_qkv,
+    const __nv_bfloat16 *__restrict__ b,
+    const __nv_bfloat16 *__restrict__ a,
+    const float *__restrict__ a_log,
+    const float *__restrict__ dt_bias,
+    float *__restrict__ state,
+    __nv_bfloat16 *__restrict__ output,
+    int batch_size,
+    int num_k_heads,
+    int num_v_heads,
+    int tiled_v_heads,
+    int64_t b_batch_stride,
+    int64_t b_head_stride,
+    int64_t a_batch_stride,
+    int64_t a_head_stride,
+    const int32_t *__restrict__ slot_indices) {
+  static_assert(GDN_DECODE_VALUE_MAJOR_V % BV == 0,
+                "V must divide into value tiles");
+  constexpr int NUM_V_TILES = GDN_DECODE_VALUE_MAJOR_V / BV;
+
+  const int lane = threadIdx.x;
+  const int linear_tile = blockIdx.x;
+  const int total_tiles = batch_size * num_v_heads * NUM_V_TILES;
+  if (linear_tile >= total_tiles) {
+    return;
+  }
+  const int v_tile = linear_tile % NUM_V_TILES;
+  const int bh = linear_tile / NUM_V_TILES;
+  const int bidx = bh / num_v_heads;
+  const int hv = bh - bidx * num_v_heads;
+  const int v_per_group = num_v_heads / num_k_heads;
+  const int hk = tiled_v_heads ? hv % num_k_heads : hv / v_per_group;
+  const int key_dim = num_k_heads * GDN_DECODE_VALUE_MAJOR_K;
+  const int value_dim = num_v_heads * GDN_DECODE_VALUE_MAJOR_V;
+  const int conv_dim = 2 * key_dim + value_dim;
+  const int v_base = v_tile * BV;
+  const __nv_bfloat16 *row = mixed_qkv + (size_t)bidx * conv_dim;
+  float *state_bh =
+      state + gdn_state_row(slot_indices, bidx, hv, num_v_heads) *
+                  GDN_DECODE_VALUE_MAJOR_V * GDN_DECODE_VALUE_MAJOR_K;
+  __nv_bfloat16 *out_bh = output + (size_t)bh * GDN_DECODE_VALUE_MAJOR_V;
+
+  float4 qv = gdn_load_bf16x4(
+      row + hk * GDN_DECODE_VALUE_MAJOR_K + lane * 4);
+  float4 kv = gdn_load_bf16x4(
+      row + key_dim + hk * GDN_DECODE_VALUE_MAJOR_K + lane * 4);
+  float q_norm = qv.x * qv.x + qv.y * qv.y + qv.z * qv.z + qv.w * qv.w;
+  float k_norm = kv.x * kv.x + kv.y * kv.y + kv.z * kv.z + kv.w * kv.w;
+  q_norm = gdn_warp_sum<32>(q_norm);
+  k_norm = gdn_warp_sum<32>(k_norm);
+  const float q_mul = rsqrtf(q_norm + 1.0e-6f) *
+                      rsqrtf((float)GDN_DECODE_VALUE_MAJOR_K);
+  const float k_mul = rsqrtf(k_norm + 1.0e-6f);
+  qv = make_float4(qv.x * q_mul, qv.y * q_mul, qv.z * q_mul, qv.w * q_mul);
+  kv = make_float4(kv.x * k_mul, kv.y * k_mul, kv.z * k_mul, kv.w * k_mul);
+
+  float beta_t = 0.0f;
+  float decay_t = 0.0f;
+  if (lane == 0) {
+    const float b_value =
+        (float)b[(size_t)bidx * b_batch_stride + hv * b_head_stride];
+    const float a_value =
+        (float)a[(size_t)bidx * a_batch_stride + hv * a_head_stride] +
+        dt_bias[hv];
+    const float softplus =
+        a_value > 20.0f
+            ? a_value
+            : (a_value > 0.0f ? a_value + log1pf(expf(-a_value))
+                              : log1pf(expf(a_value)));
+    beta_t = 1.0f / (1.0f + expf(-b_value));
+    decay_t = expf(-expf(a_log[hv]) * softplus);
+  }
+  beta_t = __shfl_sync(0xffffffff, beta_t, 0);
+  decay_t = __shfl_sync(0xffffffff, decay_t, 0);
+
+  float4 h[BV];
+#pragma unroll
+  for (int vi = 0; vi < BV; vi++) {
+    const float4 raw = reinterpret_cast<const float4 *>(
+        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K)[lane];
+    h[vi] = make_float4(raw.x * decay_t, raw.y * decay_t,
+                        raw.z * decay_t, raw.w * decay_t);
+  }
+
+  const float v_owned =
+      lane < BV
+          ? (float)row[2 * key_dim + hv * GDN_DECODE_VALUE_MAJOR_V + v_base + lane]
+          : 0.0f;
+  float out_owned = 0.0f;
+#pragma unroll
+  for (int vi = 0; vi < BV; vi++) {
+    float state_dot_k = h[vi].x * kv.x;
+    state_dot_k = __fmaf_rn(h[vi].y, kv.y, state_dot_k);
+    state_dot_k = __fmaf_rn(h[vi].z, kv.z, state_dot_k);
+    state_dot_k = __fmaf_rn(h[vi].w, kv.w, state_dot_k);
+    state_dot_k = gdn_warp_sum<32>(state_dot_k);
+    const float delta =
+        (__shfl_sync(0xffffffff, v_owned, vi) - state_dot_k) * beta_t;
+
+    h[vi].x = __fmaf_rn(kv.x, delta, h[vi].x);
+    h[vi].y = __fmaf_rn(kv.y, delta, h[vi].y);
+    h[vi].z = __fmaf_rn(kv.z, delta, h[vi].z);
+    h[vi].w = __fmaf_rn(kv.w, delta, h[vi].w);
+
+    float state_dot_q = h[vi].x * qv.x;
+    state_dot_q = __fmaf_rn(h[vi].y, qv.y, state_dot_q);
+    state_dot_q = __fmaf_rn(h[vi].z, qv.z, state_dot_q);
+    state_dot_q = __fmaf_rn(h[vi].w, qv.w, state_dot_q);
+    state_dot_q = gdn_warp_sum<32>(state_dot_q);
+    if (lane == vi) {
+      out_owned = state_dot_q;
+    }
+  }
+
+#pragma unroll
+  for (int vi = 0; vi < BV; vi++) {
+    reinterpret_cast<float4 *>(
+        state_bh + (v_base + vi) * GDN_DECODE_VALUE_MAJOR_K)[lane] = h[vi];
+  }
+  if (lane < BV) {
+    out_bh[v_base + lane] = (__nv_bfloat16)out_owned;
+  }
 }
 
 template <int VALUES_PER_WARP>
@@ -1620,6 +1788,31 @@ gdn_decode_recurrence(const void *mixed_qkv, const void *b, const void *a,
                       int64_t a_head_stride, const int32_t *slot_indices,
                       int kernel_kind, int dtype, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
+  if (kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_4 ||
+      kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_32) {
+    if (dtype == 1 && head_k_dim == GDN_DECODE_VALUE_MAJOR_K &&
+        head_v_dim == GDN_DECODE_VALUE_MAJOR_V) {
+      const int bh = batch_size * num_v_heads;
+      if (kernel_kind == GDN_DECODE_KERNEL_VALUE_MAJOR_4) {
+        gdn_decode_recurrence_kernel_value_major<4>
+            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 4), 32, 0, custream>>>(
+                (const __nv_bfloat16 *)mixed_qkv,
+                (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, a_log,
+                dt_bias, state, (__nv_bfloat16 *)output, batch_size,
+                num_k_heads, num_v_heads, tiled_v_heads, b_batch_stride,
+                b_head_stride, a_batch_stride, a_head_stride, slot_indices);
+      } else {
+        gdn_decode_recurrence_kernel_value_major<32>
+            <<<bh * (GDN_DECODE_VALUE_MAJOR_V / 32), 32, 0, custream>>>(
+                (const __nv_bfloat16 *)mixed_qkv,
+                (const __nv_bfloat16 *)b, (const __nv_bfloat16 *)a, a_log,
+                dt_bias, state, (__nv_bfloat16 *)output, batch_size,
+                num_k_heads, num_v_heads, tiled_v_heads, b_batch_stride,
+                b_head_stride, a_batch_stride, a_head_stride, slot_indices);
+      }
+    }
+    return;
+  }
   constexpr int BV = GDN_DECODE_VALUE_TILE;
   dim3 grid((head_v_dim + BV - 1) / BV, batch_size * num_v_heads);
   dim3 block(BV);

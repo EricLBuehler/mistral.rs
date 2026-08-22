@@ -649,6 +649,7 @@ mod tests {
         Ok(RecurrentStateSnapshot {
             conv_state: Tensor::zeros((1, 1, 1), DType::F32, &Device::Cpu)?,
             recurrent_state: Tensor::zeros((1, 1, 1), DType::F32, &Device::Cpu)?,
+            state_layout: crate::kv_cache::RecurrentStateLayout::Opaque,
         })
     }
 

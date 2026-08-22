@@ -12,6 +12,59 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RecurrentStateSpec {
+    Opaque {
+        dims: Vec<usize>,
+    },
+    Gdn {
+        heads: usize,
+        key_dim: usize,
+        value_dim: usize,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecurrentStateLayout {
+    Opaque,
+    GdnKeyMajor,
+    GdnValueMajor,
+}
+
+impl RecurrentStateSpec {
+    fn physical_layout(
+        &self,
+        input_dtype: DType,
+        device: &Device,
+    ) -> Result<(Vec<usize>, RecurrentStateLayout)> {
+        match self {
+            Self::Opaque { dims } => Ok((dims.clone(), RecurrentStateLayout::Opaque)),
+            Self::Gdn {
+                heads,
+                key_dim,
+                value_dim,
+            } => {
+                if crate::cuda::gdn::v_major_state_supported(
+                    device,
+                    input_dtype,
+                    *key_dim,
+                    *value_dim,
+                )? {
+                    Ok((
+                        vec![*heads, *value_dim, *key_dim],
+                        RecurrentStateLayout::GdnValueMajor,
+                    ))
+                } else {
+                    Ok((
+                        vec![*heads, *key_dim, *value_dim],
+                        RecurrentStateLayout::GdnKeyMajor,
+                    ))
+                }
+            }
+        }
+    }
+}
+
 /// Pool-based recurrent state cache for continuous batching.
 ///
 /// Works for both Mamba SSM and GDN (Gated Delta Net) recurrent layers.
@@ -24,8 +77,6 @@ pub struct RecurrentStatePool {
     /// Convolution state pool: (capacity, conv_dim, conv_width)
     pub conv_state: Tensor,
     /// Recurrent state pool: (capacity, ...state_dims)
-    /// For Mamba: (capacity, n_heads, head_dim, d_state)
-    /// For GDN: (capacity, n_v_heads, key_dim, value_dim)
     pub recurrent_state: Tensor,
     /// Stack of free slot indices (for allocation)
     free_slots: Vec<usize>,
@@ -35,6 +86,7 @@ pub struct RecurrentStatePool {
     conv_dim: usize,
     conv_width: usize,
     state_dims: Vec<usize>,
+    state_layout: RecurrentStateLayout,
     conv_dtype: DType,
     recurrent_dtype: DType,
     device: Device,
@@ -44,20 +96,31 @@ pub struct RecurrentStatePool {
 /// graph pad slot, so growth (which invalidates captured graphs) only happens past that.
 const INITIAL_POOL_CAPACITY: usize = 9;
 
+struct RecurrentStatePoolConfig<'a> {
+    conv_dim: usize,
+    conv_width: usize,
+    state_dims: Vec<usize>,
+    state_layout: RecurrentStateLayout,
+    conv_dtype: DType,
+    recurrent_dtype: DType,
+    device: &'a Device,
+}
+
 impl RecurrentStatePool {
     /// Create a new recurrent state pool.
     ///
     /// - `conv_dim`: dimension of the convolution state
     /// - `conv_width`: kernel size / d_conv for causal conv1d
-    /// - `state_dims`: shape of the recurrent state per slot (e.g. `[n_heads, head_dim, d_state]`)
-    pub fn new(
-        conv_dim: usize,
-        conv_width: usize,
-        state_dims: Vec<usize>,
-        conv_dtype: DType,
-        recurrent_dtype: DType,
-        device: &Device,
-    ) -> Result<Self> {
+    fn new(config: RecurrentStatePoolConfig<'_>) -> Result<Self> {
+        let RecurrentStatePoolConfig {
+            conv_dim,
+            conv_width,
+            state_dims,
+            state_layout,
+            conv_dtype,
+            recurrent_dtype,
+            device,
+        } = config;
         let capacity = INITIAL_POOL_CAPACITY;
 
         let conv_state = Tensor::zeros((capacity, conv_dim, conv_width), conv_dtype, device)?;
@@ -76,6 +139,7 @@ impl RecurrentStatePool {
             conv_dim,
             conv_width,
             state_dims,
+            state_layout,
             conv_dtype,
             recurrent_dtype,
             device: device.clone(),
@@ -270,6 +334,10 @@ impl RecurrentStatePool {
     pub fn recurrent_dtype(&self) -> DType {
         self.recurrent_dtype
     }
+
+    pub fn state_layout(&self) -> RecurrentStateLayout {
+        self.state_layout
+    }
 }
 
 impl Clone for RecurrentStatePool {
@@ -282,6 +350,7 @@ impl Clone for RecurrentStatePool {
             conv_dim: self.conv_dim,
             conv_width: self.conv_width,
             state_dims: self.state_dims.clone(),
+            state_layout: self.state_layout,
             conv_dtype: self.conv_dtype,
             recurrent_dtype: self.recurrent_dtype,
             device: self.device.clone(),
@@ -349,10 +418,7 @@ pub struct RecurrentLayerConfig {
     pub conv_dim: usize,
     /// Kernel size for causal conv1d
     pub conv_width: usize,
-    /// Shape of the recurrent state per slot.
-    /// For Mamba: [n_heads, head_dim, d_state]
-    /// For GDN: [n_v_heads, key_dim, value_dim]
-    pub state_dims: Vec<usize>,
+    pub state: RecurrentStateSpec,
     pub recurrent_dtype: Option<DType>,
 }
 
@@ -407,14 +473,21 @@ impl HybridCache {
                     config.max_seq_len,
                     Self::CACHE_GROW_SIZE,
                 )),
-                HybridLayerType::Recurrent => HybridLayerCache::Recurrent(RecurrentStatePool::new(
-                    config.recurrent.conv_dim,
-                    config.recurrent.conv_width,
-                    config.recurrent.state_dims.clone(),
-                    dtype,
-                    config.recurrent.recurrent_dtype.unwrap_or(dtype),
-                    device,
-                )?),
+                HybridLayerType::Recurrent => {
+                    let (state_dims, state_layout) =
+                        config.recurrent.state.physical_layout(dtype, device)?;
+                    HybridLayerCache::Recurrent(RecurrentStatePool::new(
+                        RecurrentStatePoolConfig {
+                            conv_dim: config.recurrent.conv_dim,
+                            conv_width: config.recurrent.conv_width,
+                            state_dims,
+                            state_layout,
+                            conv_dtype: dtype,
+                            recurrent_dtype: config.recurrent.recurrent_dtype.unwrap_or(dtype),
+                            device,
+                        },
+                    )?)
+                }
             };
             caches.push(cache);
         }
@@ -724,8 +797,25 @@ mod tests {
             recurrent: RecurrentLayerConfig {
                 conv_dim: 2,
                 conv_width: 3,
-                state_dims: vec![2, 2],
+                state: RecurrentStateSpec::Opaque { dims: vec![2, 2] },
                 recurrent_dtype: None,
+            },
+        }
+    }
+
+    fn gdn_config(layer_types: Vec<HybridLayerType>) -> HybridCacheConfig {
+        HybridCacheConfig {
+            layer_types,
+            max_seq_len: 32,
+            recurrent: RecurrentLayerConfig {
+                conv_dim: 2,
+                conv_width: 3,
+                state: RecurrentStateSpec::Gdn {
+                    heads: 3,
+                    key_dim: 4,
+                    value_dim: 5,
+                },
+                recurrent_dtype: Some(DType::F32),
             },
         }
     }
@@ -788,6 +878,39 @@ mod tests {
         assert_eq!(cache.recurrent_capacity(), 17);
         Ok(())
     }
+
+    #[test]
+    fn cpu_gdn_pool_is_explicitly_key_major() -> Result<()> {
+        let cache = HybridCache::new(
+            gdn_config(vec![HybridLayerType::Recurrent]),
+            DType::BF16,
+            &[Device::Cpu],
+        )?;
+        let HybridLayerCache::Recurrent(pool) = cache.get(0).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(pool.state_layout(), RecurrentStateLayout::GdnKeyMajor);
+        assert_eq!(pool.recurrent_state.dims(), &[9, 3, 4, 5]);
+        Ok(())
+    }
+
+    #[test]
+    fn recurrent_snapshot_restore_validates_layout_and_count() -> Result<()> {
+        let mut cache = HybridCache::new(
+            gdn_config(vec![HybridLayerType::Recurrent]),
+            DType::BF16,
+            &[Device::Cpu],
+        )?;
+        let snapshots = cache.snapshot_recurrent_state(0)?;
+        assert_eq!(snapshots[0].state_layout, RecurrentStateLayout::GdnKeyMajor);
+        assert!(cache.restore_recurrent_state(1, &[]).is_err());
+
+        let mut wrong_layout = snapshots;
+        wrong_layout[0].state_layout = RecurrentStateLayout::GdnValueMajor;
+        let error = cache.restore_recurrent_state(1, &wrong_layout).unwrap_err();
+        assert!(error.to_string().contains("layout mismatch"));
+        Ok(())
+    }
 }
 
 impl PastKvLenCache for HybridCache {
@@ -819,6 +942,7 @@ impl HybridCache {
 pub struct RecurrentStateSnapshot {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
+    pub state_layout: RecurrentStateLayout,
 }
 
 impl HybridCache {
@@ -835,6 +959,7 @@ impl HybridCache {
                 snapshots.push(RecurrentStateSnapshot {
                     conv_state: conv,
                     recurrent_state: recurrent,
+                    state_layout: pool.state_layout(),
                 });
             }
         }
@@ -849,16 +974,33 @@ impl HybridCache {
         slot_idx: usize,
         snapshots: &[RecurrentStateSnapshot],
     ) -> Result<()> {
+        let expected = self
+            .caches
+            .iter()
+            .filter(|cache| matches!(cache, HybridLayerCache::Recurrent(_)))
+            .count();
+        if snapshots.len() != expected {
+            candle_core::bail!(
+                "recurrent snapshot count mismatch: got {}, expected {expected}",
+                snapshots.len()
+            );
+        }
         let mut snap_iter = snapshots.iter();
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
-                if let Some(snap) = snap_iter.next() {
-                    let conv = snap.conv_state.to_device(pool.device())?;
-                    let recurrent = snap.recurrent_state.to_device(pool.device())?;
-                    let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
-                    pool.scatter_conv_state(&idx_tensor, &conv)?;
-                    pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
+                let snap = snap_iter.next().expect("snapshot count checked above");
+                if snap.state_layout != pool.state_layout() {
+                    candle_core::bail!(
+                        "recurrent state layout mismatch: snapshot {:?}, pool {:?}",
+                        snap.state_layout,
+                        pool.state_layout()
+                    );
                 }
+                let conv = snap.conv_state.to_device(pool.device())?;
+                let recurrent = snap.recurrent_state.to_device(pool.device())?;
+                let idx_tensor = Tensor::from_vec(vec![slot_idx as u32], (1,), pool.device())?;
+                pool.scatter_conv_state(&idx_tensor, &conv)?;
+                pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
             }
         }
         Ok(())

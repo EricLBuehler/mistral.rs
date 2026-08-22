@@ -1,16 +1,19 @@
 #![allow(clippy::cast_possible_truncation)]
 
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
-#[cfg(feature = "cuda")]
-use candle_core::DType;
+use crate::kv_cache::RecurrentStateLayout;
 
 #[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_MIN_COMPUTE_MAJOR: i32 = 9;
-#[cfg(any(feature = "cuda", test))]
+#[cfg_attr(not(any(feature = "cuda", test)), allow(dead_code))]
 const GDN_DECODE_TUNED_COMPUTE_MAJOR: i32 = 9;
-#[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_K_DIM: usize = 128;
+const GDN_DECODE_V_DIM: usize = 128;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_V_MAJOR_LARGE_TILE: usize = 32;
+#[cfg(any(feature = "cuda", test))]
+const GDN_DECODE_V_MAJOR_LARGE_CTA_WAVES: usize = 8;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_COOPERATIVE_V_TILE: usize = 16;
 #[cfg(any(feature = "cuda", test))]
@@ -21,8 +24,9 @@ const GDN_DECODE_COOPERATIVE_STATE_WAVES: usize = 2;
 const GDN_DECODE_PIPELINED_OCCUPANCY_WAVES: usize = 4;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DECODE_PIPELINED_AMORTIZED_WAVES: usize = 8;
-#[cfg(feature = "cuda")]
 const GDN_DECODE_VECTOR_ALIGNMENT: usize = 16;
+#[cfg(feature = "cuda")]
+const GDN_DECODE_INPUT_ALIGNMENT: usize = 8;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_KERNEL_ENV: &str = "MISTRALRS_GDN_DECODE_KERNEL";
 
@@ -33,6 +37,8 @@ enum GdnDecodeKernel {
     Baseline = 0,
     Cooperative = 1,
     Pipelined = 2,
+    ValueMajor4 = 3,
+    ValueMajor32 = 4,
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -44,14 +50,17 @@ struct GdnDecodePolicy {
     head_k_dim: usize,
     head_v_dim: usize,
     vector_aligned: bool,
+    bf16: bool,
+    state_layout: RecurrentStateLayout,
 }
 
 #[cfg(any(feature = "cuda", test))]
 fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> bool {
     match kernel {
-        GdnDecodeKernel::Baseline => true,
+        GdnDecodeKernel::Baseline => policy.state_layout == RecurrentStateLayout::GdnKeyMajor,
         GdnDecodeKernel::Cooperative => {
-            policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+            policy.state_layout == RecurrentStateLayout::GdnKeyMajor
+                && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
                 && policy
@@ -59,7 +68,8 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
                     .is_multiple_of(GDN_DECODE_COOPERATIVE_V_TILE)
         }
         GdnDecodeKernel::Pipelined => {
-            policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
+            policy.state_layout == RecurrentStateLayout::GdnKeyMajor
+                && policy.compute_major >= GDN_DECODE_MIN_COMPUTE_MAJOR
                 && policy.vector_aligned
                 && policy.head_k_dim == GDN_DECODE_K_DIM
                 && policy.head_v_dim >= GDN_DECODE_PIPELINED_V_TILE
@@ -67,11 +77,33 @@ fn decode_kernel_supported(kernel: GdnDecodeKernel, policy: GdnDecodePolicy) -> 
                     .head_v_dim
                     .is_multiple_of(GDN_DECODE_PIPELINED_V_TILE)
         }
+        GdnDecodeKernel::ValueMajor4 | GdnDecodeKernel::ValueMajor32 => {
+            policy.state_layout == RecurrentStateLayout::GdnValueMajor
+                && policy.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR
+                && policy.bf16
+                && policy.vector_aligned
+                && policy.head_k_dim == GDN_DECODE_K_DIM
+                && policy.head_v_dim == GDN_DECODE_V_DIM
+        }
     }
 }
 
 #[cfg(any(feature = "cuda", test))]
 fn automatic_decode_kernel(policy: GdnDecodePolicy) -> GdnDecodeKernel {
+    if policy.state_layout == RecurrentStateLayout::GdnValueMajor {
+        let large_tile_blocks = policy
+            .state_blocks
+            .saturating_mul(policy.head_v_dim / GDN_DECODE_V_MAJOR_LARGE_TILE);
+        let large_tile_target = policy
+            .multiprocessor_count
+            .saturating_mul(GDN_DECODE_V_MAJOR_LARGE_CTA_WAVES);
+        if large_tile_blocks >= large_tile_target
+            && decode_kernel_supported(GdnDecodeKernel::ValueMajor32, policy)
+        {
+            return GdnDecodeKernel::ValueMajor32;
+        }
+        return GdnDecodeKernel::ValueMajor4;
+    }
     if policy.compute_major != GDN_DECODE_TUNED_COMPUTE_MAJOR || policy.multiprocessor_count == 0 {
         return GdnDecodeKernel::Baseline;
     }
@@ -112,7 +144,12 @@ fn select_decode_kernel(
     match requested {
         Some(kernel) if decode_kernel_supported(kernel, policy) => Ok(kernel),
         Some(kernel) => Err(kernel),
-        None => Ok(automatic_decode_kernel(policy)),
+        None => {
+            let kernel = automatic_decode_kernel(policy);
+            decode_kernel_supported(kernel, policy)
+                .then_some(kernel)
+                .ok_or(kernel)
+        }
     }
 }
 
@@ -123,8 +160,10 @@ fn parse_decode_kernel(value: &str) -> std::result::Result<Option<GdnDecodeKerne
         "baseline" => Ok(Some(GdnDecodeKernel::Baseline)),
         "cooperative" => Ok(Some(GdnDecodeKernel::Cooperative)),
         "pipelined" => Ok(Some(GdnDecodeKernel::Pipelined)),
+        "vmajor4" => Ok(Some(GdnDecodeKernel::ValueMajor4)),
+        "vmajor32" => Ok(Some(GdnDecodeKernel::ValueMajor32)),
         other => Err(format!(
-            "invalid GDN decode kernel '{other}', expected auto, baseline, cooperative, or pipelined"
+            "invalid GDN decode kernel '{other}', expected auto, baseline, cooperative, pipelined, vmajor4, or vmajor32"
         )),
     }
 }
@@ -190,6 +229,34 @@ fn gdn_cuda_device_properties(dev: &candle_core::CudaDevice) -> Result<GdnCudaDe
     Ok(properties)
 }
 
+pub(crate) fn v_major_state_supported(
+    device: &Device,
+    input_dtype: DType,
+    key_dim: usize,
+    value_dim: usize,
+) -> Result<bool> {
+    if input_dtype != DType::BF16
+        || key_dim != GDN_DECODE_K_DIM
+        || value_dim != GDN_DECODE_V_DIM
+        || !(key_dim * std::mem::size_of::<f32>()).is_multiple_of(GDN_DECODE_VECTOR_ALIGNMENT)
+    {
+        return Ok(false);
+    }
+    #[cfg(feature = "cuda")]
+    {
+        if !device.is_cuda() {
+            return Ok(false);
+        }
+        let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
+        return Ok(properties.compute_major == GDN_DECODE_TUNED_COMPUTE_MAJOR);
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = device;
+        Ok(false)
+    }
+}
+
 /// Which rows of the recurrent state a GDN kernel reads and writes. `Gathered` means the state is a
 /// `[B*H, ...]` copy addressed by batch row; `Pooled` addresses the whole pool `[cap, H, ...]`
 /// through a `[B]` u32 slot table, so the kernels update it in place without gather/scatter copies.
@@ -247,6 +314,7 @@ pub struct RecurrenceInputs<'a> {
 enum RecurrenceKernel {
     Scalar,
     Warp,
+    ValueMajorWarp,
     Chunked,
 }
 
@@ -294,6 +362,9 @@ fn launch_recurrence(
         let launcher = match kernel {
             RecurrenceKernel::Scalar => crate::cuda::ffi::gated_delta_rule_recurrence,
             RecurrenceKernel::Warp => crate::cuda::ffi::warp_gated_delta_rule_recurrence,
+            RecurrenceKernel::ValueMajorWarp => {
+                crate::cuda::ffi::vmajor_warp_gated_delta_rule_recurrence
+            }
             RecurrenceKernel::Chunked => crate::cuda::ffi::chunked_gated_delta_rule_recurrence,
         };
         unsafe {
@@ -354,6 +425,15 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::Warp, inputs, state, slots)
 }
 
+#[cfg(feature = "cuda")]
+pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
+    inputs: RecurrenceInputs<'_>,
+    state: &mut Tensor,
+    slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    launch_recurrence(RecurrenceKernel::ValueMajorWarp, inputs, state, slots)
+}
+
 #[cfg(not(feature = "cuda"))]
 #[allow(unused)]
 pub fn gated_delta_rule_recurrence_cuda(
@@ -382,6 +462,16 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     _slots: GdnStateSlots<'_>,
 ) -> Result<Tensor> {
     candle_core::bail!("warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(unused)]
+pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
+    _inputs: RecurrenceInputs<'_>,
+    _state: &mut Tensor,
+    _slots: GdnStateSlots<'_>,
+) -> Result<Tensor> {
+    candle_core::bail!("vmajor_warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
@@ -773,41 +863,46 @@ struct GdnDecodeLaunch<'a> {
     head_k_dim: usize,
     head_v_dim: usize,
     tiled_v_heads: bool,
+    state_layout: RecurrentStateLayout,
     slots: GdnStateSlots<'a>,
     requested_kernel: Option<GdnDecodeKernel>,
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub struct FusedDecodeRecurrence<'a> {
+    pub mixed_qkv: &'a Tensor,
+    pub b: &'a Tensor,
+    pub a: &'a Tensor,
+    pub a_log: &'a Tensor,
+    pub dt_bias: &'a Tensor,
+    pub state: &'a mut Tensor,
+    pub batch_size: usize,
+    pub num_k_heads: usize,
+    pub num_v_heads: usize,
+    pub head_k_dim: usize,
+    pub head_v_dim: usize,
+    pub tiled_v_heads: bool,
+    pub state_layout: RecurrentStateLayout,
+    pub slots: GdnStateSlots<'a>,
+}
+
 #[cfg(feature = "cuda")]
-#[allow(clippy::too_many_arguments)]
-pub fn fused_decode_recurrence_cuda(
-    mixed_qkv: &Tensor,
-    b: &Tensor,
-    a: &Tensor,
-    a_log: &Tensor,
-    dt_bias: &Tensor,
-    state: &mut Tensor,
-    batch_size: usize,
-    num_k_heads: usize,
-    num_v_heads: usize,
-    head_k_dim: usize,
-    head_v_dim: usize,
-    tiled_v_heads: bool,
-    slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
+pub fn fused_decode_recurrence_cuda(launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
     fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
-        mixed_qkv,
-        b,
-        a,
-        a_log,
-        dt_bias,
-        state,
-        batch_size,
-        num_k_heads,
-        num_v_heads,
-        head_k_dim,
-        head_v_dim,
-        tiled_v_heads,
-        slots,
+        mixed_qkv: launch.mixed_qkv,
+        b: launch.b,
+        a: launch.a,
+        a_log: launch.a_log,
+        dt_bias: launch.dt_bias,
+        state: launch.state,
+        batch_size: launch.batch_size,
+        num_k_heads: launch.num_k_heads,
+        num_v_heads: launch.num_v_heads,
+        head_k_dim: launch.head_k_dim,
+        head_v_dim: launch.head_v_dim,
+        tiled_v_heads: launch.tiled_v_heads,
+        state_layout: launch.state_layout,
+        slots: launch.slots,
         requested_kernel: decode_kernel_override()?,
     })
 }
@@ -837,6 +932,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
+            state_layout,
             slots,
             requested_kernel,
         } = launch;
@@ -849,6 +945,8 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
             _ => candle::bail!("mixed_qkv must be a cuda tensor"),
         };
         let mixed_offset = mixed_l.start_offset();
+        let mixed_ptr =
+            mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0 as *const c_void;
 
         let (b_s, b_l) = b.storage_and_layout();
         let b_s = match &*b_s {
@@ -897,12 +995,20 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
             state_blocks: batch_size.saturating_mul(num_v_heads),
             head_k_dim,
             head_v_dim,
-            vector_aligned: (state_ptr as usize).is_multiple_of(GDN_DECODE_VECTOR_ALIGNMENT),
+            vector_aligned: (state_ptr as usize).is_multiple_of(GDN_DECODE_VECTOR_ALIGNMENT)
+                && (mixed_ptr as usize).is_multiple_of(GDN_DECODE_INPUT_ALIGNMENT),
+            bf16: dtype_code == 1,
+            state_layout,
         };
         let decode_kernel = select_decode_kernel(policy, requested_kernel).map_err(|kernel| {
             candle_core::Error::msg(format!(
-                "requested {kernel:?} GDN kernel is unsupported on compute {}, K={}, V={}, aligned={}",
-                policy.compute_major, policy.head_k_dim, policy.head_v_dim, policy.vector_aligned
+                "requested {kernel:?} GDN kernel is unsupported on compute {}, K={}, V={}, layout={:?}, bf16={}, aligned={}",
+                policy.compute_major,
+                policy.head_k_dim,
+                policy.head_v_dim,
+                policy.state_layout,
+                policy.bf16,
+                policy.vector_aligned
             ))
         })?;
 
@@ -913,7 +1019,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         with_slot_indices(slots, |slot_ptr, _| {
             unsafe {
                 crate::cuda::ffi::gdn_decode_recurrence(
-                    mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0 as *const c_void,
+                    mixed_ptr,
                     b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
                     a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
                     alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
@@ -959,22 +1065,8 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
 }
 
 #[cfg(not(feature = "cuda"))]
-#[allow(unused, clippy::too_many_arguments)]
-pub fn fused_decode_recurrence_cuda(
-    _mixed_qkv: &Tensor,
-    _b: &Tensor,
-    _a: &Tensor,
-    _a_log: &Tensor,
-    _dt_bias: &Tensor,
-    _state: &mut Tensor,
-    _batch_size: usize,
-    _num_k_heads: usize,
-    _num_v_heads: usize,
-    _head_k_dim: usize,
-    _head_v_dim: usize,
-    _tiled_v_heads: bool,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
+#[allow(unused)]
+pub fn fused_decode_recurrence_cuda(_launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
     candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }
 
@@ -1216,6 +1308,7 @@ mod dispatch_tests {
         automatic_decode_kernel, parse_decode_kernel, select_decode_kernel, GdnDecodeKernel,
         GdnDecodePolicy,
     };
+    use crate::kv_cache::RecurrentStateLayout;
 
     const TEST_SM_COUNT: usize = 132;
 
@@ -1227,6 +1320,16 @@ mod dispatch_tests {
             head_k_dim: 128,
             head_v_dim: 128,
             vector_aligned: true,
+            bf16: true,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
+        }
+    }
+
+    fn sm90_value_major_policy(batch_size: usize) -> GdnDecodePolicy {
+        GdnDecodePolicy {
+            state_blocks: batch_size * 48,
+            state_layout: RecurrentStateLayout::GdnValueMajor,
+            ..sm90_policy(0)
         }
     }
 
@@ -1307,6 +1410,35 @@ mod dispatch_tests {
     }
 
     #[test]
+    fn value_major_dispatch_uses_the_measured_sm90_crossover() {
+        for batch_size in 1..=5 {
+            assert_eq!(
+                automatic_decode_kernel(sm90_value_major_policy(batch_size)),
+                GdnDecodeKernel::ValueMajor4
+            );
+        }
+        for batch_size in [6, 8, 16] {
+            assert_eq!(
+                automatic_decode_kernel(sm90_value_major_policy(batch_size)),
+                GdnDecodeKernel::ValueMajor32
+            );
+        }
+
+        let mut unsupported = sm90_value_major_policy(8);
+        unsupported.bf16 = false;
+        assert!(!super::decode_kernel_supported(
+            GdnDecodeKernel::ValueMajor32,
+            unsupported
+        ));
+        unsupported = sm90_value_major_policy(8);
+        unsupported.compute_major = 10;
+        assert!(!super::decode_kernel_supported(
+            GdnDecodeKernel::ValueMajor32,
+            unsupported
+        ));
+    }
+
+    #[test]
     fn decode_kernel_override_is_forceable_and_validated() {
         assert_eq!(parse_decode_kernel("auto").unwrap(), None);
         assert_eq!(
@@ -1320,6 +1452,14 @@ mod dispatch_tests {
         assert_eq!(
             parse_decode_kernel("pipelined").unwrap(),
             Some(GdnDecodeKernel::Pipelined)
+        );
+        assert_eq!(
+            parse_decode_kernel("vmajor4").unwrap(),
+            Some(GdnDecodeKernel::ValueMajor4)
+        );
+        assert_eq!(
+            parse_decode_kernel("vmajor32").unwrap(),
+            Some(GdnDecodeKernel::ValueMajor32)
         );
         assert!(parse_decode_kernel("unknown").is_err());
 
@@ -1551,6 +1691,215 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn value_major_warp_prefill_matches_scalar_with_shuffled_slots() -> Result<()> {
+        const BATCH_SIZE: usize = 2;
+        const NUM_HEADS: usize = 4;
+        const SEQ_LEN: usize = 17;
+        const HEAD_DIM: usize = 128;
+        const CAPACITY: usize = 5;
+
+        let dev = Device::new_cuda(0)?;
+        let bh = BATCH_SIZE * NUM_HEADS;
+        let q = tensor3(
+            patterned(bh * SEQ_LEN * HEAD_DIM, 20, 0.02, 0.0),
+            (bh, SEQ_LEN, HEAD_DIM),
+            &dev,
+        )?;
+        let k = tensor3(
+            patterned(bh * SEQ_LEN * HEAD_DIM, 21, 0.02, 0.0),
+            (bh, SEQ_LEN, HEAD_DIM),
+            &dev,
+        )?;
+        let v = tensor3(
+            patterned(bh * SEQ_LEN * HEAD_DIM, 22, 0.05, 0.0),
+            (bh, SEQ_LEN, HEAD_DIM),
+            &dev,
+        )?;
+        let g = tensor2(
+            patterned(bh * SEQ_LEN, 23, 0.03, -0.08),
+            (bh, SEQ_LEN),
+            &dev,
+        )?;
+        let beta = tensor2(patterned(bh * SEQ_LEN, 24, 0.15, 0.5), (bh, SEQ_LEN), &dev)?;
+        let initial_state = Tensor::from_vec(
+            patterned(CAPACITY * NUM_HEADS * HEAD_DIM * HEAD_DIM, 25, 0.01, 0.0),
+            (CAPACITY, NUM_HEADS, HEAD_DIM, HEAD_DIM),
+            &dev,
+        )?;
+        let mut key_major_state = initial_state.clone();
+        let mut value_major_state = initial_state.transpose(2, 3)?.contiguous()?;
+        let slot_indices = Tensor::from_vec(vec![4u32, 1], (BATCH_SIZE,), &dev)?;
+        let slots = GdnStateSlots::Pooled(&slot_indices);
+        let inputs = RecurrenceInputs {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+        };
+
+        for step in 1..=2 {
+            let reference = gated_delta_rule_recurrence_cuda(inputs, &mut key_major_state, slots)?;
+            let value_major = vmajor_warp_gated_delta_rule_recurrence_cuda(
+                inputs,
+                &mut value_major_state,
+                slots,
+            )?;
+            assert_close(
+                &format!("value-major prefill output step {step}"),
+                &flat(&value_major)?,
+                &flat(&reference)?,
+                3.0e-4,
+            );
+            assert_close(
+                &format!("value-major prefill state step {step}"),
+                &flat(&value_major_state.transpose(2, 3)?.contiguous()?)?,
+                &flat(&key_major_state)?,
+                3.0e-4,
+            );
+        }
+        Ok(())
+    }
+
+    struct ValueMajorDecodeCase {
+        batch_size: usize,
+        kernel: GdnDecodeKernel,
+    }
+
+    fn run_value_major_decode_case(dev: &Device, case: ValueMajorDecodeCase) -> Result<()> {
+        const NUM_K_HEADS: usize = 16;
+        const NUM_V_HEADS: usize = 48;
+        const HEAD_DIM: usize = 128;
+        const STEPS: usize = 8;
+
+        let key_dim = NUM_K_HEADS * HEAD_DIM;
+        let value_dim = NUM_V_HEADS * HEAD_DIM;
+        let conv_dim = 2 * key_dim + value_dim;
+        let mixed_qkv = tensor3(
+            patterned(case.batch_size * conv_dim, 60, 0.08, 0.01),
+            (case.batch_size, 1, conv_dim),
+            dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let b = tensor3(
+            patterned(case.batch_size * NUM_V_HEADS, 61, 0.2, 0.1),
+            (case.batch_size, 1, NUM_V_HEADS),
+            dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let a = tensor3(
+            patterned(case.batch_size * NUM_V_HEADS, 62, 0.18, -0.04),
+            (case.batch_size, 1, NUM_V_HEADS),
+            dev,
+        )?
+        .to_dtype(DType::BF16)?;
+        let a_log = Tensor::from_vec(patterned(NUM_V_HEADS, 63, 0.05, -0.2), (NUM_V_HEADS,), dev)?;
+        let dt_bias = Tensor::from_vec(patterned(NUM_V_HEADS, 64, 0.1, 0.3), (NUM_V_HEADS,), dev)?;
+        let capacity = case.batch_size + 3;
+        let initial_state = Tensor::from_vec(
+            patterned(capacity * NUM_V_HEADS * HEAD_DIM * HEAD_DIM, 65, 0.02, 0.0),
+            (capacity, NUM_V_HEADS, HEAD_DIM, HEAD_DIM),
+            dev,
+        )?;
+        let mut key_major_state = initial_state.clone();
+        let mut value_major_state = initial_state.transpose(2, 3)?.contiguous()?;
+        let slot_indices = Tensor::from_vec(
+            (0..case.batch_size)
+                .map(|idx| (capacity - 1 - idx) as u32)
+                .collect::<Vec<_>>(),
+            (case.batch_size,),
+            dev,
+        )?;
+        let slots = GdnStateSlots::Pooled(&slot_indices);
+        let (q, k, v, g, beta) = prepare_recurrence_inputs_cuda(
+            &mixed_qkv,
+            &b,
+            &a,
+            &a_log,
+            &dt_bias,
+            case.batch_size,
+            1,
+            NUM_K_HEADS,
+            NUM_V_HEADS,
+            HEAD_DIM,
+            HEAD_DIM,
+            false,
+        )?;
+        let reference_inputs = RecurrenceInputs {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+        };
+
+        for step in 1..=STEPS {
+            let value_major = fused_decode_recurrence_cuda_impl(GdnDecodeLaunch {
+                mixed_qkv: &mixed_qkv,
+                b: &b,
+                a: &a,
+                a_log: &a_log,
+                dt_bias: &dt_bias,
+                state: &mut value_major_state,
+                batch_size: case.batch_size,
+                num_k_heads: NUM_K_HEADS,
+                num_v_heads: NUM_V_HEADS,
+                head_k_dim: HEAD_DIM,
+                head_v_dim: HEAD_DIM,
+                tiled_v_heads: false,
+                state_layout: RecurrentStateLayout::GdnValueMajor,
+                slots,
+                requested_kernel: Some(case.kernel),
+            })?;
+            let reference =
+                gated_delta_rule_recurrence_cuda(reference_inputs, &mut key_major_state, slots)?;
+            assert_close(
+                &format!(
+                    "production value-major output B{} step {step}",
+                    case.batch_size
+                ),
+                &flat(&value_major.to_dtype(DType::F32)?)?,
+                &flat(&reference)?,
+                2.0e-4,
+            );
+            assert_close(
+                &format!(
+                    "production value-major state B{} step {step}",
+                    case.batch_size
+                ),
+                &flat(&value_major_state.transpose(2, 3)?.contiguous()?)?,
+                &flat(&key_major_state)?,
+                2.0e-5,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires an SM90 CUDA device"]
+    fn sm90_value_major_decode_repeats_with_shuffled_slots() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        for case in [
+            ValueMajorDecodeCase {
+                batch_size: 1,
+                kernel: GdnDecodeKernel::ValueMajor4,
+            },
+            ValueMajorDecodeCase {
+                batch_size: 8,
+                kernel: GdnDecodeKernel::ValueMajor32,
+            },
+            ValueMajorDecodeCase {
+                batch_size: 16,
+                kernel: GdnDecodeKernel::ValueMajor32,
+            },
+        ] {
+            run_value_major_decode_case(&dev, case)?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn run_fused_decode_case(
         dev: &Device,
@@ -1642,6 +1991,7 @@ mod tests {
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: state_slots,
             requested_kernel,
         })?;
@@ -1698,6 +2048,7 @@ mod tests {
             head_k_dim,
             head_v_dim,
             tiled_v_heads,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: state_slots,
             requested_kernel,
         })?;

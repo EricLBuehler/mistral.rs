@@ -676,11 +676,11 @@ impl Qwen3_5MoeTextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
                 recurrent_dtype: Some(DType::F32),
             },
         };
@@ -831,6 +831,7 @@ impl Qwen3_5MoeTextModel {
                             GdnLayerCache::gathered(
                                 pool.gather_conv_state(&indices)?,
                                 pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
                             )
                         } else {
                             GdnLayerCache::checkout(pool, &indices)?
