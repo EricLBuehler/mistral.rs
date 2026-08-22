@@ -730,7 +730,8 @@ impl ShortConv {
             new_col
         };
         let weight = self.conv.weight().squeeze(1)?.unsqueeze(0)?;
-        let mut conv_out = (conv_state.clone() * weight)?.sum(D::Minus1)?;
+        // state is (n_seqs, d, l) vs the (1, d, l) weight, so a plain mul fails on batched decode
+        let mut conv_out = conv_state.broadcast_mul(&weight)?.sum(D::Minus1)?;
         if let Some(bias) = self.conv.bias() {
             conv_out = conv_out.broadcast_add(&bias.reshape((1, bias.dim(0)?))?)?;
         }
@@ -762,7 +763,9 @@ impl ShortConv {
                 .narrow(2, 0, seq_len)?
         };
 
-        let y = (c_proj * conv_out)?.transpose(1, 2)?.contiguous()?;
+        // At seq_len 1 the transpose leaves a degenerate stride that contiguous() keeps and
+        // candle's CPU batched matmul then misreads, so force a real copy.
+        let y = (c_proj * conv_out)?.transpose(1, 2)?.force_contiguous()?;
         self.out_proj.forward(&y)
     }
 

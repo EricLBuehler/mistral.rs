@@ -128,10 +128,13 @@ impl RecurrentStatePool {
         Some(slot_idx)
     }
 
-    /// Free a state slot when a sequence completes.
+    /// Free a state slot when a sequence completes. Idempotent: a duplicate entry in the
+    /// free list would hand the same slot to two live sequences and corrupt their state.
     pub fn free(&mut self, slot_idx: usize) {
         debug_assert!(slot_idx < self.capacity);
-        self.free_slots.push(slot_idx);
+        if !self.free_slots.contains(&slot_idx) {
+            self.free_slots.push(slot_idx);
+        }
     }
 
     /// Gather conv states for the given slot indices
