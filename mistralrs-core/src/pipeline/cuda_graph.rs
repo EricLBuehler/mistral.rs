@@ -1,4 +1,12 @@
-use std::{collections::HashMap, ptr::NonNull, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt,
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use candle_core::cuda_backend::cudarc::driver::{
     sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
@@ -36,6 +44,7 @@ pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
+static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
 pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
@@ -79,6 +88,7 @@ pub(crate) fn prepare_fa3_decode_schedules(
 /// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
 /// their KV writes and point at the hybrid pad slot, so the model can run them and their outputs be
 /// dropped.
+#[derive(Clone)]
 pub(crate) struct CudaGraphDecodeStep {
     pub(crate) input_ids: Tensor,
     pub(crate) seqlen_offsets: Vec<usize>,
@@ -180,6 +190,134 @@ impl CudaGraphDecodeStep {
         }
         let rows = tensor.dim(0)? / batch * self.real_batch;
         tensor.narrow(0, 0, rows)
+    }
+
+    fn one_token_continuation(&self, input_ids: Tensor) -> candle_core::Result<Option<Self>> {
+        let (batch, q_len) = input_ids.dims2()?;
+        let Some(rows) = self.metadata.decode_rows.as_ref() else {
+            return Ok(None);
+        };
+        if q_len != 1
+            || rows.query_len != 1
+            || rows.decode_window != 1
+            || batch != self.batch()
+            || rows.batch_size() != batch
+            || self.real_batch == 0
+            || self.real_batch > batch
+            || self.seqlen_offsets.len() != batch
+            || self.context_lens.len() != batch
+            || self.position_ids.len() != batch
+        {
+            return Ok(None);
+        }
+
+        let mut slot_mappings = Vec::with_capacity(self.real_batch);
+        let mut block_tables = Vec::with_capacity(self.real_batch);
+        let mut context_lens = Vec::with_capacity(self.real_batch);
+        let mut full_block_tables = Vec::with_capacity(self.real_batch);
+        let mut full_context_lens = Vec::with_capacity(self.real_batch);
+        for row in 0..self.real_batch {
+            let Some(&current_slot) = rows.slot_mappings[row].first() else {
+                return Ok(None);
+            };
+            let Ok(current_slot) = usize::try_from(current_slot) else {
+                return Ok(None);
+            };
+            let full_table = &rows.full_block_tables[row];
+            let current_block = current_slot / rows.block_size;
+            let Some(current_block_idx) =
+                full_table.iter().position(|&block| block == current_block)
+            else {
+                return Ok(None);
+            };
+            let current_block_offset = current_slot % rows.block_size;
+            let (next_block_idx, next_slot) = if current_block_offset + 1 < rows.block_size {
+                (current_block_idx, current_slot + 1)
+            } else {
+                let next_block_idx = current_block_idx + 1;
+                let Some(&next_block) = full_table.get(next_block_idx) else {
+                    return Ok(None);
+                };
+                let Some(next_slot) = next_block.checked_mul(rows.block_size) else {
+                    return Ok(None);
+                };
+                (next_block_idx, next_slot)
+            };
+            let Ok(next_slot) = i64::try_from(next_slot) else {
+                return Ok(None);
+            };
+            let Some(next_full_context_len) = rows.full_context_lens[row].checked_add(1) else {
+                return Ok(None);
+            };
+
+            let (paged_table, paged_context_len) = match rows.sliding_window {
+                Some(window) => {
+                    let window_start = next_full_context_len.saturating_sub(window);
+                    let block_aligned_start = window_start / rows.block_size * rows.block_size;
+                    let paged_context_len = next_full_context_len - block_aligned_start;
+                    let needed_blocks = paged_context_len.div_ceil(rows.block_size);
+                    let table_end = next_block_idx + 1;
+                    let table_start = table_end.saturating_sub(needed_blocks);
+                    (
+                        full_table[table_start..table_end].to_vec(),
+                        paged_context_len,
+                    )
+                }
+                None => (full_table.clone(), next_full_context_len),
+            };
+            slot_mappings.push(vec![next_slot]);
+            block_tables.push(paged_table);
+            context_lens.push(paged_context_len);
+            full_block_tables.push(full_table.clone());
+            full_context_lens.push(next_full_context_len);
+        }
+
+        let rows = Arc::new(
+            DecodePagedRows {
+                slot_mappings,
+                block_tables,
+                context_lens,
+                full_block_tables,
+                full_context_lens,
+                query_len: 1,
+                block_size: rows.block_size,
+                use_standard_metadata: rows.use_standard_metadata,
+                max_paged_context_len: rows.max_paged_context_len,
+                sliding_window: rows.sliding_window,
+                decode_window: rows.decode_window,
+                devices: rows.devices.clone(),
+                num_kv_heads: rows.num_kv_heads,
+            }
+            .padded(batch),
+        );
+        let metadata = rows.build_graph_staged().map_err(candle_core::Error::msg)?;
+        let Some(mut seqlen_offsets) = self.seqlen_offsets[..self.real_batch]
+            .iter()
+            .map(|offset| offset.checked_add(1))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        seqlen_offsets.resize(batch, seqlen_offsets[0]);
+        let mut context_lens = self.context_lens[..self.real_batch].to_vec();
+        context_lens.resize(batch, context_lens[0]);
+        let Some(mut position_ids) = self.position_ids[..self.real_batch]
+            .iter()
+            .map(|position| position.checked_add(1))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        position_ids.resize(batch, position_ids[0]);
+        Ok(Some(Self {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+            state_indices: self.state_indices.clone(),
+            real_batch: self.real_batch,
+        }))
     }
 }
 
@@ -957,6 +1095,8 @@ impl CudaDecodeGraphMetadataBuffers {
 }
 
 pub(crate) struct CudaDecodeGraphEntry {
+    generation: u64,
+    replay_epoch: u64,
     key: CudaDecodeGraphKey,
     graph: CudaGraphHandle,
     host_staging: CudaGraphHostStaging,
@@ -969,6 +1109,75 @@ pub(crate) struct CudaDecodeGraphEntry {
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
 }
 
+pub struct CudaDecodeGraphLaunch {
+    generation: u64,
+    replay_epoch: u64,
+    key: CudaDecodeGraphKey,
+    input_ids: Tensor,
+    graph_stream: Arc<CudaStream>,
+    real_batch: usize,
+    source: CudaGraphDecodeStep,
+}
+
+impl CudaDecodeGraphLaunch {
+    pub(crate) fn resident_input(&self) -> &Tensor {
+        &self.input_ids
+    }
+
+    pub(crate) fn graph_stream(&self) -> &Arc<CudaStream> {
+        &self.graph_stream
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn real_batch(&self) -> usize {
+        self.real_batch
+    }
+
+    fn one_token_continuation(&self) -> candle_core::Result<Option<CudaGraphDecodeStep>> {
+        let Some(continuation) = self.source.one_token_continuation(self.input_ids.clone())? else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(
+            &continuation.input_ids,
+            &continuation.metadata,
+            continuation
+                .metadata
+                .decode_rows
+                .as_ref()
+                .expect("continuation must retain decode rows")
+                .block_size,
+        )?;
+        Ok((key == self.key).then_some(continuation))
+    }
+
+    fn matches(&self, entry: &CudaDecodeGraphEntry) -> bool {
+        self.generation == entry.generation
+            && self.replay_epoch == entry.replay_epoch
+            && self.key == entry.key
+    }
+}
+
+impl fmt::Debug for CudaDecodeGraphLaunch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaDecodeGraphLaunch")
+            .field("generation", &self.generation)
+            .field("replay_epoch", &self.replay_epoch)
+            .field("input_shape", &self.input_ids.shape())
+            .field("input_device", self.input_ids.device())
+            .field("real_batch", &self.real_batch)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CudaDecodeGraphReplayInput<'a> {
+    Host,
+    Resident(&'a CudaDecodeGraphLaunch),
+}
+
 impl CudaDecodeGraphEntry {
     pub(crate) fn with_spec_state(
         mut self,
@@ -977,11 +1186,42 @@ impl CudaDecodeGraphEntry {
         self.spec_state = spec_state.map(Arc::from);
         self
     }
+
+    fn launch(
+        &self,
+        step: &CudaGraphDecodeStep,
+    ) -> candle_core::Result<Option<CudaDecodeGraphLaunch>> {
+        let input_ids = self.input_ids.as_detached_tensor();
+        let (batch, q_len) = input_ids.dims2()?;
+        if input_ids.dtype() != DType::U32
+            || q_len != 1
+            || !input_ids.is_contiguous()
+            || self.spec_state.is_some()
+        {
+            return Ok(None);
+        }
+        if step.real_batch > batch {
+            candle_core::bail!(
+                "CUDA graph resident input has batch capacity {batch}, smaller than {} live rows",
+                step.real_batch
+            );
+        }
+        Ok(Some(CudaDecodeGraphLaunch {
+            generation: self.generation,
+            replay_epoch: self.replay_epoch,
+            key: self.key.clone(),
+            input_ids,
+            graph_stream: self.graph.stream.clone(),
+            real_batch: step.real_batch,
+            source: step.clone(),
+        }))
+    }
 }
 
 pub(crate) struct CudaDecodeGraphReplay {
     pub(crate) logits: Tensor,
     pub(crate) spec_state: Option<Arc<dyn SpeculativeGraphState>>,
+    pub(crate) launch: Option<CudaDecodeGraphLaunch>,
 }
 
 #[derive(Default)]
@@ -1023,12 +1263,21 @@ impl CudaDecodeGraphState {
         &mut self,
         key: &CudaDecodeGraphKey,
         step: &CudaGraphDecodeStep,
+        input: CudaDecodeGraphReplayInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
-        entry.input_ids.set(&step.input_ids)?;
+        match input {
+            CudaDecodeGraphReplayInput::Host => entry.input_ids.set(&step.input_ids)?,
+            CudaDecodeGraphReplayInput::Resident(launch) => {
+                if !launch.matches(&entry) || launch.real_batch != step.real_batch {
+                    self.entries.push(entry);
+                    return Ok(None);
+                }
+            }
+        }
         let (_, seq_len) = step.input_ids.dims2()?;
         let metadata_buffers = &mut entry.metadata_buffers;
         let state_indices = &entry.state_indices;
@@ -1053,19 +1302,47 @@ impl CudaDecodeGraphState {
             .launch()
             .map_err(|err| err.context("CUDA graph replay launch failed"))?;
         entry.host_staging.record_graph_complete()?;
+        entry.replay_epoch = entry
+            .replay_epoch
+            .checked_add(1)
+            .expect("CUDA decode graph replay epoch overflow");
         let replay = CudaDecodeGraphReplay {
             logits: step.narrow_rows(&entry.logits)?,
             spec_state: entry.spec_state.clone(),
+            launch: entry.launch(step)?,
         };
         self.entries.push(entry);
         Ok(Some(replay))
     }
 
-    pub(crate) fn insert(&mut self, entry: CudaDecodeGraphEntry) {
+    pub(crate) fn replay_one_token(
+        &mut self,
+        launch: CudaDecodeGraphLaunch,
+    ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        let Some(step) = launch.one_token_continuation()? else {
+            return Ok(None);
+        };
+        self.replay(
+            &launch.key,
+            &step,
+            CudaDecodeGraphReplayInput::Resident(&launch),
+        )
+    }
+
+    pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
         if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
             self.entries.remove(0);
         }
+        entry.generation = self.allocate_generation();
         self.entries.push(entry);
+    }
+
+    fn allocate_generation(&mut self) -> u64 {
+        NEXT_CUDA_DECODE_GRAPH_GENERATION
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("CUDA decode graph generation overflow")
     }
 }
 
@@ -1170,6 +1447,8 @@ where
     );
 
     Ok(CudaDecodeGraphEntry {
+        generation: 0,
+        replay_epoch: 0,
         key,
         graph,
         host_staging,
@@ -2329,5 +2608,186 @@ mod tests {
         state.suspend();
         state.resume();
         assert!(state.disabled());
+    }
+
+    #[test]
+    fn graph_generations_are_not_reused_after_cleanup() {
+        let mut state = CudaDecodeGraphState::default();
+        let first = state.allocate_generation();
+        state.clear();
+        let second = state.allocate_generation();
+        state.suspend();
+        state.resume();
+        let third = state.allocate_generation();
+        assert!(first < second && second < third);
+    }
+
+    #[test]
+    fn one_token_continuation_advances_host_decode_state() -> anyhow::Result<()> {
+        let rows = Arc::new(
+            DecodePagedRows {
+                slot_mappings: vec![vec![39]],
+                block_tables: vec![vec![9]],
+                context_lens: vec![4],
+                full_block_tables: vec![vec![9, 17]],
+                full_context_lens: vec![4],
+                query_len: 1,
+                block_size: 4,
+                use_standard_metadata: false,
+                max_paged_context_len: 64,
+                sliding_window: Some(4),
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            }
+            .padded(2),
+        );
+        let step = CudaGraphDecodeStep {
+            input_ids: Tensor::zeros((2, 1), DType::U32, &Device::Cpu)?,
+            seqlen_offsets: vec![3, 3],
+            context_lens: vec![(0, 1), (0, 1)],
+            position_ids: vec![4, 4],
+            metadata: rows.build_graph_staged()?,
+            state_indices: Some(vec![2, 5]),
+            real_batch: 1,
+        };
+        let continuation = step
+            .one_token_continuation(step.input_ids.clone())?
+            .expect("next allocated block should permit one token");
+        let rows = continuation.metadata.decode_rows.as_ref().unwrap();
+        assert_eq!(rows.slot_mappings, vec![vec![68], vec![_PAD_SLOT_ID]]);
+        assert_eq!(rows.block_tables, vec![vec![9, 17], vec![9, 17]]);
+        assert_eq!(rows.context_lens, vec![5, 5]);
+        assert_eq!(rows.full_context_lens, vec![5, 5]);
+        assert_eq!(continuation.seqlen_offsets, vec![4, 4]);
+        assert_eq!(continuation.context_lens, vec![(0, 1), (0, 1)]);
+        assert_eq!(continuation.position_ids, vec![5, 5]);
+        assert_eq!(continuation.state_indices, Some(vec![2, 5]));
+        Ok(())
+    }
+
+    #[test]
+    fn one_token_continuation_requires_an_allocated_boundary_slot() -> anyhow::Result<()> {
+        let rows = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![39]],
+            block_tables: vec![vec![9]],
+            context_lens: vec![4],
+            full_block_tables: vec![vec![9]],
+            full_context_lens: vec![4],
+            query_len: 1,
+            block_size: 4,
+            use_standard_metadata: false,
+            max_paged_context_len: 64,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 1,
+        });
+        let step = CudaGraphDecodeStep {
+            input_ids: Tensor::zeros((1, 1), DType::U32, &Device::Cpu)?,
+            seqlen_offsets: vec![3],
+            context_lens: vec![(0, 1)],
+            position_ids: vec![4],
+            metadata: rows.build_graph_staged()?,
+            state_indices: None,
+            real_batch: 1,
+        };
+        assert!(step
+            .one_token_continuation(step.input_ids.clone())?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn resident_replay_skips_the_host_input_update() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![0]],
+            block_tables: vec![vec![0]],
+            context_lens: vec![1],
+            full_block_tables: vec![vec![0]],
+            full_context_lens: vec![1],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 32,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![device.clone()],
+            num_kv_heads: 1,
+        })
+        .build_materialized()?;
+        let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
+        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32)?;
+        let warmup_logits = initial_ids.to_dtype(DType::F32)?;
+        let entry = capture_cuda_decode_graph(
+            CudaDecodeGraphCaptureCtx {
+                key: key.clone(),
+                input_ids: &initial_ids,
+                seqlen_offsets: &[0],
+                block_size: 32,
+                kv_cache: &[],
+                metadata: &metadata,
+                model_metadata: None,
+                activation_dtype: DType::F32,
+                warmup_logits: &warmup_logits,
+                state_indices: None,
+                real_batch: 1,
+            },
+            |input_ids, _| input_ids.to_dtype(DType::F32),
+        )?;
+        let mut state = CudaDecodeGraphState::default();
+        state.insert(entry);
+
+        let step = |token: u32| -> candle_core::Result<CudaGraphDecodeStep> {
+            Ok(CudaGraphDecodeStep {
+                input_ids: Tensor::from_vec(vec![token], (1, 1), &device)?,
+                seqlen_offsets: vec![0],
+                context_lens: vec![(0, 1)],
+                position_ids: vec![0],
+                metadata: metadata.clone(),
+                state_indices: None,
+                real_batch: 1,
+            })
+        };
+        let host_step = step(7)?;
+        let host_replay = state
+            .replay(&key, &host_step, CudaDecodeGraphReplayInput::Host)?
+            .expect("captured graph missing");
+        let launch = host_replay.launch.expect("qlen=1 launch missing");
+        launch.graph_stream().synchronize()?;
+        assert_eq!(host_replay.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+
+        let resident_step = step(13)?;
+        let resident_replay = state
+            .replay(
+                &key,
+                &resident_step,
+                CudaDecodeGraphReplayInput::Resident(&launch),
+            )?
+            .expect("resident graph entry changed");
+        resident_replay
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(resident_replay.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        let resident_launch = resident_replay.launch.unwrap();
+        assert_eq!(resident_launch.generation(), launch.generation());
+        assert!(resident_launch.one_token_continuation()?.is_some());
+        assert!(state.replay_one_token(launch)?.is_none());
+        let lookahead = state
+            .replay_one_token(resident_launch)?
+            .expect("one-token continuation should retain the graph key");
+        lookahead
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(lookahead.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        Ok(())
     }
 }

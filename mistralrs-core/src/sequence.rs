@@ -1591,10 +1591,10 @@ impl Sequence {
         }
         self.step_start_instant = None;
         self.step_timing_kind = None;
-        if prompt_ms > 0 {
+        if total > 0 {
             #[allow(clippy::cast_precision_loss)]
             {
-                self.prompt_tok_per_sec = self.prompt_len as f32 / (prompt_ms as f32 / 1000.0);
+                self.prompt_tok_per_sec = self.prompt_len as f32 / (total as f32 / 1000.0);
             }
         }
         self.update_time_info();
@@ -2294,6 +2294,17 @@ mod tests {
             false,
             vec![],
         )
+    }
+
+    #[test]
+    fn prompt_rate_uses_accumulated_chunk_time() {
+        let mut seq = make_test_sequence();
+        seq.cache.push(None);
+        seq.finish_prompt_timing(Duration::from_secs(1));
+        seq.finish_prompt_timing(Duration::from_secs(1));
+
+        assert_eq!(seq.total_prompt_time, Some(2_000));
+        assert_eq!(seq.prompt_tok_per_sec, 4.0);
     }
 
     fn add_test_media(seq: &mut Sequence) {

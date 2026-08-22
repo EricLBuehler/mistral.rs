@@ -163,6 +163,8 @@ pub mod text_models_inputs_processor {
         pub prefill_head_dim: usize,
         pub kv_cache_manager: Arc<tokio::sync::Mutex<KVCacheManager>>,
         pub prompt_chunk_size: Option<usize>,
+        pub(crate) scheduled_prompt_chunks:
+            Option<Vec<crate::pipeline::prompt_chunks::PromptChunkPlan>>,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
@@ -1648,7 +1650,7 @@ pub mod text_models_inputs_processor {
             }
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", test))]
         pub(crate) fn graph(
             block_tables: bool,
             context_lens: bool,
@@ -1852,7 +1854,7 @@ pub mod text_models_inputs_processor {
             self.build_inner(false, PagedDecodeMetadataRequirements::conservative(self))
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(any(feature = "cuda", test))]
         pub(crate) fn build_graph_update(
             self: &Arc<Self>,
             requirements: PagedDecodeMetadataRequirements,

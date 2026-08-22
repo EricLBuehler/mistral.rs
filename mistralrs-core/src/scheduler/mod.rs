@@ -139,4 +139,11 @@ pub trait Scheduler: Send + Sync {
     fn set_requires_uniform_media_batch(&mut self, _required: bool) {}
 
     fn set_supports_packed_prefill(&mut self, _supported: bool) {}
+
+    fn set_scheduler_visible_prompt_chunks(
+        &mut self,
+        _enabled: bool,
+        _require_block_alignment: bool,
+    ) {
+    }
 }

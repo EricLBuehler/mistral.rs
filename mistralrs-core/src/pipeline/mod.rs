@@ -3,6 +3,9 @@ mod auto;
 pub mod chat_template;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_graph;
+#[cfg(feature = "cuda")]
+#[doc(hidden)]
+pub use cuda_graph::CudaDecodeGraphLaunch;
 mod diffusion;
 mod embedding;
 mod ggml;
@@ -19,7 +22,7 @@ mod multimodal;
 mod normal;
 mod paths;
 mod processing;
-mod prompt_chunks;
+pub(crate) mod prompt_chunks;
 mod response;
 pub(crate) mod sampling;
 mod speech;
@@ -157,7 +160,7 @@ use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 use crate::paged_attention::block_hash::{
     adapter_generation_key, compute_block_hashes, MultimodalAttentionPolicy,
 };
-use crate::sequence::Sequence;
+use crate::sequence::{SeqStepType, Sequence, SequenceState};
 
 use prompt_chunks::{build_prompt_chunk_plan, next_prompt_chunk_group};
 
@@ -1269,6 +1272,34 @@ impl ForwardInputsResult {
     }
 }
 
+#[doc(hidden)]
+pub struct ForwardStepResult {
+    pub output: ForwardInputsResult,
+    #[cfg(feature = "cuda")]
+    pub(crate) cuda_decode: Option<cuda_graph::CudaDecodeGraphLaunch>,
+}
+
+impl ForwardStepResult {
+    pub fn eager(output: ForwardInputsResult) -> Self {
+        Self {
+            output,
+            #[cfg(feature = "cuda")]
+            cuda_decode: None,
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_decode(
+        output: ForwardInputsResult,
+        launch: Option<cuda_graph::CudaDecodeGraphLaunch>,
+    ) -> Self {
+        Self {
+            output,
+            cuda_decode: launch,
+        }
+    }
+}
+
 /// One sequence's slice of a prompt chunk the target just processed, for proposers that keep their
 /// own KV cache; `tokens` is the full prompt so the shifted next token is available past `range`.
 pub struct SpeculativePromptRow {
@@ -1281,6 +1312,26 @@ pub struct SpeculativePromptChunk {
     /// In forward-batch order (row `i` of the batch is `rows[i].seq_idx`)
     pub rows: Vec<SpeculativePromptRow>,
     pub is_final_prompt_chunk: bool,
+}
+
+fn should_sample_step(
+    is_prompt: bool,
+    scheduler_visible_prompt_step: bool,
+    is_final_prompt_chunk: bool,
+) -> bool {
+    !is_prompt || !scheduler_visible_prompt_step || is_final_prompt_chunk
+}
+
+fn prompt_chunk_is_final(
+    scheduler_visible_prompt_step: bool,
+    scheduler_visible_prompt_is_final: bool,
+    planned_final_prompt_chunk: bool,
+) -> bool {
+    if scheduler_visible_prompt_step {
+        scheduler_visible_prompt_is_final
+    } else {
+        planned_final_prompt_chunk
+    }
 }
 
 #[async_trait::async_trait]
@@ -1322,6 +1373,25 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
+
+    #[doc(hidden)]
+    fn forward_step(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> Result<ForwardStepResult, candle_core::Error> {
+        self.forward_inputs(inputs, return_raw_logits)
+            .map(ForwardStepResult::eager)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[doc(hidden)]
+    fn replay_cuda_decode_one_token(
+        &mut self,
+        _launch: CudaDecodeGraphLaunch,
+    ) -> Result<Option<ForwardStepResult>, candle_core::Error> {
+        Ok(None)
+    }
 
     fn attach_speculative(
         &mut self,
@@ -1559,7 +1629,7 @@ pub trait Pipeline:
                             .into_iter()
                             .map(|r| {
                                 #[allow(irrefutable_let_patterns)]
-                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                let ForwardInputsResult::CausalGeneration { logits, .. } = r
                                 else {
                                     unreachable!(
                                         "All results must have same type, `CausalGeneration`"
@@ -1696,7 +1766,12 @@ pub trait Pipeline:
             CacheBackendMetadata::PagedAttention { mut metadata } => {
                 let block_size = metadata.block_size;
                 let speculative_metadata = metadata.clone();
-                let chunk_size = if is_prompt
+                let scheduled_prompt_chunks = metadata.scheduled_prompt_chunks.take();
+                let scheduler_visible_prompt_step = scheduled_prompt_chunks.is_some();
+                let scheduler_visible_prompt_is_final =
+                    scheduler_visible_prompt_step && metadata.is_final_prompt_chunk;
+                let chunk_size = if !scheduler_visible_prompt_step
+                    && is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
                     && self.device().is_cuda()
@@ -1734,30 +1809,35 @@ pub trait Pipeline:
                             .iter()
                             .all(|seq| seq.prefix_cache_len() == 0 && seq.len() <= chunk_size)
                 });
-                let chunk_plans = (!has_deferred_multimodal_prompt
-                    && !has_suffix_only_prefill
-                    && !keep_complete_packed_candidates)
-                    .then(|| {
-                        let block_align = self.cache().is_hybrid().then_some(block_size);
-                        chunk_size.map(|chunk_size| {
-                            input_seqs
-                                .iter()
-                                .map(|seq| {
-                                    build_prompt_chunk_plan(
-                                        seq.get_toks().len(),
-                                        seq.prefix_cache_len(),
-                                        chunk_size,
-                                        block_align,
-                                        seq.mm_features(),
-                                    )
+                let chunk_plans = scheduled_prompt_chunks
+                    .map(|chunks| chunks.into_iter().map(|chunk| vec![chunk]).collect())
+                    .or_else(|| {
+                        (!has_deferred_multimodal_prompt
+                            && !has_suffix_only_prefill
+                            && !keep_complete_packed_candidates)
+                            .then(|| {
+                                let block_align = self.cache().is_hybrid().then_some(block_size);
+                                chunk_size.map(|chunk_size| {
+                                    input_seqs
+                                        .iter()
+                                        .map(|seq| {
+                                            build_prompt_chunk_plan(
+                                                seq.get_toks().len(),
+                                                seq.prefix_cache_len(),
+                                                chunk_size,
+                                                block_align,
+                                                seq.mm_features(),
+                                            )
+                                        })
+                                        .collect::<Vec<_>>()
                                 })
-                                .collect::<Vec<_>>()
-                        })
-                    })
-                    .flatten();
-                let should_chunk = chunk_plans
-                    .as_ref()
-                    .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
+                            })
+                            .flatten()
+                    });
+                let should_chunk = scheduler_visible_prompt_step
+                    || chunk_plans
+                        .as_ref()
+                        .is_some_and(|plans| plans.iter().any(|plan| plan.len() > 1));
                 let (
                     mut logits,
                     batched_causal_logits,
@@ -1779,13 +1859,18 @@ pub trait Pipeline:
                             .zip(chunk_plans.iter())
                             .any(|(plan_idx, plan)| *plan_idx < plan.len())
                         {
-                            let (active_indices, attention_policy, is_final_prompt_chunk) =
+                            let (active_indices, attention_policy, planned_final_prompt_chunk) =
                                 next_prompt_chunk_group(
                                     &plan_indices,
                                     &chunk_plans,
                                     hybrid_recurrent,
                                 )
                                 .expect("at least one chunk plan is active");
+                            let is_final_prompt_chunk = prompt_chunk_is_final(
+                                scheduler_visible_prompt_step,
+                                scheduler_visible_prompt_is_final,
+                                planned_final_prompt_chunk,
+                            );
 
                             let mut recurrent_boundaries = Vec::new();
                             let mut prompt_chunk = SpeculativePromptChunk {
@@ -1839,7 +1924,23 @@ pub trait Pipeline:
                                     *seq_idx = active_indices[*seq_idx];
                                 }
                             }
-                            inputs.push((processed, recurrent_boundaries, Some(prompt_chunk)));
+                            let computed_updates = scheduler_visible_prompt_step
+                                .then(|| {
+                                    active_indices
+                                        .iter()
+                                        .map(|&seq_idx| {
+                                            let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
+                                            (seq_idx, chunk.end)
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+                            inputs.push((
+                                processed,
+                                recurrent_boundaries,
+                                Some(prompt_chunk),
+                                computed_updates,
+                            ));
                             for &seq_idx in &active_indices {
                                 plan_indices[seq_idx] += 1;
                             }
@@ -1882,6 +1983,7 @@ pub trait Pipeline:
                             ),
                             Vec::new(),
                             prompt_chunk,
+                            Vec::new(),
                         )]
                     };
 
@@ -1892,7 +1994,7 @@ pub trait Pipeline:
                     let mut embedding_logits = vec![None; input_seqs.len()];
 
                     let mut exec_duration = Duration::ZERO;
-                    for (i, (inputs, recurrent_boundaries, prompt_chunk)) in
+                    for (i, (inputs, recurrent_boundaries, prompt_chunk, computed_updates)) in
                         inputs_iter.into_iter().enumerate()
                     {
                         let InputProcessorOutput {
@@ -1955,6 +2057,10 @@ pub trait Pipeline:
                                 &speculative_metadata,
                             )?;
                         }
+                        for (seq_idx, end) in computed_updates {
+                            input_seqs[seq_idx].set_prefix_cache_len(end);
+                            input_seqs[seq_idx].set_num_computed_tokens(end);
+                        }
                         let end = Instant::now();
                         exec_duration += end.duration_since(start);
 
@@ -1974,7 +2080,7 @@ pub trait Pipeline:
                             && seq_indices.iter().copied().eq(0..input_seqs.len());
                         let raw_logits = if keep_batched_causal_logits {
                             match raw_logits {
-                                ForwardInputsResult::CausalGeneration { logits } => {
+                                ForwardInputsResult::CausalGeneration { logits, .. } => {
                                     batched_causal_logits = Some(logits);
                                     continue;
                                 }
@@ -2043,6 +2149,13 @@ pub trait Pipeline:
 
                     return Ok(exec_duration);
                 }
+                if !should_sample_step(
+                    is_prompt,
+                    scheduler_visible_prompt_step,
+                    scheduler_visible_prompt_is_final,
+                ) {
+                    return Ok(exec_duration);
+                }
 
                 let start = Instant::now();
                 if let Some(batched_causal_logits) = batched_causal_logits {
@@ -2056,6 +2169,18 @@ pub trait Pipeline:
                         )
                         .await?
                     {
+                        if scheduler_visible_prompt_step {
+                            for seq in input_seqs.iter_mut() {
+                                if !seq.is_finished_paged_attn()
+                                    && matches!(
+                                        seq.sequence_stepping_type(),
+                                        SeqStepType::PromptAndDecode
+                                    )
+                                {
+                                    seq.set_state(SequenceState::RunningCompletion);
+                                }
+                            }
+                        }
                         exec_duration += start.elapsed();
                         return Ok(exec_duration);
                     }
@@ -2077,7 +2202,7 @@ pub trait Pipeline:
                             .into_iter()
                             .map(|r| {
                                 #[allow(irrefutable_let_patterns)]
-                                let ForwardInputsResult::CausalGeneration { logits } = r
+                                let ForwardInputsResult::CausalGeneration { logits, .. } = r
                                 else {
                                     unreachable!("All results must have same type")
                                 };
@@ -2204,6 +2329,15 @@ pub trait Pipeline:
                         .await?;
                     }
                 }
+                if scheduler_visible_prompt_step {
+                    for seq in input_seqs.iter_mut() {
+                        if !seq.is_finished_paged_attn()
+                            && matches!(seq.sequence_stepping_type(), SeqStepType::PromptAndDecode)
+                        {
+                            seq.set_state(SequenceState::RunningCompletion);
+                        }
+                    }
+                }
                 let end = Instant::now();
                 exec_duration += end.duration_since(start);
 
@@ -2250,7 +2384,10 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_lora_execution, ForwardCache, LogitsSelection, ModelForwardContext};
+    use super::{
+        prompt_chunk_is_final, resolve_lora_execution, should_sample_step, ForwardCache,
+        LogitsSelection, ModelForwardContext,
+    };
     use crate::{
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         MessageContent,
@@ -2258,6 +2395,21 @@ mod tests {
     use candle_core::{Device, Tensor};
     use either::Either;
     use indexmap::IndexMap;
+
+    #[test]
+    fn scheduler_visible_prefill_samples_only_the_final_chunk() {
+        assert!(!should_sample_step(true, true, false));
+        assert!(should_sample_step(true, true, true));
+        assert!(should_sample_step(true, false, false));
+        assert!(should_sample_step(false, true, false));
+    }
+
+    #[test]
+    fn scheduler_visible_prefill_preserves_nonfinal_proposer_state() {
+        assert!(!prompt_chunk_is_final(true, false, true));
+        assert!(prompt_chunk_is_final(true, true, false));
+        assert!(prompt_chunk_is_final(false, false, true));
+    }
     use serde_json::Value;
 
     #[test]

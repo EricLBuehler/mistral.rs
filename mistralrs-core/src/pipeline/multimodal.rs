@@ -5,11 +5,11 @@ use super::isq::{
 use super::{
     get_model_paths, reserve_recurrent_serving_capacity, AdapterKind, AnyMoePipelineMixin,
     AutoMultimodalLoader, CacheManager, CacheManagerMixin, DecodeGraphPrecaptureCtx, EitherCache,
-    ForwardInputsResult, Gemma3Loader, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, MultimodalModel, MultimodalModelLoader,
-    MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor, Qwen2VLLoader,
-    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource, VLlama4Loader,
-    VLlamaLoader,
+    ForwardInputsResult, ForwardStepResult, Gemma3Loader, GeneralMetadata, IsqPipelineMixin,
+    Loader, MetadataMixin, MiniCpmOLoader, ModelCategory, ModelKind, ModelPaths, MultimodalModel,
+    MultimodalModelLoader, MultimodalPromptPrefixer, Phi4MMLoader, PreProcessingMixin, Processor,
+    Qwen2VLLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, TokenSource,
+    VLlama4Loader, VLlamaLoader,
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
@@ -53,7 +53,8 @@ use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
     cuda_graph_batch_bucket, cuda_graph_precapture_batches, hybrid_graph_slots,
     install_hybrid_graph_state_indices, prepare_cuda_graph_memory_pool, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
+    CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
     CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
@@ -1661,7 +1662,7 @@ impl MultimodalPipeline {
     fn try_cuda_decode_graph_forward(
         &self,
         input: CudaDecodeGraphForwardInput<'_>,
-    ) -> candle_core::Result<Option<Tensor>> {
+    ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         let CudaDecodeGraphForwardInput {
             input_ids,
             seqlen_offsets,
@@ -1745,11 +1746,11 @@ impl MultimodalPipeline {
         };
         let key =
             CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
-        if let Some(replay) = state.replay(&key, &step)? {
+        if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
             if let Some(spec_state) = replay.spec_state.as_deref() {
                 self.model.install_speculative_graph_state(spec_state)?;
             }
-            return Ok(Some(replay.logits));
+            return Ok(Some(replay));
         }
 
         let logits = self.capture_cuda_decode_graph_step(
@@ -1764,7 +1765,11 @@ impl MultimodalPipeline {
                 speculative,
             },
         )?;
-        Ok(Some(step.narrow_rows(&logits)?))
+        Ok(Some(CudaDecodeGraphReplay {
+            logits: step.narrow_rows(&logits)?,
+            spec_state: None,
+            launch: None,
+        }))
     }
 
     fn precapture_cuda_decode_graphs_impl(
@@ -2095,6 +2100,14 @@ impl Pipeline for MultimodalPipeline {
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> candle_core::Result<ForwardInputsResult> {
+        Ok(self.forward_step(inputs, return_raw_logits)?.output)
+    }
+
+    fn forward_step(
+        &mut self,
+        inputs: Box<dyn Any>,
+        return_raw_logits: bool,
+    ) -> candle_core::Result<ForwardStepResult> {
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -2153,7 +2166,14 @@ impl Pipeline for MultimodalPipeline {
                 model_specific_args: &*model_specific_args,
                 recurrent_batch_kind,
             }) {
-                Ok(Some(logits)) => return Ok(ForwardInputsResult::CausalGeneration { logits }),
+                Ok(Some(replay)) => {
+                    return Ok(ForwardStepResult::cuda_decode(
+                        ForwardInputsResult::CausalGeneration {
+                            logits: replay.logits,
+                        },
+                        replay.launch,
+                    ))
+                }
                 Ok(None) => {}
                 Err(err) => self.disable_cuda_decode_graph(&err),
             }
@@ -2182,15 +2202,56 @@ impl Pipeline for MultimodalPipeline {
                 .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)
         })?;
         if self.model.is_block_diffusion() && !return_raw_logits {
-            return Ok(ForwardInputsResult::BlockGeneration {
-                token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
-                denoise_time: self.model.take_block_denoise_time().unwrap_or_default(),
-            });
+            return Ok(ForwardStepResult::eager(
+                ForwardInputsResult::BlockGeneration {
+                    token_blocks: logits.to_dtype(candle_core::DType::U32)?.to_vec2::<u32>()?,
+                    denoise_time: self.model.take_block_denoise_time().unwrap_or_default(),
+                },
+            ));
         }
-        if return_raw_logits {
-            Ok(ForwardInputsResult::RawLogits { logits })
+        let output = if return_raw_logits {
+            ForwardInputsResult::RawLogits { logits }
         } else {
-            Ok(ForwardInputsResult::CausalGeneration { logits })
+            ForwardInputsResult::CausalGeneration { logits }
+        };
+        Ok(ForwardStepResult::eager(output))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn replay_cuda_decode_one_token(
+        &mut self,
+        launch: CudaDecodeGraphLaunch,
+    ) -> candle_core::Result<Option<ForwardStepResult>> {
+        let replay = {
+            let mut state = self
+                .cuda_decode_graph
+                .lock()
+                .expect("CUDA graph mutex poisoned");
+            if state.disabled() {
+                return Ok(None);
+            }
+            state.replay_one_token(launch)
+        };
+        match replay {
+            Ok(Some(replay)) => {
+                if let Some(spec_state) = replay.spec_state.as_deref() {
+                    if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
+                        self.disable_cuda_decode_graph(&err);
+                        return Err(err);
+                    }
+                }
+                Ok(Some(ForwardStepResult::cuda_decode(
+                    ForwardInputsResult::CausalGeneration {
+                        logits: replay.logits,
+                    },
+                    replay.launch,
+                )))
+            }
+            Ok(None) => Ok(None),
+            Err(err) => {
+                self.disable_cuda_decode_graph(&err);
+                Err(err)
+            }
         }
     }
 

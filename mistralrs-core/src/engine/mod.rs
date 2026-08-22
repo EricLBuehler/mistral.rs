@@ -321,13 +321,18 @@ impl Engine {
             requires_uniform_completion_batch,
             requires_uniform_media_batch,
             supports_packed_prefill,
+            scheduler_visible_prompt_chunks,
+            prompt_chunks_require_block_alignment,
         ) = {
             let pipeline = get_mut_arcmutex!(pipeline);
+            let pipeline_metadata = pipeline.get_metadata();
             (
                 pipeline.requires_uniform_prompt_batch(),
                 pipeline.requires_uniform_completion_batch(),
                 pipeline.requires_uniform_media_batch(),
                 pipeline.supports_packed_prefill(),
+                pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
+                pipeline.cache().is_hybrid(),
             )
         };
         let recurrent_capacity = match &config {
@@ -354,6 +359,10 @@ impl Engine {
             .set_requires_uniform_completion_batch(requires_uniform_completion_batch);
         get_mut_arcmutex!(scheduler).set_requires_uniform_media_batch(requires_uniform_media_batch);
         get_mut_arcmutex!(scheduler).set_supports_packed_prefill(supports_packed_prefill);
+        get_mut_arcmutex!(scheduler).set_scheduler_visible_prompt_chunks(
+            scheduler_visible_prompt_chunks,
+            prompt_chunks_require_block_alignment,
+        );
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
         // This ensures PagedAttention prefix caching respects the same setting
@@ -890,13 +899,25 @@ impl Engine {
 
                         let staged_width =
                             crate::speculative::staging::staged_batch_width(&guards_mut);
+                        let scheduler_visible_prompt_step =
+                            output.scheduled_prompt_chunks.is_some();
                         let num_computed_before_step = guards_mut
                             .iter()
                             .map(|seq| seq.num_computed_tokens())
                             .collect::<Vec<_>>();
                         let scheduled_token_counts = guards_mut
                             .iter()
-                            .map(|seq| {
+                            .enumerate()
+                            .map(|(seq_idx, seq)| {
+                                if is_prompt {
+                                    if let Some(chunk) = output
+                                        .scheduled_prompt_chunks
+                                        .as_ref()
+                                        .and_then(|chunks| chunks.get(seq_idx))
+                                    {
+                                        return chunk.end - chunk.start;
+                                    }
+                                }
                                 let staged = staged_width
                                     .map(|_| seq.active_staged_speculative_len())
                                     .unwrap_or_default();
@@ -916,6 +937,21 @@ impl Engine {
                                     let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
                                     kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
                                 };
+                                let scheduled_prompt_chunks = output.scheduled_prompt_chunks.take();
+                                let prompt_chunk_attention_policy = scheduled_prompt_chunks
+                                    .as_ref()
+                                    .and_then(|chunks| chunks.first())
+                                    .map(|chunk| chunk.attention_policy)
+                                    .unwrap_or(
+                                        crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                                    );
+                                let is_final_prompt_chunk =
+                                    scheduled_prompt_chunks.as_ref().is_none_or(|chunks| {
+                                        chunks
+                                            .iter()
+                                            .zip(guards_mut.iter())
+                                            .all(|(chunk, seq)| chunk.end == seq.get_toks().len())
+                                    });
                                 let metadata = PagedAttentionMeta {
                                     block_size,
                                     max_paged_context_len,
@@ -946,12 +982,13 @@ impl Engine {
                                         .max(1),
                                     kv_cache_manager: kv_cache_manager.clone(),
                                     prompt_chunk_size: output.prompt_chunk_size,
-                                    prompt_chunk_attention_policy: crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                                    scheduled_prompt_chunks,
+                                    prompt_chunk_attention_policy,
                                     has_noncausal_mm_context: false,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     full_mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     enable_packed_prefill: pipeline.supports_packed_prefill(),
-                                    is_final_prompt_chunk: true,
+                                    is_final_prompt_chunk,
                                 };
 
                                 let return_raw_logits = guards_mut[0].return_raw_logits;
@@ -994,6 +1031,18 @@ impl Engine {
                                 seq.advance_num_computed_tokens(scheduled);
                             }
                         }
+                        if is_prompt && !scheduler_visible_prompt_step {
+                            for seq in guards_mut.iter_mut() {
+                                if !seq.is_finished_paged_attn()
+                                    && matches!(
+                                        seq.sequence_stepping_type(),
+                                        SeqStepType::PromptAndDecode
+                                    )
+                                {
+                                    seq.set_state(SequenceState::RunningCompletion);
+                                }
+                            }
+                        }
                         for seq in guards_mut.iter_mut() {
                             if is_prompt {
                                 seq.finish_prompt_timing(step_exec_time);
@@ -1015,6 +1064,7 @@ impl Engine {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
                             if is_prompt
+                                && !scheduler_visible_prompt_step
                                 && pipeline.cache().is_hybrid()
                                 && prefix_cacher.accepts_paged_recurrent_prefix()
                             {
