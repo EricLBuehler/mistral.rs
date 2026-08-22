@@ -3,18 +3,18 @@ title: Quantization types
 description: Supported runtime ISQ formats, numeric shorthands, and backend constraints.
 ---
 
-ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+ISQ (in-situ quantization) types supported by mistral.rs. For format selection guidance and underlying tradeoffs, see the [quantization guide](/guides/quantization/quantize-a-model/).
 
 For `run`, `serve`, and `bench`:
 
 - `--quant N` selects a matching pre-quantized artifact. For safetensors sources, a missing UQFF
   falls back to runtime ISQ.
 - `--isq N` forces runtime ISQ and skips the
-  [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) lookup.
+  [UQFF (Universal Quantized File Format)](/reference/uqff-format/) lookup.
 
 For a GGUF repository, `--quant` selects a matching published file. To requantize GGUF weights
 instead, select an exact file with `-f` and pass `--isq`. See
-[GGUF support](/mistral.rs/reference/gguf-support/) for the accepted file formats. GGUF selection
+[GGUF support](/reference/gguf-support/) for the accepted file formats. GGUF selection
 requires an explicit bit width or format name; `--quant auto` is not supported.
 
 ## Numeric shorthands
@@ -54,7 +54,7 @@ this policy. A similarly named tensor in a vision, audio, or auxiliary subtree i
 because its name ends in `embed_tokens`, `word_embeddings`, or `lm_head`.
 
 A tied output head reuses the effective embedding instead of storing a second copy. An explicit
-per-tensor ISQ type in a [topology](/mistral.rs/guides/perf/topology/) takes precedence over these
+per-tensor ISQ type in a [topology](/guides/perf/topology/) takes precedence over these
 defaults.
 
 ## Format-specific types
@@ -133,4 +133,4 @@ mistralrs run --format plain -m <gptq-or-awq-repo>
 
 mistral.rs detects the quantization from the model's config. No `--quant` or `--isq` required.
 
-See the [quantization guide](/mistral.rs/guides/quantization/quantize-a-model/) for format selection.
+See the [quantization guide](/guides/quantization/quantize-a-model/) for format selection.

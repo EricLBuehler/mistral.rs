@@ -29,7 +29,7 @@ Agent permission fields:
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
-See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
+See [agent permissions](/guides/agents/permissions-and-approvals/)
 for the shared CLI, HTTP, Python, and Rust behavior.
 
 `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`

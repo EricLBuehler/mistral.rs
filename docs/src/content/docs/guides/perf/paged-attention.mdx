@@ -33,7 +33,7 @@ runner = Runner(
 )
 ```
 
-`paged_attn=True` forces it on, `no_paged_attn=True` forces it off; the `pa_*` arguments mirror the CLI flags. [Full example](/mistral.rs/examples/python/paged-attention/).
+`paged_attn=True` forces it on, `no_paged_attn=True` forces it off; the `pa_*` arguments mirror the CLI flags. [Full example](/examples/python/paged-attention/).
 
 </TabItem>
 <TabItem label="Rust">
@@ -53,7 +53,7 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/mistral.rs/examples/rust/advanced/paged-attn/).
+`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/examples/rust/advanced/paged-attn/).
 
 </TabItem>
 </Tabs>
@@ -80,7 +80,7 @@ Two more flags tune the cache itself:
 - `--pa-block-size <n>`: block size (default 32).
 - `--pa-cache-type`: KV cache quantization (`auto` or `f8e4m3`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
 
-See the [serve flag reference](/mistral.rs/reference/cli/serve/) for all `--pa-*` flags.
+See the [serve flag reference](/reference/cli/serve/) for all `--pa-*` flags.
 
 ## How it works
 
@@ -88,7 +88,7 @@ The default block size is 32 tokens. Supported block sizes are 8, 16, and 32; ot
 
 Each sequence holds a list of block pointers. On each decoding step, the scheduler checks whether the sequence has a free slot in its tail block; if not, it allocates a new block from the pool. When a sequence finishes, its blocks return to the pool.
 
-Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/mistral.rs/guides/perf/throughput-tuning/) when paged attention is on.
+Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/guides/perf/throughput-tuning/) when paged attention is on.
 
 MLA (Multi-head Latent Attention)'s latent cache is supported through a dedicated kernel path. Some models opt out of the FlashInfer paged cache layout (FlashInfer is NVIDIA's attention-kernel library; see [Flash attention vs FlashInfer](#flash-attention-vs-flashinfer) below) when their cache shape needs a different backend.
 
@@ -112,7 +112,7 @@ MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 
 Paged attention and flash attention compose; both can be on simultaneously. They are not the same backend:
 
-- `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/mistral.rs/reference/cargo-features/).
+- `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/reference/cargo-features/).
 - FlashInfer paged decode and prefill kernels are built with the `cuda` feature as part of paged attention. They do not require the `flash-attn` Cargo feature.
 
 Set `MISTRALRS_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.

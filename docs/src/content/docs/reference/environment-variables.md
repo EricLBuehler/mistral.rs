@@ -17,7 +17,7 @@ User-facing environment variables read by `mistralrs` or its build scripts. Stan
 
 If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
 
-For the offline workflow (pre-downloading models, local paths), see [run models](/mistral.rs/guides/models/run-any-model/).
+For the offline workflow (pre-downloading models, local paths), see [run models](/guides/models/run-any-model/).
 
 ## Logging
 
@@ -31,7 +31,7 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | Variable | Purpose |
 |---|---|
 | `MISTRALRS_NO_MMAP` | `MISTRALRS_NO_MMAP=1` loads safetensors without mmap. |
-| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) single-threaded. |
+| `MISTRALRS_ISQ_SINGLETHREAD` | If set, runs [ISQ (in-situ quantization)](/reference/quantization-types/) single-threaded. |
 
 ## CPU runtime
 
@@ -43,21 +43,21 @@ For the offline workflow (pre-downloading models, local paths), see [run models]
 | `CANDLE_CPU_AFFINITY` | Linux only. Set to `1` to try Candle's automatic high-capacity CPU affinity mask on heterogeneous CPUs. Default is off. |
 | `CANDLE_BARRIER_POOL_SPIN_LIMIT` | Advanced CPU tuning. Overrides the spin count used by Candle's persistent barrier pool before worker threads park. |
 
-See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-threads-and-affinity) for examples.
+See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-affinity) for examples.
 
 ## Sandbox
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/mistral.rs/reference/sandbox/). |
+| `MISTRALRS_SANDBOX` | `auto`, `on`, or `off`. Overrides the sandbox only when the resolved mode is `auto`; `on` and `off` in CLI/TOML win. See [sandbox reference](/reference/sandbox/). |
 
 ## Server and UI
 
 | Variable | Purpose |
 |---|---|
-| `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
+| `MCP_CONFIG_PATH` | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration path used when `--mcp-config` is not passed. |
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
-| `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/mistral.rs/guides/customize/lora-adapters/#enable-http-mutation). |
+| `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to enable runtime LoRA load and unload endpoints. Disabled by default; the read-only route remains registered, but the target model must have a dynamic LoRA runtime. See [LoRA adapters](/guides/customize/lora-adapters/#enable-http-mutation). |
 | `MISTRALRS_LORA_ADAPTER_ROOT` | Canonical directory root allowed for runtime LoRA adapter paths. Use this whenever runtime LoRA updating is enabled in production. |
 | `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
@@ -66,7 +66,7 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 
 | Variable | Purpose |
 |---|---|
-| `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/mistral.rs/guides/perf/paged-attention/#cuda-graphs). |
+| `MISTRALRS_CUDA_GRAPHS` | CUDA graph acceleration is enabled by default when supported. Set to `0`, `false`, `no`, or `off` to disable. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs). |
 | `MISTRALRS_DFLASH_ADAPTIVE` | Adaptive DFlash draft depth is on by default (off when `--mtp-n-predict` is set). Set to `0` to always draft at full depth, or `1` to adapt below an explicit `--mtp-n-predict`. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
@@ -87,7 +87,7 @@ See [CPU threads and affinity](/mistral.rs/guides/perf/throughput-tuning/#cpu-th
 | `MISTRALRS_MN_WORKER_ID` | Set on worker nodes: worker index (0-based). |
 | `RING_CONFIG` | Path to the ring backend JSON config. Setting it selects the ring backend when built with the `ring` feature. If the binary also has `nccl`, set `MISTRALRS_NO_NCCL=1` as well. |
 
-See the [distributed inference guide](/mistral.rs/guides/perf/distributed-inference/) for use.
+See the [distributed inference guide](/guides/perf/distributed-inference/) for use.
 
 ## GPU memory
 

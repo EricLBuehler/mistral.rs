@@ -78,7 +78,7 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
 
 The built-in backend uses DuckDuckGo (`https://html.duckduckgo.com/html/?q=...`). Up to 10 results are returned per query. Results pass through a readability-style extractor.
 
-The built-in search and extraction tools use [strict tool calling](/mistral.rs/guides/agents/tool-calling-basics/#strict-tool-calling) by default, so generated queries and URLs are constrained to the declared JSON Schema.
+The built-in search and extraction tools use [strict tool calling](/guides/agents/tool-calling-basics/#strict-tool-calling) by default, so generated queries and URLs are constrained to the declared JSON Schema.
 
 ## Reranking
 
@@ -92,7 +92,7 @@ mistralrs serve --enable-search \
   -m <model>
 ```
 
-`--search-embedding-model` accepts `embedding-gemma`. It requires `--enable-search` (or `--agent`/`--agentic`, the [one-flag agent preset](/mistral.rs/guides/agents/build-an-agent/) that turns search on).
+`--search-embedding-model` accepts `embedding-gemma`. It requires `--enable-search` (or `--agent`/`--agentic`, the [one-flag agent preset](/guides/agents/build-an-agent/) that turns search on).
 
 ## Per-request options
 

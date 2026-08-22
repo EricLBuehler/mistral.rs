@@ -1428,7 +1428,7 @@ impl MistralRs {
                         warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
                         warn!("  Pass a sandbox_policy (or --sandbox on at the CLI) to enable isolation.");
                     }
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("  See: https://docs.mistralrs.dev/reference/sandbox/");
                     warn!("============================================================");
                     info!("Code execution initialized with {count} tools");
                 }
@@ -1480,7 +1480,7 @@ impl MistralRs {
                     } else {
                         warn!("  Sandbox: OFF. Network and filesystem are NOT restricted.");
                     }
-                    warn!("  See: https://ericlbuehler.github.io/mistral.rs/reference/sandbox/");
+                    warn!("  See: https://docs.mistralrs.dev/reference/sandbox/");
                     warn!("============================================================");
                     info!("Shell execution initialized with {count} tool");
                 }

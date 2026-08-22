@@ -5,7 +5,7 @@ description: Per-family behavior that differs from the defaults - thinking tags,
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Most models need nothing beyond `mistralrs run -m <id>` (see [Run models](/mistral.rs/guides/models/run-any-model/)). This page collects the per-family exceptions. The full architecture inventory is in the [supported models reference](/mistral.rs/reference/supported-models/).
+Most models need nothing beyond `mistralrs run -m <id>` (see [Run models](/guides/models/run-any-model/)). This page collects the per-family exceptions. The full architecture inventory is in the [supported models reference](/reference/supported-models/).
 
 ## Reasoning controls
 
@@ -60,7 +60,7 @@ runner.send_chat_completion_request(
 </TabItem>
 </Tabs>
 
-Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID directly when you want those weights instead of runtime [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/).
+Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID directly when you want those weights instead of runtime [ISQ (in-situ quantization)](/reference/quantization-types/).
 
 ## MoE models and MoQE
 
@@ -81,7 +81,7 @@ DeepSeek V2, DeepSeek V3 (including non-distill R1, which uses the V3 architectu
 On CUDA (Unix builds), a specialized MLA decode kernel is used when all of the following hold:
 
 - single-token decode (no attention mask, sequence length 1);
-- [paged attention](/mistral.rs/guides/perf/paged-attention/) enabled;
+- [paged attention](/guides/perf/paged-attention/) enabled;
 - FlashInfer (NVIDIA's attention-kernel library) paged metadata available.
 
 A parallel fast path covers prefill with prefix caching (paged attention on, CUDA device). Otherwise the generic attention path reconstructs the latent per step.
@@ -120,7 +120,7 @@ The official repos ship `chat_template.jinja`, including the Liquid tool-call fo
 
 Gemma repos are gated: accept the license on the Hugging Face model page, then authenticate with `mistralrs login`.
 
-Gemma 4 accepts image, audio, and video parts mixed in one message, and enforces its tool-call format through constrained decoding by default; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+Gemma 4 accepts image, audio, and video parts mixed in one message, and enforces its tool-call format through constrained decoding by default; see [tool calling](/guides/agents/tool-calling-basics/).
 
 ## Muse Glimmer
 
@@ -134,7 +134,7 @@ The native safetensors checkpoint accepts text, images, and video; it does not a
 
 The model's ATEM chat template is detected automatically. Tool calling supports automatic, required, named, and parallel calls through the same HTTP, Python, Rust, and agent APIs as other tool-capable models. Muse reads the `reasoning_strength` template variable, so mistral.rs maps the public `reasoning_effort` control to it. The published Muse tiers are `low`, `medium`, `high`, and `xhigh`; omission uses the template's `high` default.
 
-ISQ, UQFF, paged attention, prefix caching, tensor parallelism, and text-backbone LoRA use the standard multimodal model paths. For GGUF-specific requirements and its image-only projector limitation, see [GGUF compatibility](/mistral.rs/reference/gguf-support/).
+ISQ, UQFF, paged attention, prefix caching, tensor parallelism, and text-backbone LoRA use the standard multimodal model paths. For GGUF-specific requirements and its image-only projector limitation, see [GGUF compatibility](/reference/gguf-support/).
 
 ## MatFormer
 
@@ -197,7 +197,7 @@ Phi 3.5 Vision works best with a single image; multiple images are resized toget
 
 ## DiffusionGemma
 
-Block-diffusion generation has its own page: [block-diffusion models](/mistral.rs/guides/models/use-block-diffusion/).
+Block-diffusion generation has its own page: [block-diffusion models](/guides/models/use-block-diffusion/).
 
 ## Reporting issues
 

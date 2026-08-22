@@ -69,7 +69,7 @@ Codex. The local mistral.rs server itself does not validate API keys.
 Codex tool calls arrive through `/v1/responses` as Responses function tools.
 mistral.rs routes them through the same tool-calling path used by Chat
 Completions. For Responses endpoint behavior, see
-[OpenAI compatibility](/mistral.rs/reference/openai-compatibility/#responses-api).
+[OpenAI compatibility](/reference/openai-compatibility/#responses-api).
 
 ## Claude Code
 
@@ -123,7 +123,7 @@ telemetry, and error reporting so the client stays local.
 Claude Code client tools arrive as Anthropic tool definitions and later
 `tool_result` content blocks. mistral.rs translates these to its internal tool
 format. For direct Anthropic examples, see the
-[Anthropic Messages API guide](/mistral.rs/guides/serve/anthropic-messages-api/).
+[Anthropic Messages API guide](/guides/serve/anthropic-messages-api/).
 
 ## Server-side agent tools
 

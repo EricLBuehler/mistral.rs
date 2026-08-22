@@ -3,7 +3,7 @@ title: HTTP API semantics
 description: Streaming event types, authentication, approval flow, and protocol behavior that the generated OpenAPI reference does not express.
 ---
 
-Every endpoint, request schema, and response schema is in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/), produced from the server's OpenAPI document. This page covers what a schema cannot say: streaming wire formats, authentication, and cross-request semantics.
+Every endpoint, request schema, and response schema is in the [generated HTTP API reference](/reference/http-api-generated/), produced from the server's OpenAPI document. This page covers what a schema cannot say: streaming wire formats, authentication, and cross-request semantics.
 
 ## Discovering the API from a running server
 
@@ -17,7 +17,7 @@ There is none. The server accepts and ignores `Authorization: Bearer ...` (OpenA
 
 ## Model routing
 
-The request `model` field selects among loaded models. `"default"` (or omitting the field) targets the configured default model; with a single `-m` model that is the only model. `GET /v1/models` lists real ids plus per-model `status` (`loaded`, `unloaded`, `reloading`), `tools_available`, `mcp_tools_count`, and `mcp_servers_connected`. See [multiple models](/mistral.rs/guides/serve/multiple-models/).
+The request `model` field selects among loaded models. `"default"` (or omitting the field) targets the configured default model; with a single `-m` model that is the only model. `GET /v1/models` lists real ids plus per-model `status` (`loaded`, `unloaded`, `reloading`), `tools_available`, `mcp_tools_count`, and `mcp_servers_connected`. See [multiple models](/guides/serve/multiple-models/).
 
 ## LoRA adapter routing and management
 
@@ -29,7 +29,7 @@ The read-only status route is always registered, even when mutation is disabled.
 - `GET /v1/lora_adapters` lists aliases, generation IDs, capacity, and configured limits for a dynamic LoRA model. Sources are redacted unless mutation is enabled.
 - `POST /v1/unload_lora_adapter` removes an alias without interrupting in-flight requests; `expected_generation` prevents stale removal.
 
-Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its ancestors, and every selected adapter directory writable only by the service operator. Publish adapters at new immutable directory paths instead of replacing an existing selected path. Loads are serialized; concurrent attempts return 429. An admitted load continues if its client disconnects, so verify the generation through the list endpoint after a timeout. These routes have no built-in authentication and should not be exposed without an authenticated reverse proxy. Request schemas and response objects are in the [generated HTTP API reference](/mistral.rs/reference/http-api-generated/); stable error-code recovery, setup, and support boundaries are in the [LoRA guide](/mistral.rs/guides/customize/lora-adapters/).
+Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its ancestors, and every selected adapter directory writable only by the service operator. Publish adapters at new immutable directory paths instead of replacing an existing selected path. Loads are serialized; concurrent attempts return 429. An admitted load continues if its client disconnects, so verify the generation through the list endpoint after a timeout. These routes have no built-in authentication and should not be exposed without an authenticated reverse proxy. Request schemas and response objects are in the [generated HTTP API reference](/reference/http-api-generated/); stable error-code recovery, setup, and support boundaries are in the [LoRA guide](/guides/customize/lora-adapters/).
 
 ## Streaming
 
@@ -70,7 +70,7 @@ Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_p
 
 ### Streaming: Anthropic Messages
 
-`stream: true` on `POST /v1/messages` uses Anthropic's named events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, with idle `ping` events. Deltas are `text_delta`, `thinking_delta` (when the model exposes separate reasoning), and `input_json_delta` (tool-call arguments). mistral.rs named events (`agentic_tool_call_progress`, `agentic_tool_approval_required`, `file_produced`) may be interleaved. See the [Anthropic Messages guide](/mistral.rs/guides/serve/anthropic-messages-api/).
+`stream: true` on `POST /v1/messages` uses Anthropic's named events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, with idle `ping` events. Deltas are `text_delta`, `thinking_delta` (when the model exposes separate reasoning), and `input_json_delta` (tool-call arguments). mistral.rs named events (`agentic_tool_call_progress`, `agentic_tool_approval_required`, `file_produced`) may be interleaved. See the [Anthropic Messages guide](/guides/serve/anthropic-messages-api/).
 
 ## Chat response extensions
 
@@ -92,18 +92,18 @@ event: agentic_tool_approval_required
 data: {"type":"agentic_tool_approval_required","approval_id":"appr_abc123","session_id":"...","round":1,"tool":{"source":"built_in","kind":"code_execution","label":"Python code"},"arguments":{"code":"...","outputs":[]}}
 ```
 
-The run pauses until the app answers with `POST /v1/agent/approvals/{approval_id}` (body schema in the [generated reference](/mistral.rs/reference/http-api-generated/)). Semantics:
+The run pauses until the app answers with `POST /v1/agent/approvals/{approval_id}` (body schema in the [generated reference](/reference/http-api-generated/)). Semantics:
 
 - `decision` is `"approve"` or `"deny"`. A deny may carry `message`, returned to the model as the tool result.
 - `remember_for_session: true` on an approve auto-approves later agent actions in the same `session_id`.
 - Unanswered approvals are denied after five minutes.
 - The response `status` is `"resolved"` (a waiting tool call was released), `"queued"` (the app answered before the runtime started waiting), or `"not_found"` with HTTP 404 (unknown or expired approval id).
 
-Permission levels and how they combine across CLI, HTTP, Python, and Rust are on the [permissions and approvals page](/mistral.rs/guides/agents/permissions-and-approvals/).
+Permission levels and how they combine across CLI, HTTP, Python, and Rust are on the [permissions and approvals page](/guides/agents/permissions-and-approvals/).
 
 ## File wire schemas and semantics
 
-Agentic runs return typed file outputs as first-class objects. Chat Completions and Anthropic Messages use a `files[]` array in non-streaming responses and `file_produced` events in streams. Responses uses OpenAI-style `container_file_citation` annotations on assistant `output_text` content. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These schemas are normative because they do not all appear in the OpenAPI document. (The `/v1/files` metadata endpoints *are* in the [generated reference](/mistral.rs/reference/http-api-generated/).)
+Agentic runs return typed file outputs as first-class objects. Chat Completions and Anthropic Messages use a `files[]` array in non-streaming responses and `file_produced` events in streams. Responses uses OpenAI-style `container_file_citation` annotations on assistant `output_text` content. User-provided input files can also be uploaded or attached to OpenAI-compatible requests. These schemas are normative because they do not all appear in the OpenAPI document. (The `/v1/files` metadata endpoints *are* in the [generated reference](/reference/http-api-generated/).)
 
 Requesting files (`files` on chat, Responses, and Anthropic Messages requests):
 
@@ -146,7 +146,7 @@ Semantics:
 - `GET /v1/containers/{container_id}/files/{file_id}/content` is an OpenAI-compatible alias backed by the same file store.
 - Each `agentic_tool_calls` entry in a chat response carries a `file_ids` array attributing files to that tool round.
 
-For examples and supported file-type behavior, see [OpenAI-compatible file inputs](/mistral.rs/guides/agents/file-inputs/).
+For examples and supported file-type behavior, see [OpenAI-compatible file inputs](/guides/agents/file-inputs/).
 
 ## Skills
 
@@ -156,7 +156,7 @@ Uploading skills does not require shell execution, but running a Responses reque
 
 ## Session semantics
 
-`GET /v1/sessions/{session_id}` exports a `SerializedSession` (404 if missing); `PUT` imports one, replacing any session with the same id; `DELETE` always returns 200 whether the session existed or not. Session lifecycle and splicing behavior are on the [sessions page](/mistral.rs/guides/agents/persist-sessions/).
+`GET /v1/sessions/{session_id}` exports a `SerializedSession` (404 if missing); `PUT` imports one, replacing any session with the same id; `DELETE` always returns 200 whether the session existed or not. Session lifecycle and splicing behavior are on the [sessions page](/guides/agents/persist-sessions/).
 
 ## Metrics
 
@@ -167,7 +167,7 @@ Uploading skills does not require shell execution, but running a Responses reque
 - `http_requests_in_flight` (gauge): requests currently running, labeled by `method`, `path`, and `model`.
 - `http_request_body_bytes` (histogram): request body size when the body size is known, labeled by `method`, `path`, and `model`.
 
-Streaming responses additionally record `mistralrs_time_to_first_token_seconds` and `mistralrs_inter_token_latency_seconds` (histograms, same labels as the request-duration histogram). The endpoint also serves the unlabeled `mistralrs_*` engine metrics (throughput, queues, KV cache, prefix cache, speculative decoding). See the [observability guide](/mistral.rs/guides/deploy/observability/#prometheus-metrics) for the full table and PromQL examples.
+Streaming responses additionally record `mistralrs_time_to_first_token_seconds` and `mistralrs_inter_token_latency_seconds` (histograms, same labels as the request-duration histogram). The endpoint also serves the unlabeled `mistralrs_*` engine metrics (throughput, queues, KV cache, prefix cache, speculative decoding). See the [observability guide](/guides/deploy/observability/#prometheus-metrics) for the full table and PromQL examples.
 
 The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}`), not the concrete URI, so per-request ids do not inflate label cardinality. The `model` label is the resolved model id for inference requests, reads the `model` query parameter for `GET /v1/lora_adapters`, defaults to the server default model when the request omits `model`, uses explicit `model_id` values for model-management requests, uses `unknown` when a required request body cannot be read or parsed as JSON, and uses `none` for routes that do not target a model. Unmatched requests are labeled `<unmatched>`. Health, metrics, docs, UI, and CORS preflight requests are excluded from these HTTP metrics. Returns 503 until the metrics recorder initializes at startup, or when metrics are disabled.
 
@@ -177,4 +177,4 @@ The `path` label is the matched route pattern (e.g. `/v1/responses/{response_id}
 
 ## Compatibility
 
-Field-level OpenAI deviations, silently-ignored fields, and Responses API restrictions: [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/). Anthropic field and content-block support: [Anthropic Messages API](/mistral.rs/guides/serve/anthropic-messages-api/).
+Field-level OpenAI deviations, silently-ignored fields, and Responses API restrictions: [OpenAI compatibility](/reference/openai-compatibility/). Anthropic field and content-block support: [Anthropic Messages API](/guides/serve/anthropic-messages-api/).

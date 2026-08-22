@@ -3,7 +3,7 @@ title: Set up video input
 description: Install FFmpeg so multimodal models can decode video files.
 ---
 
-This page covers the FFmpeg setup that video input depends on. To actually send video (CLI flags, content parts, model notes), see [Send images, audio, and video](/mistral.rs/guides/models/multimodal-input/). Video input works with multimodal models that list video in the [supported models reference](/mistral.rs/reference/supported-models/).
+This page covers the FFmpeg setup that video input depends on. To actually send video (CLI flags, content parts, model notes), see [Send images, audio, and video](/guides/models/multimodal-input/). Video input works with multimodal models that list video in the [supported models reference](/reference/supported-models/).
 
 ## You need FFmpeg on the server PATH
 

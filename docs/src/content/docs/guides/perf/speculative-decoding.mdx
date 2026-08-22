@@ -10,7 +10,7 @@ Speculative decoding lets a smaller assistant propose future tokens while the ta
 Output stays exact: every accepted token is verified by the target model before it is emitted.
 
 :::caution
-The target must run with [paged attention](/mistral.rs/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
+The target must run with [paged attention](/guides/perf/paged-attention/) (the default on CUDA). Loading fails with an error if paged attention is off.
 :::
 
 <Tabs>
@@ -22,7 +22,7 @@ mistralrs run -m google/gemma-4-E4B-it --quant 8 \
   --mtp-n-predict 6
 ```
 
-`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve`. See [run](/mistral.rs/reference/cli/run/) and [serve](/mistral.rs/reference/cli/serve/) flag references.
+`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve`. See [run](/reference/cli/run/) and [serve](/reference/cli/serve/) flag references.
 
 </TabItem>
 <TabItem label="Python">
