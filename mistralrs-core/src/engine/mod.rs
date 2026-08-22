@@ -364,6 +364,8 @@ impl Engine {
             } => max_num_seqs.get(),
             SchedulerConfig::PagedAttentionMeta { max_num_seqs, .. } => *max_num_seqs,
         };
+        let capacity_metric = u32::try_from(max_active_sequences).unwrap_or(u32::MAX);
+        metrics::gauge!("mistralrs_sequences_capacity").set(f64::from(capacity_metric));
 
         let (
             requires_uniform_prompt_batch,

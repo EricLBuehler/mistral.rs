@@ -75,6 +75,7 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
 | `mistralrs_sequences_running` | gauge | - | Sequences currently running. |
 | `mistralrs_sequences_waiting` | gauge | - | Sequences in the waiting queue. |
+| `mistralrs_sequences_capacity` | gauge | - | Maximum sequences the engine schedules concurrently (set at engine startup). |
 | `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`, `error`. |
 | `mistralrs_kv_cache_blocks_used` | gauge | - | KV cache blocks currently in use (paged attention). |
 | `mistralrs_kv_cache_blocks_total` | gauge | - | Total KV cache blocks (paged attention). |
@@ -115,6 +116,9 @@ histogram_quantile(0.95,
 
 # KV cache pressure (sustained 1.0 with a growing waiting queue means preemptions are likely)
 mistralrs_kv_cache_blocks_used / mistralrs_kv_cache_blocks_total
+
+# Sequence capacity utilization (sustained 1.0 with a growing waiting queue means requests are queueing)
+mistralrs_sequences_running / mistralrs_sequences_capacity
 ```
 
 If you want gauge-like ergonomics for the acceptance rate, use a recording rule instead of a server-side percentile gauge:
