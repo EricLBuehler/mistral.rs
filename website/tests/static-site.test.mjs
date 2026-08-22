@@ -13,7 +13,7 @@ async function readAssets(extension) {
   return Promise.all(names.map((name) => readFile(path.join(assetsDir, name), "utf8")));
 }
 
-test("builds the minimal landing page", async () => {
+test("builds the focused landing page", async () => {
   const html = await readFile(path.join(distDir, "index.html"), "utf8");
   const scripts = (await readAssets(".js")).join("\n");
   const styles = (await readAssets(".css")).join("\n");
@@ -23,10 +23,14 @@ test("builds the minimal landing page", async () => {
   assert.ok(html.includes("Go from install to inference in one command."));
   assert.ok(html.includes("mistralrs serve -m Qwen/Qwen3.8-27B --quant 4"));
   assert.ok(html.includes("mistralrs run -m google/gemma-4-E4B-it --quant 4"));
-  assert.ok(html.includes("45+ model architectures"));
+  assert.ok(html.includes("50+ model architectures"));
+  assert.ok(html.includes("https://docs.mistralrs.dev/quickstart/"));
+  assert.ok(html.includes("install from source"));
+  assert.doesNotMatch(html, /MIT licensed|not affiliated with Mistral AI/);
   assert.ok(scripts.includes("curl -fsSL https://mistralrs.dev/install.sh | sh"));
   assert.ok(scripts.includes("irm https://mistralrs.dev/install.ps1 | iex"));
   assert.ok(styles.includes("SFMono-Regular"));
+  assert.ok(styles.includes("overflow-x:hidden"));
   assert.doesNotMatch(`${html}\n${scripts}\n${styles}`, /Geist|fonts\.googleapis\.com/);
   assert.doesNotMatch(`${html}\n${scripts}`, /mistralrs\.(?:sh|ps1)/);
 });

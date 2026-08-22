@@ -24,6 +24,7 @@ html {
 
 body {
   margin: 0;
+  overflow-x: hidden;
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-terminal);
@@ -177,9 +178,28 @@ button {
   color: var(--accent-soft);
 }
 
+.source-install {
+  margin: 13px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.source-install a {
+  color: var(--muted-strong);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 4px;
+  transition: color 150ms ease;
+}
+
+.source-install a:hover,
+.source-install a:focus-visible {
+  color: var(--accent-soft);
+}
+
 .examples {
   width: min(100%, 720px);
-  margin-top: 64px;
+  margin-top: 32px;
 }
 
 .examples-intro {
@@ -245,41 +265,34 @@ button {
   color: var(--accent-soft);
 }
 
-.site-footer {
-  width: min(calc(100% - 48px), var(--page-width));
-  min-height: 72px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-
 @media (max-width: 560px) {
-  .hero,
-  .site-footer {
-    width: min(calc(100% - 32px), var(--page-width));
-  }
-
   .hero {
+    width: min(calc(100% - 32px), var(--page-width));
     min-height: calc(100svh - 64px);
-    padding: 72px 0 64px;
+    padding: 56px 0 48px;
   }
 
   .hero h1 {
-    font-size: clamp(3.5rem, 18vw, 5rem);
+    max-width: 100%;
+    font-size: clamp(3rem, 16vw, 5rem);
   }
 
   .hero-tagline {
+    max-width: 28rem;
     margin-top: 18px;
     font-size: clamp(0.875rem, 4.2vw, 1.0625rem);
+    line-height: 1.5;
+    white-space: normal;
   }
 
   .install-card {
-    margin-top: 42px;
+    margin-top: 38px;
+  }
+
+  .platform-tabs button {
+    min-height: 44px;
+    flex: 1;
+    padding: 8px;
   }
 
   .command-row {
@@ -290,22 +303,101 @@ button {
   .command-row code,
   .example-row code {
     font-size: 12px;
+    scrollbar-color: var(--line-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  .command-row code::-webkit-scrollbar,
+  .example-row code::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  .command-row code::-webkit-scrollbar-thumb,
+  .example-row code::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: var(--line-strong);
   }
 
   .copy-button {
     min-width: 64px;
   }
 
+  .source-install {
+    margin-top: 12px;
+    font-size: 12px;
+  }
+
   .examples {
-    margin-top: 52px;
+    margin-top: 22px;
+  }
+
+  .examples-intro {
+    line-height: 1.5;
+    white-space: normal;
   }
 
   .example-row {
     grid-template-columns: 58px minmax(0, 1fr);
   }
 
-  .site-footer {
-    min-height: 64px;
+  .hero-meta {
+    margin-top: 24px;
+    gap: 4px 16px;
+    font-size: 12px;
+  }
+
+  .hero-meta a {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+@media (max-width: 360px) {
+  .hero {
+    width: min(calc(100% - 24px), var(--page-width));
+    padding: 44px 0 40px;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.75rem, 16.5vw, 3.5rem);
+  }
+
+  .install-card {
+    margin-top: 34px;
+  }
+
+  .platform-tabs button {
+    font-size: 12px;
+  }
+
+  .command-row {
+    padding-left: 10px;
+    gap: 6px;
+  }
+
+  .command-row code,
+  .example-row code {
+    font-size: 11px;
+  }
+
+  .copy-button {
+    min-width: 58px;
+  }
+
+  .example-row {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .example-label {
+    font-size: 11px;
+  }
+}
+
+@media (max-height: 560px) and (min-width: 561px) {
+  .hero {
+    min-height: auto;
+    padding: 64px 0 56px;
   }
 }
 
