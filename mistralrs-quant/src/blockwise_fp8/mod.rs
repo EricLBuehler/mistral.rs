@@ -428,7 +428,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 .ok_or_else(|| candle_core::Error::msg("FP8 activation shape overflows usize"))?;
             let x = x.reshape((rows, features))?.contiguous()?;
             let (quantized, scales) = ops::fp8_quantize_activation_cutlass(&x)?;
-            return QuantizedActivation::new(quantized, scales, source_shape, source_dtype, scheme);
+            QuantizedActivation::new(quantized, scales, source_shape, source_dtype, scheme)
         }
 
         #[cfg(not(all(feature = "cuda", has_cutlass_fp8_sm90_kernels)))]
@@ -466,7 +466,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             if let Some(bias) = &self.bias {
                 return result.broadcast_add(bias);
             }
-            return Ok(result);
+            Ok(result)
         }
 
         #[cfg(not(all(feature = "cuda", has_cutlass_fp8_sm90_kernels)))]
