@@ -15,6 +15,8 @@ mod rotating_cache;
 mod single_cache;
 
 pub use full_cache::{EitherCache, LayerCaches};
+#[cfg(feature = "cuda")]
+pub(crate) use hybrid_cache::RecurrentCheckpointStateSnapshot;
 pub use hybrid_cache::{
     HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     RecurrentStateLayout, RecurrentStatePool, RecurrentStateSnapshot, RecurrentStateSpec,

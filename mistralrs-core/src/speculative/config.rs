@@ -111,7 +111,40 @@ pub fn reserve_external_mtp_memory(
         return Ok(Some(cache_config));
     }
     let dtype = dtype.try_into_dtype(&[device])?;
+    let mut cache_config = cache_config;
+    if let Some(dflash_config) = super::dflash::peek_config(mtp_config)? {
+        let max_drafts = dflash_config.block_size().saturating_sub(1);
+        let drafts = mtp_config
+            .n_predict
+            .unwrap_or(max_drafts.min(super::dflash::DEFAULT_MAX_DRAFTS));
+        if drafts == 0 || drafts > max_drafts {
+            anyhow::bail!(
+                "requested {drafts} draft tokens but this DFlash drafter supports 1..={max_drafts}"
+            );
+        }
+        cache_config = cache_config.with_recurrent_checkpoint_lanes(drafts + 1)?;
+    }
     let bytes = mtp_config.external_weight_size_in_bytes(dtype)?;
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    let bytes = if device.is_cuda() {
+        if let Some(serving_capacity) = cache_config.serving_capacity {
+            let sequence_capacity = serving_capacity
+                .checked_add(crate::pipeline::RECURRENT_GRAPH_PAD_SLOTS)
+                .ok_or_else(|| anyhow::anyhow!("DFlash serving capacity overflow"))?;
+            let cache_bytes = super::dflash::windowed_kv_cache_size_in_bytes(
+                mtp_config,
+                sequence_capacity,
+                crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+            )?;
+            bytes
+                .checked_add(cache_bytes)
+                .ok_or_else(|| anyhow::anyhow!("external MTP memory reservation overflow"))?
+        } else {
+            bytes
+        }
+    } else {
+        bytes
+    };
     Ok(Some(
         cache_config.with_base_device_memory_reservation(bytes)?,
     ))
@@ -176,6 +209,10 @@ mod tests {
             )]),
             None,
             &path,
+        )?;
+        fs::write(
+            dir.path().join("config.json"),
+            r#"{"architectures":["GenericMtpModel"]}"#,
         )?;
         let config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
 

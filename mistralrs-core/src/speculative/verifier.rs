@@ -10,52 +10,110 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sampler::Logprobs;
 use crate::sequence::{Sequence, SequenceRecognizer, SequenceState};
 
-/// One batched argmax + a single D2H for every verify row of a greedy sequence, replacing a
-/// host sampler round trip per draft. None when anything could make the sampler diverge from argmax.
-#[cfg(feature = "cuda")]
-fn greedy_device_verify_tokens(
-    seq: &Sequence,
-    verify_logits: &Tensor,
-    return_logprobs: bool,
-) -> Result<Option<Vec<u32>>> {
-    if !verify_logits.device().is_cuda()
-        || return_logprobs
-        || !matches!(seq.recognizer, SequenceRecognizer::None)
-        || seq.tool_call_state.is_some()
+pub(crate) fn can_greedy_device_verify(seq: &Sequence) -> bool {
+    #[cfg(feature = "cuda")]
     {
-        return Ok(None);
+        !seq.return_logprobs()
+            && !seq.sampling_logprob_required()
+            && matches!(seq.recognizer, SequenceRecognizer::None)
+            && seq.tool_call_state.is_none()
+            && seq
+                .sampler()
+                .cuda_batch_sampling_plan(false)
+                .is_some_and(|plan| plan.kind.is_argmax())
     }
-    let Some(plan) = seq.sampler().cuda_batch_sampling_plan(false) else {
-        return Ok(None);
-    };
-    if !plan.kind.is_argmax() {
-        return Ok(None);
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = seq;
+        false
     }
-    let logits = match *verify_logits.dims() {
-        [1, rows, vocab] => verify_logits.reshape((rows, vocab))?,
-        [_, _] => verify_logits.clone(),
-        _ => return Ok(None),
-    };
-    let logits = logits.to_dtype(DType::F32)?.contiguous()?;
-    let packed = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?
-        .packed
-        .to_vec2::<f32>()?;
-    let mut tokens = Vec::with_capacity(packed.len());
-    for row in packed {
-        if row.len() != crate::ops::CUDA_TOP1_PACKED_WIDTH
-            || !row[1].is_finite()
-            || row[1] < 0.0
-            || row[1].fract() != 0.0
-        {
-            candle_core::bail!("invalid batched CUDA top-1 verify output");
-        }
-        #[allow(clippy::cast_possible_truncation)]
-        tokens.push(row[1] as u32);
-    }
-    Ok(Some(tokens))
+}
+
+pub(crate) fn can_batch_greedy_device_verify(seqs: &[&mut Sequence]) -> bool {
+    crate::speculative::staging::staged_batch_width(seqs).is_some()
+        && seqs.iter().all(|seq| can_greedy_device_verify(seq))
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct GreedyDeviceVerifyInput<'a> {
+    pub(crate) seq: &'a Sequence,
+    pub(crate) logits: &'a Tensor,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn greedy_device_verify_batch(
+    inputs: &[GreedyDeviceVerifyInput<'_>],
+) -> Result<Vec<Option<Vec<u32>>>> {
+    let mut outputs = std::iter::repeat_with(|| None)
+        .take(inputs.len())
+        .collect::<Vec<_>>();
+    let mut selected_indices = Vec::new();
+    let mut selected_logits = Vec::new();
+    let mut row_counts = Vec::new();
+    let mut common_device: Option<candle_core::Device> = None;
+    let mut common_dtype = None;
+    let mut common_vocab = None;
+
+    for (idx, input) in inputs.iter().enumerate() {
+        if !input.logits.device().is_cuda() || !can_greedy_device_verify(input.seq) {
+            continue;
+        }
+        let logits = match *input.logits.dims() {
+            [1, rows, vocab] => input.logits.reshape((rows, vocab))?,
+            [_, _] => input.logits.clone(),
+            _ => continue,
+        };
+        let [rows, vocab] = *logits.dims() else {
+            unreachable!("verify logits were normalized to rank two")
+        };
+        if rows == 0 || vocab == 0 {
+            continue;
+        }
+
+        match (&common_device, common_dtype, common_vocab) {
+            (Some(device), Some(dtype), Some(expected_vocab))
+                if !device.same_device(logits.device())
+                    || dtype != logits.dtype()
+                    || expected_vocab != vocab =>
+            {
+                continue;
+            }
+            (Some(_), Some(_), Some(_)) => {}
+            (None, None, None) => {
+                common_device = Some(logits.device().clone());
+                common_dtype = Some(logits.dtype());
+                common_vocab = Some(vocab);
+            }
+            _ => unreachable!("CUDA verify batch properties are initialized together"),
+        }
+        selected_indices.push(idx);
+        selected_logits.push(logits);
+        row_counts.push(rows);
+    }
+
+    let Some(first_idx) = selected_indices.first().copied() else {
+        return Ok(outputs);
+    };
+    let logits = if let [logits] = selected_logits.as_slice() {
+        logits.clone()
+    } else {
+        Tensor::cat(&selected_logits.iter().collect::<Vec<_>>(), 0)?
+    }
+    .to_dtype(DType::F32)?
+    .contiguous()?;
+    let token_ids = inputs[first_idx]
+        .seq
+        .sampler()
+        .submit_cuda_top1_batch_owned(&logits)?
+        .complete()?
+        .token_ids;
+    let tokens = partition_device_tokens(token_ids, &row_counts)?;
+    for (idx, tokens) in selected_indices.into_iter().zip(tokens) {
+        outputs[idx] = Some(tokens);
+    }
+    Ok(outputs)
+}
+
 fn device_token_logprobs(token: u32) -> Logprobs {
     Logprobs {
         token,
@@ -72,19 +130,31 @@ pub struct VerificationOutcome {
     pub continuation_token: Option<u32>,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn finish_verified_step<P: Pipeline>(
+pub(crate) struct VerificationInput {
+    pub(crate) verify_logits: Tensor,
+    pub(crate) proposal: Vec<u32>,
+    pub(crate) proposal_logits: Option<Tensor>,
+    pub(crate) base_len: usize,
+    pub(crate) anchor_to_emit: Option<Logprobs>,
+    pub(crate) device_tokens: Option<Vec<u32>>,
+}
+
+pub(crate) async fn finish_verified_step<P: Pipeline>(
     pipeline: &P,
     seq: &mut Sequence,
-    verify_logits: Tensor,
-    proposal: Vec<u32>,
-    proposal_logits: Option<Tensor>,
-    base_len: usize,
+    input: VerificationInput,
     prefix_cacher: &mut PrefixCacheManagerV2,
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    anchor_to_emit: Option<Logprobs>,
 ) -> Result<VerificationOutcome> {
+    let VerificationInput {
+        verify_logits,
+        proposal,
+        proposal_logits,
+        base_len,
+        anchor_to_emit,
+        device_tokens,
+    } = input;
     let general_metadata = pipeline.get_metadata();
     let eos_tok = seq.effective_eos_tokens(&general_metadata.eos_tok, disable_eos_stop);
     let return_logprobs = seq.return_logprobs();
@@ -125,15 +195,11 @@ pub async fn finish_verified_step<P: Pipeline>(
         }
     }
 
-    #[cfg(feature = "cuda")]
-    let device_tokens = greedy_device_verify_tokens(seq, &verify_logits, return_logprobs)?;
-    #[cfg(not(feature = "cuda"))]
-    let device_tokens: Option<Vec<u32>> = None;
+    validate_device_token_count(device_tokens.as_deref(), proposal.len())?;
 
     let mut accepted = 0usize;
     for (idx, draft) in proposal.iter().copied().enumerate() {
         let sampled = match &device_tokens {
-            #[cfg(feature = "cuda")]
             Some(tokens) => device_token_logprobs(tokens[idx]),
             _ => {
                 let row = logit_row(&verify_logits, idx)?;
@@ -188,7 +254,6 @@ pub async fn finish_verified_step<P: Pipeline>(
     }
 
     let continuation = match &device_tokens {
-        #[cfg(feature = "cuda")]
         Some(tokens) => device_token_logprobs(tokens[accepted]),
         _ => {
             let row = logit_row(&verify_logits, accepted)?;
@@ -224,6 +289,42 @@ pub async fn finish_verified_step<P: Pipeline>(
         keep_len,
         continuation_token,
     })
+}
+
+fn validate_device_token_count(tokens: Option<&[u32]>, proposal_len: usize) -> Result<()> {
+    if tokens.is_some_and(|tokens| tokens.len() < proposal_len + 1) {
+        candle_core::bail!(
+            "speculative CUDA verification returned fewer tokens than required: got {}, need {}",
+            tokens.map_or(0, <[u32]>::len),
+            proposal_len + 1
+        );
+    }
+    Ok(())
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn partition_device_tokens(tokens: Vec<u32>, row_counts: &[usize]) -> Result<Vec<Vec<u32>>> {
+    let expected = row_counts.iter().try_fold(0usize, |total, &rows| {
+        total.checked_add(rows).ok_or_else(|| {
+            candle_core::Error::Msg("speculative CUDA verify row count overflow".to_string())
+        })
+    })?;
+    if tokens.len() != expected {
+        candle_core::bail!(
+            "speculative CUDA verification returned {} tokens for {expected} rows",
+            tokens.len()
+        );
+    }
+    let mut offset = 0;
+    Ok(row_counts
+        .iter()
+        .map(|&rows| {
+            let end = offset + rows;
+            let row = tokens[offset..end].to_vec();
+            offset = end;
+            row
+        })
+        .collect())
 }
 
 fn stochastic_verification_allowed(
@@ -423,7 +524,10 @@ fn accepts_draft(draw: f32, accept_prob: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{accepts_draft, stochastic_verification_allowed};
+    use super::{
+        accepts_draft, partition_device_tokens, stochastic_verification_allowed,
+        validate_device_token_count,
+    };
 
     #[test]
     fn tool_sequences_use_per_row_target_sampling() {
@@ -438,5 +542,19 @@ mod tests {
         assert!(!accepts_draft(0.0, 0.0));
         assert!(accepts_draft(0.0, 1.0));
         assert!(accepts_draft(0.999, 1.0));
+    }
+
+    #[test]
+    fn partitions_batched_device_tokens_in_sequence_order() {
+        let tokens = partition_device_tokens(vec![1, 2, 3, 4, 5, 6], &[2, 1, 3]).unwrap();
+        assert_eq!(tokens, vec![vec![1, 2], vec![3], vec![4, 5, 6]]);
+        assert!(partition_device_tokens(vec![1, 2], &[1, 2]).is_err());
+    }
+
+    #[test]
+    fn device_verification_requires_a_continuation_token() {
+        assert!(validate_device_token_count(None, 7).is_ok());
+        assert!(validate_device_token_count(Some(&[0; 8]), 7).is_ok());
+        assert!(validate_device_token_count(Some(&[0; 7]), 7).is_err());
     }
 }

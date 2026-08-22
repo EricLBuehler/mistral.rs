@@ -105,7 +105,7 @@ impl BlockwiseFP8Linear {
                 Ok(prepared) => {
                     self.provider = BlockwiseFp8Provider::DeepGemmSm90(prepared);
                     DEEPGEMM_FP8_PROVIDER_LOG.call_once(|| {
-                        tracing::info!("Using DeepGEMM SM90 blockwise FP8 provider for decode");
+                        tracing::info!("Using DeepGEMM SM90 blockwise FP8 serving provider");
                     });
                     return Ok(());
                 }
@@ -206,7 +206,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                         candle_core::Error::msg("FP8 activation shape overflows usize")
                     })?;
                 let input = x.reshape((rows, features))?;
-                let result = if deepgemm::decode_supported(&input) {
+                let result = if deepgemm::serving_supported(&input) {
                     deepgemm::matmul(prepared, &input, &self.weight, &self.weight_scale_inv)?
                 } else {
                     let (activation, scales) = ops::fp8_quantize_activation_cutlass(&input)?;
@@ -403,7 +403,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             let rows = batch_dims
                 .iter()
                 .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))?;
-            if deepgemm::decode_shape_supported(_x.dtype(), rows) {
+            if deepgemm::serving_shape_supported(_x.dtype(), rows) {
                 return None;
             }
         }

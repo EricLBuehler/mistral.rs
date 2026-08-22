@@ -2034,7 +2034,7 @@ impl SequenceGroup {
 
     #[cfg(feature = "cuda")]
     fn sampling_logprob_required(&self) -> bool {
-        self.n_choices > 1 || self.best_of.is_some()
+        self.n_choices > 1 || self.best_of.is_some_and(|best_of| best_of > 1)
     }
 
     /// This may apply the best_of.
@@ -2456,7 +2456,8 @@ mod tests {
     fn sampling_logprob_is_retained_for_multi_choice_groups() {
         assert!(!SequenceGroup::new(1, false, true, None).sampling_logprob_required());
         assert!(SequenceGroup::new(2, false, true, None).sampling_logprob_required());
-        assert!(SequenceGroup::new(1, false, false, Some(1)).sampling_logprob_required());
+        assert!(!SequenceGroup::new(1, false, false, Some(1)).sampling_logprob_required());
+        assert!(SequenceGroup::new(1, false, false, Some(2)).sampling_logprob_required());
     }
 
     #[test]

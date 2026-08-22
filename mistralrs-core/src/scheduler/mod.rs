@@ -92,6 +92,7 @@ pub enum SchedulerOutput<'a> {
     },
     PagedAttention {
         output: PagedAttentionSchedulerOutput,
+        preempted_sequence_ids: Vec<usize>,
     },
 }
 
@@ -123,6 +124,8 @@ pub trait Scheduler: Send + Sync {
     /// Get recurrent state pool indices of finished sequences for freeing.
     /// Called before free_finished_sequence_groups to allow cleanup of hybrid cache slots.
     fn get_finished_recurrent_indices(&self) -> Vec<usize>;
+    /// Get IDs of finished sequences before free_finished_sequence_groups removes them.
+    fn get_finished_sequence_ids(&self) -> Vec<usize>;
 
     // PagedAttention metadata
     fn block_size(&self) -> Option<usize>;

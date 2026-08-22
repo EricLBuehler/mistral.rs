@@ -97,6 +97,7 @@ pub struct PagedAttentionScheduler {
     /// Per-sequence waitlist counter for starvation detection.
     waiting_counts: HashMap<usize, usize>,
     finished_recurrent_indices: Vec<usize>,
+    preempted_sequence_ids: Vec<usize>,
 }
 
 impl PagedAttentionScheduler {
@@ -128,6 +129,7 @@ impl PagedAttentionScheduler {
             seq_block_hash_revisions: HashMap::new(),
             waiting_counts: HashMap::new(),
             finished_recurrent_indices: Vec::new(),
+            preempted_sequence_ids: Vec::new(),
         }
     }
 
@@ -1035,6 +1037,7 @@ impl PagedAttentionScheduler {
         seq_guard.set_prefix_cache_len(0);
         seq_guard.clear_staged_speculative_tokens();
         let seq_id = *seq_guard.id();
+        self.preempted_sequence_ids.push(seq_id);
         let tokens = seq_guard.get_toks().to_vec();
         let mm_features = seq_guard.mm_features().to_vec();
         let adapter_generation = seq_guard.adapter_generation();
@@ -1084,8 +1087,10 @@ impl Scheduler for PagedAttentionScheduler {
         logger: &IntervalLogger,
         prefix_validator: Option<&mut dyn PagedPrefixCacheValidator>,
     ) -> SchedulerOutput<'_> {
+        let output = self.schedule(logger, prefix_validator);
         SchedulerOutput::PagedAttention {
-            output: self.schedule(logger, prefix_validator),
+            output,
+            preempted_sequence_ids: std::mem::take(&mut self.preempted_sequence_ids),
         }
     }
     fn waiting_len(&self) -> usize {
@@ -1109,6 +1114,13 @@ impl Scheduler for PagedAttentionScheduler {
                 .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx()),
         );
         indices
+    }
+    fn get_finished_sequence_ids(&self) -> Vec<usize> {
+        self.running
+            .iter()
+            .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
+            .map(|seq| *get_mut_arcmutex!(seq).id())
+            .collect()
     }
     fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {
         Some(self.kv_cache_manager.clone())
@@ -1344,6 +1356,42 @@ mod tests {
 
         assert_eq!(output.scheduled.len(), 1);
         assert_eq!(validator.cached_tokens, vec![0]);
+    }
+
+    #[test]
+    fn scheduler_output_reports_preempted_sequence_ids() {
+        let mut scheduler = test_scheduler();
+        scheduler.requires_uniform_completion_batch = true;
+        scheduler.running.push_back(test_sequence(10, 4));
+        scheduler.running.push_back(test_sequence(20, 7));
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = Scheduler::schedule(&mut scheduler, &logger, None);
+        let SchedulerOutput::PagedAttention {
+            output,
+            preempted_sequence_ids,
+        } = output
+        else {
+            panic!("paged scheduler returned a default scheduler output");
+        };
+
+        assert_eq!(preempted_sequence_ids, vec![20]);
+        assert_eq!(output.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(output.scheduled[0]).id(), 10);
+    }
+
+    #[test]
+    fn finished_sequence_ids_are_visible_before_cleanup() {
+        let mut scheduler = test_scheduler();
+        let live = test_sequence(10, 4);
+        let finished = test_sequence(20, 4);
+        get_mut_arcmutex!(finished).set_state(SequenceState::Done(StopReason::Eos));
+        scheduler.running.push_back(live);
+        scheduler.running.push_back(finished);
+
+        assert_eq!(Scheduler::get_finished_sequence_ids(&scheduler), vec![20]);
+        scheduler.free_finished_sequence_groups();
+        assert!(Scheduler::get_finished_sequence_ids(&scheduler).is_empty());
     }
 
     #[test]

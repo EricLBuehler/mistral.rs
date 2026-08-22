@@ -504,9 +504,11 @@ impl Engine {
     }
 
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
+        let finished_sequence_ids = scheduler.get_finished_sequence_ids();
         let recurrent_indices = scheduler.get_finished_recurrent_indices();
-        if !recurrent_indices.is_empty() {
-            let pipeline = get_mut_arcmutex!(self.pipeline);
+        if !finished_sequence_ids.is_empty() || !recurrent_indices.is_empty() {
+            let mut pipeline = get_mut_arcmutex!(self.pipeline);
+            pipeline.release_speculative_sequences(&finished_sequence_ids);
             if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                 let mut hybrid_cache = pipeline.cache().hybrid();
                 for idx in recurrent_indices {
@@ -1167,7 +1169,10 @@ impl Engine {
                         }
                     }
                 }
-                SchedulerOutput::PagedAttention { mut output } => {
+                SchedulerOutput::PagedAttention {
+                    mut output,
+                    preempted_sequence_ids,
+                } => {
                     let block_size = scheduler.block_size().unwrap();
                     let kv_cache_manager = scheduler.kv_cache_manager().unwrap();
                     let is_prompt = output
@@ -1192,6 +1197,10 @@ impl Engine {
                     #[cfg(not(feature = "cuda"))]
                     let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
+                    if !preempted_sequence_ids.is_empty() {
+                        get_mut_arcmutex!(self.pipeline)
+                            .release_speculative_sequences(&preempted_sequence_ids);
+                    }
                     if !output.scheduled.is_empty() {
                         for seq in output.scheduled.iter() {
                             let mut seq_guard = get_mut_arcmutex!(seq);

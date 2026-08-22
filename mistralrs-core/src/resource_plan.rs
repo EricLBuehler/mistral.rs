@@ -99,6 +99,7 @@ fn split_paged_config(
     let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
     split.serving_capacity = config.serving_capacity;
     split.base_device_memory_reservation_bytes = config.base_device_memory_reservation_bytes;
+    split.recurrent_checkpoint_lanes = config.recurrent_checkpoint_lanes;
     Ok(split)
 }
 
@@ -115,7 +116,8 @@ mod tests {
             PagedCacheType::Auto,
         )?
         .with_serving_capacity(16)?
-        .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?;
+        .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?
+        .with_recurrent_checkpoint_lanes(8)?;
 
         let split = split_paged_config(config, 1, 2)?;
         assert_eq!(split.serving_capacity, Some(16));
@@ -123,6 +125,7 @@ mod tests {
             split.base_device_memory_reservation_bytes,
             4 * 1024 * 1024 * 1024
         );
+        assert_eq!(split.recurrent_checkpoint_lanes, 8);
         assert!(matches!(
             split.mem_gpu,
             MemoryGpuConfig::Utilization(value) if value == 0.45

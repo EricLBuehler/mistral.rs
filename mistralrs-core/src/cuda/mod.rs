@@ -2,6 +2,8 @@ pub mod ffi;
 pub mod gdn;
 #[cfg(feature = "cuda")]
 pub mod graph;
+#[cfg(feature = "cuda")]
+pub(crate) mod indexed_copy;
 pub mod moe;
 #[cfg(feature = "cuda")]
 pub(crate) mod preload;

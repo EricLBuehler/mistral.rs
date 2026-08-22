@@ -18,6 +18,7 @@ pub enum SpeculativeKvCache<'a> {
 }
 
 pub struct SpeculativeProposeBatchCtx<'a> {
+    pub proposal_len: usize,
     pub sampled_tokens: &'a [u32],
     pub sampled_tokens_emitted: bool,
     pub seq_ids: &'a [usize],

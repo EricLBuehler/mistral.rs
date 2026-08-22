@@ -18,7 +18,10 @@ use super::{
     ops::{fp8_tensor_aligned, fp8_workspace, is_sm90, FP8_BLOCK_SIZE},
 };
 
-pub(super) const DECODE_MAX_M: usize = 16;
+const DENSE_SERVING_MAX_M: usize = 16;
+const SERVING_M_VALUES: [usize; 19] = [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 32, 64, 128,
+];
 const JIT_SOURCE_HASH: &str = env!("MISTRALRS_DEEPGEMM_SOURCE_HASH");
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -38,7 +41,7 @@ pub(super) struct Prepared {
     device: candle_core::cuda::DeviceId,
     n: usize,
     k: usize,
-    plans: [ffi::DeepGemmPrepared; DECODE_MAX_M],
+    plans: [ffi::DeepGemmPrepared; SERVING_M_VALUES.len()],
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -295,8 +298,8 @@ pub(super) fn prepare(
                 })?;
             let stream = dev.cuda_stream().cu_stream() as *mut core::ffi::c_void;
             let mut include_dir = None;
-            let mut plans = Vec::with_capacity(DECODE_MAX_M);
-            for m in 1..=DECODE_MAX_M {
+            let mut plans = Vec::with_capacity(SERVING_M_VALUES.len());
+            for m in SERVING_M_VALUES {
                 let plan = deepgemm_plan(m, *n, *k)?;
                 let mut prepared = std::mem::MaybeUninit::uninit();
                 let mut status = unsafe {
@@ -349,12 +352,20 @@ pub(super) fn prepare(
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
-pub(super) fn decode_supported(input: &Tensor) -> bool {
-    input.dims().len() == 2 && decode_shape_supported(input.dtype(), input.dims()[0])
+pub(super) fn serving_supported(input: &Tensor) -> bool {
+    input.dims().len() == 2 && serving_shape_supported(input.dtype(), input.dims()[0])
 }
 
-pub(super) fn decode_shape_supported(dtype: DType, rows: usize) -> bool {
-    dtype == DType::BF16 && (1..=DECODE_MAX_M).contains(&rows)
+pub(super) fn serving_shape_supported(dtype: DType, rows: usize) -> bool {
+    dtype == DType::BF16 && serving_plan_index(rows).is_some()
+}
+
+fn serving_plan_index(rows: usize) -> Option<usize> {
+    if (1..=DENSE_SERVING_MAX_M).contains(&rows) {
+        Some(rows - 1)
+    } else {
+        SERVING_M_VALUES.binary_search(&rows).ok()
+    }
 }
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
@@ -369,8 +380,11 @@ pub(super) fn matmul(
 
     use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
-    if !decode_supported(input) {
-        candle_core::bail!("DeepGEMM decode requires a BF16 matrix with 1 to 16 rows")
+    if !serving_supported(input) {
+        candle_core::bail!(
+            "DeepGEMM serving requires BF16 rows in {:?}",
+            SERVING_M_VALUES
+        )
     }
     let input = input.contiguous()?;
     let input = if fp8_tensor_aligned(&input) {
@@ -403,7 +417,7 @@ pub(super) fn matmul(
     if prepared.device != dev.id() || prepared.n != n || prepared.k != k {
         candle_core::bail!("DeepGEMM prepared state does not match the CUDA device or weight shape")
     }
-    let plan = &prepared.plans[m - 1];
+    let plan = &prepared.plans[serving_plan_index(m).unwrap()];
     dev.cuda_stream()
         .context()
         .bind_to_thread()
@@ -484,11 +498,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn direct_decode_route_is_bf16_small_m_only() {
-        assert!(decode_shape_supported(DType::BF16, 1));
-        assert!(decode_shape_supported(DType::BF16, DECODE_MAX_M));
-        assert!(!decode_shape_supported(DType::BF16, 0));
-        assert!(!decode_shape_supported(DType::BF16, DECODE_MAX_M + 1));
-        assert!(!decode_shape_supported(DType::F16, 1));
+    fn direct_decode_route_covers_decode_and_verification_buckets() {
+        assert!(serving_shape_supported(DType::BF16, 1));
+        assert!(serving_shape_supported(DType::BF16, DENSE_SERVING_MAX_M));
+        assert!(serving_shape_supported(DType::BF16, 32));
+        assert!(serving_shape_supported(DType::BF16, 64));
+        assert!(serving_shape_supported(DType::BF16, 128));
+        assert!(!serving_shape_supported(DType::BF16, 0));
+        assert!(!serving_shape_supported(
+            DType::BF16,
+            DENSE_SERVING_MAX_M + 1
+        ));
+        assert!(!serving_shape_supported(DType::BF16, 256));
+        assert!(!serving_shape_supported(DType::F16, 1));
     }
 }

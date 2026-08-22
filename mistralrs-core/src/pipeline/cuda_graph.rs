@@ -4,7 +4,7 @@ use std::{
     ptr::NonNull,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
 };
 
@@ -47,6 +47,13 @@ pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
+static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
+    OnceLock::new();
+
+struct MemoryPoolScopeState {
+    guards: usize,
+    release_threshold: u64,
+}
 
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
 pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
@@ -94,9 +101,8 @@ pub(crate) fn prepare_fa3_decode_schedules(
     })
 }
 
-/// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
-/// their KV writes and point at the hybrid pad slot, so the model can run them and their outputs be
-/// dropped.
+/// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for reads and skip
+/// their KV and recurrent writes, so the model can run them and drop their outputs.
 #[derive(Clone)]
 pub(crate) struct CudaGraphDecodeStep {
     pub(crate) input_ids: Tensor,
@@ -411,19 +417,17 @@ impl CudaGraphPrecaptureInputs {
 
 pub(crate) struct HybridGraphSlots {
     pub(crate) real: Vec<u32>,
-    pub(crate) pad_slot: u32,
-    // Allocating the pad slot reallocated the pools, invalidating every captured graph
+    // Reserving graph capacity may reallocate the pools, invalidating every captured graph.
     pub(crate) grew: bool,
 }
 
-/// The batch's live recurrent slots plus the scratch slot pad rows write into.
+/// The batch's live recurrent slots after reserving graph capacity.
 pub(crate) fn hybrid_graph_slots(cache: &mut HybridCache) -> Option<HybridGraphSlots> {
     let real = cache.state_indices_host()?.to_vec();
     let capacity = cache.recurrent_capacity();
-    let pad_slot = cache.graph_pad_slot()?;
+    cache.graph_pad_slot()?;
     Some(HybridGraphSlots {
         real,
-        pad_slot: u32::try_from(pad_slot).ok()?,
         grew: cache.recurrent_capacity() != capacity,
     })
 }
@@ -529,6 +533,10 @@ impl CudaGraphHandle {
         let _ = self.stream.context().check_err();
         Ok(())
     }
+
+    pub(crate) fn stream(&self) -> &Arc<CudaStream> {
+        &self.stream
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -594,7 +602,7 @@ struct CudaGraphCopyCompletion {
     ordered_after_graph: bool,
 }
 
-struct CudaGraphHostStaging {
+pub(crate) struct CudaGraphHostStaging {
     buffers: HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>,
     completions: HashMap<DeviceLocation, CudaGraphCopyCompletion>,
     graph_complete: CudaEvent,
@@ -1207,7 +1215,6 @@ pub(crate) struct CudaDecodeGraphEntry {
     generation: u64,
     replay_epoch: u64,
     key: CudaDecodeGraphKey,
-    graph: CudaGraphHandle,
     host_staging: CudaGraphHostStaging,
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
@@ -1217,6 +1224,8 @@ pub(crate) struct CudaDecodeGraphEntry {
     // Proposer-facing outputs living in persistent buffers the replay refreshes
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
     spec_state_usage: CudaGraphSpecStateUsage,
+    // Must stay last so graph-backed tensors enqueue their frees before the graph exec is destroyed.
+    graph: CudaGraphHandle,
 }
 
 pub struct CudaDecodeGraphLaunch {
@@ -1304,6 +1313,7 @@ impl CudaDecodeGraphEntry {
     fn launch(
         &self,
         step: &CudaGraphDecodeStep,
+        replay_epoch: u64,
     ) -> candle_core::Result<Option<CudaDecodeGraphLaunch>> {
         let input_ids = self.input_ids.as_detached_tensor();
         let (batch, q_len) = input_ids.dims2()?;
@@ -1322,13 +1332,106 @@ impl CudaDecodeGraphEntry {
         }
         Ok(Some(CudaDecodeGraphLaunch {
             generation: self.generation,
-            replay_epoch: self.replay_epoch,
+            replay_epoch,
             key: self.key.clone(),
             input_ids,
             graph_stream: self.graph.stream.clone(),
             real_batch: step.real_batch,
             source: step.clone(),
         }))
+    }
+
+    fn release(self) -> (Arc<CudaStream>, candle_core::Result<()>) {
+        let Self {
+            generation: _,
+            replay_epoch,
+            key: _,
+            host_staging,
+            input_ids,
+            metadata_buffers,
+            state_indices,
+            _metadata,
+            logits,
+            spec_state,
+            spec_state_usage: _,
+            graph,
+        } = self;
+        let stream = graph.stream.clone();
+        let mut release_result = stream
+            .synchronize()
+            .map_err(candle_core::Error::wrap)
+            .map_err(|err| err.context("CUDA graph entry release wait failed"));
+        drop_cuda_graph_entry_resource(host_staging, &stream, "host staging", &mut release_result);
+        drop_cuda_graph_entry_resource(
+            spec_state,
+            &stream,
+            "speculative state",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_logits(logits, &stream, replay_epoch, &mut release_result);
+        drop_cuda_graph_entry_resource(
+            _metadata,
+            &stream,
+            "paged-attention metadata",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(
+            state_indices,
+            &stream,
+            "state indices",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(
+            metadata_buffers,
+            &stream,
+            "metadata buffers",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(input_ids, &stream, "input ids", &mut release_result);
+        let storage_result = stream
+            .synchronize()
+            .map_err(candle_core::Error::wrap)
+            .map_err(|err| err.context("CUDA graph entry storage release failed"));
+        if release_result.is_ok() {
+            release_result = storage_result;
+        }
+        drop(graph);
+        (stream, release_result)
+    }
+}
+
+fn drop_cuda_graph_entry_logits(
+    logits: Tensor,
+    stream: &Arc<CudaStream>,
+    replay_epoch: u64,
+    release_result: &mut candle_core::Result<()>,
+) {
+    drop(logits);
+    if let Err(err) = stream.context().check_err() {
+        // Alloc nodes have no materialized allocation before first launch, but CudaSlice::drop still frees them.
+        if replay_epoch == 0 && err.0 == sys::CUresult::CUDA_ERROR_INVALID_VALUE {
+            return;
+        }
+        if release_result.is_ok() {
+            *release_result = Err(
+                candle_core::Error::wrap(err).context("CUDA graph entry logits release failed")
+            );
+        }
+    }
+}
+
+fn drop_cuda_graph_entry_resource<T>(
+    resource: T,
+    stream: &Arc<CudaStream>,
+    name: &'static str,
+    release_result: &mut candle_core::Result<()>,
+) {
+    drop(resource);
+    if let Err(err) = stream.context().check_err() {
+        if release_result.is_ok() {
+            *release_result = Err(candle_core::Error::wrap(err)
+                .context(format!("CUDA graph entry {name} release failed")));
+        }
     }
 }
 
@@ -1344,6 +1447,7 @@ pub(crate) struct CudaDecodeGraphState {
     spec_state_budgets: HashMap<DeviceLocation, usize>,
     disabled: bool,
     suspended: bool,
+    eager_retry_blocked: bool,
 }
 
 impl CudaDecodeGraphState {
@@ -1356,8 +1460,17 @@ impl CudaDecodeGraphState {
         self.clear();
     }
 
+    pub(crate) fn take_eager_retry_allowed(&mut self) -> bool {
+        !std::mem::take(&mut self.eager_retry_blocked)
+    }
+
+    pub(crate) fn block_eager_retry(&mut self) {
+        self.eager_retry_blocked = true;
+    }
+
     pub(crate) fn clear(&mut self) {
-        self.entries.clear();
+        self.eager_retry_blocked = false;
+        release_cuda_graph_entries(std::mem::take(&mut self.entries));
     }
 
     pub(crate) fn suspend(&mut self) {
@@ -1384,48 +1497,128 @@ impl CudaDecodeGraphState {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
-        match input {
-            CudaDecodeGraphReplayInput::Host => entry.input_ids.set(&step.input_ids)?,
-            CudaDecodeGraphReplayInput::Resident(launch) => {
-                if !launch.matches(&entry) || launch.real_batch != step.real_batch {
-                    self.entries.push(entry);
-                    return Ok(None);
+        let prelaunch = (|| -> candle_core::Result<_> {
+            match input {
+                CudaDecodeGraphReplayInput::Host => {
+                    entry.input_ids.set(&step.input_ids).map_err(|err| {
+                        err.context(format!(
+                            "CUDA graph input update failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                            entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                        ))
+                    })?
+                }
+                CudaDecodeGraphReplayInput::Resident(launch) => {
+                    if !launch.matches(&entry) || launch.real_batch != step.real_batch {
+                        return Ok(None);
+                    }
                 }
             }
-        }
-        let (_, seq_len) = step.input_ids.dims2()?;
-        let metadata_buffers = &mut entry.metadata_buffers;
-        let state_indices = &entry.state_indices;
-        entry.host_staging.update(|host_staging| {
-            metadata_buffers.copy_from(
-                &step.metadata,
-                &step.seqlen_offsets,
-                seq_len,
-                host_staging,
-            )?;
-            match (state_indices, &step.state_indices) {
-                (Some(dst), Some(host)) => copy_state_indices(dst, host, host_staging),
-                (None, None) => Ok(()),
-                _ => candle_core::bail!(
-                    "hybrid state indices changed optional state during CUDA graph replay"
-                ),
+            let replay_epoch = entry
+                .replay_epoch
+                .checked_add(1)
+                .expect("CUDA decode graph replay epoch overflow");
+            let spec_state = entry
+                .spec_state
+                .as_deref()
+                .map(|state| state.for_real_batch(step.real_batch))
+                .transpose()?
+                .map(Arc::from);
+            let replay = CudaDecodeGraphReplay {
+                logits: step.narrow_rows(&entry.logits)?,
+                spec_state,
+                launch: entry.launch(step, replay_epoch)?,
+            };
+            let (_, seq_len) = step.input_ids.dims2()?;
+            let metadata_buffers = &mut entry.metadata_buffers;
+            let state_indices = &entry.state_indices;
+            entry
+                .host_staging
+                .update(|host_staging| {
+                    metadata_buffers.copy_from(
+                        &step.metadata,
+                        &step.seqlen_offsets,
+                        seq_len,
+                        host_staging,
+                    )?;
+                    match (state_indices, &step.state_indices) {
+                        (Some(dst), Some(host)) => copy_state_indices(dst, host, host_staging),
+                        (None, None) => Ok(()),
+                        _ => candle_core::bail!(
+                            "hybrid state indices changed optional state during CUDA graph replay"
+                        ),
+                    }
+                })
+                .map_err(|err| {
+                    err.context(format!(
+                        "CUDA graph metadata update failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                        entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                    ))
+                })?;
+            entry.host_staging.order_before_graph().map_err(|err| {
+                err.context(format!(
+                    "CUDA graph metadata ordering failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                    entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                ))
+            })?;
+            Ok(Some((replay_epoch, replay)))
+        })();
+        let (replay_epoch, mut replay) = match prelaunch {
+            Ok(Some(prelaunch)) => prelaunch,
+            Ok(None) => {
+                self.entries.push(entry);
+                return Ok(None);
             }
-        })?;
-        entry.host_staging.order_before_graph()?;
-        entry
-            .graph
-            .launch()
-            .map_err(|err| err.context("CUDA graph replay launch failed"))?;
-        entry.host_staging.record_graph_complete()?;
-        entry.replay_epoch = entry
-            .replay_epoch
-            .checked_add(1)
-            .expect("CUDA decode graph replay epoch overflow");
-        let replay = CudaDecodeGraphReplay {
-            logits: step.narrow_rows(&entry.logits)?,
-            spec_state: entry.spec_state.clone(),
-            launch: entry.launch(step)?,
+            Err(err) => {
+                self.entries.push(entry);
+                return Err(err);
+            }
         };
+        if let Err(err) = entry.graph.launch().map_err(|err| {
+            err.context(format!(
+                "CUDA graph replay launch failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                entry.generation, entry.replay_epoch, step.real_batch, entry.key
+            ))
+        }) {
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return Err(err);
+        }
+        if let Err(record_err) = entry.host_staging.record_graph_complete().map_err(|err| {
+            err.context(format!(
+                "CUDA graph completion recording failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                entry.generation, entry.replay_epoch, step.real_batch, entry.key
+            ))
+        }) {
+            let synchronize_result = entry
+                .graph
+                .stream()
+                .synchronize()
+                .map_err(candle_core::Error::wrap)
+                .map_err(|err| err.context("CUDA graph replay recovery synchronization failed"));
+            entry.replay_epoch = replay_epoch;
+            replay.launch = None;
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return match synchronize_result {
+                Ok(()) => {
+                    tracing::warn!(
+                        "CUDA decode graphs retired after completion recording error: {record_err:?}"
+                    );
+                    Ok(Some(replay))
+                }
+                Err(synchronize_err) => {
+                    tracing::warn!(
+                        "CUDA decode graph completion recording and recovery synchronization failed: {record_err:?}; {synchronize_err:?}"
+                    );
+                    Err(candle_core::Error::msg(format!(
+                        "{record_err}; CUDA graph state may have advanced and recovery failed: {synchronize_err}"
+                    )))
+                }
+            };
+        }
+        entry.replay_epoch = replay_epoch;
         self.entries.push(entry);
         Ok(Some(replay))
     }
@@ -1456,7 +1649,7 @@ impl CudaDecodeGraphState {
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
         self.evict_for_spec_state(&entry.spec_state_usage);
         if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-            self.entries.remove(0);
+            release_cuda_graph_entries(vec![self.entries.remove(0)]);
         }
         entry.generation = self.allocate_generation();
         self.entries.push(entry);
@@ -1481,9 +1674,11 @@ impl CudaDecodeGraphState {
                 "Evicting CUDA graphs to stay within the speculative state budget"
             );
             evictions.sort_unstable();
+            let mut entries = Vec::with_capacity(evictions.len());
             for idx in evictions.into_iter().rev() {
-                self.entries.remove(idx);
+                entries.push(self.entries.remove(idx));
             }
+            release_cuda_graph_entries(entries);
         }
     }
 
@@ -1493,6 +1688,26 @@ impl CudaDecodeGraphState {
                 generation.checked_add(1)
             })
             .expect("CUDA decode graph generation overflow")
+    }
+}
+
+fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
+    let mut streams = Vec::new();
+    for entry in entries {
+        let (stream, release_result) = entry.release();
+        if let Err(err) = release_result {
+            tracing::warn!("Failed to release CUDA graph entry storage: {err:?}");
+        }
+        if !streams.iter().any(|known: &Arc<CudaStream>| {
+            known.context().cu_device() == stream.context().cu_device()
+        }) {
+            streams.push(stream);
+        }
+    }
+    for stream in streams {
+        if let Err(err) = trim_cuda_graph_memory(&stream) {
+            tracing::warn!("Failed to trim released CUDA graph memory: {err:?}");
+        }
     }
 }
 
@@ -1537,6 +1752,7 @@ where
     };
     graph_input_ids.device().synchronize()?;
     let stream = cuda_device.cuda_stream();
+    let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
     let restore_event_tracking = disable_event_tracking_for_capture(&stream);
     let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
@@ -1600,7 +1816,6 @@ where
         generation: 0,
         replay_epoch: 0,
         key,
-        graph,
         host_staging,
         input_ids,
         metadata_buffers,
@@ -1609,6 +1824,7 @@ where
         logits,
         spec_state: None,
         spec_state_usage: CudaGraphSpecStateUsage::default(),
+        graph,
     })
 }
 
@@ -1642,36 +1858,187 @@ pub(crate) fn cuda_decode_graph_supported_for_model(
     }
 }
 
-pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
-    if !stream.context().has_async_alloc() {
-        return Ok(());
-    }
+#[must_use]
+pub(crate) struct CudaGraphMemoryPoolGuard {
+    stream: Arc<CudaStream>,
+    pool: Option<usize>,
+}
 
-    stream
-        .context()
-        .bind_to_thread()
-        .map_err(candle_core::Error::wrap)?;
-    let dev = stream.context().cu_device();
-    let mut pool = std::ptr::null_mut();
-    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, dev) };
+impl Drop for CudaGraphMemoryPoolGuard {
+    fn drop(&mut self) {
+        let Some(pool) = self.pool else { return };
+        if let Err(err) = self.stream.context().bind_to_thread() {
+            tracing::warn!("Failed to bind CUDA context while restoring graph memory pool: {err}");
+        }
+        let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+        let mut scopes = scopes
+            .lock()
+            .expect("CUDA graph memory pool scopes poisoned");
+        let Some(scope) = scopes.get_mut(&pool) else {
+            tracing::warn!("CUDA graph memory pool scope disappeared before restoration");
+            return;
+        };
+        scope.guards = scope
+            .guards
+            .checked_sub(1)
+            .expect("CUDA graph memory pool guard underflow");
+        if scope.guards != 0 {
+            return;
+        }
+        let release_threshold = scope.release_threshold;
+        let pool_ptr = pool as sys::CUmemoryPool;
+        if let Err(err) = set_memory_pool_release_threshold(pool_ptr, release_threshold) {
+            tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
+        }
+        let _ = self.stream.synchronize();
+        if let Err(err) = trim_cuda_graph_memory_bound(&self.stream) {
+            tracing::warn!("Failed to trim CUDA graph memory after capture: {err:?}");
+        }
+        scopes.remove(&pool);
+    }
+}
+
+fn memory_pool_release_threshold(pool: sys::CUmemoryPool) -> candle_core::Result<u64> {
+    let mut value = 0u64;
+    let result = unsafe {
+        sys::cuMemPoolGetAttribute(
+            pool,
+            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+            (&mut value as *mut u64).cast(),
+        )
+    };
     if result != sys::CUresult::CUDA_SUCCESS {
         return Err(candle_core::Error::msg(format!("{result:?}"))
-            .context("CUDA graph mempool lookup failed"));
+            .context("CUDA graph mempool release threshold lookup failed"));
     }
+    Ok(value)
+}
 
-    let mut release_threshold = u64::MAX;
+fn set_memory_pool_release_threshold(
+    pool: sys::CUmemoryPool,
+    mut value: u64,
+) -> candle_core::Result<()> {
     let result = unsafe {
         sys::cuMemPoolSetAttribute(
             pool,
             sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-            (&mut release_threshold as *mut u64).cast(),
+            (&mut value as *mut u64).cast(),
         )
     };
     if result != sys::CUresult::CUDA_SUCCESS {
         return Err(candle_core::Error::msg(format!("{result:?}"))
             .context("CUDA graph mempool release threshold setup failed"));
     }
+    Ok(())
+}
 
+fn cuda_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<sys::CUmemoryPool> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)?;
+    let mut pool = std::ptr::null_mut();
+    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph mempool lookup failed"));
+    }
+    Ok(pool)
+}
+
+fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    let result = unsafe { sys::cuDeviceGraphMemTrim(stream.context().cu_device()) };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(
+            candle_core::Error::msg(format!("{result:?}")).context("CUDA graph memory trim failed")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn cuda_graph_memory_attribute(
+    stream: &Arc<CudaStream>,
+    attribute: sys::CUgraphMem_attribute,
+) -> candle_core::Result<usize> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)?;
+    let mut value = 0usize;
+    let result = unsafe {
+        sys::cuDeviceGetGraphMemAttribute(
+            stream.context().cu_device(),
+            attribute,
+            (&mut value as *mut usize).cast(),
+        )
+    };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph memory attribute lookup failed"));
+    }
+    Ok(value)
+}
+
+pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("CUDA graph memory trim context bind failed"))?;
+    let pool = cuda_memory_pool(stream)? as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    if scopes.contains_key(&pool) {
+        return Ok(());
+    }
+    stream
+        .synchronize()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("CUDA graph memory trim synchronization failed"))?;
+    trim_cuda_graph_memory_bound(stream)
+}
+
+pub(crate) fn prepare_cuda_graph_memory_pool(
+    stream: &Arc<CudaStream>,
+) -> candle_core::Result<CudaGraphMemoryPoolGuard> {
+    if !stream.context().has_async_alloc() {
+        return Ok(CudaGraphMemoryPoolGuard {
+            stream: stream.clone(),
+            pool: None,
+        });
+    }
+
+    let pool = cuda_memory_pool(stream)?;
+    let pool_key = pool as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let mut scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    if let Some(scope) = scopes.get_mut(&pool_key) {
+        scope.guards = scope
+            .guards
+            .checked_add(1)
+            .expect("CUDA graph memory pool guard overflow");
+    } else {
+        let release_threshold = memory_pool_release_threshold(pool)?;
+        set_memory_pool_release_threshold(pool, u64::MAX)?;
+        scopes.insert(
+            pool_key,
+            MemoryPoolScopeState {
+                guards: 1,
+                release_threshold,
+            },
+        );
+    }
+    drop(scopes);
+
+    let guard = CudaGraphMemoryPoolGuard {
+        stream: stream.clone(),
+        pool: Some(pool_key),
+    };
     for attr in [
         sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_FOLLOW_EVENT_DEPENDENCIES,
         sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_OPPORTUNISTIC,
@@ -1686,7 +2053,7 @@ pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle
         }
     }
 
-    Ok(())
+    Ok(guard)
 }
 
 fn flashinfer_decode_scratch_maps(
@@ -2196,10 +2563,55 @@ impl CudaGraphPinnedBuffer {
         }
         Ok(())
     }
+
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
+    fn copy_from_i64_slice(
+        &mut self,
+        src: &[i64],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if dst.dtype() != DType::I64 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching i64 metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA i64 metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous i64 metadata");
+        }
+        let CudaGraphPinnedData::I64(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging i64 metadata dtype changed");
+        };
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
+        let dst = dst_storage.as_cuda_slice::<i64>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(src),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph i64 metadata H2D copy failed"));
+        }
+        Ok(())
+    }
 }
 
 impl CudaGraphHostStaging {
-    fn new(graph_stream: Arc<CudaStream>) -> candle_core::Result<Self> {
+    pub(crate) fn new(graph_stream: Arc<CudaStream>) -> candle_core::Result<Self> {
         let graph_complete = graph_stream
             .context()
             .new_event(None)
@@ -2213,7 +2625,7 @@ impl CudaGraphHostStaging {
         })
     }
 
-    fn update(
+    pub(crate) fn update(
         &mut self,
         copy: impl FnOnce(&mut Self) -> candle_core::Result<()>,
     ) -> candle_core::Result<()> {
@@ -2269,7 +2681,7 @@ impl CudaGraphHostStaging {
         result
     }
 
-    fn order_before_graph(&self) -> candle_core::Result<()> {
+    pub(crate) fn order_before_graph(&self) -> candle_core::Result<()> {
         for completion in self.completions.values() {
             if completion.pending && !same_cuda_stream(&completion.stream, &self.graph_stream) {
                 self.graph_stream
@@ -2280,7 +2692,7 @@ impl CudaGraphHostStaging {
         Ok(())
     }
 
-    fn record_graph_complete(&mut self) -> candle_core::Result<()> {
+    pub(crate) fn record_graph_complete(&mut self) -> candle_core::Result<()> {
         self.graph_complete
             .record(&self.graph_stream)
             .map_err(candle_core::Error::wrap)?;
@@ -2343,7 +2755,7 @@ impl CudaGraphHostStaging {
         buffer.copy_from(src, dst, &stream)
     }
 
-    fn copy_from_u32_slice(
+    pub(crate) fn copy_from_u32_slice(
         &mut self,
         name: &'static str,
         location: DeviceLocation,
@@ -2359,6 +2771,25 @@ impl CudaGraphHostStaging {
             }
         };
         buffer.copy_from_u32_slice(src, dst, &stream)
+    }
+
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
+    pub(crate) fn copy_from_i64_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[i64],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_i64_slice(src, dst, &stream)
     }
 }
 
@@ -2731,11 +3162,105 @@ mod tests {
 
     #[test]
     #[ignore = "requires a CUDA device"]
+    fn graph_memory_pool_scope_restores_release_threshold() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let pool = cuda_memory_pool(&stream)?;
+        let original = memory_pool_release_threshold(pool)?;
+
+        let first = prepare_cuda_graph_memory_pool(&stream)?;
+        let second = prepare_cuda_graph_memory_pool(&stream)?;
+        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        drop(first);
+        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        drop(second);
+        assert_eq!(memory_pool_release_threshold(pool)?, original);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
+        let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
+        let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
+
+        let guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let output = input.as_detached_tensor().affine(2.0, 1.0)?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+        graph.launch()?;
+        stream.synchronize()?;
+        drop(output);
+        stream.synchronize()?;
+        drop(graph);
+        drop(guard);
+
+        trim_cuda_graph_memory(&stream)?;
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, used_attribute)?,
+            used_before
+        );
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, reserved_attribute)?,
+            reserved_before
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
+        let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
+        let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
+
+        let guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let logits = input.as_detached_tensor().affine(2.0, 1.0)?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        let mut release_result = Ok(());
+        drop_cuda_graph_entry_logits(logits, &stream, 0, &mut release_result);
+        release_result?;
+        drop(graph);
+        drop(guard);
+        trim_cuda_graph_memory(&stream)?;
+
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, used_attribute)?,
+            used_before
+        );
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, reserved_attribute)?,
+            reserved_before
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
     fn graph_replay_retains_captured_output_storage() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let cuda_device = device.as_cuda_device()?;
         let stream = cuda_device.cuda_stream();
-        prepare_cuda_graph_memory_pool(&stream)?;
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
 
         let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
         let warmup = input.as_detached_tensor().affine(2.0, 1.0)?;
@@ -2772,7 +3297,7 @@ mod tests {
         let device = Device::new_cuda(0)?;
         let cuda_device = device.as_cuda_device()?;
         let stream = cuda_device.cuda_stream();
-        prepare_cuda_graph_memory_pool(&stream)?;
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
 
         let input = Var::from_tensor(&Tensor::from_vec(
             (1u16..=16).map(f32::from).collect::<Vec<_>>(),
@@ -2829,6 +3354,18 @@ mod tests {
         state.suspend();
         state.resume();
         assert!(state.disabled());
+    }
+
+    #[test]
+    fn eager_retry_block_applies_to_one_failed_step() {
+        let mut state = CudaDecodeGraphState::default();
+        assert!(state.take_eager_retry_allowed());
+        state.block_eager_retry();
+        assert!(!state.take_eager_retry_allowed());
+        assert!(state.take_eager_retry_allowed());
+        state.block_eager_retry();
+        state.clear();
+        assert!(state.take_eager_retry_allowed());
     }
 
     #[test]

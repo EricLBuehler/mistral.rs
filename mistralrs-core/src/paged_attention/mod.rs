@@ -18,6 +18,11 @@ pub(crate) mod mm_prefix;
 pub(crate) mod plan;
 mod scales;
 mod scheduler;
+#[cfg(any(
+    test,
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix")
+))]
+pub(crate) mod windowed_pool;
 pub const _PAD_SLOT_ID: i64 = -1;
 
 pub use attention_backend::AttentionBackendKind;
@@ -103,6 +108,7 @@ pub struct PagedAttentionConfig {
     pub(crate) cache_type: PagedCacheType,
     pub(crate) serving_capacity: Option<usize>,
     pub(crate) base_device_memory_reservation_bytes: usize,
+    pub(crate) recurrent_checkpoint_lanes: usize,
 }
 
 impl PagedAttentionConfig {
@@ -117,6 +123,7 @@ impl PagedAttentionConfig {
             cache_type,
             serving_capacity: None,
             base_device_memory_reservation_bytes: 0,
+            recurrent_checkpoint_lanes: 1,
         })
     }
 
@@ -134,6 +141,14 @@ impl PagedAttentionConfig {
             .base_device_memory_reservation_bytes
             .checked_add(bytes)
             .ok_or_else(|| anyhow::anyhow!("paged attention device memory reservation overflow"))?;
+        Ok(self)
+    }
+
+    pub fn with_recurrent_checkpoint_lanes(mut self, lanes: usize) -> anyhow::Result<Self> {
+        if lanes == 0 {
+            anyhow::bail!("recurrent checkpoint lane count must be nonzero")
+        }
+        self.recurrent_checkpoint_lanes = lanes;
         Ok(self)
     }
 }

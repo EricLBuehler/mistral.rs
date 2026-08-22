@@ -1,8 +1,9 @@
 use candle_core::{Result, Tensor};
 
 use super::{
-    logging::log_attach, SpeculativeAttachInfo, SpeculativeCommitRow, SpeculativeConfig,
-    SpeculativePrefillCtx, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
+    logging::log_attach, SpeculativeAttachInfo, SpeculativeBatchObservation, SpeculativeBatchPlan,
+    SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphPlan, SpeculativePrefillCtx,
+    SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
 };
 
 /// Everything a target forward leaves behind for the proposer/commit (captured hidden states, rollback
@@ -12,6 +13,8 @@ pub trait SpeculativeGraphState: Send + Sync {
     /// Device tensors in a fixed order; `with_tensors` rebuilds the same structure around replacements.
     fn tensors(&self) -> Vec<Tensor>;
     fn with_tensors(&self, tensors: Vec<Tensor>) -> Result<Box<dyn SpeculativeGraphState>>;
+    /// Build views for the live rows before launching a padded CUDA graph.
+    fn for_real_batch(&self, real_batch: usize) -> Result<Box<dyn SpeculativeGraphState>>;
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -34,15 +37,26 @@ pub trait SpeculativeTargetMixin {
         false
     }
 
-    fn speculative_proposal_len(&self) -> Option<usize> {
+    fn supports_recurrent_speculative_checkpoints(&self) -> bool {
+        false
+    }
+
+    fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         None
     }
 
-    /// Every proposal length the proposer may use, for decode-graph precapture. Defaults to the
-    /// current length; adaptive proposers return all their depth tiers.
-    fn speculative_proposal_len_options(&self) -> Vec<usize> {
-        self.speculative_proposal_len().into_iter().collect()
+    fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {
+        self.speculative_plan(1)
+            .map(|plan| SpeculativeGraphPlan::new(plan.proposal_len, None))
+            .into_iter()
+            .collect()
     }
+
+    fn speculative_observe(&self, _observation: SpeculativeBatchObservation) {}
+
+    fn speculative_bypass(&mut self, _seq_ids: &[usize]) {}
+
+    fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
 
     /// Returns `Ok(None)` when speculation is unsupported for the current step.
     /// Return `Err` only for real failures that should stop generation.

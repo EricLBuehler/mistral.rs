@@ -17,14 +17,18 @@ use super::{
     Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
+#[cfg(feature = "cuda")]
+use crate::cuda::gdn::GDN_PAD_SLOT;
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::{self, WorkerTransferData};
 #[cfg(feature = "cuda")]
-use crate::kv_cache::RecurrentStateSnapshot;
+use crate::kv_cache::RecurrentCheckpointStateSnapshot;
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 
 #[cfg(feature = "cuda")]
-type SeqRecurrentStateSnapshots = Vec<(usize, Vec<RecurrentStateSnapshot>)>;
+type SeqRecurrentCheckpointSnapshots = Vec<(usize, RecurrentCheckpointStateSnapshot)>;
+#[cfg(feature = "cuda")]
+type HybridStateIndicesSnapshot = (Option<Tensor>, Option<Vec<u32>>);
 #[cfg(feature = "cuda")]
 struct CudaDecodeGraphCaptureInputs<'a> {
     kv_cache: &'a [(Tensor, Tensor)],
@@ -52,10 +56,10 @@ use crate::pipeline::chat_template::{
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
     cuda_graph_batch_bucket, cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed,
-    hybrid_graph_slots, install_hybrid_graph_state_indices, prepare_cuda_graph_memory_pool,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay,
-    CudaDecodeGraphReplayInput, CudaDecodeGraphState, CudaGraphDecodeStep,
-    CudaGraphDecodeStepInputs, CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    hybrid_graph_slots, install_hybrid_graph_state_indices, CudaDecodeGraphCaptureCtx,
+    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
+    CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1268,8 +1272,15 @@ impl Loader for MultimodalLoader {
         #[cfg(feature = "cuda")]
         super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
 
+        let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
         let recurrent_pool_grew = paged_attn_config
-            .map(|config| reserve_recurrent_serving_capacity(model.cache(), config))
+            .map(|config| {
+                reserve_recurrent_serving_capacity(
+                    model.cache(),
+                    config,
+                    recurrent_checkpoints_supported,
+                )
+            })
             .transpose()?
             .unwrap_or(false);
         #[cfg(feature = "cuda")]
@@ -1549,8 +1560,19 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
         self.model.has_speculative_proposer()
     }
 
-    fn speculative_proposal_len(&self) -> Option<usize> {
-        self.model.speculative_proposal_len()
+    fn speculative_plan(
+        &self,
+        batch_size: usize,
+    ) -> Option<crate::speculative::SpeculativeBatchPlan> {
+        self.model.speculative_plan(batch_size)
+    }
+
+    fn speculative_observe(&self, observation: crate::speculative::SpeculativeBatchObservation) {
+        self.model.speculative_observe(observation);
+    }
+
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) {
+        self.model.speculative_bypass(seq_ids);
     }
 
     fn speculative_target_hiddens(
@@ -1589,7 +1611,7 @@ impl crate::speculative::driver::SpeculativePipelineExt for MultimodalPipeline {
             model_specific_args,
             paged_attn_meta: input_meta.paged_attn_meta,
             flash_meta: input_meta.flash_meta,
-            recurrent_batch_kind: RecurrentBatchKind::Decode,
+            recurrent_batch_kind: RecurrentBatchKind::SpeculativeDecode,
             adapter_leases,
         }))
     }
@@ -1602,6 +1624,9 @@ impl MultimodalPipeline {
         paged_attn_meta: Option<&PagedAttentionInputMetadata>,
         recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<RecurrentBatchKind> {
+        if recurrent_batch_kind == RecurrentBatchKind::SpeculativeDecode {
+            return Ok(recurrent_batch_kind);
+        }
         let seq_len = input_ids.dim(1)?;
         if let Some(metadata) = paged_attn_meta {
             return Ok(
@@ -1632,34 +1657,40 @@ impl MultimodalPipeline {
 
 #[cfg(feature = "cuda")]
 impl MultimodalPipeline {
-    fn snapshot_hybrid_recurrent_state(
+    fn snapshot_hybrid_recurrent_checkpoints(
         &self,
-    ) -> candle_core::Result<Option<SeqRecurrentStateSnapshots>> {
+    ) -> candle_core::Result<Option<SeqRecurrentCheckpointSnapshots>> {
         if !self.model.cache().is_hybrid() {
             return Ok(None);
         }
         let hybrid_cache = self.model.cache().hybrid();
-        let Some(indices) = hybrid_cache.state_indices_host().map(ToOwned::to_owned) else {
+        let Some(mut indices) = hybrid_cache
+            .logical_state_indices_host()
+            .map(ToOwned::to_owned)
+        else {
             return Ok(None);
         };
+        indices.retain(|&idx| idx != u32::MAX);
+        indices.sort_unstable();
+        indices.dedup();
         let mut snapshots = Vec::with_capacity(indices.len());
         for idx in indices {
             let idx = idx as usize;
-            snapshots.push((idx, hybrid_cache.snapshot_recurrent_state(idx)?));
+            snapshots.push((idx, hybrid_cache.snapshot_recurrent_checkpoint_state(idx)?));
         }
         Ok(Some(snapshots))
     }
 
-    fn restore_hybrid_recurrent_state(
+    fn restore_hybrid_recurrent_checkpoints(
         &self,
-        snapshots: Option<&[(usize, Vec<RecurrentStateSnapshot>)]>,
+        snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
     ) -> candle_core::Result<()> {
         let Some(snapshots) = snapshots else {
             return Ok(());
         };
         let mut hybrid_cache = self.model.cache().hybrid();
         for (idx, snapshot) in snapshots {
-            hybrid_cache.restore_recurrent_state(*idx, snapshot)?;
+            hybrid_cache.restore_recurrent_checkpoint_state(*idx, snapshot)?;
         }
         Ok(())
     }
@@ -1734,6 +1765,7 @@ impl MultimodalPipeline {
         } else {
             None
         };
+        let graph_pad_slot = hybrid_slots.as_ref().map(|_| GDN_PAD_SLOT);
         let Some(step) = CudaGraphDecodeStep::padded(
             CudaGraphDecodeStepInputs {
                 input_ids,
@@ -1742,7 +1774,7 @@ impl MultimodalPipeline {
                 position_ids,
                 metadata,
                 state_indices: hybrid_slots.as_ref().map(|slots| slots.real.as_slice()),
-                pad_slot: hybrid_slots.as_ref().map(|slots| slots.pad_slot),
+                pad_slot: graph_pad_slot,
             },
             bucket,
         )?
@@ -1753,7 +1785,10 @@ impl MultimodalPipeline {
             CudaDecodeGraphKey::new(&step.input_ids, &step.metadata, cache_config.block_size)?;
         if let Some(replay) = state.replay(&key, &step, CudaDecodeGraphReplayInput::Host)? {
             if let Some(spec_state) = replay.spec_state.as_deref() {
-                self.model.install_speculative_graph_state(spec_state)?;
+                if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
+                    state.block_eager_retry();
+                    return Err(err);
+                }
             }
             return Ok(Some(replay));
         }
@@ -1771,7 +1806,7 @@ impl MultimodalPipeline {
             },
         )?;
         Ok(Some(CudaDecodeGraphReplay {
-            logits: step.narrow_rows(&logits)?,
+            logits,
             spec_state: None,
             launch: None,
         }))
@@ -1798,24 +1833,19 @@ impl MultimodalPipeline {
             return Ok(());
         };
         let speculative = self.model.has_speculative_proposer();
-        let options = self
+        let graph_plans = self
             .model
-            .speculative_proposal_len_options()
+            .speculative_graph_plans()
             .into_iter()
-            .filter(|n| cuda_graph_startup_capture_allowed(speculative, 1 + n))
+            .filter(|plan| cuda_graph_startup_capture_allowed(speculative, 1 + plan.proposal_len))
             .collect::<Vec<_>>();
-        let max_option = options.iter().copied().max().unwrap_or(0);
-        // Non-max depths exist only for the adaptive controller, which is gated to small batches;
-        // capturing them for every bucket would multiply the decode-scratch footprint for nothing.
         let mut widths = vec![(1usize, usize::MAX)];
-        for n in options {
-            if n > 0 {
-                let max_bucket = if n == max_option {
-                    usize::MAX
-                } else {
-                    crate::speculative::dflash::ADAPT_MAX_BATCH
-                };
-                widths.push((1 + n, max_bucket));
+        for plan in graph_plans {
+            if plan.proposal_len > 0 {
+                widths.push((
+                    1 + plan.proposal_len,
+                    plan.max_batch_size.unwrap_or(usize::MAX),
+                ));
             }
         }
         widths.sort_unstable();
@@ -1825,6 +1855,7 @@ impl MultimodalPipeline {
             let mut cache = self.model.cache().hybrid();
             let Some(pad_slot) = cache
                 .graph_pad_slot()
+                .and_then(|slot| cache.active_physical_slot(slot).ok())
                 .and_then(|slot| u32::try_from(slot).ok())
             else {
                 return Ok(());
@@ -1845,9 +1876,17 @@ impl MultimodalPipeline {
         for (q_len, max_bucket) in widths {
             let inputs = CudaGraphPrecaptureInputs::new(ctx, q_len, &device, self.device_mapper())?;
             let live = hybrid_slots.map(|pad_slot| vec![pad_slot]);
+            let recurrent_batch_kind = if q_len == 1 {
+                RecurrentBatchKind::Decode
+            } else if speculative {
+                RecurrentBatchKind::SpeculativeDecode
+            } else {
+                RecurrentBatchKind::Prefill
+            };
+            let graph_pad_slot = hybrid_slots.map(|_| GDN_PAD_SLOT);
             for bucket in cuda_graph_precapture_batches().filter(|b| *b <= max_bucket) {
                 let Some(step) = CudaGraphDecodeStep::padded(
-                    inputs.step_inputs(live.as_deref(), hybrid_slots),
+                    inputs.step_inputs(live.as_deref(), graph_pad_slot),
                     bucket,
                 )?
                 else {
@@ -1861,11 +1900,6 @@ impl MultimodalPipeline {
                 if state.contains(&key) {
                     continue;
                 }
-                let recurrent_batch_kind = if q_len == 1 {
-                    RecurrentBatchKind::Decode
-                } else {
-                    RecurrentBatchKind::Prefill
-                };
                 // The live step's slot table is whatever the pad slot is; the model only sees it
                 // through the installed graph buffers
                 self.capture_cuda_decode_graph_step(
@@ -1896,8 +1930,7 @@ impl MultimodalPipeline {
         Ok(())
     }
 
-    /// Runs the (padded) step eagerly as the live forward, then captures the same step into a graph.
-    /// Returns the live logits, still padded.
+    /// Runs the padded step eagerly as the live forward, then captures the same step into a graph.
     fn capture_cuda_decode_graph_step(
         &self,
         state: &mut CudaDecodeGraphState,
@@ -1915,187 +1948,207 @@ impl MultimodalPipeline {
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
-        prepare_cuda_graph_memory_pool(&cuda_device.cuda_stream())?;
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
         let metadata = step
             .metadata
             .materialize_decode_tensors()
             .map_err(candle_core::Error::msg)?;
 
-        // The graph reads the slot table from buffers the replay rewrites; the live step's own
-        // indices come back once both forwards are done
-        let live_state_indices = self.model.cache().is_hybrid().then(|| {
+        let recurrent_snapshots = self.snapshot_hybrid_recurrent_checkpoints()?;
+        let live_state_indices = self.snapshot_hybrid_state_indices();
+        let mut warm_spec_state = None;
+        let mut warm_live_spec_state = None;
+        let mut graph_spec_state = None;
+        let capture_attempt: candle_core::Result<_> = (|| {
+            let state_index_buffers = match &step.state_indices {
+                Some(host) => Some(install_hybrid_graph_state_indices(
+                    &mut self.model.cache().hybrid(),
+                    host,
+                )?),
+                None => None,
+            };
+            let mut ctx = ModelForwardContext::new(
+                &step.seqlen_offsets,
+                &step.context_lens,
+                &step.position_ids,
+                Some((kv_cache, &metadata)),
+                flash_meta,
+            )
+            .with_recurrent_batch_kind(recurrent_batch_kind)
+            .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+            let warmup_logits = self.model.forward(
+                &step.input_ids,
+                None,
+                self.model.default_model_specific_args(&step.input_ids),
+                &mut ctx,
+            )?;
+            warm_spec_state = speculative
+                .then(|| self.model.take_speculative_graph_state())
+                .flatten();
+            warm_live_spec_state = warm_spec_state
+                .as_deref()
+                .map(|state| state.for_real_batch(step.real_batch))
+                .transpose()?;
+            step.input_ids.device().synchronize()?;
+            let live_logits = step.narrow_rows(&warmup_logits)?;
+
+            let spec_state_usage = warm_spec_state
+                .as_deref()
+                .map(|warm| state.prepare_spec_state_admission(warm))
+                .transpose()?;
+            let persistent_spec_tensors = warm_spec_state
+                .as_ref()
+                .map(|warm| {
+                    warm.tensors()
+                        .iter()
+                        .map(|tensor| {
+                            if tensor.is_contiguous() {
+                                Ok(tensor.clone())
+                            } else {
+                                unsafe {
+                                    Tensor::empty(tensor.shape(), tensor.dtype(), tensor.device())
+                                }
+                            }
+                        })
+                        .collect::<candle_core::Result<Vec<_>>>()
+                })
+                .transpose()?;
+
+            // Captured recurrent writes do not execute, so the eager warm state remains live.
+            let entry = capture_cuda_decode_graph(
+                CudaDecodeGraphCaptureCtx {
+                    key,
+                    input_ids: &step.input_ids,
+                    seqlen_offsets: &step.seqlen_offsets,
+                    block_size,
+                    kv_cache,
+                    metadata: &metadata,
+                    model_metadata: self.metadata.model_metadata.as_deref(),
+                    activation_dtype: self.metadata.activation_dtype,
+                    warmup_logits: &warmup_logits,
+                    state_indices: state_index_buffers,
+                    real_batch: step.real_batch,
+                },
+                |graph_input_ids, graph_metadata| {
+                    let mut ctx = ModelForwardContext::new(
+                        &step.seqlen_offsets,
+                        &step.context_lens,
+                        &step.position_ids,
+                        Some((kv_cache, graph_metadata)),
+                        flash_meta,
+                    )
+                    .with_recurrent_batch_kind(recurrent_batch_kind)
+                    .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
+                    let logits = self.model.forward(
+                        graph_input_ids,
+                        None,
+                        self.model.default_model_specific_args(graph_input_ids),
+                        &mut ctx,
+                    )?;
+                    if let Some(persistent) = persistent_spec_tensors.as_ref() {
+                        let captured =
+                            self.model.take_speculative_graph_state().ok_or_else(|| {
+                                candle_core::Error::msg(
+                                    "captured forward left no speculative state",
+                                )
+                            })?;
+                        let produced = captured.tensors();
+                        if produced.len() != persistent.len() {
+                            candle_core::bail!(
+                                "speculative graph state changed shape between warmup and capture"
+                            );
+                        }
+                        for (src, dst) in produced.iter().zip(persistent) {
+                            if src.id() != dst.id() {
+                                crate::cuda::graph::copy_tensor(src, dst)?;
+                            }
+                        }
+                        graph_spec_state = Some(captured.with_tensors(persistent.clone())?);
+                    }
+                    Ok(logits)
+                },
+            )?;
+            Ok((
+                live_logits,
+                entry.with_spec_state(graph_spec_state.take(), spec_state_usage),
+            ))
+        })();
+        let capture_attempt = if let Some(warm) = warm_live_spec_state.as_deref() {
+            match self.model.install_speculative_graph_state(warm) {
+                Ok(()) => capture_attempt,
+                Err(install_err) => {
+                    state.block_eager_retry();
+                    match capture_attempt {
+                        Ok(_) => Err(install_err),
+                        Err(capture_err) => Err(candle_core::Error::msg(format!(
+                            "CUDA graph capture failed: {capture_err}; warm speculative state restoration failed: {install_err}"
+                        ))),
+                    }
+                }
+            }
+        } else {
+            capture_attempt
+        };
+        let (logits, entry) = self.finish_cuda_graph_capture_attempt(
+            state,
+            capture_attempt,
+            recurrent_snapshots.as_deref(),
+            live_state_indices.as_ref(),
+        )?;
+        state.insert(entry);
+        Ok(logits)
+    }
+
+    fn snapshot_hybrid_state_indices(&self) -> Option<HybridStateIndicesSnapshot> {
+        self.model.cache().is_hybrid().then(|| {
             let cache = self.model.cache().hybrid();
             (
                 cache.state_indices().cloned(),
                 cache.state_indices_host().map(ToOwned::to_owned),
             )
-        });
-        let state_index_buffers = match &step.state_indices {
-            Some(host) => Some(install_hybrid_graph_state_indices(
-                &mut self.model.cache().hybrid(),
-                host,
-            )?),
-            None => None,
-        };
-        let restore_live_state_indices = || {
-            if let Some((tensor, host)) = live_state_indices.clone() {
-                self.model
-                    .cache()
-                    .hybrid()
-                    .set_state_indices_with_host(tensor, host);
-            }
-        };
-
-        let recurrent_snapshots = self.snapshot_hybrid_recurrent_state()?;
-        let mut ctx = ModelForwardContext::new(
-            &step.seqlen_offsets,
-            &step.context_lens,
-            &step.position_ids,
-            Some((kv_cache, &metadata)),
-            flash_meta,
-        )
-        .with_recurrent_batch_kind(recurrent_batch_kind)
-        .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-        let warmup_logits = match self.model.forward(
-            &step.input_ids,
-            None,
-            self.model.default_model_specific_args(&step.input_ids),
-            &mut ctx,
-        ) {
-            Ok(logits) => logits,
-            Err(err) => {
-                restore_live_state_indices();
-                return Err(err);
-            }
-        };
-        step.input_ids.device().synchronize()?;
-        let warmup_recurrent_snapshots = self.snapshot_hybrid_recurrent_state()?;
-        self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
-        step.input_ids.device().synchronize()?;
-        // The warmup forward is the one that really ran this step, so its proposer outputs are the
-        // live ones; the captured forward's outputs are copied into persistent buffers for replays
-        let warm_spec_state = speculative
-            .then(|| self.model.take_speculative_graph_state())
-            .flatten();
-        let spec_state_usage = match warm_spec_state.as_deref() {
-            Some(warm) => match state.prepare_spec_state_admission(warm) {
-                Ok(usage) => Some(usage),
-                Err(err) => {
-                    restore_live_state_indices();
-                    self.model.install_speculative_graph_state(warm)?;
-                    self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
-                    return Err(err);
-                }
-            },
-            None => None,
-        };
-        let persistent_spec_tensors = warm_spec_state
-            .as_ref()
-            .map(|warm| {
-                warm.tensors()
-                    .iter()
-                    .map(|tensor| {
-                        if tensor.is_contiguous() {
-                            Ok(tensor.clone())
-                        } else {
-                            unsafe {
-                                Tensor::empty(tensor.shape(), tensor.dtype(), tensor.device())
-                            }
-                        }
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()
-            })
-            .transpose();
-        let persistent_spec_tensors = match persistent_spec_tensors {
-            Ok(tensors) => tensors,
-            Err(err) => {
-                restore_live_state_indices();
-                if let Some(warm) = warm_spec_state.as_deref() {
-                    self.model.install_speculative_graph_state(warm)?;
-                }
-                self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
-                return Err(err);
-            }
-        };
-        let mut graph_spec_state = None;
-
-        let capture_result = capture_cuda_decode_graph(
-            CudaDecodeGraphCaptureCtx {
-                key,
-                input_ids: &step.input_ids,
-                seqlen_offsets: &step.seqlen_offsets,
-                block_size,
-                kv_cache,
-                metadata: &metadata,
-                model_metadata: self.metadata.model_metadata.as_deref(),
-                activation_dtype: self.metadata.activation_dtype,
-                warmup_logits: &warmup_logits,
-                state_indices: state_index_buffers,
-                real_batch: step.real_batch,
-            },
-            |graph_input_ids, graph_metadata| {
-                let mut ctx = ModelForwardContext::new(
-                    &step.seqlen_offsets,
-                    &step.context_lens,
-                    &step.position_ids,
-                    Some((kv_cache, graph_metadata)),
-                    flash_meta,
-                )
-                .with_recurrent_batch_kind(recurrent_batch_kind)
-                .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-                let logits = self.model.forward(
-                    graph_input_ids,
-                    None,
-                    self.model.default_model_specific_args(graph_input_ids),
-                    &mut ctx,
-                )?;
-                if let Some(persistent) = persistent_spec_tensors.as_ref() {
-                    let captured = self.model.take_speculative_graph_state().ok_or_else(|| {
-                        candle_core::Error::msg("captured forward left no speculative state")
-                    })?;
-                    let produced = captured.tensors();
-                    if produced.len() != persistent.len() {
-                        candle_core::bail!(
-                            "speculative graph state changed shape between warmup and capture"
-                        );
-                    }
-                    for (src, dst) in produced.iter().zip(persistent) {
-                        if src.id() != dst.id() {
-                            crate::cuda::graph::copy_tensor(src, dst)?;
-                        }
-                    }
-                    graph_spec_state = Some(captured.with_tensors(persistent.clone())?);
-                }
-                Ok(logits)
-            },
-        );
-        restore_live_state_indices();
-        if let Some(warm) = warm_spec_state.as_deref() {
-            self.model.install_speculative_graph_state(warm)?;
-        }
-        match capture_result {
-            Ok(entry) => {
-                self.restore_hybrid_recurrent_state(warmup_recurrent_snapshots.as_deref())?;
-                state.insert(entry.with_spec_state(graph_spec_state, spec_state_usage));
-            }
-            Err(err) => {
-                self.restore_hybrid_recurrent_state(recurrent_snapshots.as_deref())?;
-                return Err(err);
-            }
-        }
-        Ok(warmup_logits)
+        })
     }
 
-    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) {
+    fn restore_hybrid_state_indices(&self, snapshot: Option<&HybridStateIndicesSnapshot>) {
+        if let Some((tensor, host)) = snapshot {
+            self.model
+                .cache()
+                .hybrid()
+                .set_physical_state_indices_with_host(tensor.clone(), host.clone());
+        }
+    }
+
+    fn finish_cuda_graph_capture_attempt<T>(
+        &self,
+        state: &mut CudaDecodeGraphState,
+        attempt: candle_core::Result<T>,
+        recurrent_snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
+        live_state_indices: Option<&HybridStateIndicesSnapshot>,
+    ) -> candle_core::Result<T> {
+        self.restore_hybrid_state_indices(live_state_indices);
+        let Err(capture_err) = attempt else {
+            return attempt;
+        };
+        if let Err(restore_err) = self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots) {
+            state.block_eager_retry();
+            return Err(candle_core::Error::msg(format!(
+                "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
+            )));
+        }
+        Err(capture_err)
+    }
+
+    fn disable_cuda_decode_graph(&self, err: &candle_core::Error) -> bool {
         let mut state = self
             .cuda_decode_graph
             .lock()
             .expect("CUDA graph mutex poisoned");
+        let eager_retry_allowed = state.take_eager_retry_allowed();
         if !state.disabled() {
             warn!("CUDA decode graphs disabled after capture/replay error: {err:?}");
         }
         state.disable();
+        eager_retry_allowed
     }
 }
 
@@ -2216,7 +2269,11 @@ impl Pipeline for MultimodalPipeline {
                     ))
                 }
                 Ok(None) => {}
-                Err(err) => self.disable_cuda_decode_graph(&err),
+                Err(err) => {
+                    if !self.disable_cuda_decode_graph(&err) {
+                        return Err(err);
+                    }
+                }
             }
         }
         let paged_attn_meta = paged_attn_meta
@@ -2277,7 +2334,7 @@ impl Pipeline for MultimodalPipeline {
             Ok(Some(replay)) => {
                 if let Some(spec_state) = replay.spec_state.as_deref() {
                     if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
-                        self.disable_cuda_decode_graph(&err);
+                        let _ = self.disable_cuda_decode_graph(&err);
                         return Err(err);
                     }
                 }
@@ -2290,7 +2347,7 @@ impl Pipeline for MultimodalPipeline {
             }
             Ok(None) => Ok(None),
             Err(err) => {
-                self.disable_cuda_decode_graph(&err);
+                let _ = self.disable_cuda_decode_graph(&err);
                 Err(err)
             }
         }
@@ -2314,6 +2371,10 @@ impl Pipeline for MultimodalPipeline {
             self.model.log_speculative_attach(&info);
         }
         Ok(())
+    }
+
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+        self.model.release_speculative_sequences(seq_ids);
     }
 
     fn speculative_prompt_chunk(

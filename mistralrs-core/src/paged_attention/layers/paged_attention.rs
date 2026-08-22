@@ -153,9 +153,9 @@ fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, us
 }
 
 fn cache_input_shape(tensor: &Tensor) -> Result<(usize, usize, usize)> {
-    match tensor.dims() {
-        &[tokens, heads, head_size] => Ok((tokens, heads, head_size)),
-        &[batch, seq_len, heads, head_size] => Ok((
+    match *tensor.dims() {
+        [tokens, heads, head_size] => Ok((tokens, heads, head_size)),
+        [batch, seq_len, heads, head_size] => Ok((
             batch
                 .checked_mul(seq_len)
                 .ok_or_else(|| candle_core::Error::msg("cache input token count overflow"))?,
@@ -173,9 +173,9 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
     let (_, heads, head_size) = cache_input_shape(tensor)?;
     let dims = tensor.dims();
     let stride = tensor.stride();
-    let row_stride = match dims {
-        &[_, _, _] => stride[0],
-        &[batch, seq_len, _, _] => {
+    let row_stride = match *dims {
+        [_, _, _] => stride[0],
+        [batch, seq_len, _, _] => {
             if !cfg!(all(feature = "cuda", target_family = "unix")) {
                 return Ok(false);
             }
@@ -204,14 +204,16 @@ fn write_kv_cache(
     let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = key.contiguous()?.reshape(cache_input_shape(key)?)?;
+        key_packed = key.force_contiguous()?.reshape(cache_input_shape(key)?)?;
         &key_packed
     };
     let value_packed;
     let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = value.contiguous()?.reshape(cache_input_shape(value)?)?;
+        value_packed = value
+            .force_contiguous()?
+            .reshape(cache_input_shape(value)?)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
@@ -2156,6 +2158,19 @@ mod tests {
             .unfold(D::Minus1, 4, 4)?;
         assert_eq!(row_strided.stride(), &[48, 4, 1]);
         assert!(cache_input_can_write_directly(&row_strided)?);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_write_packs_singleton_token_stride() -> Result<()> {
+        let source = Tensor::zeros((8, 1, 128), DType::F32, &Device::Cpu)?;
+        let singleton = source.transpose(0, 1)?;
+        assert_eq!(singleton.dims(), &[1, 8, 128]);
+        assert!(!cache_input_can_write_directly(&singleton)?);
+
+        let packed = singleton.force_contiguous()?;
+        assert_eq!(packed.stride(), &[1024, 128, 1]);
+        assert!(cache_input_can_write_directly(&packed)?);
         Ok(())
     }
 

@@ -26,6 +26,12 @@ pub(crate) const CUDA_TOP1_PACKED_WIDTH: usize = 2;
 pub(crate) const CUDA_TOP1_INVALID_TOKEN: u32 = u32::MAX;
 #[cfg(feature = "cuda")]
 const CUDA_TOP1_RING_SLOTS: usize = 2;
+#[cfg(feature = "cuda")]
+pub(crate) const CUDA_DFLASH_SELECTOR_MAX_K: usize = 128;
+#[cfg(feature = "cuda")]
+const CUDA_DFLASH_SELECTOR_F32: i32 = 0;
+#[cfg(feature = "cuda")]
+const CUDA_DFLASH_SELECTOR_BF16: i32 = 1;
 
 // ============================================================================
 // Optimized parallel topk for CUDA
@@ -1013,6 +1019,216 @@ pub(crate) fn cuda_topk_logits_f32_packed_batched(
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) fn cuda_dflash_greedy_select(
+    packed_topk: &Tensor,
+    projected_hidden: &Tensor,
+    predecessor_codebook: &Tensor,
+    successor_codebook: &Tensor,
+    anchors: &Tensor,
+) -> Result<Tensor> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::CudaStorageSlice;
+    use std::ffi::c_void;
+
+    const OP: &str = "cuda_dflash_greedy_select";
+
+    let [rows, packed_width] = packed_topk.dims() else {
+        candle_core::bail!("{OP} expected packed top-k with shape [batch * positions, 2 * k + 2]");
+    };
+    let [hidden_rows, rank] = projected_hidden.dims() else {
+        candle_core::bail!(
+            "{OP} expected projected hidden states with shape [batch * positions, rank]"
+        );
+    };
+    let [predecessor_vocab, predecessor_rank] = predecessor_codebook.dims() else {
+        candle_core::bail!("{OP} expected predecessor codebook with shape [vocab, rank]");
+    };
+    let [successor_vocab, successor_rank] = successor_codebook.dims() else {
+        candle_core::bail!("{OP} expected successor codebook with shape [vocab, rank]");
+    };
+    let [batch] = anchors.dims() else {
+        candle_core::bail!("{OP} expected anchors with shape [batch]");
+    };
+    let (rows, packed_width, hidden_rows, rank) = (*rows, *packed_width, *hidden_rows, *rank);
+    let (predecessor_vocab, predecessor_rank) = (*predecessor_vocab, *predecessor_rank);
+    let (successor_vocab, successor_rank, batch) = (*successor_vocab, *successor_rank, *batch);
+
+    if rows == 0 || batch == 0 || rank == 0 || predecessor_vocab == 0 {
+        candle_core::bail!("{OP} does not support empty inputs");
+    }
+    if rows % batch != 0 {
+        candle_core::bail!("{OP} row count {rows} is not divisible by batch size {batch}");
+    }
+    if hidden_rows != rows {
+        candle_core::bail!("{OP} expected {rows} projected hidden rows, got {hidden_rows}");
+    }
+    if predecessor_vocab != successor_vocab || predecessor_rank != rank || successor_rank != rank {
+        candle_core::bail!(
+            "{OP} codebook shapes {:?} and {:?} do not match hidden rank {rank}",
+            predecessor_codebook.dims(),
+            successor_codebook.dims()
+        );
+    }
+    if packed_width < 4 || (packed_width - 2) % 2 != 0 {
+        candle_core::bail!("{OP} invalid packed top-k width {packed_width}");
+    }
+    let k = (packed_width - 2) / 2;
+    if k == 0 || k > CUDA_DFLASH_SELECTOR_MAX_K {
+        candle_core::bail!("{OP} k={k} must be in [1, {CUDA_DFLASH_SELECTOR_MAX_K}]");
+    }
+    if predecessor_vocab > CUDA_TOPK_MAX_EXACT_PACKED_VOCAB {
+        candle_core::bail!(
+            "{OP} vocabulary size {predecessor_vocab} cannot be represented exactly by packed F32 indices"
+        );
+    }
+    if packed_topk.dtype() != DType::F32 {
+        candle_core::bail!("{OP} requires F32 packed top-k values");
+    }
+    if anchors.dtype() != DType::U32 {
+        candle_core::bail!("{OP} requires U32 anchors");
+    }
+    for (name, tensor) in [
+        ("projected hidden states", projected_hidden),
+        ("predecessor codebook", predecessor_codebook),
+        ("successor codebook", successor_codebook),
+    ] {
+        if !matches!(tensor.dtype(), DType::BF16 | DType::F32) {
+            candle_core::bail!("{OP} requires BF16 or F32 {name}");
+        }
+    }
+    for tensor in [
+        packed_topk,
+        projected_hidden,
+        predecessor_codebook,
+        successor_codebook,
+        anchors,
+    ] {
+        if !tensor.is_contiguous() {
+            return Err(candle_core::Error::RequiresContiguous { op: OP });
+        }
+        if !packed_topk.device().same_device(tensor.device()) {
+            candle_core::bail!("{OP} tensors must be on the same CUDA device");
+        }
+    }
+
+    let positions = rows / batch;
+    let batch_i32 = i32::try_from(batch).map_err(candle_core::Error::wrap)?;
+    let positions_i32 = i32::try_from(positions).map_err(candle_core::Error::wrap)?;
+    let rank_i32 = i32::try_from(rank).map_err(candle_core::Error::wrap)?;
+    let vocab_i32 = i32::try_from(predecessor_vocab).map_err(candle_core::Error::wrap)?;
+    let k_i32 = i32::try_from(k).map_err(candle_core::Error::wrap)?;
+
+    let (packed_storage, packed_layout) = packed_topk.storage_and_layout();
+    let packed_storage = match &*packed_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("{OP} requires CUDA tensors"),
+    };
+    let (hidden_storage, hidden_layout) = projected_hidden.storage_and_layout();
+    let hidden_storage = match &*hidden_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("{OP} requires CUDA tensors"),
+    };
+    let (predecessor_storage, predecessor_layout) = predecessor_codebook.storage_and_layout();
+    let predecessor_storage = match &*predecessor_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("{OP} requires CUDA tensors"),
+    };
+    let (successor_storage, successor_layout) = successor_codebook.storage_and_layout();
+    let successor_storage = match &*successor_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("{OP} requires CUDA tensors"),
+    };
+    let (anchor_storage, anchor_layout) = anchors.storage_and_layout();
+    let anchor_storage = match &*anchor_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => candle_core::bail!("{OP} requires CUDA tensors"),
+    };
+
+    let dev = packed_storage.device();
+    let stream = dev.cuda_stream();
+    let CudaStorageSlice::F32(packed_slice) = &packed_storage.slice else {
+        candle_core::bail!("{OP} packed top-k dtype mismatch");
+    };
+    let CudaStorageSlice::U32(anchor_slice) = &anchor_storage.slice else {
+        candle_core::bail!("{OP} anchor dtype mismatch");
+    };
+    let (packed_ptr, packed_guard) = packed_slice.device_ptr(&stream);
+    let packed_ptr = unsafe { (packed_ptr as *const f32).add(packed_layout.start_offset()) };
+    let (anchor_ptr, anchor_guard) = anchor_slice.device_ptr(&stream);
+    let anchor_ptr = unsafe { (anchor_ptr as *const u32).add(anchor_layout.start_offset()) };
+
+    macro_rules! data_ptr {
+        ($storage:expr, $layout:expr, $name:expr) => {{
+            match &$storage.slice {
+                CudaStorageSlice::F32(slice) => {
+                    let (ptr, guard) = slice.device_ptr(&stream);
+                    let ptr =
+                        unsafe { (ptr as *const f32).add($layout.start_offset()) as *const c_void };
+                    (ptr, CUDA_DFLASH_SELECTOR_F32, guard)
+                }
+                CudaStorageSlice::BF16(slice) => {
+                    let (ptr, guard) = slice.device_ptr(&stream);
+                    let ptr = unsafe {
+                        (ptr as *const half::bf16).add($layout.start_offset()) as *const c_void
+                    };
+                    (ptr, CUDA_DFLASH_SELECTOR_BF16, guard)
+                }
+                _ => candle_core::bail!("{OP} {} dtype mismatch", $name),
+            }
+        }};
+    }
+
+    let (hidden_ptr, hidden_dtype, hidden_guard) =
+        data_ptr!(hidden_storage, hidden_layout, "projected hidden states");
+    let (predecessor_ptr, predecessor_dtype, predecessor_guard) = data_ptr!(
+        predecessor_storage,
+        predecessor_layout,
+        "predecessor codebook"
+    );
+    let (successor_ptr, successor_dtype, successor_guard) =
+        data_ptr!(successor_storage, successor_layout, "successor codebook");
+
+    let mut selected = unsafe { dev.alloc::<u32>(rows) }?;
+    let (selected_ptr, selected_guard) = selected.device_ptr_mut(&stream);
+    unsafe {
+        ffi::dflash_greedy_select(
+            packed_ptr,
+            hidden_ptr,
+            predecessor_ptr,
+            successor_ptr,
+            anchor_ptr,
+            selected_ptr as *mut u32,
+            batch_i32,
+            positions_i32,
+            rank_i32,
+            vocab_i32,
+            k_i32,
+            hidden_dtype,
+            predecessor_dtype,
+            successor_dtype,
+            stream.cu_stream() as i64,
+        );
+    }
+
+    drop(packed_guard);
+    drop(hidden_guard);
+    drop(predecessor_guard);
+    drop(successor_guard);
+    drop(anchor_guard);
+    drop(selected_guard);
+
+    Ok(Tensor::from((
+        candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
+            slice: CudaStorageSlice::U32(selected),
+            device: dev.clone(),
+        }),
+        Shape::from_dims(&[batch, positions]),
+    )))
+}
+
+#[cfg(feature = "cuda")]
+#[allow(dead_code)]
 pub(crate) fn cuda_top1_logits_f32_packed_batched(
     input: &Tensor,
 ) -> Result<Top1LogitsPackedOutput> {
@@ -1666,8 +1882,6 @@ fn cuda_top1_logits_f32_submit_inner(
                 .map_err(candle_core::Error::wrap)?;
         }
     }
-    let token_copy = token_slice
-        .slice(token_layout.start_offset()..token_layout.start_offset().saturating_add(nrows));
     let slot = &mut workspace.slots[slot_index];
     if slot.reuse_pending {
         stream
@@ -1734,6 +1948,8 @@ fn cuda_top1_logits_f32_submit_inner(
         slot.device_ready
             .record(&stream)
             .map_err(candle_core::Error::wrap)?;
+        let token_copy = token_slice
+            .slice(token_layout.start_offset()..token_layout.start_offset().saturating_add(nrows));
         dev.memcpy_dtoh(&token_copy, &mut slot.token_ids_host)?;
         if copy_packed {
             dev.memcpy_dtoh(&slot.packed, &mut slot.packed_host)?;
@@ -1748,8 +1964,6 @@ fn cuda_top1_logits_f32_submit_inner(
         slot.pending = None;
         return Err(error);
     }
-    drop(token_copy);
-
     Ok(CudaTop1Submission {
         workspace_id: workspace.id,
         slot: slot_index,
@@ -1900,7 +2114,7 @@ pub(crate) fn cuda_top1_submission_complete<'a>(
     submission: &CudaTop1Submission,
 ) -> Result<CudaTop1Completion<'a>> {
     const OP: &str = "cuda_top1_submission_complete";
-    validate_cuda_top1_submission(workspace, &submission, OP)?;
+    validate_cuda_top1_submission(workspace, submission, OP)?;
     let slot = &mut workspace.slots[submission.slot];
     let pending = slot.pending.as_ref().expect("submission validated above");
     if pending.consumer_stream.is_some() {
@@ -2220,6 +2434,7 @@ pub(crate) struct CategoricalLogitsPackedOutput {
 }
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 pub(crate) struct Top1LogitsPackedOutput {
     pub(crate) packed: Tensor,
     _workspace: Vec<Tensor>,
@@ -4928,6 +5143,57 @@ mod tests {
     }
 
     #[cfg(feature = "cuda")]
+    struct DFlashSelectorReference<'a> {
+        packed_topk: &'a [f32],
+        hidden: &'a [f32],
+        predecessor_codebook: &'a [f32],
+        successor_codebook: &'a [f32],
+        anchors: &'a [u32],
+        positions: usize,
+        rank: usize,
+        vocab: usize,
+        k: usize,
+    }
+
+    #[cfg(feature = "cuda")]
+    fn dflash_selector_reference(input: DFlashSelectorReference<'_>) -> Vec<u32> {
+        let packed_width = 2 * input.k + 2;
+        let mut selected = Vec::with_capacity(input.anchors.len() * input.positions);
+        for (batch, anchor) in input.anchors.iter().enumerate() {
+            let mut predecessor = *anchor as usize;
+            for position in 0..input.positions {
+                let row = batch * input.positions + position;
+                let packed = &input.packed_topk[row * packed_width..(row + 1) * packed_width];
+                let hidden = &input.hidden[row * input.rank..(row + 1) * input.rank];
+                let pred = &input.predecessor_codebook
+                    [predecessor * input.rank..(predecessor + 1) * input.rank];
+                let mut best_score = f32::NEG_INFINITY;
+                let mut best_token = packed[input.k] as u32;
+                for candidate_slot in 0..input.k {
+                    let candidate = packed[input.k + candidate_slot] as usize;
+                    assert!(candidate < input.vocab);
+                    let succ = &input.successor_codebook
+                        [candidate * input.rank..(candidate + 1) * input.rank];
+                    let dot = pred
+                        .iter()
+                        .zip(hidden)
+                        .zip(succ)
+                        .map(|((pred, hidden), succ)| pred * hidden * succ)
+                        .sum::<f32>();
+                    let score = packed[candidate_slot] + dot;
+                    if score > best_score {
+                        best_score = score;
+                        best_token = candidate as u32;
+                    }
+                }
+                selected.push(best_token);
+                predecessor = best_token as usize;
+            }
+        }
+        selected
+    }
+
+    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_add_rms_norm_matches_separate_ops() -> candle_core::Result<()> {
         const ROWS: usize = 2;
@@ -5415,6 +5681,99 @@ mod tests {
             &packed[0][output.k..2 * output.k],
             &[1.0, 256.0, 300.0, 2048.0]
         );
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires CUDA"]
+    fn cuda_dflash_selector_matches_reference_with_bf16_codebooks() -> candle_core::Result<()> {
+        const BATCH: usize = 2;
+        const POSITIONS: usize = 3;
+        const K: usize = 4;
+        const RANK: usize = 7;
+        const VOCAB: usize = 13;
+
+        let rows = BATCH * POSITIONS;
+        let packed_width = 2 * K + 2;
+        let mut packed = vec![0.0f32; rows * packed_width];
+        for row in 0..rows {
+            for candidate_slot in 0..K {
+                packed[row * packed_width + candidate_slot] =
+                    ((row * 3 + candidate_slot * 5) % 7) as f32 * 0.25 - 0.75;
+                packed[row * packed_width + K + candidate_slot] =
+                    ((row * 3 + candidate_slot * 2 + 1) % VOCAB) as f32;
+            }
+        }
+        let hidden = (0..rows * RANK)
+            .map(|index| ((index * 7) % 9) as f32 * 0.25 - 1.0)
+            .collect::<Vec<_>>();
+        let predecessor = (0..VOCAB * RANK)
+            .map(|index| ((index * 5) % 11) as f32 * 0.125 - 0.625)
+            .collect::<Vec<_>>();
+        let successor = (0..VOCAB * RANK)
+            .map(|index| ((index * 3) % 13) as f32 * 0.125 - 0.75)
+            .collect::<Vec<_>>();
+        let anchors = [2u32, 7];
+        let expected = dflash_selector_reference(DFlashSelectorReference {
+            packed_topk: &packed,
+            hidden: &hidden,
+            predecessor_codebook: &predecessor,
+            successor_codebook: &successor,
+            anchors: &anchors,
+            positions: POSITIONS,
+            rank: RANK,
+            vocab: VOCAB,
+            k: K,
+        });
+
+        let device = Device::new_cuda(0)?;
+        let actual = super::cuda_dflash_greedy_select(
+            &Tensor::from_vec(packed, (rows, packed_width), &device)?,
+            &Tensor::from_vec(hidden, (rows, RANK), &device)?,
+            &Tensor::from_vec(predecessor, (VOCAB, RANK), &device)?.to_dtype(DType::BF16)?,
+            &Tensor::from_vec(successor, (VOCAB, RANK), &device)?.to_dtype(DType::BF16)?,
+            &Tensor::new(&anchors, &device)?,
+        )?
+        .to_vec2::<u32>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires CUDA"]
+    fn cuda_dflash_selector_supports_max_k_and_stable_ties() -> candle_core::Result<()> {
+        const POSITIONS: usize = 2;
+        const K: usize = super::CUDA_DFLASH_SELECTOR_MAX_K;
+        const RANK: usize = 3;
+        const VOCAB: usize = K;
+
+        let packed_width = 2 * K + 2;
+        let mut packed = vec![0.0f32; POSITIONS * packed_width];
+        for position in 0..POSITIONS {
+            for candidate_slot in 0..K {
+                packed[position * packed_width + candidate_slot] = 1.0;
+                packed[position * packed_width + K + candidate_slot] =
+                    (K - candidate_slot - 1) as f32;
+            }
+        }
+
+        let device = Device::new_cuda(0)?;
+        let actual = super::cuda_dflash_greedy_select(
+            &Tensor::from_vec(packed, (POSITIONS, packed_width), &device)?,
+            &Tensor::zeros((POSITIONS, RANK), DType::BF16, &device)?,
+            &Tensor::zeros((VOCAB, RANK), DType::F32, &device)?,
+            &Tensor::zeros((VOCAB, RANK), DType::F32, &device)?,
+            &Tensor::new(&[0u32], &device)?,
+        )?
+        .to_vec2::<u32>()?;
+
+        assert_eq!(actual, [vec![(K - 1) as u32; POSITIONS]]);
         Ok(())
     }
 

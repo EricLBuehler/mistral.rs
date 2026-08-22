@@ -311,20 +311,42 @@ pub use crate::kv_cache::{
 
 pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
 
+fn effective_recurrent_checkpoint_lanes(requested: usize, supported: bool) -> usize {
+    if supported {
+        requested
+    } else {
+        1
+    }
+}
+
 fn reserve_recurrent_serving_capacity(
     cache: &EitherCache,
     paged_attn_config: PagedAttentionConfig,
+    recurrent_checkpoints_supported: bool,
 ) -> Result<bool> {
-    let Some(serving_capacity) = paged_attn_config.serving_capacity else {
-        return Ok(false);
-    };
     if !cache.is_hybrid() {
         return Ok(false);
     }
+    let checkpoint_lanes = effective_recurrent_checkpoint_lanes(
+        paged_attn_config.recurrent_checkpoint_lanes,
+        recurrent_checkpoints_supported,
+    );
+    if checkpoint_lanes != paged_attn_config.recurrent_checkpoint_lanes {
+        tracing::info!(
+            requested_lanes = paged_attn_config.recurrent_checkpoint_lanes,
+            "Using recurrent replay fallback for speculative decoding"
+        );
+    }
+    let mut cache = cache.hybrid();
+    let mut grew = cache.configure_checkpoint_lanes(checkpoint_lanes)?;
+    let Some(serving_capacity) = paged_attn_config.serving_capacity else {
+        return Ok(grew);
+    };
     let capacity = serving_capacity
         .checked_add(RECURRENT_GRAPH_PAD_SLOTS)
         .ok_or_else(|| candle_core::Error::msg("recurrent serving capacity overflow"))?;
-    Ok(cache.hybrid().reserve_recurrent_capacity(capacity)?)
+    grew |= cache.reserve_recurrent_capacity(capacity)?;
+    Ok(grew)
 }
 
 pub(crate) type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
@@ -424,6 +446,7 @@ pub(crate) enum ForwardMaskCache<'a> {
 pub(crate) enum RecurrentBatchKind {
     Prefill,
     Decode,
+    SpeculativeDecode,
 }
 
 #[derive(Clone, Debug)]
@@ -1404,6 +1427,8 @@ pub trait Pipeline:
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
+    fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
+
     /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
     /// process the chunk. Default: nothing to do.
     fn speculative_prompt_chunk(
@@ -1577,8 +1602,11 @@ pub trait Pipeline:
                     let preserve_causal_generation = input_seqs.len() > 1
                         && !return_raw_logits
                         && self.device().is_cuda()
-                        && self.supports_batched_cuda_sampling()
-                        && sampling::can_sample_batch_cuda(input_seqs);
+                        && ((self.supports_batched_cuda_sampling()
+                            && sampling::can_sample_batch_cuda(input_seqs))
+                            || crate::speculative::verifier::can_batch_greedy_device_verify(
+                                input_seqs,
+                            ));
                     let start = Instant::now();
                     let raw_logits = self
                         .forward_inputs(inputs, return_raw_logits)?
@@ -2054,8 +2082,11 @@ pub trait Pipeline:
                             || cuda_decode_lookahead)
                             && !return_raw_logits
                             && self.device().is_cuda()
-                            && self.supports_batched_cuda_sampling()
-                            && sampling::can_sample_batch_cuda(input_seqs);
+                            && ((self.supports_batched_cuda_sampling()
+                                && sampling::can_sample_batch_cuda(input_seqs))
+                                || crate::speculative::verifier::can_batch_greedy_device_verify(
+                                    input_seqs,
+                                ));
                         if self.cache().is_hybrid() {
                             let mut hybrid_cache = self.cache().hybrid();
                             let device = hybrid_cache
@@ -2478,13 +2509,20 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::{
-        prompt_chunk_is_final, resolve_lora_execution, should_sample_step, ForwardCache,
-        LogitsSelection, ModelForwardContext,
+        effective_recurrent_checkpoint_lanes, prompt_chunk_is_final,
+        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
+        ForwardCache, LogitsSelection, ModelForwardContext,
     };
     use crate::{
+        kv_cache::{
+            EitherCache, HybridCache, HybridCacheConfig, HybridLayerType, RecurrentLayerConfig,
+            RecurrentStateSpec,
+        },
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        MessageContent,
+        MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
     use candle_core::{Device, Tensor};
     use either::Either;
@@ -2503,6 +2541,52 @@ mod tests {
         assert!(!prompt_chunk_is_final(true, false, true));
         assert!(prompt_chunk_is_final(true, true, false));
         assert!(prompt_chunk_is_final(false, false, true));
+    }
+
+    #[test]
+    fn unsupported_recurrent_checkpoint_placement_uses_one_lane() {
+        assert_eq!(effective_recurrent_checkpoint_lanes(8, false), 1);
+        assert_eq!(effective_recurrent_checkpoint_lanes(8, true), 8);
+        assert_eq!(effective_recurrent_checkpoint_lanes(1, false), 1);
+    }
+
+    #[test]
+    fn cpu_recurrent_reservation_does_not_allocate_checkpoint_lanes() {
+        let hybrid = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent],
+                max_seq_len: 32,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: 8,
+                    conv_width: 4,
+                    state: RecurrentStateSpec::Gdn {
+                        heads: 2,
+                        key_dim: 4,
+                        value_dim: 4,
+                    },
+                    recurrent_dtype: Some(candle_core::DType::F32),
+                },
+            },
+            candle_core::DType::BF16,
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
+        let config =
+            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+                .unwrap()
+                .with_serving_capacity(16)
+                .unwrap()
+                .with_recurrent_checkpoint_lanes(8)
+                .unwrap();
+
+        reserve_recurrent_serving_capacity(&cache, config, false).unwrap();
+
+        let cache = cache.hybrid();
+        assert_eq!(cache.checkpoint_lanes(), 1);
+        let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
+        assert_eq!(pool.capacity(), 17);
+        assert_eq!(pool.physical_capacity(), 17);
     }
     use serde_json::Value;
 
