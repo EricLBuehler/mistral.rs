@@ -2715,23 +2715,34 @@ impl MistralRs {
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 
-        if let Some(mtp_config) = loader_config.mtp_config.clone() {
-            pipeline
-                .blocking_lock()
-                .attach_speculative(SpeculativeConfig::Mtp(
-                    mtp_config.with_draft_lm_head_isq(loader_config.isq),
-                ))
-                .map_err(|e| {
-                    MistralRsError::ReloadFailed(format!(
-                        "Failed to attach MTP speculative decoding: {e}"
+        let realized_cache_config = {
+            let mut pipeline = pipeline.lock().await;
+            if let Some(mtp_config) = loader_config.mtp_config.clone() {
+                pipeline
+                    .attach_speculative(SpeculativeConfig::Mtp(
+                        mtp_config.with_draft_lm_head_isq(loader_config.isq),
                     ))
-                })?;
-        }
+                    .map_err(|e| {
+                        MistralRsError::ReloadFailed(format!(
+                            "Failed to attach MTP speculative decoding: {e}"
+                        ))
+                    })?;
+            }
+            pipeline.get_metadata().cache_config.clone()
+        };
+        let mut scheduler_config = unloaded_state.scheduler_config;
+        scheduler_config
+            .refresh_paged_cache_config(realized_cache_config)
+            .map_err(|e| {
+                MistralRsError::ReloadFailed(format!(
+                    "Failed to refresh scheduler cache configuration: {e}"
+                ))
+            })?;
 
         // Create the reboot state
         let reboot_state = RebootState {
             pipeline: pipeline.clone(),
-            method: unloaded_state.scheduler_config.clone(),
+            method: scheduler_config.clone(),
             no_kv_cache: unloaded_state.engine_config.no_kv_cache,
             no_prefix_cache: unloaded_state.engine_config.no_prefix_cache,
             prefix_cache_n: unloaded_state.engine_config.prefix_cache_n,
@@ -2746,7 +2757,7 @@ impl MistralRs {
 
         let engine_instance = Self::create_engine_instance(
             pipeline,
-            unloaded_state.scheduler_config,
+            scheduler_config,
             unloaded_state.engine_config,
             reboot_state,
         )

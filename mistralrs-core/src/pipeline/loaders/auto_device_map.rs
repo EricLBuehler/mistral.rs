@@ -1,7 +1,8 @@
 use std::fmt::{self, Display};
 
 use crate::paged_attention::{
-    calculate_cache_config, MemoryGpuConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+    calculate_cache_config, device_memory_cap, CacheMemoryReservations, MemoryGpuConfig,
+    ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
@@ -11,22 +12,6 @@ use itertools::Itertools;
 use tracing::{info, warn};
 
 use super::DeviceMappedModelLoader;
-
-const GPU_RESERVE_FRACTION: f64 = 0.02;
-const GPU_MIN_RESERVE_BYTES: usize = 512 * 1024 * 1024; // 512MB safety buffer
-
-/// Usable device capacity after subtracting a small safety reserve for GPUs.
-/// CPU devices return `avail_bytes` unchanged.
-#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn device_cap(avail_bytes: usize, dev: &Device) -> usize {
-    if dev.is_cpu() {
-        avail_bytes
-    } else {
-        let reserve_frac = (avail_bytes as f64 * GPU_RESERVE_FRACTION) as usize;
-        let reserve = reserve_frac.max(GPU_MIN_RESERVE_BYTES).min(avail_bytes);
-        avail_bytes.saturating_sub(reserve)
-    }
-}
 
 fn saturating_memory_sum<const N: usize>(parts: [usize; N]) -> usize {
     parts
@@ -38,6 +23,17 @@ fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
     parts
         .into_iter()
         .try_fold(0usize, |total, part| total.checked_add(part))
+}
+
+fn post_load_memory_config(
+    requested: MemoryGpuConfig,
+    pre_load_budget: MemoryGpuConfig,
+    resolve_utilization_after_load: bool,
+) -> MemoryGpuConfig {
+    match requested {
+        MemoryGpuConfig::Utilization(_) if !resolve_utilization_after_load => pre_load_budget,
+        _ => requested,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -240,22 +236,34 @@ pub fn get_device_layers(
         .map_or(0, |config| config.base_device_memory_reservation_bytes);
     let kv_cache_elems = match paged_attn_config {
         Some(cfg) => {
-            // For MbAmount, clamp to available memory so the capacity check
-            // below stays consistent. Utilization and ContextSize pass through
-            // to calculate_cache_config which handles model weight subtraction.
-            let effective_mem_gpu = match cfg.mem_gpu {
-                MemoryGpuConfig::MbAmount(user_mb)
-                | MemoryGpuConfig::BestEffortMbAmount {
-                    target_mb: user_mb,
-                    min_mb: _,
-                } => {
+            // The mapping estimate is bounded independently from the post-load memory mode.
+            let requested_mem_gpu = cfg.mem_gpu;
+            let effective_mem_gpu = match requested_mem_gpu {
+                MemoryGpuConfig::MbAmount(user_mb) => {
                     // Clamp user's KV budget to available memory.
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
-                    let cap = device_cap(avail_bytes, primary_dev);
+                    let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
-                    let budget_mb = cap.saturating_sub(act_overhead) / (1024 * 1024);
+                    let budget_mb = cap
+                        .saturating_sub(act_overhead)
+                        .saturating_sub(base_device_memory_reservation_bytes)
+                        / (1024 * 1024);
                     MemoryGpuConfig::MbAmount(budget_mb.min(user_mb))
+                }
+                MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
+                    let primary_dev = &devices[0];
+                    let avail_bytes = MemoryUsage.query(primary_dev)?.available();
+                    let cap = device_memory_cap(avail_bytes, primary_dev);
+                    let act_overhead = non_mapped_max.max(mapped_max);
+                    let budget_mb = cap
+                        .saturating_sub(act_overhead)
+                        .saturating_sub(base_device_memory_reservation_bytes)
+                        / (1024 * 1024);
+                    MemoryGpuConfig::BestEffortMbAmount {
+                        target_mb: budget_mb.min(target_mb),
+                        min_mb,
+                    }
                 }
                 MemoryGpuConfig::Utilization(f) => {
                     // Prevent overallocation when total_memory > available_memory
@@ -264,7 +272,7 @@ pub fn get_device_layers(
                     // the device capacity derived from *available* memory.
                     let primary_dev = &devices[0];
                     let avail_bytes = MemoryUsage.query(primary_dev)?.available();
-                    let cap = device_cap(avail_bytes, primary_dev);
+                    let cap = device_memory_cap(avail_bytes, primary_dev);
                     let act_overhead = non_mapped_max.max(mapped_max);
                     let occupied = saturating_memory_sum([
                         remaining,
@@ -279,22 +287,27 @@ pub fn get_device_layers(
                 other => other,
             };
             info!(
-                "Reserving {} MB for activations (predicted).",
-                b_to_mb!(non_mapped_max.max(mapped_max))
+                "Reserving {} MB on the primary device and {} MB on mapped devices for activations (predicted).",
+                b_to_mb!(non_mapped_max.max(mapped_max)),
+                b_to_mb!(mapped_max),
             );
+            cfg.reserve_activation_memory(non_mapped_max.max(mapped_max), mapped_max);
             if base_device_memory_reservation_bytes > 0 {
                 info!(
                     "Reserving {} MB on the primary device for post-load model components.",
                     base_device_memory_reservation_bytes.div_ceil(1024 * 1024)
                 );
             }
-            // The budget derived here is the only one that accounts for the activation reserve, so
-            // it has to be what the pipelines load with. Recomputing there drops the reserve.
-            cfg.mem_gpu = effective_mem_gpu;
+            // Re-resolve utilization after recurrent serving state is allocated.
+            cfg.mem_gpu = post_load_memory_config(
+                requested_mem_gpu,
+                effective_mem_gpu,
+                cfg.resolve_memory_utilization_after_load,
+            );
 
             let cache = calculate_cache_config(
                 effective_mem_gpu,
-                cfg.base_device_memory_reservation_bytes,
+                CacheMemoryReservations::default(),
                 Some(cfg.block_size.unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE)),
                 dtype,
                 cfg.cache_type,
@@ -381,7 +394,7 @@ pub fn get_device_layers(
             .context("No more devices to map to. The model does not fit on this system.")?;
 
         // For GPU/accelerators: keep a small dynamic safety reserve to avoid OOMs
-        let cap = device_cap(avail_bytes, &dev);
+        let cap = device_memory_cap(avail_bytes, &dev);
         if ordinal == 0
             && !checked_memory_sum([
                 non_mapped_max.max(mapped_max),
@@ -569,5 +582,43 @@ mod tests {
     fn checked_memory_sum_distinguishes_max_from_overflow() {
         assert_eq!(checked_memory_sum([usize::MAX - 1, 1]), Some(usize::MAX));
         assert_eq!(checked_memory_sum([usize::MAX, 1]), None);
+    }
+
+    #[test]
+    fn post_load_utilization_is_not_frozen_to_the_inventory_estimate() {
+        let requested = MemoryGpuConfig::Utilization(0.85);
+        assert!(matches!(
+            post_load_memory_config(requested, MemoryGpuConfig::MbAmount(45_000), true),
+            MemoryGpuConfig::Utilization(value) if value == 0.85
+        ));
+        assert!(matches!(
+            post_load_memory_config(requested, MemoryGpuConfig::MbAmount(45_000), false,),
+            MemoryGpuConfig::MbAmount(45_000)
+        ));
+        assert!(matches!(
+            post_load_memory_config(
+                MemoryGpuConfig::MbAmount(60_000),
+                MemoryGpuConfig::MbAmount(45_000),
+                true,
+            ),
+            MemoryGpuConfig::MbAmount(60_000)
+        ));
+        assert!(matches!(
+            post_load_memory_config(
+                MemoryGpuConfig::BestEffortMbAmount {
+                    target_mb: 60_000,
+                    min_mb: Some(40_000),
+                },
+                MemoryGpuConfig::BestEffortMbAmount {
+                    target_mb: 45_000,
+                    min_mb: Some(40_000),
+                },
+                true,
+            ),
+            MemoryGpuConfig::BestEffortMbAmount {
+                target_mb: 60_000,
+                min_mb: Some(40_000),
+            }
+        ));
     }
 }

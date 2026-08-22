@@ -64,6 +64,22 @@ pub enum SchedulerConfig {
 }
 
 impl SchedulerConfig {
+    pub(crate) fn refresh_paged_cache_config(
+        &mut self,
+        realized_cache_config: Option<CacheConfig>,
+    ) -> anyhow::Result<()> {
+        match (self, realized_cache_config) {
+            (Self::PagedAttentionMeta { config, .. }, Some(realized_cache_config)) => {
+                *config = realized_cache_config;
+                Ok(())
+            }
+            (Self::DefaultScheduler { .. }, None) => Ok(()),
+            _ => anyhow::bail!(
+                "reloaded pipeline PagedAttention mode does not match its scheduler configuration"
+            ),
+        }
+    }
+
     pub fn into_scheduler(self) -> Arc<Mutex<dyn Scheduler>> {
         match self {
             Self::DefaultScheduler { method } => {
@@ -155,4 +171,66 @@ pub trait Scheduler: Send + Sync {
     }
 
     fn record_decode_continuation(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PagedCacheType;
+    use std::num::NonZeroUsize;
+
+    fn cache_config(num_gpu_blocks: usize) -> CacheConfig {
+        CacheConfig {
+            block_size: 32,
+            num_gpu_blocks,
+            cache_type: PagedCacheType::Auto,
+            kv_cache_group_ids: vec![0, 1],
+        }
+    }
+
+    #[test]
+    fn refresh_paged_cache_config_preserves_scheduler_limits() -> anyhow::Result<()> {
+        let mut scheduler = SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: 16,
+            max_num_batched_tokens: 4096,
+            max_decode_steps_before_prefill: 8,
+            config: cache_config(128),
+        };
+
+        scheduler.refresh_paged_cache_config(Some(cache_config(256)))?;
+
+        let SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs,
+            max_num_batched_tokens,
+            max_decode_steps_before_prefill,
+            config,
+        } = scheduler
+        else {
+            panic!("expected PagedAttention scheduler")
+        };
+        assert_eq!(max_num_seqs, 16);
+        assert_eq!(max_num_batched_tokens, 4096);
+        assert_eq!(max_decode_steps_before_prefill, 8);
+        assert_eq!(config.num_gpu_blocks, 256);
+        assert_eq!(config.kv_cache_group_ids, vec![0, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_paged_cache_config_rejects_mode_mismatch() {
+        let mut scheduler = SchedulerConfig::DefaultScheduler {
+            method: DefaultSchedulerMethod::Fixed(NonZeroUsize::new(1).unwrap()),
+        };
+        assert!(scheduler
+            .refresh_paged_cache_config(Some(cache_config(128)))
+            .is_err());
+
+        let mut scheduler = SchedulerConfig::PagedAttentionMeta {
+            max_num_seqs: 16,
+            max_num_batched_tokens: 4096,
+            max_decode_steps_before_prefill: 8,
+            config: cache_config(128),
+        };
+        assert!(scheduler.refresh_paged_cache_config(None).is_err());
+    }
 }
