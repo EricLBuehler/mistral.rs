@@ -24,6 +24,24 @@ const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (11, 4),
 ];
 
+#[cfg(feature = "cuda")]
+fn cuda_kernel_builder(build_dir: &std::path::Path) -> cudaforge::KernelBuilder {
+    cudaforge::KernelBuilder::new()
+        .out_dir(build_dir)
+        .arg("-std=c++17")
+        .arg("-O3")
+        .arg("-U__CUDA_NO_HALF_OPERATORS__")
+        .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
+        .arg("-U__CUDA_NO_HALF2_OPERATORS__")
+        .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
+        .arg("--expt-relaxed-constexpr")
+        .arg("--expt-extended-lambda")
+        .arg("--use_fast_math")
+        .arg("--verbose")
+        .arg("--compiler-options")
+        .arg("-fPIC")
+}
+
 #[cfg(feature = "metal")]
 include!("src/metal_kernels/source_set.rs");
 
@@ -82,6 +100,8 @@ fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_deepgemm_fp8_sm90_provider)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
@@ -98,32 +118,30 @@ fn main() -> Result<(), String> {
         println!("cargo:rerun-if-env-changed=CUDA_NVCC_FLAGS");
         println!("cargo:rerun-if-env-changed={CUTLASS_COMMIT_ENV}");
         let build_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+        let (cuda_major, cuda_minor) = cuda_version_from_build_system();
 
+        let deepgemm_headers = cuda_headers::find(Path::new("third_party/deepgemm_sm90"))
+            .map_err(|e| e.to_string())?;
+        let deepgemm_source_hash =
+            cuda_headers::hash(&deepgemm_headers).map_err(|e| e.to_string())?;
+        println!("cargo:rustc-env=MISTRALRS_DEEPGEMM_SOURCE_HASH={deepgemm_source_hash:016x}");
         let header_files = cuda_headers::find(Path::new("kernels")).map_err(|e| e.to_string())?;
         for header_file in &header_files {
+            println!("cargo:rerun-if-changed={}", header_file.display());
+        }
+        for header_file in &deepgemm_headers {
             println!("cargo:rerun-if-changed={}", header_file.display());
         }
         let header_hash_arg = format!(
             "-DMISTRALRS_QUANT_CUDA_HEADER_HASH=0x{:016x}",
             cuda_headers::hash(&header_files).map_err(|e| e.to_string())?
         );
+        let deepgemm_source_hash_arg =
+            format!("-DMISTRALRS_DEEPGEMM_SOURCE_HASH=0x{deepgemm_source_hash:016x}");
 
-        let mut builder = cudaforge::KernelBuilder::new()
+        let mut builder = cuda_kernel_builder(&build_dir)
             .source_glob("kernels/*/*.cu")
             .watch(["kernels"])
-            .out_dir(build_dir.clone())
-            .arg("-std=c++17")
-            .arg("-O3")
-            .arg("-U__CUDA_NO_HALF_OPERATORS__")
-            .arg("-U__CUDA_NO_HALF_CONVERSIONS__")
-            .arg("-U__CUDA_NO_HALF2_OPERATORS__")
-            .arg("-U__CUDA_NO_BFLOAT16_CONVERSIONS__")
-            .arg("--expt-relaxed-constexpr")
-            .arg("--expt-extended-lambda")
-            .arg("--use_fast_math")
-            .arg("--verbose")
-            .arg("--compiler-options")
-            .arg("-fPIC")
             .arg(&header_hash_arg);
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
@@ -143,6 +161,16 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
+        }
+        let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
+        if cutlass_fp8_sm90 {
+            println!("cargo:rustc-cfg=has_cutlass_fp8_sm90_kernels");
+        }
+        let deepgemm_fp8_sm90 = compute_cap == 90
+            && (cuda_major > 12 || (cuda_major == 12 && cuda_minor >= 8))
+            && target.contains("linux");
+        if deepgemm_fp8_sm90 {
+            println!("cargo:rustc-cfg=has_deepgemm_fp8_sm90_provider");
         }
         // CUTLASS grouped-GEMM MoE fallback (Sm80 tensor-op, runs on sm_80+)
         if cutlass_moe {
@@ -166,6 +194,9 @@ fn main() -> Result<(), String> {
         if cc_over_80 && !cutlass_moe {
             excluded_files.push("moe_data.cu");
             excluded_files.push("grouped_mm_*.cu");
+        }
+        if !cutlass_fp8_sm90 {
+            excluded_files.push("*_cutlass_sm90.cu");
         }
         builder = builder.exclude(&excluded_files);
         let cutlass_commit =
@@ -195,9 +226,31 @@ fn main() -> Result<(), String> {
         builder
             .build_lib(out_file)
             .expect("Build mistral quant lib failed!");
+        if deepgemm_fp8_sm90 {
+            let mut deepgemm_builder = cuda_kernel_builder(&build_dir)
+                .source_files(["third_party/deepgemm_sm90/mistralrs_deepgemm_sm90.cu"])
+                .watch(["third_party/deepgemm_sm90"])
+                .compute_cap_arch("90a")
+                .arg(&deepgemm_source_hash_arg)
+                .with_cutlass(Some(&cutlass_commit))
+                .include_path("third_party/deepgemm_sm90")
+                .include_path("third_party/deepgemm_sm90/include");
+            if let Some(cuda_nvcc_flags_env) = CUDA_NVCC_FLAGS {
+                deepgemm_builder = deepgemm_builder
+                    .arg("--compiler-options")
+                    .arg(cuda_nvcc_flags_env);
+            }
+            deepgemm_builder
+                .build_lib(build_dir.join("libmistralrsdeepgemm.a"))
+                .expect("Build mistral DeepGEMM provider failed!");
+        }
         println!("cargo:rustc-link-search={}", build_dir.display());
         println!("cargo:rustc-link-lib=mistralrsquant");
         println!("cargo:rustc-link-lib=dylib=cudart");
+        if deepgemm_fp8_sm90 {
+            println!("cargo:rustc-link-lib=mistralrsdeepgemm");
+            println!("cargo:rustc-link-lib=dylib=cuda");
+        }
 
         if target.contains("msvc") {
             // nothing to link to
@@ -212,7 +265,7 @@ fn main() -> Result<(), String> {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
 
-        let (major, minor) = cuda_version_from_build_system();
+        let (major, minor) = (cuda_major, cuda_minor);
         println!("cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION={major}.{minor}");
         println!(
             "cargo:rustc-env=MISTRALRS_BUILD_CUDA_VERSION_CODE={}",

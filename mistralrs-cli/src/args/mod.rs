@@ -17,9 +17,12 @@ pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use mistralrs_core::{ReasoningEffort, TokenSource};
+use mistralrs_core::{
+    ReasoningEffort, TokenSource, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{num::NonZeroUsize, path::PathBuf};
 
 /// Fast LLM inference engine
 #[derive(Parser)]
@@ -572,6 +575,16 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_seqs")]
     pub max_seqs: usize,
 
+    /// Maximum tokens processed in one paged-attention scheduler step
+    #[arg(long, default_value_t = default_max_num_batched_tokens())]
+    #[serde(default = "default_max_num_batched_tokens")]
+    pub max_num_batched_tokens: NonZeroUsize,
+
+    /// Maximum decode steps before a waiting prefill batch is admitted
+    #[arg(long, default_value_t = default_max_decode_steps_before_prefill())]
+    #[serde(default = "default_max_decode_steps_before_prefill")]
+    pub max_decode_steps_before_prefill: NonZeroUsize,
+
     /// Disable KV cache entirely
     #[arg(long)]
     #[serde(default)]
@@ -923,6 +936,8 @@ impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
             max_seqs: 32,
+            max_num_batched_tokens: default_max_num_batched_tokens(),
+            max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
             prefix_cache_n: 16,
             chat_template: None,
@@ -969,6 +984,14 @@ fn default_token_source() -> TokenSource {
 
 fn default_max_seqs() -> usize {
     32
+}
+
+fn default_max_num_batched_tokens() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
+}
+
+fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL).unwrap()
 }
 
 fn default_prefix_cache_n() -> usize {

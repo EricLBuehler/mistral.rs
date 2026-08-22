@@ -1,7 +1,7 @@
 use std::{collections::HashMap, iter::zip};
 
 use crate::cuda::backend::slice_ptr;
-use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32};
+use crate::cuda::ffi::{copy_blocks_bf16, copy_blocks_f16, copy_blocks_f32, copy_blocks_u8};
 use candle_core::backend::BackendDevice;
 use candle_core::cuda_backend::CudaStorageSlice;
 use candle_core::Result;
@@ -85,8 +85,14 @@ pub fn copy_blocks(
                 let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
                 (ptr_key, ptr_value)
             }
+            (CudaStorageSlice::F8E4M3(slice_key), CudaStorageSlice::F8E4M3(slice_value)) => {
+                let (ptr_key, _key_guard) = slice_ptr(slice_key, 0);
+                let (ptr_value, _value_guard) = slice_ptr(slice_value, 0);
+                dtype = DType::F8E4M3;
+                (ptr_key, ptr_value)
+            }
             _ => {
-                candle_core::bail!("only f32, f16 and bf16 input data type supported!",);
+                candle_core::bail!("only f32, f16, bf16 and f8e4m3 input data types are supported");
             }
         };
         key_cache_ptrs.push(key_ptr + key_offset);
@@ -164,7 +170,19 @@ pub fn copy_blocks(
                 dev.cuda_stream().cu_stream() as i64,
             );
         },
-        _ => {}
+        candle_core::DType::F8E4M3 => unsafe {
+            copy_blocks_u8(
+                key_cache_ptr,
+                value_cache_ptr,
+                block_mapping_ptr,
+                num_layers as i32,
+                num_pairs as i32,
+                numel_per_block_key as i32,
+                numel_per_block_value as i32,
+                dev.cuda_stream().cu_stream() as i64,
+            );
+        },
+        _ => unreachable!(),
     }
 
     Ok(())
@@ -210,8 +228,15 @@ pub unsafe fn swap_blocks(
                     let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
                     (ptr_src, ptr_dst)
                 }
+                (CudaStorageSlice::F8E4M3(slice_src), CudaStorageSlice::F8E4M3(slice_dst)) => {
+                    let (ptr_src, _src_guard) = slice_ptr(slice_src, src_layout.start_offset());
+                    let (ptr_dst, _dst_guard) = slice_ptr(slice_dst, dst_layout.start_offset());
+                    (ptr_src, ptr_dst)
+                }
                 _ => {
-                    candle_core::bail!("only f32, f16 and bf16 input data type supported!")
+                    candle_core::bail!(
+                        "only f32, f16, bf16 and f8e4m3 input data types are supported"
+                    )
                 }
             };
 

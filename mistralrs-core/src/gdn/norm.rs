@@ -23,8 +23,11 @@ impl RmsNormGated {
     pub fn forward(&self, x: &Tensor, gate: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cuda")]
         if x.device().is_cuda()
-            && x.rank() == 2
-            && gate.shape() == x.shape()
+            && (2..=4).contains(&x.rank())
+            && (2..=4).contains(&gate.rank())
+            && gate.elem_count() == x.elem_count()
+            && x.dim(D::Minus1)? == self.weight.elem_count()
+            && gate.dtype() == x.dtype()
             && self.weight.dtype() == x.dtype()
             && matches!(x.dtype(), DType::F16 | DType::BF16)
         {
@@ -33,7 +36,8 @@ impl RmsNormGated {
 
         let dtype = x.dtype();
         let x = x.to_dtype(DType::F32)?;
-        let gate = candle_nn::ops::silu(&gate.to_dtype(DType::F32)?)?;
+        let gate = gate.reshape(x.shape().clone())?.to_dtype(DType::F32)?;
+        let gate = candle_nn::ops::silu(&gate)?;
         let variance = x.sqr()?.mean_keepdim(D::Minus1)?;
         let normed = x.broadcast_div(&(variance + self.eps)?.sqrt()?)?;
         let out = normed

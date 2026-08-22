@@ -70,6 +70,10 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | `MISTRALRS_DFLASH_ADAPTIVE` | Adaptive DFlash draft depth is on by default (off when `--mtp-n-predict` is set). Set to `0` to always draft at full depth, or `1` to adapt below an explicit `--mtp-n-predict`. |
 | `MISTRALRS_DFLASH_ISQ` | ISQ type for DFlash drafter weights (`q4k`, `q6k`, ... or `none` for bf16); defaults to the target's in-situ quantization type. |
 | `MISTRALRS_FLASHINFER_DECODE` | Disables FlashInfer decode acceleration when set to `0`, `false`, `no`, or `off`. Use only for compatibility troubleshooting. |
+| `MISTRALRS_GDN_DECODE_KERNEL` | Overrides the SM90 GDN decode kernel for benchmarking or troubleshooting. Accepted values are `auto` (default), `baseline`, `cooperative`, and `pipelined`; an incompatible forced kernel returns an error. |
+| `MISTRALRS_FP8_SM90_PROVIDER` | Selects the SM90 provider for compatible 128x128 blockwise FP8 weights. DeepGEMM decode is selected automatically on Linux with CUDA 12.8 or newer; set `cutlass` to disable it, or `deepgemm`/`auto` to select it explicitly. Kernels are prepared before graph capture, with clean CUTLASS fallback when JIT or cache preparation is unavailable. |
+| `MISTRALRS_DEEPGEMM_CACHE_DIR` | Overrides the owner-private, content-versioned DeepGEMM cubin and JIT-header cache. Defaults below `XDG_CACHE_HOME`, then `~/.cache`. |
+| `MISTRALRS_DEEPGEMM_NVCC` | Path to the `nvcc` executable used only when a DeepGEMM kernel is absent from the cache. A populated cache does not require runtime `nvcc`. |
 | `MISTRALRS_NO_MLA` | Disables MLA acceleration for DeepSeek V2/V3 when set to `1`. Use only for compatibility troubleshooting. |
 | `MISTRALRS_GGUF_AFFINE_BACKEND` | Set to `on` to speed up GGUF matmuls at batch sizes of 8 or more. Off by default because it keeps a second copy of the quantized weights, taking that memory from the KV cache. Worth enabling for production serving with high concurrency. |
 | `CUTILE_TILEIRAS_PATH` | Path to `tileiras` when it is not available on `PATH`. |

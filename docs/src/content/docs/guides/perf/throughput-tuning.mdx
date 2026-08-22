@@ -10,12 +10,15 @@ A handful of flags control how many requests run at once and how much repeated w
 ```bash
 mistralrs serve -m Qwen/Qwen3-4B \
   --max-seqs 64 \
+  --max-num-batched-tokens 4096 \
   --pa-memory-fraction 0.9
 ```
 
 `--pa-memory-fraction` sizes the [paged attention](/guides/perf/paged-attention/) block pool; see [When paged attention matters](#when-paged-attention-matters) below.
 
-Measure with `mistralrs bench -m <model>` before and after changing anything; flags that help one workload can hurt another.
+Use `mistralrs bench -m <model>` for single-request kernel measurements. For server tuning, replay
+the same prompt and output lengths through the HTTP API at the production concurrency; flags that
+help one workload can hurt another.
 
 ## Concurrency: max running sequences
 
@@ -59,6 +62,20 @@ The default differs by surface:
 | Rust | `.with_max_num_seqs(...)` | 32 |
 
 More running sequences need more KV cache. With paged attention, size the block pool to match: one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` (default: 90% of available VRAM). If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.
+
+## Mixed prefill and decode
+
+Two limits control how new prompts share the GPU with active decodes:
+
+- `--max-num-batched-tokens` bounds the total prompt tokens in a scheduler batch (default 4096).
+  The budget is divided across the admitted prompt sequences, keeping peak activation memory
+  stable as concurrency grows.
+- `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a
+  decode batch is active (default 8). Raise it to favor inter-token latency for active requests;
+  lower it to reduce time to first token under sustained arrivals.
+
+Measure both output throughput and latency percentiles when changing either value. A larger token
+budget can improve prefill throughput while increasing decode latency, especially for long prompts.
 
 ## When paged attention matters
 

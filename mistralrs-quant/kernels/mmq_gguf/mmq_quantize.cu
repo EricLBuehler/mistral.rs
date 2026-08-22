@@ -220,6 +220,8 @@ static __device__ __forceinline__ float mmq_glu_activation(float x, int act) {
     return fmaxf(x, 0.0f);
   case 3:
     return x * normcdff(x);
+  case 4:
+    return 1.0f / (1.0f + expf(-x));
   default:
     return mmq_glu_silu(x);
   }

@@ -1,0 +1,10 @@
+FlashInfer
+Copyright 2025-2026 NVIDIA
+Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/)
+
+-------------------------------------------------------------------------------------------------
+Some of the code in this project are adapted from other open-source projects with different
+licenses. This product also bundles some third-party components under other open source licenses.
+See licenses/ for text of these licenses.
+
+The cooperative and pipelined K-major GDN decode kernels in mistralrs-core are adapted from FlashInfer.

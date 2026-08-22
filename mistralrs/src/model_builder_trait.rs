@@ -354,6 +354,15 @@ pub(crate) fn default_scheduler_config(max_num_seqs: usize) -> anyhow::Result<Sc
     })
 }
 
+fn paged_attn_with_serving_capacity(
+    config: Option<PagedAttentionConfig>,
+    max_num_seqs: usize,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    config
+        .map(|config| config.with_serving_capacity(max_num_seqs))
+        .transpose()
+}
+
 pub(crate) async fn scheduler_config_from_pipeline<P>(
     pipeline: &Arc<Mutex<P>>,
     paged_attn_requested: bool,
@@ -373,6 +382,9 @@ where
         {
             return Ok(SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs,
+                max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                max_decode_steps_before_prefill:
+                    mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                 config,
             });
         }
@@ -412,10 +424,13 @@ pub(crate) fn join_path_list(paths: Option<&[PathBuf]>, delimiter: &str) -> Opti
 }
 
 pub(crate) async fn build_pipeline_from_text_loader(
-    builder: crate::TextModelBuilder,
+    mut builder: crate::TextModelBuilder,
     loader: Box<dyn mistralrs_core::Loader>,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -427,6 +442,12 @@ pub(crate) async fn build_pipeline_from_text_loader(
     );
     let mcp_client_config = builder.mcp_client_config.clone();
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
     let device_map_setting =
         builder
@@ -470,10 +491,13 @@ pub(crate) async fn build_pipeline_from_text_loader(
 }
 
 pub(crate) async fn build_pipeline_from_gguf_loader(
-    builder: crate::GgufModelBuilder,
+    mut builder: crate::GgufModelBuilder,
     loader: Box<dyn mistralrs_core::Loader>,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -484,6 +508,12 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.prefix_cache_n,
     );
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -577,9 +607,12 @@ pub async fn build_model_from_pipeline(
 /// Build a text model pipeline from a TextModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_text_pipeline(
-    builder: crate::TextModelBuilder,
+    mut builder: crate::TextModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -612,6 +645,12 @@ pub async fn build_text_pipeline(
     .build(builder.loader_type.clone())?;
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -705,9 +744,12 @@ pub async fn build_text_pipeline(
 /// Build a multimodal model pipeline from a MultimodalModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_multimodal_pipeline(
-    builder: crate::MultimodalModelBuilder,
+    mut builder: crate::MultimodalModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
@@ -741,6 +783,12 @@ pub async fn build_multimodal_pipeline(
     .build(builder.loader_type.clone());
 
     let device = resolve_device(builder.force_cpu, None)?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(
@@ -841,9 +889,12 @@ pub async fn build_multimodal_pipeline(
 /// Build a GGUF model pipeline from a GgufModelBuilder.
 /// Returns the pipeline, scheduler config, and AddModelConfig needed for Model creation.
 pub async fn build_gguf_pipeline(
-    builder: crate::GgufModelBuilder,
+    mut builder: crate::GgufModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
@@ -881,6 +932,12 @@ pub async fn build_gguf_pipeline(
     let loader = loader_builder.build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let default_device_map = if builder.mmproj_files.is_some() {
         AutoDeviceMapParams::default_multimodal()
     } else {
@@ -1237,9 +1294,12 @@ pub async fn build_embedding_pipeline(
 /// This uses `AutoLoaderBuilder` to detect the model type (text, multimodal, embedding, etc.)
 /// from the model's config.json, similar to the CLI `run` command.
 pub async fn build_auto_pipeline(
-    builder: crate::ModelBuilder,
+    mut builder: crate::ModelBuilder,
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
+
+    builder.paged_attn_cfg =
+        paged_attn_with_serving_capacity(builder.paged_attn_cfg, builder.max_num_seqs)?;
 
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -1303,6 +1363,12 @@ pub async fn build_auto_pipeline(
         .build();
 
     let device = resolve_device(builder.force_cpu, builder.device.clone())?;
+    builder.paged_attn_cfg = reserve_external_mtp_memory(
+        builder.paged_attn_cfg,
+        builder.mtp_config.as_ref(),
+        &builder.dtype,
+        &device,
+    )?;
     let isq_type = resolve_isq_type(builder.isq.as_ref(), &device)?;
 
     let pipeline = loader.load_model_from_hf(

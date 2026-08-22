@@ -8,6 +8,30 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{KvCacheLayout, ModelConfigLike};
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn cuda_supports_fp8(device: &Device) -> bool {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+
+    if !mistralrs_paged_attn::USE_FP8 {
+        return false;
+    }
+    let Device::Cuda(cuda) = device else {
+        return false;
+    };
+    let ordinal = cuda.cuda_stream().context().ordinal();
+    #[allow(clippy::cast_possible_truncation)]
+    let Ok(device) = result::device::get(ordinal as i32) else {
+        return false;
+    };
+    unsafe {
+        result::device::get_attribute(
+            device,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+        )
+        .is_ok_and(|major| major >= 8)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
 pub enum PagedCacheType {
@@ -22,6 +46,60 @@ impl PagedCacheType {
             PagedCacheType::F8E4M3 => DType::F8E4M3,
             PagedCacheType::Auto => act_dtype,
         }
+    }
+
+    pub fn validate(
+        &self,
+        act_dtype: DType,
+        model_config: &dyn ModelConfigLike,
+        device: &Device,
+        layer_devices: &[Option<Device>],
+    ) -> std::result::Result<(), String> {
+        if *self == Self::Auto {
+            return Ok(());
+        }
+        if !matches!(act_dtype, DType::F16 | DType::BF16 | DType::F32) {
+            return Err(format!(
+                "FP8 KV cache requires f16, bf16, or f32 activations, got {act_dtype:?}"
+            ));
+        }
+
+        for layer_idx in 0..model_config.num_layers() {
+            if !model_config.layer_has_paged_kv_cache(layer_idx) {
+                continue;
+            }
+            if matches!(
+                model_config.kv_cache_layout_for_layer(layer_idx),
+                KvCacheLayout::Mla { .. }
+            ) {
+                return Err(format!(
+                    "FP8 KV cache is not supported for MLA layer {layer_idx}"
+                ));
+            }
+            let layer_device = layer_devices
+                .get(layer_idx)
+                .and_then(Option::as_ref)
+                .unwrap_or(device);
+            if layer_device.is_cuda() {
+                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                if !cuda_supports_fp8(layer_device) {
+                    return Err(
+                        "FP8 KV cache requires CUDA compute capability 8.0 or newer and a matching CUDA build"
+                            .to_string(),
+                    );
+                }
+                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                return Err("FP8 KV cache requires the CUDA paged-attention backend".to_string());
+            } else if layer_device.is_metal() {
+                #[cfg(not(feature = "metal"))]
+                return Err("FP8 KV cache requires the Metal paged-attention backend".to_string());
+            } else {
+                return Err(format!(
+                    "FP8 KV cache is only supported on CUDA or Metal, got {layer_device:?} for layer {layer_idx}"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -60,6 +138,10 @@ impl CacheEngine {
         device: &Device,
         layer_devices: Vec<Option<Device>>,
     ) -> Result<Self> {
+        cache_config
+            .cache_type
+            .validate(dtype, model_config, device, &layer_devices)
+            .map_err(candle_core::Error::msg)?;
         let dtype = cache_config.cache_type.to_dtype(dtype);
         Ok(Self {
             gpu_cache: Arc::new(Mutex::new(Self::allocate_gpu_cache(
@@ -411,5 +493,54 @@ impl CacheEngine {
             block_size,
             model_config.k_head_dim_for_layer(layer_idx),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::paged_attention::config::ModelConfigMetadata;
+
+    fn model_config(layout: KvCacheLayout) -> ModelConfigMetadata {
+        ModelConfigMetadata {
+            max_seq_len: 4096,
+            num_layers: 2,
+            hidden_size: 1024,
+            num_kv_heads: 4,
+            num_attn_heads: 16,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: layout,
+        }
+    }
+
+    #[test]
+    fn fp8_cache_rejects_cpu_before_allocation() {
+        let err = PagedCacheType::F8E4M3
+            .validate(
+                DType::BF16,
+                &model_config(KvCacheLayout::Standard),
+                &Device::Cpu,
+                &[],
+            )
+            .unwrap_err();
+        assert!(err.contains("only supported on CUDA or Metal"));
+    }
+
+    #[test]
+    fn fp8_cache_rejects_mla_before_allocation() {
+        let err = PagedCacheType::F8E4M3
+            .validate(
+                DType::BF16,
+                &model_config(KvCacheLayout::Mla {
+                    kv_lora_rank: 512,
+                    kpe_head_dim: 64,
+                }),
+                &Device::Cpu,
+                &[],
+            )
+            .unwrap_err();
+        assert!(err.contains("not supported for MLA layer 0"));
     }
 }

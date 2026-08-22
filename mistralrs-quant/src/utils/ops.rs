@@ -2603,6 +2603,7 @@ pub enum GluActivationType {
     Gelu = 1,
     Relu = 2,
     GeluErf = 3,
+    Sigmoid = 4,
 }
 
 // CPU activation functions for fused GLU
@@ -2628,16 +2629,67 @@ fn cpu_gelu_erf(x: f32) -> f32 {
     x * (1.0 + candle_core::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
 }
 
+fn cpu_sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
 fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
     match activation {
         GluActivationType::Silu => cpu_silu(x),
         GluActivationType::Gelu => cpu_gelu(x),
         GluActivationType::Relu => cpu_relu(x),
         GluActivationType::GeluErf => cpu_gelu_erf(x),
+        GluActivationType::Sigmoid => cpu_sigmoid(x),
     }
 }
 
 struct FusedGlu(GluActivationType);
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+struct DenseLastDimLayout {
+    rows: usize,
+    cols: usize,
+    row_stride: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn dense_last_dim_layout(layout: &Layout) -> Option<DenseLastDimLayout> {
+    let dims = layout.dims();
+    if dims.is_empty() {
+        return Some(DenseLastDimLayout {
+            rows: 1,
+            cols: 1,
+            row_stride: 1,
+        });
+    }
+    let cols = *dims.last()?;
+    let strides = layout.stride();
+    if *strides.last()? != 1 {
+        return None;
+    }
+    let rows = dims[..dims.len() - 1]
+        .iter()
+        .try_fold(1usize, |rows, &dim| rows.checked_mul(dim))?;
+    let row_stride = if dims.len() == 1 {
+        cols
+    } else {
+        strides[strides.len() - 2]
+    };
+    if row_stride < cols {
+        return None;
+    }
+    for index in 0..dims.len().saturating_sub(2) {
+        if strides[index] != dims[index + 1].checked_mul(strides[index + 1])? {
+            return None;
+        }
+    }
+    Some(DenseLastDimLayout {
+        rows,
+        cols,
+        row_stride,
+    })
+}
 
 impl CustomOp2 for FusedGlu {
     fn name(&self) -> &'static str {
@@ -2652,6 +2704,10 @@ impl CustomOp2 for FusedGlu {
         l2: &Layout,
     ) -> Result<(CpuStorage, Shape)> {
         use half::{bf16, f16};
+
+        if !l1.is_contiguous() || !l2.is_contiguous() {
+            candle_core::bail!("fused_glu CPU inputs must be contiguous");
+        }
 
         let activation = self.0;
         let out_shape = l1.shape().clone();
@@ -2741,7 +2797,21 @@ impl CustomOp2 for FusedGlu {
 
         let activation = self.0;
         let device = s1.device();
-        let n_elements = l1.shape().elem_count();
+        let a_layout = dense_last_dim_layout(l1)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input a is not row-dense"))?;
+        let b_layout = dense_last_dim_layout(l2)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input b is not row-dense"))?;
+        if (a_layout.rows, a_layout.cols) != (b_layout.rows, b_layout.cols) {
+            candle_core::bail!("fused_glu CUDA input layouts have different logical shapes");
+        }
+        let n_elements = a_layout
+            .rows
+            .checked_mul(a_layout.cols)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu output size overflow"))?;
+        let rows = u32::try_from(a_layout.rows)?;
+        let cols = u32::try_from(a_layout.cols)?;
+        let a_row_stride = u32::try_from(a_layout.row_stride)?;
+        let b_row_stride = u32::try_from(b_layout.row_stride)?;
         let dtype = s1.dtype();
         let out_shape = l1.shape().clone();
         let stream = device.cuda_stream();
@@ -2764,7 +2834,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2788,7 +2861,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2812,7 +2888,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2870,10 +2949,8 @@ impl CustomOp2 for FusedGlu {
 /// This fuses the activation function application and element-wise multiplication
 /// into a single pass, reducing memory bandwidth and eliminating
 /// intermediate tensor allocation.
+/// CUDA inputs may have padding between rows as long as their last dimension is dense.
 pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
-    let a = a.contiguous()?;
-    let b = b.contiguous()?;
-
     if a.shape() != b.shape() {
         candle_core::bail!(
             "fused_glu: a and b must have same shape, got {:?} vs {:?}",
@@ -2881,6 +2958,18 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
             b.shape()
         );
     }
+
+    #[cfg(feature = "cuda")]
+    if a.device().is_cuda()
+        && matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32)
+        && dense_last_dim_layout(a.layout()).is_some()
+        && dense_last_dim_layout(b.layout()).is_some()
+    {
+        return a.apply_op2_no_bwd(b, &FusedGlu(activation));
+    }
+
+    let a = a.contiguous()?;
+    let b = b.contiguous()?;
 
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
 }
@@ -3166,6 +3255,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let expected = fused_glu(&gate, &up, activation)
                 .unwrap()
@@ -3181,6 +3271,43 @@ mod tests {
                 .unwrap();
             assert_close(&actual, &expected, 1e-6);
         }
+    }
+
+    #[test]
+    fn test_fused_sigmoid_glu_matches_candle_extremes() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{Device, Tensor};
+
+        let gate = Tensor::new(
+            &[
+                [f32::NEG_INFINITY, -100.0, -20.0],
+                [-2.0, 0.0, 2.0],
+                [20.0, 100.0, f32::INFINITY],
+            ],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let up = Tensor::new(
+            &[[1.5f32, -2.0, 0.25], [3.0, -4.0, 5.0], [-0.5, 2.5, -3.0]],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let expected = candle_nn::ops::sigmoid(&gate)
+            .unwrap()
+            .broadcast_mul(&up)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let actual = fused_glu(&gate, &up, GluActivationType::Sigmoid)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_close(&actual, &expected, 1e-6);
+        assert!(actual.iter().all(|value| value.is_finite()));
     }
 
     #[cfg(feature = "cuda")]
@@ -3217,6 +3344,7 @@ mod tests {
                     GluActivationType::Gelu,
                     GluActivationType::Relu,
                     GluActivationType::GeluErf,
+                    GluActivationType::Sigmoid,
                 ] {
                     let expected = fused_glu(&gate, &up, activation)
                         .unwrap()
@@ -3240,6 +3368,70 @@ mod tests {
                         .unwrap();
                     assert_close(&actual, &expected, tolerance);
                 }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_sigmoid_glu_cuda_row_strides_and_offsets() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+
+        const ROWS: usize = 3;
+        const COLS: usize = 8;
+
+        let cpu = Device::Cpu;
+        let cuda = Device::new_cuda(0).unwrap();
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            for (a_width, a_start, b_width, b_start) in [(13, 1, 15, 2), (16, 4, 16, 4)] {
+                let a_data = (0..ROWS * a_width)
+                    .map(|index| (index as f32 - 17.0) / 9.0)
+                    .collect::<Vec<_>>();
+                let b_data = (0..ROWS * b_width)
+                    .map(|index| (23.0 - index as f32) / 13.0)
+                    .collect::<Vec<_>>();
+                let a = Tensor::from_vec(a_data, (ROWS, 1, a_width), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap()
+                    .narrow(2, a_start, COLS)
+                    .unwrap();
+                let b = Tensor::from_vec(b_data, (ROWS, 1, b_width), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap()
+                    .narrow(2, b_start, COLS)
+                    .unwrap();
+                assert!(!a.is_contiguous());
+                assert!(!b.is_contiguous());
+                assert_ne!(a.layout().start_offset(), 0);
+                assert_ne!(b.layout().start_offset(), 0);
+
+                let expected = candle_nn::ops::sigmoid(&a)
+                    .unwrap()
+                    .broadcast_mul(&b)
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_device(&cpu)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                let actual = fused_glu(&a, &b, GluActivationType::Sigmoid)
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_device(&cpu)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                let tolerance = if dtype == DType::F32 { 1e-6 } else { 2e-2 };
+                assert_close(&actual, &expected, tolerance);
             }
         }
     }
@@ -3961,6 +4153,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
@@ -4165,6 +4358,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();

@@ -5,6 +5,51 @@ use candle_core::backend::BackendStorage;
 use candle_core::{DType, IndexOp, Result, Storage, Tensor};
 use float8::F8E4M3;
 
+use crate::{KvCacheScales, DEFAULT_FP8_KV_CACHE_SCALES};
+
+fn validate_cache_scales(
+    cache_dtype: DType,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+) -> Result<()> {
+    match (cache_dtype, k_scale, v_scale) {
+        (DType::F8E4M3, Some(k_scale), Some(v_scale)) => {
+            if k_scale.dtype() != DType::F32
+                || v_scale.dtype() != DType::F32
+                || k_scale.elem_count() != 1
+                || v_scale.elem_count() != 1
+            {
+                candle_core::bail!(
+                    "gather_kv_cache requires scalar f32 K/V scales for an f8e4m3 cache"
+                );
+            }
+        }
+        (DType::F8E4M3, _, _) => {
+            candle_core::bail!("gather_kv_cache requires explicit K/V scales for an f8e4m3 cache")
+        }
+        (_, None, None) => {}
+        (_, _, _) => {
+            candle_core::bail!("gather_kv_cache only accepts K/V scales for an f8e4m3 cache")
+        }
+    }
+    Ok(())
+}
+
+fn flashinfer_cache_scales(
+    cache_dtype: DType,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+) -> Result<KvCacheScales> {
+    match (cache_dtype, k_scale, v_scale) {
+        (DType::F8E4M3, Some(k_scale), Some(v_scale)) => Ok(KvCacheScales {
+            k: k_scale.to_dtype(DType::F32)?.to_scalar::<f32>()?,
+            v: v_scale.to_dtype(DType::F32)?.to_scalar::<f32>()?,
+        }),
+        (_, None, None) => Ok(DEFAULT_FP8_KV_CACHE_SCALES),
+        _ => unreachable!(),
+    }
+}
+
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
     value_cache: &Tensor, // [num_blocks, kv_heads, head_size, block_size]
@@ -14,6 +59,15 @@ pub fn gather_kv_cache(
     cu_seq_lens: &Tensor, // [batch + 1]
     out_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
+    let cache_dtype = key_cache.dtype();
+    if value_cache.dtype() != cache_dtype {
+        candle_core::bail!(
+            "gather_kv_cache expects matching cache dtypes, got {:?} and {:?}",
+            cache_dtype,
+            value_cache.dtype()
+        );
+    }
+    validate_cache_scales(cache_dtype, k_scale, v_scale)?;
     if is_flashinfer_cache(key_cache, value_cache) {
         return gather_kv_cache_flashinfer(
             key_cache,
@@ -21,15 +75,7 @@ pub fn gather_kv_cache(
             block_table,
             cu_seq_lens,
             out_dtype,
-        );
-    }
-
-    let cache_dtype = key_cache.dtype();
-    if value_cache.dtype() != cache_dtype {
-        candle_core::bail!(
-            "gather_kv_cache expects matching cache dtypes, got {:?} and {:?}",
-            cache_dtype,
-            value_cache.dtype()
+            flashinfer_cache_scales(cache_dtype, k_scale, v_scale)?,
         );
     }
 

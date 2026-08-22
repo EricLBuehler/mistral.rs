@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, Result, Tensor};
 
-use crate::kv_cache::RecurrentStatePool;
+use crate::kv_cache::{RecurrentStateLayout, RecurrentStatePool};
 
 use super::config::{GdnConfig, GdnDims};
 
@@ -11,6 +11,7 @@ use super::config::{GdnConfig, GdnDims};
 pub struct GdnLayerCache {
     pub conv_state: Tensor,
     pub recurrent_state: Tensor,
+    pub state_layout: RecurrentStateLayout,
     pub slots: Option<Tensor>,
 }
 
@@ -24,21 +25,36 @@ impl GdnLayerCache {
             DType::F32,
             device,
         )?;
-        Ok(Self::gathered(conv_state, recurrent_state))
+        Ok(Self::gathered(
+            conv_state,
+            recurrent_state,
+            RecurrentStateLayout::GdnKeyMajor,
+        ))
     }
 
-    pub fn gathered(conv_state: Tensor, recurrent_state: Tensor) -> Self {
+    pub fn gathered(
+        conv_state: Tensor,
+        recurrent_state: Tensor,
+        state_layout: RecurrentStateLayout,
+    ) -> Self {
         Self {
             conv_state,
             recurrent_state,
+            state_layout,
             slots: None,
         }
     }
 
-    pub fn pooled(conv_state: Tensor, recurrent_state: Tensor, slots: Tensor) -> Self {
+    pub fn pooled(
+        conv_state: Tensor,
+        recurrent_state: Tensor,
+        state_layout: RecurrentStateLayout,
+        slots: Tensor,
+    ) -> Self {
         Self {
             conv_state,
             recurrent_state,
+            state_layout,
             slots: Some(slots),
         }
     }
@@ -50,12 +66,14 @@ impl GdnLayerCache {
             return Ok(Self::pooled(
                 pool.conv_state.clone(),
                 pool.recurrent_state.clone(),
+                pool.state_layout(),
                 indices.clone(),
             ));
         }
         Ok(Self::gathered(
             pool.gather_conv_state(indices)?,
             pool.gather_recurrent_state(indices)?,
+            pool.state_layout(),
         ))
     }
 
@@ -84,6 +102,7 @@ impl Clone for GdnLayerCache {
         Self {
             conv_state: self.conv_state.clone(),
             recurrent_state: self.recurrent_state.clone(),
+            state_layout: self.state_layout,
             slots: self.slots.clone(),
         }
     }

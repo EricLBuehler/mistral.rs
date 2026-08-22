@@ -800,7 +800,8 @@ enum GluActivation {
   GLU_SILU = 0,
   GLU_GELU = 1,
   GLU_RELU = 2,
-  GLU_GELU_ERF = 3
+  GLU_GELU_ERF = 3,
+  GLU_SIGMOID = 4
 };
 
 // SiLU activation: x * sigmoid(x)
@@ -835,6 +836,8 @@ __device__ __forceinline__ float apply_glu_activation(float x, int act) {
     return glu_relu(x);
   case GLU_GELU_ERF:
     return glu_gelu_erf(x);
+  case GLU_SIGMOID:
+    return 1.0f / (1.0f + expf(-x));
   default:
     return glu_silu(x);
   }
@@ -844,31 +847,47 @@ __device__ __forceinline__ float apply_glu_activation(float x, int act) {
 template <typename T>
 __global__ void fused_glu_kernel(const T *__restrict__ a, // input to activation
                                  const T *__restrict__ b, // multiplier
-                                 T *__restrict__ output, const uint32_t N,
+                                 T *__restrict__ output, const uint32_t cols,
+                                 const uint32_t a_row_stride,
+                                 const uint32_t b_row_stride,
+                                 const uint64_t output_elements,
                                  const int activation) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= N)
+  const uint64_t index =
+      static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= output_elements)
     return;
 
-  float a_val = (float)a[idx];
+  const uint64_t row = index / cols;
+  const uint32_t column = static_cast<uint32_t>(index - row * cols);
+  const uint64_t a_index = row * a_row_stride + column;
+  const uint64_t b_index = row * b_row_stride + column;
+  float a_val = (float)a[a_index];
   // Cast activation back to T before multiplying, matching candle's
   // two-step behavior: unary op in float32 -> cast to T -> binary mul in T
   T activated = (T)apply_glu_activation(a_val, activation);
-  output[idx] = activated * b[idx];
+  output[index] = activated * b[b_index];
 }
 
 // Vectorized version for 4 elements at a time
 template <typename T, typename T4>
-__global__ void fused_glu_kernel_vec4(const T4 *__restrict__ a,
-                                      const T4 *__restrict__ b,
+__global__ void fused_glu_kernel_vec4(const T *__restrict__ a,
+                                      const T *__restrict__ b,
                                       T4 *__restrict__ output,
-                                      const uint32_t N4, const int activation) {
-  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= N4)
+                                      const uint32_t cols_vec,
+                                      const uint32_t a_row_stride,
+                                      const uint32_t b_row_stride,
+                                      const uint64_t output_vecs,
+                                      const int activation) {
+  const uint64_t index =
+      static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= output_vecs)
     return;
 
-  T4 a4 = a[idx];
-  T4 b4 = b[idx];
+  const uint64_t row = index / cols_vec;
+  const uint32_t column =
+      static_cast<uint32_t>(index - row * cols_vec) * 4;
+  T4 a4 = *reinterpret_cast<const T4 *>(a + row * a_row_stride + column);
+  T4 b4 = *reinterpret_cast<const T4 *>(b + row * b_row_stride + column);
   T4 out4;
 
   float a0 = (float)((T *)&a4)[0];
@@ -888,62 +907,67 @@ __global__ void fused_glu_kernel_vec4(const T4 *__restrict__ a,
   ((T *)&out4)[2] = act2 * ((T *)&b4)[2];
   ((T *)&out4)[3] = act3 * ((T *)&b4)[3];
 
-  output[idx] = out4;
+  output[index] = out4;
+}
+
+template <typename T, typename T4>
+void launch_fused_glu(const T *a, const T *b, T *output, uint32_t rows,
+                      uint32_t cols, uint32_t a_row_stride,
+                      uint32_t b_row_stride, int activation,
+                      cudaStream_t stream) {
+  if (rows == 0 || cols == 0)
+    return;
+  constexpr int threads = 256;
+  const uintptr_t pointer_alignment = reinterpret_cast<uintptr_t>(a) |
+                                      reinterpret_cast<uintptr_t>(b) |
+                                      reinterpret_cast<uintptr_t>(output);
+  const bool aligned_rows =
+      (static_cast<uint64_t>(a_row_stride) * sizeof(T)) % alignof(T4) == 0 &&
+      (static_cast<uint64_t>(b_row_stride) * sizeof(T)) % alignof(T4) == 0;
+  if (cols % 4 == 0 && aligned_rows &&
+      (pointer_alignment & (alignof(T4) - 1)) == 0) {
+    const uint32_t cols_vec = cols / 4;
+    const uint64_t output_vecs = static_cast<uint64_t>(rows) * cols_vec;
+    const int blocks = static_cast<int>((output_vecs + threads - 1) / threads);
+    fused_glu_kernel_vec4<T, T4><<<blocks, threads, 0, stream>>>(
+        a, b, reinterpret_cast<T4 *>(output), cols_vec, a_row_stride,
+        b_row_stride, output_vecs, activation);
+  } else {
+    const uint64_t output_elements = static_cast<uint64_t>(rows) * cols;
+    const int blocks =
+        static_cast<int>((output_elements + threads - 1) / threads);
+    fused_glu_kernel<<<blocks, threads, 0, stream>>>(
+        a, b, output, cols, a_row_stride, b_row_stride, output_elements,
+        activation);
+  }
+  CUDA_CHECK(cudaGetLastError());
 }
 
 extern "C" void fused_glu_f16(const __half *a, const __half *b, __half *output,
-                              uint32_t N, int activation, cudaStream_t stream) {
-  if (N % 4 == 0) {
-    const int N4 = N / 4;
-    const int nthreads = 256;
-    const int nblocks = (N4 + nthreads - 1) / nthreads;
-    fused_glu_kernel_vec4<__half, uint64_t><<<nblocks, nthreads, 0, stream>>>(
-        (const uint64_t *)a, (const uint64_t *)b, (uint64_t *)output, N4,
-        activation);
-  } else {
-    const int nthreads = 256;
-    const int nblocks = (N + nthreads - 1) / nthreads;
-    fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(a, b, output, N,
-                                                       activation);
-  }
-  CUDA_CHECK(cudaGetLastError());
+                              uint32_t rows, uint32_t cols,
+                              uint32_t a_row_stride,
+                              uint32_t b_row_stride, int activation,
+                              cudaStream_t stream) {
+  launch_fused_glu<__half, uint64_t>(a, b, output, rows, cols, a_row_stride,
+                                    b_row_stride, activation, stream);
 }
 
 extern "C" void fused_glu_bf16(const __nv_bfloat16 *a, const __nv_bfloat16 *b,
-                               __nv_bfloat16 *output, uint32_t N,
+                               __nv_bfloat16 *output, uint32_t rows,
+                               uint32_t cols, uint32_t a_row_stride,
+                               uint32_t b_row_stride,
                                int activation, cudaStream_t stream) {
-  if (N % 4 == 0) {
-    const int N4 = N / 4;
-    const int nthreads = 256;
-    const int nblocks = (N4 + nthreads - 1) / nthreads;
-    fused_glu_kernel_vec4<__nv_bfloat16, uint64_t>
-        <<<nblocks, nthreads, 0, stream>>>((const uint64_t *)a,
-                                           (const uint64_t *)b,
-                                           (uint64_t *)output, N4, activation);
-  } else {
-    const int nthreads = 256;
-    const int nblocks = (N + nthreads - 1) / nthreads;
-    fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(a, b, output, N,
-                                                       activation);
-  }
-  CUDA_CHECK(cudaGetLastError());
+  launch_fused_glu<__nv_bfloat16, uint64_t>(
+      a, b, output, rows, cols, a_row_stride, b_row_stride, activation, stream);
 }
 
 extern "C" void fused_glu_f32(const float *a, const float *b, float *output,
-                              uint32_t N, int activation, cudaStream_t stream) {
-  if (N % 4 == 0) {
-    const int N4 = N / 4;
-    const int nthreads = 256;
-    const int nblocks = (N4 + nthreads - 1) / nthreads;
-    fused_glu_kernel_vec4<float, float4><<<nblocks, nthreads, 0, stream>>>(
-        (const float4 *)a, (const float4 *)b, (float4 *)output, N4, activation);
-  } else {
-    const int nthreads = 256;
-    const int nblocks = (N + nthreads - 1) / nthreads;
-    fused_glu_kernel<<<nblocks, nthreads, 0, stream>>>(a, b, output, N,
-                                                       activation);
-  }
-  CUDA_CHECK(cudaGetLastError());
+                              uint32_t rows, uint32_t cols,
+                              uint32_t a_row_stride,
+                              uint32_t b_row_stride, int activation,
+                              cudaStream_t stream) {
+  launch_fused_glu<float, float4>(a, b, output, rows, cols, a_row_stride,
+                                 b_row_stride, activation, stream);
 }
 
 template <typename T>

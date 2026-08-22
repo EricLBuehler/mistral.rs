@@ -6,7 +6,7 @@ use rand::distr::{Distribution, Uniform};
 use rand_isaac::Isaac64Rng;
 
 #[cfg(feature = "cuda")]
-use crate::sampler::CudaBatchSamplingKind;
+use crate::sampler::{CudaBatchSamplingKind, CudaTop1BatchSubmission};
 use crate::{
     prefix_cacher::PrefixCacheManagerV2,
     sampler::Logprobs,
@@ -551,8 +551,71 @@ pub async fn sample_and_add_toks(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::PerSequence(logits_seq),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+pub async fn sample_and_add_toks_batched(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: Tensor,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
+    sample_and_add_toks_inner(
+        this,
+        seqs,
+        CausalLogitsBatch::Batched(logits),
+        prefix_cacher,
+        disable_eos_stop,
+        rng,
+    )
+    .await
+}
+
+enum CausalLogitsBatch {
+    PerSequence(Vec<Tensor>),
+    Batched(Tensor),
+}
+
+impl CausalLogitsBatch {
+    fn len(&self) -> Result<usize> {
+        match self {
+            Self::PerSequence(logits) => Ok(logits.len()),
+            Self::Batched(logits) => logits.dim(0),
+        }
+    }
+
+    fn into_cpu_rows(self) -> Result<Vec<Tensor>> {
+        match self {
+            Self::PerSequence(logits) => coalesce_batch_logits_to_cpu(logits),
+            Self::Batched(logits) => {
+                let batch = logits.dim(0)?;
+                let logits = logits.to_device(&candle_core::Device::Cpu)?;
+                (0..batch).map(|idx| logits.i(idx)).collect()
+            }
+        }
+    }
+}
+
+async fn sample_and_add_toks_inner(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    logits: CausalLogitsBatch,
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+) -> Result<()> {
     let seqs_len = seqs.len();
-    debug_assert_eq!(logits_seq.len(), seqs_len);
+    debug_assert_eq!(logits.len()?, seqs_len);
 
     let use_async_pool = seqs_len > 1;
     let metadata = this.get_metadata();
@@ -560,10 +623,10 @@ pub async fn sample_and_add_toks(
     let max_model_len = metadata.max_seq_len;
     let eos_toks = metadata.eos_tok.clone();
 
-    let sampled_vec = match try_sample_batch_cuda(&logits_seq, seqs, &rng)? {
+    let sampled_vec = match try_sample_batch_cuda(&logits, seqs, &rng)? {
         Some(sampled) => sampled,
         None => {
-            let logits_seq = coalesce_batch_logits_to_cpu(logits_seq)?;
+            let logits_seq = logits.into_cpu_rows()?;
             let sampling_futures: Vec<_> = std::iter::zip(logits_seq, seqs.iter_mut())
                 .map(|(logits_per_seq, seq)| {
                     let return_logprobs = seq.return_logprobs();
@@ -628,6 +691,199 @@ pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
     }
 }
 
+#[cfg(feature = "cuda")]
+pub(crate) struct CudaGreedyBatchSubmission {
+    inner: CudaTop1BatchSubmission,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaGreedyBatchSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        self.inner.batch_size()
+    }
+
+    pub(crate) fn wait_on(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        self.inner.wait_on(stream)
+    }
+
+    pub(crate) fn release_after(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        self.inner.release_after(stream)
+    }
+
+    pub(crate) fn complete(self) -> Result<Vec<u32>> {
+        Ok(self.inner.complete()?.token_ids)
+    }
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_submit_greedy_batch_cuda(
+    logits: &Tensor,
+    seqs: &[&mut Sequence],
+    resident_input: &Tensor,
+) -> Result<Option<CudaGreedyBatchSubmission>> {
+    if !can_submit_greedy_batch_cuda_seqs(seqs) || !logits.device().is_cuda() {
+        return Ok(None);
+    }
+
+    let logits = final_batched_logits(logits)?;
+    if logits.dim(0)? != seqs.len() {
+        return Ok(None);
+    }
+    let inner = seqs[0]
+        .sampler()
+        .submit_cuda_top1_batch_into(&logits, resident_input)?;
+    Ok(Some(CudaGreedyBatchSubmission { inner }))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn try_submit_greedy_batch_cuda_owned(
+    logits: &Tensor,
+    seqs: &[&mut Sequence],
+) -> Result<Option<CudaGreedyBatchSubmission>> {
+    if !can_submit_greedy_batch_cuda_seqs(seqs) || !logits.device().is_cuda() {
+        return Ok(None);
+    }
+    let logits = final_batched_logits(logits)?;
+    if logits.dim(0)? != seqs.len() {
+        return Ok(None);
+    }
+    let inner = seqs[0].sampler().submit_cuda_top1_batch_owned(&logits)?;
+    Ok(Some(CudaGreedyBatchSubmission { inner }))
+}
+
+pub(crate) fn can_submit_greedy_batch_cuda_seqs(seqs: &[&mut Sequence]) -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        !seqs.is_empty()
+            && seqs.iter().all(|seq| {
+                matches!(&seq.recognizer, SequenceRecognizer::None)
+                    && seq.tool_call_state.is_none()
+                    && !seq.sampling_logprob_required()
+                    && seq.active_staged_speculative_len() == 0
+                    && seq
+                        .sampler()
+                        .cuda_batch_sampling_plan(seq.return_logprobs())
+                        .is_some_and(|plan| plan.kind.is_argmax())
+            })
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = seqs;
+        false
+    }
+}
+
+pub(crate) fn can_launch_one_token_lookahead(seqs: &[&mut Sequence], max_model_len: usize) -> bool {
+    !seqs.is_empty()
+        && seqs.iter().all(|seq| {
+            !seq.is_finished_paged_attn()
+                && one_token_stays_within_limits(
+                    seq.generated_len(),
+                    seq.max_generation_len(max_model_len),
+                    seq.get_toks().len(),
+                    max_model_len,
+                )
+        })
+}
+
+fn one_token_stays_within_limits(
+    generated_len: usize,
+    max_generation_len: usize,
+    sequence_len: usize,
+    max_model_len: usize,
+) -> bool {
+    generated_len.saturating_add(1) < max_generation_len && sequence_len < max_model_len
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn validate_greedy_batch_cardinality(
+    sequence_count: usize,
+    token_count: usize,
+    commit_count: usize,
+) -> Result<()> {
+    if token_count != sequence_count || commit_count != sequence_count {
+        candle_core::bail!(
+            "greedy completion rows do not match the active batch: tokens={token_count}, commits={commit_count}, sequences={sequence_count}"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn greedy_batch_will_finish(
+    this: &dyn Pipeline,
+    seqs: &[&mut Sequence],
+    token_ids: &[u32],
+    commit_rows: &[bool],
+    disable_eos_stop: bool,
+) -> Result<bool> {
+    let metadata = this.get_metadata();
+    greedy_batch_will_finish_with_metadata(
+        seqs,
+        token_ids,
+        commit_rows,
+        &metadata.eos_tok,
+        metadata.max_seq_len,
+        disable_eos_stop,
+    )
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn greedy_batch_will_finish_with_metadata(
+    seqs: &[&mut Sequence],
+    token_ids: &[u32],
+    commit_rows: &[bool],
+    eos_tokens: &[u32],
+    max_model_len: usize,
+    disable_eos_stop: bool,
+) -> Result<bool> {
+    validate_greedy_batch_cardinality(seqs.len(), token_ids.len(), commit_rows.len())?;
+    Ok(seqs
+        .iter()
+        .zip(token_ids)
+        .zip(commit_rows)
+        .any(|((seq, token), commit)| {
+            if !*commit {
+                return false;
+            }
+            let eos_tokens = seq.effective_eos_tokens(eos_tokens, disable_eos_stop);
+            seq.is_done(*token, eos_tokens, max_model_len).is_some()
+        }))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) async fn finish_greedy_batch(
+    this: &dyn Pipeline,
+    seqs: &mut [&mut Sequence],
+    token_ids: Vec<u32>,
+    commit_rows: &[bool],
+    prefix_cacher: &mut PrefixCacheManagerV2,
+    disable_eos_stop: bool,
+) -> Result<()> {
+    validate_greedy_batch_cardinality(seqs.len(), token_ids.len(), commit_rows.len())?;
+    let metadata = this.get_metadata();
+    for ((token, commit), seq) in token_ids.into_iter().zip(commit_rows).zip(seqs.iter_mut()) {
+        if !*commit {
+            continue;
+        }
+        let next_token = Logprobs {
+            token,
+            logprob: 0.0,
+            top_logprobs: None,
+            bytes: None,
+        };
+        let eos_tok = seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop);
+        finish_or_add_toks_to_seq(this, prefix_cacher, seq, next_token, eos_tok, true).await?;
+    }
+    Ok(())
+}
+
 fn final_logits_row(logits: &Tensor) -> Result<Tensor> {
     logits.squeeze(0)?.squeeze(0)
 }
@@ -645,6 +901,20 @@ fn stack_final_logits(logits: &[Tensor]) -> Result<Tensor> {
         .to_dtype(DType::F32)
 }
 
+#[cfg(any(feature = "cuda", test))]
+fn final_batched_logits(logits: &Tensor) -> Result<Tensor> {
+    let dims = logits.dims();
+    if dims.len() < 2 || dims[1..dims.len() - 1].iter().any(|&dim| dim != 1) {
+        candle_core::bail!(
+            "batched causal logits must have shape [batch, ..., vocab] with singleton middle dimensions, got {dims:?}"
+        );
+    }
+    logits
+        .contiguous()?
+        .reshape((dims[0], dims[dims.len() - 1]))?
+        .to_dtype(DType::F32)
+}
+
 fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
     if logits.len() <= 1 || logits.iter().all(|logits| logits.device().is_cpu()) {
         return Ok(logits);
@@ -657,16 +927,27 @@ fn coalesce_batch_logits_to_cpu(logits: Vec<Tensor>) -> Result<Vec<Tensor>> {
 
 #[cfg(feature = "cuda")]
 fn try_sample_batch_cuda(
-    logits: &[Tensor],
+    logits: &CausalLogitsBatch,
     seqs: &[&mut Sequence],
     rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
-    if logits.is_empty()
-        || logits.len() != seqs.len()
-        || logits.iter().any(|logits| !logits.device().is_cuda())
-    {
-        return Ok(None);
-    }
+    let logits = match logits {
+        CausalLogitsBatch::PerSequence(logits) => {
+            if logits.is_empty()
+                || logits.len() != seqs.len()
+                || logits.iter().any(|logits| !logits.device().is_cuda())
+            {
+                return Ok(None);
+            }
+            stack_final_logits(logits)?
+        }
+        CausalLogitsBatch::Batched(logits) => {
+            if logits.dim(0)? != seqs.len() || !logits.device().is_cuda() {
+                return Ok(None);
+            }
+            final_batched_logits(logits)?
+        }
+    };
 
     let mut samplers_and_plans = Vec::with_capacity(seqs.len());
     let mut sampling_logprob_required = false;
@@ -689,20 +970,18 @@ fn try_sample_batch_cuda(
     if samplers_and_plans
         .iter()
         .any(|(_, plan)| matches!(plan.kind, CudaBatchSamplingKind::Categorical) != categorical)
-        || logits.len() == 1 && !categorical
+        || seqs.len() == 1 && !categorical
     {
         return Ok(None);
     }
 
-    let logits = stack_final_logits(logits)?;
     let all_argmax = samplers_and_plans
         .iter()
         .all(|(_, plan)| plan.kind.is_argmax());
     if all_argmax && !sampling_logprob_required {
-        let output = crate::ops::cuda_top1_logits_f32_packed_batched(&logits)?;
-        let packed = output.packed.to_vec2::<f32>()?;
+        let packed = samplers_and_plans[0].0.sample_cuda_top1_batch(&logits)?;
         let sampled = std::iter::zip(packed, samplers_and_plans)
-            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(&row))
+            .map(|(row, (sampler, _))| sampler.sample_cuda_top1_row(row.as_slice()))
             .collect();
         return Ok(Some(sampled));
     }
@@ -762,7 +1041,7 @@ fn try_sample_batch_cuda(
 
 #[cfg(not(feature = "cuda"))]
 fn try_sample_batch_cuda(
-    _logits: &[Tensor],
+    _logits: &CausalLogitsBatch,
     _seqs: &[&mut Sequence],
     _rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
 ) -> Result<Option<Vec<Result<Logprobs>>>> {
@@ -930,9 +1209,72 @@ pub async fn sample_sequence(
 #[cfg(test)]
 mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
+    use std::{collections::HashMap, sync::Arc};
+    use tokio::sync::{mpsc::channel, Mutex};
 
     use super::*;
     use crate::tools::{ToolCallState, ToolChoice};
+    use crate::{
+        sampler::Sampler,
+        sequence::{SeqStepType, SequenceGroup},
+    };
+
+    fn terminal_test_sequence(
+        stop_tokens: Vec<u32>,
+        max_len: Option<usize>,
+        ignore_eos: bool,
+    ) -> Sequence {
+        let (tx, _rx) = channel(1);
+        let sampler = Sampler::new(
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            32,
+            1.0,
+            0.0,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap();
+        let group = Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None)));
+        Sequence::new_waiting(
+            vec![1, 2, 3],
+            "prompt".to_string(),
+            0,
+            0,
+            0,
+            tx,
+            sampler,
+            stop_tokens,
+            vec![],
+            max_len,
+            false,
+            false,
+            group,
+            0,
+            0,
+            SequenceRecognizer::None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            SeqStepType::PromptAndDecode,
+            None,
+            None,
+            None,
+            false,
+            ignore_eos,
+            vec![],
+        )
+    }
 
     fn weather_tool() -> Tool {
         Tool {
@@ -1016,6 +1358,77 @@ mod tests {
         assert_eq!(
             packed,
             vec![vec![8.0, 9.0, 10.0, 11.0], vec![0.0, 1.0, 2.0, 3.0]]
+        );
+    }
+
+    #[test]
+    fn final_batched_logits_flattens_singleton_axes() {
+        let logits = Tensor::from_vec(
+            vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+            (2, 1, 1, 4),
+            &candle_core::Device::Cpu,
+        )
+        .unwrap();
+
+        let packed = final_batched_logits(&logits)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        assert_eq!(
+            packed,
+            vec![vec![0.0, 1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0, 7.0]]
+        );
+    }
+
+    #[test]
+    fn lookahead_stops_before_known_length_boundaries() {
+        assert!(one_token_stays_within_limits(4, 8, 12, 16));
+        assert!(!one_token_stays_within_limits(7, 8, 12, 16));
+        assert!(!one_token_stays_within_limits(4, 8, 16, 16));
+    }
+
+    #[test]
+    fn greedy_terminal_prediction_matches_sequence_stop_rules() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        let seqs = [&mut seq];
+        assert!(
+            greedy_batch_will_finish_with_metadata(&seqs, &[42], &[true], &[42], 1024, false,)
+                .unwrap()
+        );
+        assert!(
+            !greedy_batch_will_finish_with_metadata(&seqs, &[42], &[true], &[42], 1024, true,)
+                .unwrap()
+        );
+
+        let mut seq = terminal_test_sequence(vec![9], None, false);
+        let seqs = [&mut seq];
+        assert!(
+            greedy_batch_will_finish_with_metadata(&seqs, &[9], &[true], &[], 1024, false,)
+                .unwrap()
+        );
+        assert!(
+            !greedy_batch_will_finish_with_metadata(&seqs, &[9], &[false], &[], 1024, false,)
+                .unwrap()
+        );
+
+        let mut seq = terminal_test_sequence(vec![], Some(1), false);
+        let seqs = [&mut seq];
+        assert!(
+            greedy_batch_will_finish_with_metadata(&seqs, &[7], &[true], &[], 1024, false,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn greedy_terminal_prediction_rejects_mismatched_rows() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        let seqs = [&mut seq];
+        assert!(
+            greedy_batch_will_finish_with_metadata(&seqs, &[], &[true], &[], 1024, false,).is_err()
+        );
+        assert!(
+            greedy_batch_will_finish_with_metadata(&seqs, &[7], &[], &[], 1024, false,).is_err()
         );
     }
 }

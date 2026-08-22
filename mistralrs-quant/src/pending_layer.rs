@@ -10,8 +10,8 @@ use std::{
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
-    DistributedKind, IsqJobOutput, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedSerde,
+    ActivationQuantizationScheme, DistributedKind, IsqJobOutput, IsqType, QuantMethod,
+    QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedSerde,
 };
 
 enum PendingState {
@@ -168,6 +168,25 @@ impl QuantMethod for PendingIsqLayer {
 
     fn afq_inner(&self) -> Option<crate::AfqInner> {
         self.resolve().ok()?.afq_inner()
+    }
+
+    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
+        self.resolve().ok()?.activation_quantization_scheme()
+    }
+
+    fn activation_quantization_scheme_for(
+        &self,
+        a: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.resolve().ok()?.activation_quantization_scheme_for(a)
+    }
+
+    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
+        self.resolve()?.quantize_activation(a)
+    }
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        self.resolve()?.forward_quantized(a)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

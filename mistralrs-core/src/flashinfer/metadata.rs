@@ -1,10 +1,20 @@
 use anyhow::Result;
+#[cfg(feature = "cuda")]
+use candle_core::DType;
 use candle_core::{Device, Tensor};
 
+#[cfg(feature = "cuda")]
+use super::Fa3DecodeState;
 use super::{
     DeviceTensorMap, FlashInferMetadata, FlashInferPagedAttentionView,
     FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
 };
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use super::{Fa3DecodeBuffers, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::paged_attention::AttentionBackendKind;
+#[cfg(feature = "cuda")]
+use crate::paged_attention::ModelConfigLike;
 
 // Split-KV decode chunks each (sequence, kv head) context so the grid reaches about this many
 // blocks per SM; grids that are already full keep one 2048-token chunk and skip the partial merge.
@@ -281,7 +291,185 @@ pub(crate) fn flashinfer_metadata(
         views: FlashInferPagedAttentionViews { logical, sliding },
         decode_tmp_v: None,
         decode_tmp_s: None,
+        fa3_decode: None,
+        #[cfg(feature = "cuda")]
+        decode_tile_plan_used: None,
     }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub(crate) fn make_fa3_decode_state(
+    metadata: &FlashInferMetadata,
+    batch: usize,
+    kv_cache: &[(Tensor, Tensor)],
+    model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    activation_dtype: DType,
+) -> candle_core::Result<Option<Fa3DecodeState>> {
+    if !mistralrs_paged_attn::USE_FA3_FP8_PAGED || activation_dtype != DType::BF16 || batch == 0 {
+        return Ok(None);
+    }
+    let Some(model_metadata) = model_metadata else {
+        return Ok(None);
+    };
+
+    let mut state = Fa3DecodeState::default();
+    let layer_count = model_metadata.num_layers().min(kv_cache.len());
+    for (layer_idx, (key_cache, value_cache)) in kv_cache.iter().enumerate().take(layer_count) {
+        if !model_metadata.layer_has_paged_kv_cache(layer_idx)
+            || model_metadata.attention_backend_kind_for_layer(layer_idx)
+                != AttentionBackendKind::FlashInfer
+            || key_cache.dtype() != DType::F8E4M3
+            || value_cache.dtype() != DType::F8E4M3
+        {
+            continue;
+        }
+        let Some(num_sm) = fa3_device_num_sm(key_cache.device()) else {
+            continue;
+        };
+        let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        if num_pages == 0
+            || value_cache.dims4()? != (num_pages, kv_heads, page_size, head_dim)
+            || value_cache.device().location() != key_cache.device().location()
+        {
+            continue;
+        }
+        let q_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
+        let key = Fa3DecodeScheduleKey {
+            device: key_cache.device().location(),
+            view: Fa3DecodeView::Logical,
+            batch,
+            q_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+            num_splits: FA3_DECODE_NUM_SPLITS,
+        };
+        if !key.supported() || state.get(&key).is_some() {
+            continue;
+        }
+        let Some(max_pages_per_sequence) = fa3_view_capacity(&metadata.views.logical, &key)? else {
+            continue;
+        };
+        state.insert(
+            key,
+            allocate_fa3_decode_buffers(key_cache.device(), key, max_pages_per_sequence, num_sm)?,
+        );
+    }
+
+    Ok((!state.is_empty()).then_some(state))
+}
+
+#[cfg(all(feature = "cuda", not(target_family = "unix")))]
+pub(crate) fn make_fa3_decode_state(
+    _metadata: &FlashInferMetadata,
+    _batch: usize,
+    _kv_cache: &[(Tensor, Tensor)],
+    _model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    _activation_dtype: DType,
+) -> candle_core::Result<Option<Fa3DecodeState>> {
+    Ok(None)
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn fa3_device_num_sm(device: &Device) -> Option<usize> {
+    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+
+    let Device::Cuda(device) = device else {
+        return None;
+    };
+    let stream = device.cuda_stream();
+    let context = stream.context();
+    let compute_major = context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
+        .ok()?;
+    if compute_major != 9 {
+        return None;
+    }
+    context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .ok()
+        .and_then(|count| usize::try_from(count).ok())
+        .filter(|count| *count > 0)
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn fa3_view_capacity(
+    view: &FlashInferPagedAttentionView,
+    key: &Fa3DecodeScheduleKey,
+) -> candle_core::Result<Option<usize>> {
+    let Some(indptr) = view.paged_kv.indptr.get(&key.device) else {
+        return Ok(None);
+    };
+    let Some(indices) = view.paged_kv.indices.get(&key.device) else {
+        return Ok(None);
+    };
+    let Some(last_page_len) = view.paged_kv.last_page_len.get(&key.device) else {
+        return Ok(None);
+    };
+    if indptr.dtype() != DType::I32
+        || indices.dtype() != DType::I32
+        || last_page_len.dtype() != DType::I32
+        || indptr.elem_count() != key.batch + 1
+        || last_page_len.elem_count() != key.batch
+        || indices.elem_count() < key.batch
+        || !indices.elem_count().is_multiple_of(key.batch)
+        || indptr.device().location() != key.device
+        || indices.device().location() != key.device
+        || last_page_len.device().location() != key.device
+    {
+        return Ok(None);
+    }
+    Ok(Some(indices.elem_count() / key.batch))
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn allocate_fa3_decode_buffers(
+    device: &Device,
+    key: Fa3DecodeScheduleKey,
+    max_pages_per_sequence: usize,
+    num_sm: usize,
+) -> candle_core::Result<Fa3DecodeBuffers> {
+    let scheduler_len = fa3_scheduler_metadata_len(key.batch);
+    let cu_seqlens_q = Tensor::from_vec(
+        (0..=key.batch)
+            .map(i32::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?,
+        (key.batch + 1,),
+        device,
+    )?;
+    Ok(Fa3DecodeBuffers {
+        query: unsafe {
+            Tensor::empty(
+                (key.batch, key.q_heads, key.head_dim),
+                DType::F8E4M3,
+                device,
+            )?
+        },
+        scheduler_metadata: unsafe { Tensor::empty((scheduler_len,), DType::I32, device)? },
+        output_accum: unsafe {
+            Tensor::empty(
+                (key.num_splits, key.q_heads, key.batch, key.head_dim),
+                DType::F32,
+                device,
+            )?
+        },
+        lse_accum: unsafe {
+            Tensor::empty((key.num_splits, key.q_heads, key.batch), DType::F32, device)?
+        },
+        output_lse: unsafe { Tensor::empty((key.q_heads, key.batch), DType::F32, device)? },
+        cu_seqlens_q,
+        page_table: unsafe {
+            Tensor::empty((key.batch, max_pages_per_sequence), DType::I32, device)?
+        },
+        seqused_k: unsafe { Tensor::empty((key.batch,), DType::I32, device)? },
+        max_pages_per_sequence,
+        num_sm,
+    })
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+fn fa3_scheduler_metadata_len(batch: usize) -> usize {
+    2 * batch.div_ceil(4) * 4 + 1
 }
 
 #[cfg(test)]
@@ -301,5 +489,14 @@ mod tests {
         assert_eq!(decode_split_tokens(64, 8, 48, 8192), 2048);
         assert_eq!(decode_split_capacity_pages(32), 8);
         assert!(decode_split_pages(32, 1, 4, 8192) >= decode_split_capacity_pages(32));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_scheduler_metadata_covers_rounded_batch_rows_and_semaphore() {
+        assert_eq!(fa3_scheduler_metadata_len(1), 9);
+        assert_eq!(fa3_scheduler_metadata_len(4), 9);
+        assert_eq!(fa3_scheduler_metadata_len(8), 17);
+        assert_eq!(fa3_scheduler_metadata_len(16), 33);
     }
 }

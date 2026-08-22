@@ -7,10 +7,12 @@
 //! a rejected tail needs no drafter rollback. DFlash 2 adds two-tap grouped dynamic convolutions
 //! around each sublayer and a candidate path selector over the top-k logits per position.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::{Arc, Mutex};
 
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+use candle_core::{cuda_backend::cudarc::driver::sys, Var};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, ShardedVarBuilder, UnquantLinear,
@@ -21,29 +23,53 @@ use crate::layers::RmsNorm;
 use crate::speculative::MtpConfig;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+use crate::paged_attention::windowed_pool::{
+    WindowedKvBatch, WindowedKvBatchTensors, WindowedKvPool, WindowedKvPoolConfig, WindowedKvQuery,
+};
+
 const DEFAULT_BLOCK_SIZE: usize = 16;
+pub const DEFAULT_MAX_DRAFTS: usize = 7;
 // Rotary table length precomputed at load; positions past it fall back to on-the-fly computation.
 const ROPE_TABLE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
-// Adaptive draft depth (SGLang-style): EMA of mean accepted drafts per step picks a tier from
-// {3, 5, max}; a tier switch only lands after ADAPT_STICKY consecutive agreeing decisions.
-const ADAPT_EMA_ALPHA: f32 = 0.2;
-// Tier t is worth keeping while the EMA stays above t * ADAPT_TIER_FRAC accepted drafts.
-const ADAPT_TIER_FRAC: f32 = 0.65;
-const ADAPT_HYSTERESIS: f32 = 0.25;
-// Upshift once the EMA saturates the current depth to within this margin.
-const ADAPT_UP_MARGIN: f32 = 0.5;
-const ADAPT_STICKY: u32 = 4;
-const ADAPT_WARMUP: u32 = 8;
-// After a switch, hold the new depth for this many steps so borderline content cannot flap between
-// tiers every few steps (the bands overlap by construction: an EMA capped at the shallow tier can
-// sit inside the deeper tier's downshift range).
-const ADAPT_COOLDOWN: u32 = 32;
-// Past this batch size the batched drafter makes deep drafts nearly free, so always draft at max.
-// Also bounds which graph buckets the non-max draft depths are precaptured for.
-pub const ADAPT_MAX_BATCH: usize = 2;
-const ADAPT_MID_TIER: usize = 5;
-const ADAPT_MIN_TIER: usize = 3;
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 8;
+const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 2;
+const ADAPT_MIN_DEPTH: usize = 1;
+const DFLASH_ADAPTIVE_ENV: &str = "MISTRALRS_DFLASH_ADAPTIVE";
+
+fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize) -> usize {
+    if max_n == 0 || !adaptive || batch <= ADAPT_FULL_DEPTH_MAX_BATCH {
+        max_n
+    } else {
+        ADAPT_MIN_DEPTH.min(max_n)
+    }
+}
+
+fn dflash_adaptive_env_value(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+pub(crate) fn dflash_adaptive_requested() -> bool {
+    std::env::var(DFLASH_ADAPTIVE_ENV)
+        .ok()
+        .as_deref()
+        .is_some_and(dflash_adaptive_env_value)
+}
+
+fn dflash_graph_plans(adaptive: bool, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
+    if max_n == 0 {
+        return Vec::new();
+    }
+    if !adaptive || max_n == ADAPT_MIN_DEPTH {
+        return vec![super::SpeculativeGraphPlan::new(max_n, None)];
+    }
+    vec![
+        super::SpeculativeGraphPlan::new(max_n, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
+        super::SpeculativeGraphPlan::new(ADAPT_MIN_DEPTH, None),
+    ]
+}
 
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct DFlashSpecificConfig {
@@ -271,12 +297,53 @@ impl CandidateSelector {
         })
     }
 
-    /// Greedy path walk over the per-position top-k candidates; scores couple each candidate to the
-    /// chosen predecessor through the low-rank codebooks gated by the position's hidden state.
+    #[cfg(feature = "cuda")]
+    fn supports_cuda(&self) -> bool {
+        matches!(self.hidden_projection.dtype(), DType::BF16 | DType::F32)
+            && matches!(self.predecessor_codebook.dtype(), DType::BF16 | DType::F32)
+            && matches!(self.successor_codebook.dtype(), DType::BF16 | DType::F32)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn select_greedy_cuda(
+        &self,
+        hidden: &Tensor,
+        logits: &Tensor,
+        anchors: &Tensor,
+    ) -> Result<Tensor> {
+        let (batch, positions, vocab) = logits.dims3()?;
+        let rows = batch * positions;
+        let logits = logits
+            .reshape((rows, vocab))?
+            .to_dtype(DType::F32)?
+            .contiguous()?;
+        if !logits.device().is_cuda() || !self.supports_cuda() {
+            candle_core::bail!("DFlash CUDA selector does not support these tensors");
+        }
+        let inverse_temperatures = Tensor::ones((rows,), DType::F32, logits.device())?;
+        let topk = crate::ops::cuda_topk_logits_f32_packed_batched(
+            &logits,
+            self.top_k,
+            &inverse_temperatures,
+        )?;
+        let projection_dtype = self.hidden_projection.dtype();
+        let hidden = hidden.reshape((rows, ()))?.to_dtype(projection_dtype)?;
+        let projected = hidden
+            .broadcast_matmul(&self.hidden_projection.t()?)?
+            .contiguous()?;
+        crate::ops::cuda_dflash_greedy_select(
+            &topk.packed,
+            &projected,
+            &self.predecessor_codebook.contiguous()?,
+            &self.successor_codebook.contiguous()?,
+            anchors,
+        )
+    }
+
     /// Greedy path walk over the per-position top-k candidates for every sequence at once; scores
     /// couple each candidate to the chosen predecessor through the low-rank codebooks gated by the
-    /// position's hidden state. `hidden` `[batch, n, hidden]`, `logits` `[batch, n, vocab]`; one
-    /// batched top-k kernel and one D2H cover the whole batch, the walks are host-side.
+    /// position's hidden state. `hidden` is `[batch, n, hidden]` and `logits` is
+    /// `[batch, n, vocab]`.
     fn select_greedy_batch(
         &self,
         hidden: &Tensor,
@@ -286,12 +353,25 @@ impl CandidateSelector {
         let (batch, positions, vocab) = logits.dims3()?;
         let k = self.top_k;
         let rows = batch * positions;
+
+        #[cfg(feature = "cuda")]
+        if logits.device().is_cuda()
+            && matches!(self.hidden_projection.dtype(), DType::BF16 | DType::F32)
+            && matches!(self.predecessor_codebook.dtype(), DType::BF16 | DType::F32)
+            && matches!(self.successor_codebook.dtype(), DType::BF16 | DType::F32)
+        {
+            let anchors = Tensor::from_vec(anchors.to_vec(), (batch,), logits.device())?;
+            return self
+                .select_greedy_cuda(hidden, logits, &anchors)?
+                .to_vec2::<u32>();
+        }
+
         let logits = logits
             .reshape((rows, vocab))?
             .to_dtype(DType::F32)?
             .contiguous()?;
+
         let (unary, candidates) = topk_rows(&logits, k)?;
-        // H(h): [rows, rank]
         let hproj = hidden
             .reshape((rows, ()))?
             .to_dtype(DType::F32)?
@@ -301,8 +381,7 @@ impl CandidateSelector {
         let succ = self
             .successor_codebook
             .to_dtype(DType::F32)?
-            .index_select(&cand_ids, 0)?; // [rows*k, rank]
-                                          // Predecessors can only be an anchor or one of the candidates
+            .index_select(&cand_ids, 0)?;
         let mut pred_ids = anchors.to_vec();
         pred_ids.extend_from_slice(&cand_flat);
         let pred_ids_t = Tensor::from_vec(pred_ids.clone(), (pred_ids.len(),), logits.device())?;
@@ -310,7 +389,6 @@ impl CandidateSelector {
             .predecessor_codebook
             .to_dtype(DType::F32)?
             .index_select(&pred_ids_t, 0)?;
-        // One D2H for everything; the walks themselves are tiny and host-side
         let rank = hproj.dim(1)?;
         let packed = Tensor::cat(
             &[
@@ -329,7 +407,6 @@ impl CandidateSelector {
         let mut paths = Vec::with_capacity(batch);
         for b in 0..batch {
             let mut path = Vec::with_capacity(positions);
-            // pred rows: the batch anchors first, then every candidate
             let mut pred_row = b;
             for pos in 0..positions {
                 let row = b * positions + pos;
@@ -393,16 +470,13 @@ fn topk_rows(logits: &Tensor, k: usize) -> Result<TopkRows> {
 }
 
 struct DFlashLayer {
-    q_proj: Arc<dyn QuantMethod>,
-    k_proj: Arc<dyn QuantMethod>,
-    v_proj: Arc<dyn QuantMethod>,
+    qkv_proj: Arc<dyn QuantMethod>,
     o_proj: Arc<dyn QuantMethod>,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
+    gate_up_proj: Arc<dyn QuantMethod>,
     down_proj: Arc<dyn QuantMethod>,
     attention_conv: Option<DynamicConv>,
     mlp_conv: Option<DynamicConv>,
@@ -430,17 +504,147 @@ pub struct CtxAppend {
 }
 
 struct AdaptiveState {
-    ema: f32,
-    current: usize,
-    pending: usize,
-    streak: u32,
-    seen: u32,
-    cooldown: u32,
+    max_n: usize,
+}
+
+#[derive(Clone, Copy)]
+enum DFlashSequenceEviction {
+    Dormant,
+    Released,
+}
+
+fn update_dormant_sequences(
+    dormant: &mut HashSet<usize>,
+    seq_ids: &[usize],
+    eviction: DFlashSequenceEviction,
+) {
+    match eviction {
+        DFlashSequenceEviction::Dormant => dormant.extend(seq_ids.iter().copied()),
+        DFlashSequenceEviction::Released => {
+            for seq_id in seq_ids {
+                dormant.remove(seq_id);
+            }
+        }
+    }
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+struct DFlashGraphHostRows {
+    token_ids: Vec<u32>,
+    rope_indices: Vec<u32>,
+    anchors: Vec<u32>,
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn dflash_graph_host_rows(
+    anchors: &[u32],
+    start_positions: &[usize],
+    mask_token_id: u32,
+    block: usize,
+    batch_bucket: usize,
+) -> Result<DFlashGraphHostRows> {
+    if anchors.is_empty() || anchors.len() != start_positions.len() {
+        candle_core::bail!("DFlash graph inputs must contain matching non-empty rows");
+    }
+    if block == 0 || batch_bucket < anchors.len() {
+        candle_core::bail!("DFlash graph input shape is invalid");
+    }
+    let mut token_ids = Vec::with_capacity(batch_bucket * block);
+    let mut rope_indices = Vec::with_capacity(batch_bucket * block);
+    let mut padded_anchors = Vec::with_capacity(batch_bucket);
+    for row in 0..batch_bucket {
+        let source = row.min(anchors.len() - 1);
+        let anchor = anchors[source];
+        let start = start_positions[source];
+        padded_anchors.push(anchor);
+        token_ids.push(anchor);
+        token_ids.extend(std::iter::repeat_n(mask_token_id, block - 1));
+        for offset in 0..block {
+            let position = start
+                .checked_add(offset)
+                .ok_or_else(|| candle_core::Error::msg("DFlash graph position overflow"))?;
+            rope_indices.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+        }
+    }
+    Ok(DFlashGraphHostRows {
+        token_ids,
+        rope_indices,
+        anchors: padded_anchors,
+    })
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct DFlashCudaGraphKey {
+    batch_bucket: usize,
+    block: usize,
+    use_selector: bool,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashCudaGraphBuffers {
+    token_ids: Var,
+    rope_indices: Var,
+    anchors: Var,
+    block_tables: Var,
+    slot_mapping: Var,
+    cumulative_kv_lens: Var,
+    cumulative_query_lens: Tensor,
+    output_tokens: Var,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashCudaGraphEntry {
+    key: DFlashCudaGraphKey,
+    staging: crate::pipeline::cuda_graph::CudaGraphHostStaging,
+    buffers: DFlashCudaGraphBuffers,
+    token_embedding: Arc<dyn QuantMethod>,
+    lm_head: Arc<dyn QuantMethod>,
+    graph: crate::pipeline::cuda_graph::CudaGraphHandle,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[derive(Default)]
+struct DFlashCudaGraphState {
+    entries: Vec<DFlashCudaGraphEntry>,
+    warmed: HashSet<DFlashCudaGraphKey>,
+    failed: HashSet<DFlashCudaGraphKey>,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashCudaGraphRun<'a> {
+    model: &'a DFlashDraftModel,
+    key: DFlashCudaGraphKey,
+    rows: &'a DFlashGraphHostRows,
+    attention_batch: &'a WindowedKvBatch,
+    token_embedding: &'a Arc<dyn QuantMethod>,
+    lm_head: &'a Arc<dyn QuantMethod>,
+    real_batch: usize,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashWindowedForward<'a> {
+    noise_embedding: &'a Tensor,
+    q_cos: &'a Tensor,
+    q_sin: &'a Tensor,
+    batch: usize,
+    block: usize,
+    attention_batch: &'a WindowedKvBatch,
+    metadata: &'a WindowedKvBatchTensors,
 }
 
 pub struct DFlashDraftModel {
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    cuda_graphs: Mutex<DFlashCudaGraphState>,
     layers: Vec<DFlashLayer>,
     fc: Arc<dyn QuantMethod>,
+    context_kv_proj: Arc<dyn QuantMethod>,
     hidden_norm: RmsNorm,
     norm: RmsNorm,
     selector: Option<CandidateSelector>,
@@ -453,13 +657,430 @@ pub struct DFlashDraftModel {
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    intermediate_size: usize,
     dtype: DType,
     device: Device,
     ctx_cache: Mutex<HashMap<usize, SeqCtxCache>>,
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    windowed_pool: Option<Mutex<WindowedKvPool>>,
+    dormant_seqs: Mutex<HashSet<usize>>,
     // cos/sin for positions 0..ROPE_TABLE_LEN, [len, head_dim/2]
     rope_table: (Tensor, Tensor),
     mask_cache: Mutex<HashMap<MaskKey, Tensor>>,
     adaptive: Mutex<Option<AdaptiveState>>,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl DFlashCudaGraphBuffers {
+    fn new(
+        key: DFlashCudaGraphKey,
+        rows: &DFlashGraphHostRows,
+        batch: &WindowedKvBatch,
+        device: &Device,
+    ) -> Result<Self> {
+        let token_ids = Var::from_tensor(&Tensor::from_vec(
+            rows.token_ids.clone(),
+            (key.batch_bucket, key.block),
+            device,
+        )?)?;
+        let rope_indices = Var::from_tensor(&Tensor::from_vec(
+            rows.rope_indices.clone(),
+            (key.batch_bucket * key.block,),
+            device,
+        )?)?;
+        let anchors = Var::from_tensor(&Tensor::from_vec(
+            rows.anchors.clone(),
+            (key.batch_bucket,),
+            device,
+        )?)?;
+        let block_tables = Var::from_tensor(&Tensor::from_vec(
+            batch.block_tables_for_graph().to_vec(),
+            (key.batch_bucket, batch.block_table_width_for_graph()),
+            device,
+        )?)?;
+        let slot_mapping = Var::from_tensor(&Tensor::from_vec(
+            batch.slot_mapping_for_graph().to_vec(),
+            (key.batch_bucket * key.block,),
+            device,
+        )?)?;
+        let cumulative_kv_lens = Var::from_tensor(&Tensor::from_vec(
+            batch.cumulative_kv_lens_for_graph().to_vec(),
+            (key.batch_bucket + 1,),
+            device,
+        )?)?;
+        let cumulative_query_lens = Tensor::from_vec(
+            batch.cumulative_query_lens_for_graph().to_vec(),
+            (key.batch_bucket + 1,),
+            device,
+        )?;
+        let output_tokens = Var::zeros((key.batch_bucket, key.block - 1), DType::U32, device)?;
+        Ok(Self {
+            token_ids,
+            rope_indices,
+            anchors,
+            block_tables,
+            slot_mapping,
+            cumulative_kv_lens,
+            cumulative_query_lens,
+            output_tokens,
+        })
+    }
+
+    fn metadata(&self) -> WindowedKvBatchTensors {
+        WindowedKvBatchTensors {
+            block_tables: self.block_tables.as_detached_tensor(),
+            slot_mapping: self.slot_mapping.as_detached_tensor(),
+            cumulative_query_lens: self.cumulative_query_lens.clone(),
+            cumulative_kv_lens: self.cumulative_kv_lens.as_detached_tensor(),
+        }
+    }
+
+    fn update(
+        &self,
+        rows: &DFlashGraphHostRows,
+        batch: &WindowedKvBatch,
+        staging: &mut crate::pipeline::cuda_graph::CudaGraphHostStaging,
+    ) -> Result<()> {
+        let location = self.token_ids.device().location();
+        staging.update(|staging| {
+            staging.copy_from_u32_slice(
+                "dflash_token_ids",
+                location,
+                &rows.token_ids,
+                &self.token_ids,
+            )?;
+            staging.copy_from_u32_slice(
+                "dflash_rope_indices",
+                location,
+                &rows.rope_indices,
+                &self.rope_indices,
+            )?;
+            staging.copy_from_u32_slice(
+                "dflash_anchors",
+                location,
+                &rows.anchors,
+                &self.anchors,
+            )?;
+            staging.copy_from_u32_slice(
+                "dflash_block_tables",
+                location,
+                batch.block_tables_for_graph(),
+                &self.block_tables,
+            )?;
+            staging.copy_from_i64_slice(
+                "dflash_slot_mapping",
+                location,
+                batch.slot_mapping_for_graph(),
+                &self.slot_mapping,
+            )?;
+            staging.copy_from_u32_slice(
+                "dflash_cumulative_kv_lens",
+                location,
+                batch.cumulative_kv_lens_for_graph(),
+                &self.cumulative_kv_lens,
+            )
+        })
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl DFlashCudaGraphEntry {
+    fn matches_dependencies(
+        &self,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+    ) -> bool {
+        Arc::ptr_eq(&self.token_embedding, token_embedding) && Arc::ptr_eq(&self.lm_head, lm_head)
+    }
+
+    fn launch(&mut self, real_batch: usize) -> Result<Vec<Vec<u32>>> {
+        self.graph.launch()?;
+        self.staging.record_graph_complete()?;
+        let mut tokens = self
+            .buffers
+            .output_tokens
+            .as_detached_tensor()
+            .to_vec2::<u32>()?;
+        tokens.truncate(real_batch);
+        Ok(tokens)
+    }
+
+    fn replay(
+        &mut self,
+        rows: &DFlashGraphHostRows,
+        batch: &WindowedKvBatch,
+        real_batch: usize,
+    ) -> Result<Vec<Vec<u32>>> {
+        self.buffers.update(rows, batch, &mut self.staging)?;
+        self.staging.order_before_graph()?;
+        self.launch(real_batch)
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+fn release_dflash_cuda_graph(entry: DFlashCudaGraphEntry) {
+    let stream = entry.graph.stream().clone();
+    drop(entry);
+    if let Err(err) = crate::pipeline::cuda_graph::trim_cuda_graph_memory(&stream) {
+        tracing::warn!("Failed to trim released DFlash CUDA graph memory: {err:?}");
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl Drop for DFlashCudaGraphState {
+    fn drop(&mut self) {
+        for entry in self.entries.drain(..) {
+            release_dflash_cuda_graph(entry);
+        }
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl DFlashCudaGraphState {
+    fn retire_failed_entry(
+        &mut self,
+        entry: DFlashCudaGraphEntry,
+        operation: &str,
+        failure: candle_core::Error,
+    ) -> Result<()> {
+        let key = entry.key;
+        let synchronize_result = entry
+            .graph
+            .stream()
+            .synchronize()
+            .map_err(candle_core::Error::wrap);
+        self.failed.insert(key);
+        self.warmed.remove(&key);
+        release_dflash_cuda_graph(entry);
+        match synchronize_result {
+            Ok(()) => {
+                tracing::warn!(
+                    batch_bucket = key.batch_bucket,
+                    block = key.block,
+                    "DFlash CUDA graph {operation} failed; disabled this shape and retrying eagerly: {failure:?}"
+                );
+                Ok(())
+            }
+            Err(synchronize_err) => Err(candle_core::Error::msg(format!(
+                "DFlash CUDA graph {operation} failed: {failure}; recovery synchronization failed: {synchronize_err}"
+            ))),
+        }
+    }
+
+    fn eager(
+        model: &DFlashDraftModel,
+        key: DFlashCudaGraphKey,
+        rows: &DFlashGraphHostRows,
+        attention_batch: &WindowedKvBatch,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+        real_batch: usize,
+    ) -> Result<Vec<Vec<u32>>> {
+        let buffers = DFlashCudaGraphBuffers::new(key, rows, attention_batch, &model.device)?;
+        let Device::Cuda(cuda_device) = &model.device else {
+            candle_core::bail!("DFlash CUDA graph expected a CUDA device");
+        };
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+        let mut tokens = model
+            .cuda_graph_tokens(key, &buffers, attention_batch, token_embedding, lm_head)?
+            .to_vec2::<u32>()?;
+        tokens.truncate(real_batch);
+        Ok(tokens)
+    }
+
+    fn capture(
+        model: &DFlashDraftModel,
+        key: DFlashCudaGraphKey,
+        rows: &DFlashGraphHostRows,
+        attention_batch: &WindowedKvBatch,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+    ) -> Result<DFlashCudaGraphEntry> {
+        let buffers = DFlashCudaGraphBuffers::new(key, rows, attention_batch, &model.device)?;
+        model.device.synchronize()?;
+        let Device::Cuda(cuda_device) = &model.device else {
+            candle_core::bail!("DFlash CUDA graph expected a CUDA device");
+        };
+        let stream = cuda_device.cuda_stream();
+        let _memory_pool_guard =
+            crate::pipeline::cuda_graph::prepare_cuda_graph_memory_pool(&stream)?;
+        let restore_event_tracking =
+            crate::pipeline::cuda_graph::disable_event_tracking_for_capture(&stream);
+        let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
+        if let Err(err) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+                &stream,
+                restore_event_tracking,
+            );
+            return Err(candle_core::Error::msg(err.to_string())
+                .context("DFlash CUDA graph begin capture failed"));
+        }
+
+        let capture_result =
+            model.cuda_graph_tokens(key, &buffers, attention_batch, token_embedding, lm_head);
+        match capture_result {
+            Ok(tokens) => {
+                if let Err(err) = crate::cuda::graph::copy_tensor(
+                    &tokens,
+                    &buffers.output_tokens.as_detached_tensor(),
+                ) {
+                    crate::pipeline::cuda_graph::end_cuda_capture_discard(&stream);
+                    crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+                        &stream,
+                        restore_event_tracking,
+                    );
+                    return Err(err.context("DFlash CUDA graph output copy capture failed"));
+                }
+            }
+            Err(err) => {
+                crate::pipeline::cuda_graph::end_cuda_capture_discard(&stream);
+                crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+                    &stream,
+                    restore_event_tracking,
+                );
+                return Err(err.context("DFlash CUDA graph forward capture failed"));
+            }
+        }
+
+        let graph = match crate::pipeline::cuda_graph::CudaGraphHandle::end_capture(&stream) {
+            Ok(Some(graph)) => graph,
+            Ok(None) => {
+                crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+                    &stream,
+                    restore_event_tracking,
+                );
+                return Err(candle_core::Error::msg(
+                    "DFlash CUDA graph capture returned no graph",
+                ));
+            }
+            Err(err) => {
+                crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+                    &stream,
+                    restore_event_tracking,
+                );
+                return Err(err);
+            }
+        };
+        crate::pipeline::cuda_graph::restore_event_tracking_after_capture(
+            &stream,
+            restore_event_tracking,
+        );
+        graph.upload()?;
+        let staging = crate::pipeline::cuda_graph::CudaGraphHostStaging::new(stream)?;
+        Ok(DFlashCudaGraphEntry {
+            key,
+            staging,
+            buffers,
+            token_embedding: token_embedding.clone(),
+            lm_head: lm_head.clone(),
+            graph,
+        })
+    }
+
+    fn run(&mut self, run: DFlashCudaGraphRun<'_>) -> Result<Option<Vec<Vec<u32>>>> {
+        let DFlashCudaGraphRun {
+            model,
+            key,
+            rows,
+            attention_batch,
+            token_embedding,
+            lm_head,
+            real_batch,
+        } = run;
+        if let Some(position) = self.entries.iter().position(|entry| {
+            entry.key == key && entry.matches_dependencies(token_embedding, lm_head)
+        }) {
+            let mut entry = self.entries.remove(position);
+            match entry.replay(rows, attention_batch, real_batch) {
+                Ok(tokens) => {
+                    self.entries.push(entry);
+                    return Ok(Some(tokens));
+                }
+                Err(err) => {
+                    self.retire_failed_entry(entry, "replay", err)?;
+                    return Self::eager(
+                        model,
+                        key,
+                        rows,
+                        attention_batch,
+                        token_embedding,
+                        lm_head,
+                        real_batch,
+                    )
+                    .map(Some)
+                    .map_err(|err| err.context("DFlash eager fallback after graph replay failed"));
+                }
+            }
+        }
+        let mismatched = self
+            .entries
+            .iter()
+            .position(|entry| entry.key == key)
+            .map(|position| self.entries.remove(position));
+        if let Some(entry) = mismatched {
+            release_dflash_cuda_graph(entry);
+        }
+        if self.failed.contains(&key) {
+            return Ok(None);
+        }
+        if self.warmed.insert(key) {
+            return Self::eager(
+                model,
+                key,
+                rows,
+                attention_batch,
+                token_embedding,
+                lm_head,
+                real_batch,
+            )
+            .map(Some);
+        }
+
+        let mut entry =
+            match Self::capture(model, key, rows, attention_batch, token_embedding, lm_head) {
+                Ok(entry) => entry,
+                Err(err) => {
+                    self.failed.insert(key);
+                    tracing::warn!(
+                        batch_bucket = key.batch_bucket,
+                        block = key.block,
+                        "DFlash CUDA graph capture disabled for this shape: {err:?}"
+                    );
+                    return Ok(None);
+                }
+            };
+        let tokens = match entry.launch(real_batch) {
+            Ok(tokens) => tokens,
+            Err(err) => {
+                self.retire_failed_entry(entry, "first launch", err)?;
+                return Self::eager(
+                    model,
+                    key,
+                    rows,
+                    attention_batch,
+                    token_embedding,
+                    lm_head,
+                    real_batch,
+                )
+                .map(Some)
+                .map_err(|err| {
+                    err.context("DFlash eager fallback after first graph launch failed")
+                });
+            }
+        };
+        if self.entries.len() >= DFLASH_CUDA_GRAPH_CACHE_CAPACITY {
+            release_dflash_cuda_graph(self.entries.remove(0));
+        }
+        tracing::debug!(
+            batch_bucket = key.batch_bucket,
+            block = key.block,
+            "Captured DFlash CUDA graph"
+        );
+        self.entries.push(entry);
+        Ok(Some(tokens))
+    }
 }
 
 fn load_linear(
@@ -470,6 +1091,14 @@ fn load_linear(
     device: &Device,
 ) -> Result<Arc<dyn QuantMethod>> {
     let weight = vb.pp(name).get((shape.1, shape.0), "weight")?;
+    linear_from_weight(weight, isq, device)
+}
+
+fn linear_from_weight(
+    weight: Tensor,
+    isq: Option<IsqType>,
+    device: &Device,
+) -> Result<Arc<dyn QuantMethod>> {
     let layer: Arc<dyn QuantMethod> = Arc::new(UnquantLinear::new(
         QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, None)),
     )?);
@@ -485,12 +1114,83 @@ fn load_linear(
     }
 }
 
-/// Reads only the drafter's config, to decide whether an `--mtp-model` path is a DFlash checkpoint.
-pub fn peek_config(config: &MtpConfig) -> Result<DFlashConfig> {
+/// Reads only the drafter's config when it identifies a DFlash checkpoint.
+pub fn peek_config(config: &MtpConfig) -> Result<Option<DFlashConfig>> {
     let path = config.resolve_path()?;
     let raw = fs::read_to_string(path.join("config.json"))
         .map_err(|e| candle_core::Error::Msg(format!("failed to read MTP model config: {e}")))?;
-    serde_json::from_str(&raw).map_err(candle_core::Error::msg)
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(candle_core::Error::msg)?;
+    let is_dflash = value
+        .get("architectures")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|architectures| {
+            architectures.iter().any(|architecture| {
+                architecture
+                    .as_str()
+                    .is_some_and(|name| name.contains("DFlash") || name.contains("Dflash"))
+            })
+        });
+    if !is_dflash {
+        return Ok(None);
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(candle_core::Error::msg)
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+pub(crate) fn windowed_kv_cache_size_in_bytes(
+    config: &MtpConfig,
+    sequence_capacity: usize,
+    page_size: usize,
+) -> Result<usize> {
+    let path = config.resolve_path()?;
+    let raw = fs::read_to_string(path.join("config.json"))
+        .map_err(|err| candle_core::Error::msg(format!("failed to read MTP config: {err}")))?;
+    let value: serde_json::Value = serde_json::from_str(&raw).map_err(candle_core::Error::msg)?;
+    let is_dflash = value
+        .get("architectures")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|architectures| {
+            architectures.iter().any(|architecture| {
+                architecture
+                    .as_str()
+                    .is_some_and(|name| name.contains("DFlash") || name.contains("Dflash"))
+            })
+        });
+    if !is_dflash {
+        return Ok(0);
+    }
+    let cfg: DFlashConfig = serde_json::from_str(&raw).map_err(candle_core::Error::msg)?;
+    let windows = (0..cfg.num_hidden_layers)
+        .map(|layer| cfg.layer_attention(layer).1)
+        .collect::<Vec<_>>();
+    if windows.iter().any(Option::is_none) {
+        return Ok(0);
+    }
+    let max_window = windows
+        .into_iter()
+        .flatten()
+        .max()
+        .expect("DFlash has at least one layer");
+    let retained_tokens = max_window
+        .checked_sub(1)
+        .and_then(|value| value.checked_add(cfg.block_size()))
+        .and_then(|value| value.checked_add(page_size - 1))
+        .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV capacity overflow"))?;
+    let pages_per_sequence = retained_tokens.div_ceil(page_size);
+    let elements = cfg
+        .num_hidden_layers
+        .checked_mul(sequence_capacity)
+        .and_then(|value| value.checked_mul(pages_per_sequence))
+        .and_then(|value| value.checked_mul(cfg.num_key_value_heads))
+        .and_then(|value| value.checked_mul(page_size))
+        .and_then(|value| value.checked_mul(cfg.head_dim()))
+        .and_then(|value| value.checked_mul(2))
+        .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV size overflow"))?;
+    elements
+        .checked_mul(DType::BF16.size_in_bytes())
+        .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV byte size overflow"))
 }
 
 impl DFlashDraftModel {
@@ -570,32 +1270,30 @@ impl DFlashDraftModel {
         let head_dim = cfg.head_dim();
         let eps = cfg.rms_norm_eps;
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        let mut context_kv_weights = Vec::with_capacity(cfg.num_hidden_layers * 2);
         for i in 0..cfg.num_hidden_layers {
             let vb_l = vb.pp("layers").pp(i);
             let vb_attn = vb_l.pp("self_attn");
             let (is_causal, sliding_window) = cfg.layer_attention(i);
+            let q_size = cfg.num_attention_heads * head_dim;
+            let kv_size = cfg.num_key_value_heads * head_dim;
+            let q_weight = vb_attn.pp("q_proj").get((q_size, hidden), "weight")?;
+            let k_weight = vb_attn.pp("k_proj").get((kv_size, hidden), "weight")?;
+            let v_weight = vb_attn.pp("v_proj").get((kv_size, hidden), "weight")?;
+            let qkv_weight = Tensor::cat(&[&q_weight, &k_weight, &v_weight], 0)?;
+            context_kv_weights.push(k_weight);
+            context_kv_weights.push(v_weight);
+
+            let vb_mlp = vb_l.pp("mlp");
+            let gate_weight = vb_mlp
+                .pp("gate_proj")
+                .get((cfg.intermediate_size, hidden), "weight")?;
+            let up_weight = vb_mlp
+                .pp("up_proj")
+                .get((cfg.intermediate_size, hidden), "weight")?;
+            let gate_up_weight = Tensor::cat(&[&gate_weight, &up_weight], 0)?;
             layers.push(DFlashLayer {
-                q_proj: load_linear(
-                    &vb_attn,
-                    (hidden, cfg.num_attention_heads * head_dim),
-                    "q_proj",
-                    isq,
-                    device,
-                )?,
-                k_proj: load_linear(
-                    &vb_attn,
-                    (hidden, cfg.num_key_value_heads * head_dim),
-                    "k_proj",
-                    isq,
-                    device,
-                )?,
-                v_proj: load_linear(
-                    &vb_attn,
-                    (hidden, cfg.num_key_value_heads * head_dim),
-                    "v_proj",
-                    isq,
-                    device,
-                )?,
+                qkv_proj: linear_from_weight(qkv_weight, isq, device)?,
                 o_proj: load_linear(
                     &vb_attn,
                     (cfg.num_attention_heads * head_dim, hidden),
@@ -611,22 +1309,9 @@ impl DFlashDraftModel {
                     eps,
                     vb_l.pp("post_attention_layernorm"),
                 )?,
-                gate_proj: load_linear(
-                    &vb_l.pp("mlp"),
-                    (hidden, cfg.intermediate_size),
-                    "gate_proj",
-                    isq,
-                    device,
-                )?,
-                up_proj: load_linear(
-                    &vb_l.pp("mlp"),
-                    (hidden, cfg.intermediate_size),
-                    "up_proj",
-                    isq,
-                    device,
-                )?,
+                gate_up_proj: linear_from_weight(gate_up_weight, isq, device)?,
                 down_proj: load_linear(
-                    &vb_l.pp("mlp"),
+                    &vb_mlp,
                     (cfg.intermediate_size, hidden),
                     "down_proj",
                     isq,
@@ -644,6 +1329,8 @@ impl DFlashDraftModel {
                 sliding_window,
             });
         }
+        let context_kv_weight = Tensor::cat(&context_kv_weights.iter().collect::<Vec<_>>(), 0)?;
+        let context_kv_proj = linear_from_weight(context_kv_weight, isq, device)?;
         let fc = load_linear(
             &vb,
             (target_layer_ids.len() * hidden, hidden),
@@ -671,8 +1358,11 @@ impl DFlashDraftModel {
         };
 
         Ok(Self {
+            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            cuda_graphs: Mutex::new(DFlashCudaGraphState::default()),
             layers,
             fc,
+            context_kv_proj,
             hidden_norm: RmsNorm::new(hidden, eps, vb.pp("hidden_norm"))?,
             norm: RmsNorm::new(hidden, eps, vb.pp("norm"))?,
             selector,
@@ -685,130 +1375,192 @@ impl DFlashDraftModel {
             num_heads: cfg.num_attention_heads,
             num_kv_heads: cfg.num_key_value_heads,
             head_dim,
+            intermediate_size: cfg.intermediate_size,
             dtype,
             device: device.clone(),
             ctx_cache: Mutex::new(HashMap::new()),
+            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            windowed_pool: None,
+            dormant_seqs: Mutex::new(HashSet::new()),
             rope_table,
             mask_cache: Mutex::new(HashMap::new()),
             adaptive: Mutex::new(None),
         })
     }
 
-    fn adaptive_tiers(max_n: usize) -> Vec<usize> {
-        let mut tiers = vec![ADAPT_MIN_TIER, ADAPT_MID_TIER, max_n];
-        tiers.retain(|t| *t <= max_n);
-        tiers.dedup();
-        tiers
+    pub fn enable_windowed_kv(&mut self, sequence_capacity: usize) -> Result<bool> {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            if self.dtype != DType::BF16 || !self.device.is_cuda() {
+                return Ok(false);
+            }
+            let layer_windows = self
+                .layers
+                .iter()
+                .map(|layer| layer.sliding_window)
+                .collect::<Vec<_>>();
+            if layer_windows.iter().any(Option::is_none) {
+                return Ok(false);
+            }
+            let config = WindowedKvPoolConfig::new(
+                sequence_capacity,
+                layer_windows,
+                self.block_size,
+                crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+                self.num_kv_heads,
+                self.head_dim,
+            )?;
+            let pages = config.pages_per_sequence();
+            self.windowed_pool = Some(Mutex::new(WindowedKvPool::new(config, &self.device)?));
+            tracing::info!(
+                sequence_capacity,
+                pages_per_sequence = pages,
+                "Using bounded paged FlashAttention KV for DFlash"
+            );
+            Ok(true)
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            let _ = sequence_capacity;
+            Ok(false)
+        }
     }
 
-    /// Enables acceptance-driven draft depth; drafting starts at `max_n` and settles per workload.
+    pub(crate) fn greedy_proposals_cuda_graph(
+        &self,
+        seq_ids: &[usize],
+        anchors: &[u32],
+        start_positions: &[usize],
+        n_predict: usize,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+    ) -> Result<Option<Vec<Vec<u32>>>> {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled()
+                || self.windowed_pool.is_none()
+                || seq_ids.is_empty()
+                || seq_ids.len() != anchors.len()
+                || seq_ids.len() != start_positions.len()
+                || n_predict == 0
+            {
+                return Ok(None);
+            }
+            let block = n_predict + 1;
+            if block > self.block_size
+                || start_positions
+                    .iter()
+                    .any(|start| start.saturating_add(block) > ROPE_TABLE_LEN)
+            {
+                return Ok(None);
+            }
+            let Some(batch_bucket) =
+                crate::pipeline::cuda_graph::cuda_graph_batch_bucket(seq_ids.len())
+            else {
+                return Ok(None);
+            };
+            let use_selector =
+                self.selector.is_some() && std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
+            if use_selector
+                && !self
+                    .selector
+                    .as_ref()
+                    .expect("selector checked above")
+                    .supports_cuda()
+            {
+                return Ok(None);
+            }
+            let key = DFlashCudaGraphKey {
+                batch_bucket,
+                block,
+                use_selector,
+            };
+            let rows = dflash_graph_host_rows(
+                anchors,
+                start_positions,
+                self.mask_token_id,
+                block,
+                batch_bucket,
+            )?;
+            let attention_batch = {
+                let pool = self
+                    .windowed_pool
+                    .as_ref()
+                    .expect("windowed pool checked above")
+                    .lock()
+                    .expect("dflash windowed pool poisoned");
+                for (seq_id, start_position) in seq_ids.iter().zip(start_positions) {
+                    let state = pool.sequence(*seq_id).ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "DFlash draft requested for sequence {seq_id} without paged context"
+                        ))
+                    })?;
+                    if state.next_committed_pos != *start_position {
+                        candle_core::bail!(
+                            "DFlash draft at position {start_position} but paged context ends at {}",
+                            state.next_committed_pos
+                        );
+                    }
+                }
+                let queries = seq_ids
+                    .iter()
+                    .map(|seq_id| WindowedKvQuery {
+                        seq_id: *seq_id,
+                        query_len: block,
+                    })
+                    .collect::<Vec<_>>();
+                pool.scratch_graph_batch(&queries, batch_bucket)?
+            };
+            return self
+                .cuda_graphs
+                .lock()
+                .expect("dflash CUDA graph cache poisoned")
+                .run(DFlashCudaGraphRun {
+                    model: self,
+                    key,
+                    rows: &rows,
+                    attention_batch: &attention_batch,
+                    token_embedding,
+                    lm_head,
+                    real_batch: seq_ids.len(),
+                });
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            let _ = (
+                seq_ids,
+                anchors,
+                start_positions,
+                n_predict,
+                token_embedding,
+                lm_head,
+            );
+            Ok(None)
+        }
+    }
+
     pub fn enable_adaptive(&self, max_n: usize) -> bool {
-        if Self::adaptive_tiers(max_n).len() < 2 {
+        if max_n == 0 {
             return false;
         }
-        *self.adaptive.lock().expect("dflash adaptive poisoned") = Some(AdaptiveState {
-            ema: 0.0,
-            current: max_n,
-            pending: max_n,
-            streak: 0,
-            seen: 0,
-            cooldown: 0,
-        });
+        *self.adaptive.lock().expect("dflash adaptive poisoned") = Some(AdaptiveState { max_n });
         true
     }
 
-    /// The draft depth to use this step: the adaptive tier if enabled, else `max_n`.
-    pub fn current_n(&self, max_n: usize) -> usize {
-        self.adaptive
-            .lock()
-            .expect("dflash adaptive poisoned")
-            .as_ref()
-            .map_or(max_n, |s| s.current)
+    pub fn plan_n(&self, max_n: usize, batch: usize) -> usize {
+        let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
+        if let Some(adaptive) = guard.as_ref() {
+            debug_assert_eq!(adaptive.max_n, max_n);
+        }
+        select_dflash_depth(guard.is_some(), max_n, batch)
     }
 
-    /// The draft depths the adaptive controller can pick, for graph precapture. Empty when fixed.
-    pub fn adaptive_depths(&self, max_n: usize) -> Vec<usize> {
-        if self
-            .adaptive
-            .lock()
-            .expect("dflash adaptive poisoned")
-            .is_none()
-        {
-            return Vec::new();
+    pub fn graph_plans(&self, max_n: usize) -> Vec<super::SpeculativeGraphPlan> {
+        let guard = self.adaptive.lock().expect("dflash adaptive poisoned");
+        if let Some(adaptive) = guard.as_ref() {
+            debug_assert_eq!(adaptive.max_n, max_n);
         }
-        Self::adaptive_tiers(max_n)
-    }
-
-    /// Feeds this step's per-sequence accepted draft counts into the depth controller.
-    pub fn adaptive_observe(&self, accepted: &[usize], max_n: usize, batch: usize) {
-        let mut guard = self.adaptive.lock().expect("dflash adaptive poisoned");
-        let Some(state) = guard.as_mut() else {
-            return;
-        };
-        if batch > ADAPT_MAX_BATCH {
-            if state.current != max_n {
-                tracing::info!(
-                    "DFlash adaptive draft depth {} -> {max_n} (batch {batch})",
-                    state.current
-                );
-                state.current = max_n;
-                state.cooldown = ADAPT_COOLDOWN;
-            }
-            state.streak = 0;
-            return;
-        }
-        if accepted.is_empty() {
-            return;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let mean = accepted.iter().sum::<usize>() as f32 / accepted.len() as f32;
-        state.seen += 1;
-        state.ema = if state.seen == 1 {
-            mean
-        } else {
-            ADAPT_EMA_ALPHA * mean + (1.0 - ADAPT_EMA_ALPHA) * state.ema
-        };
-        if state.seen < ADAPT_WARMUP {
-            return;
-        }
-        if state.cooldown > 0 {
-            state.cooldown -= 1;
-            return;
-        }
-        let tiers = Self::adaptive_tiers(max_n);
-        let Some(idx) = tiers.iter().position(|t| *t == state.current) else {
-            return;
-        };
-        #[allow(clippy::cast_precision_loss)]
-        let desired = if idx + 1 < tiers.len()
-            && state.ema >= state.current as f32 - ADAPT_UP_MARGIN
-        {
-            tiers[idx + 1]
-        } else if idx > 0 && state.ema < state.current as f32 * ADAPT_TIER_FRAC - ADAPT_HYSTERESIS {
-            tiers[idx - 1]
-        } else {
-            state.current
-        };
-        if desired == state.current {
-            state.streak = 0;
-            return;
-        }
-        if state.pending == desired {
-            state.streak += 1;
-        } else {
-            state.pending = desired;
-            state.streak = 1;
-        }
-        if state.streak >= ADAPT_STICKY {
-            tracing::info!(
-                "DFlash adaptive draft depth {} -> {desired} (accept EMA {:.2})",
-                state.current,
-                state.ema
-            );
-            state.current = desired;
-            state.streak = 0;
-            state.cooldown = ADAPT_COOLDOWN;
-        }
+        dflash_graph_plans(guard.is_some(), max_n)
     }
 
     pub fn block_size(&self) -> usize {
@@ -829,6 +1581,14 @@ impl DFlashDraftModel {
 
     /// Absolute position of the next context token a sequence expects, or None if unseen.
     pub fn ctx_next_pos(&self, seq_id: usize) -> Option<usize> {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            return pool
+                .lock()
+                .expect("dflash windowed pool poisoned")
+                .sequence(seq_id)
+                .map(|state| state.next_committed_pos);
+        }
         self.ctx_cache
             .lock()
             .expect("dflash cache poisoned")
@@ -836,17 +1596,77 @@ impl DFlashDraftModel {
             .map(|c| c.next_pos)
     }
 
-    pub fn retain_seqs(&self, seq_ids: &[usize]) {
-        self.ctx_cache
+    pub fn contexts_ready_for_draft(&self, seq_ids: &[usize]) -> bool {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            let pool = pool.lock().expect("dflash windowed pool poisoned");
+            return seq_ids
+                .iter()
+                .all(|seq_id| pool.sequence_query_ready(*seq_id));
+        }
+        let cache = self.ctx_cache.lock().expect("dflash cache poisoned");
+        seq_ids.iter().all(|seq_id| cache.contains_key(seq_id))
+    }
+
+    fn release_seq_storage(&self, seq_ids: &[usize]) {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            let mut pool = pool.lock().expect("dflash windowed pool poisoned");
+            for seq_id in seq_ids {
+                pool.release(*seq_id);
+            }
+        }
+        let mut ctx_cache = self.ctx_cache.lock().expect("dflash cache poisoned");
+        for seq_id in seq_ids {
+            ctx_cache.remove(seq_id);
+        }
+    }
+
+    pub fn mark_seqs_dormant(&self, seq_ids: &[usize]) {
+        self.release_seq_storage(seq_ids);
+        let mut dormant = self
+            .dormant_seqs
             .lock()
-            .expect("dflash cache poisoned")
-            .retain(|id, _| seq_ids.contains(id));
+            .expect("dflash dormant set poisoned");
+        update_dormant_sequences(&mut dormant, seq_ids, DFlashSequenceEviction::Dormant);
+    }
+
+    pub fn release_seqs(&self, seq_ids: &[usize]) {
+        self.release_seq_storage(seq_ids);
+        let mut dormant = self
+            .dormant_seqs
+            .lock()
+            .expect("dflash dormant set poisoned");
+        update_dormant_sequences(&mut dormant, seq_ids, DFlashSequenceEviction::Released);
+    }
+
+    pub fn activate_seqs(&self, seq_ids: &[usize]) {
+        self.dormant_seqs
+            .lock()
+            .expect("dflash dormant set poisoned")
+            .retain(|id| !seq_ids.contains(id));
+    }
+
+    pub fn has_dormant_seq(&self, seq_ids: &[usize]) -> bool {
+        let dormant = self
+            .dormant_seqs
+            .lock()
+            .expect("dflash dormant set poisoned");
+        seq_ids.iter().any(|id| dormant.contains(id))
     }
 
     pub fn clear(&self) {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if let Some(pool) = &self.windowed_pool {
+            pool.lock().expect("dflash windowed pool poisoned").clear();
+        }
         self.ctx_cache
             .lock()
             .expect("dflash cache poisoned")
+            .clear();
+        self.dormant_seqs
+            .lock()
+            .expect("dflash dormant set poisoned")
             .clear();
     }
 
@@ -918,25 +1738,34 @@ impl DFlashDraftModel {
             (Tensor::cat(&coss, 0)?, Tensor::cat(&sins, 0)?)
         };
 
+        let all_kv = self
+            .context_kv_proj
+            .forward(&ctx_hidden)?
+            .squeeze(0)?
+            .reshape((
+                total,
+                self.layers.len(),
+                2,
+                self.num_kv_heads,
+                self.head_dim,
+            ))?
+            .permute((2, 1, 3, 0, 4))?
+            .contiguous()?;
+        let raw_k = all_kv.i(0)?;
+        let v_all = all_kv.i(1)?;
         let mut ks = Vec::with_capacity(self.layers.len());
-        let mut vs = Vec::with_capacity(self.layers.len());
-        for layer in &self.layers {
-            let k = Self::heads_first(&layer.k_norm.forward(
-                &layer.k_proj.forward(&ctx_hidden)?.reshape((
-                    1,
-                    total,
-                    self.num_kv_heads,
-                    self.head_dim,
-                ))?,
-            )?)?;
+        for (i, layer) in self.layers.iter().enumerate() {
+            let k = layer.k_norm.forward(&raw_k.narrow(0, i, 1)?)?;
             let k = self.rope(&k, &cos, &sin)?;
-            let v = self.split_heads(&layer.v_proj.forward(&ctx_hidden)?, self.num_kv_heads)?;
             ks.push(k.squeeze(0)?);
-            vs.push(v.squeeze(0)?);
         }
         // [layers, kv_heads, total, head_dim]
         let k_all = Tensor::stack(&ks, 0)?;
-        let v_all = Tensor::stack(&vs, 0)?;
+
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if self.windowed_pool.is_some() {
+            return self.append_ctx_windowed(entries, &rows, &k_all, &v_all);
+        }
 
         // Sliding layers never look further back than their window; trim by the widest window plus
         // a block so every layer keeps what it can see (full-attention layers keep everything).
@@ -999,6 +1828,79 @@ impl DFlashDraftModel {
         Ok(())
     }
 
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    fn append_ctx_windowed(
+        &self,
+        entries: &[CtxAppend],
+        rows: &[usize],
+        k_all: &Tensor,
+        v_all: &Tensor,
+    ) -> Result<()> {
+        let mut pool = self
+            .windowed_pool
+            .as_ref()
+            .expect("windowed pool checked by caller")
+            .lock()
+            .expect("dflash windowed pool poisoned");
+        let mut writes = Vec::with_capacity(entries.len());
+        for (entry, row_count) in entries.iter().zip(rows) {
+            pool.acquire_at(entry.seq_id, entry.start_pos)?;
+            writes.push(pool.plan_context_write(entry.seq_id, *row_count)?);
+        }
+
+        for layer_idx in 0..self.layers.len() {
+            let mut k_rows = Vec::with_capacity(entries.len());
+            let mut v_rows = Vec::with_capacity(entries.len());
+            let mut slot_mapping = Vec::new();
+            let mut offset = 0;
+            for (write, row_count) in writes.iter().zip(rows) {
+                let retained = write.retained_input_range();
+                let retained_len = retained.end - retained.start;
+                k_rows.push(
+                    k_all
+                        .i(layer_idx)?
+                        .narrow(1, offset + retained.start, retained_len)?
+                        .transpose(0, 1)?
+                        .force_contiguous()?,
+                );
+                v_rows.push(
+                    v_all
+                        .i(layer_idx)?
+                        .narrow(1, offset + retained.start, retained_len)?
+                        .transpose(0, 1)?
+                        .force_contiguous()?,
+                );
+                slot_mapping.extend_from_slice(write.slot_mapping());
+                offset += *row_count;
+            }
+            let k = if k_rows.len() == 1 {
+                k_rows.pop().expect("one context K tensor")
+            } else {
+                Tensor::cat(&k_rows.iter().collect::<Vec<_>>(), 0)?
+            };
+            let v = if v_rows.len() == 1 {
+                v_rows.pop().expect("one context V tensor")
+            } else {
+                Tensor::cat(&v_rows.iter().collect::<Vec<_>>(), 0)?
+            };
+            let slot_count = slot_mapping.len();
+            let slots = Tensor::from_vec(slot_mapping, (slot_count,), &self.device)?;
+            let (key_cache, value_cache) = pool.layer_cache(layer_idx)?;
+            mistralrs_paged_attn::reshape_and_cache_flashinfer(
+                &k,
+                &v,
+                &key_cache,
+                &value_cache,
+                &slots,
+                mistralrs_paged_attn::DEFAULT_FP8_KV_CACHE_SCALES,
+            )?;
+        }
+        for write in &writes {
+            pool.commit_context(write)?;
+        }
+        Ok(())
+    }
+
     /// One block draft for every sequence at once: noise `[anchor, mask * n_drafts]` rows at each
     /// sequence's `start_positions[i]..`, attending to that sequence's accumulated context left-
     /// padded to the batch maximum (pad columns are masked out). Every weight is read once for the
@@ -1010,6 +1912,10 @@ impl DFlashDraftModel {
         start_positions: &[usize],
     ) -> Result<Tensor> {
         let (b, block, _) = noise_embedding.dims3()?;
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if self.windowed_pool.is_some() {
+            return self.draft_hidden_windowed(seq_ids, noise_embedding, start_positions, b, block);
+        }
         let cache = self.ctx_cache.lock().expect("dflash cache poisoned");
         let mut lens = Vec::with_capacity(b);
         for (seq_id, start_pos) in seq_ids.iter().zip(start_positions.iter()) {
@@ -1093,9 +1999,46 @@ impl DFlashDraftModel {
         #[allow(clippy::cast_precision_loss)]
         let scale = 1f64 / (self.head_dim as f64).sqrt();
         let groups = self.num_heads / self.num_kv_heads;
+        let hs = self.run_draft_layers(
+            noise_embedding,
+            &q_cos,
+            &q_sin,
+            |i, layer, q, k_noise, v_noise| {
+                let ctx_k = ctx_k.narrow(0, i, 1)?.squeeze(0)?;
+                let ctx_v = ctx_v.narrow(0, i, 1)?.squeeze(0)?;
+                let k = Tensor::cat(&[&ctx_k, k_noise], 2)?;
+                let v = Tensor::cat(&[&ctx_v, v_noise], 2)?;
+                let mask = &kind_masks[&(layer.is_causal, layer.sliding_window)];
+                let k = repeat_kv(&k, groups)?;
+                let v = repeat_kv(&v, groups)?;
+                let att = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
+                let att = att.broadcast_add(mask)?;
+                let att = candle_nn::ops::softmax_last_dim(&att)?;
+                let out = att.matmul(&v)?;
+                out.transpose(1, 2)?
+                    .reshape((b, block, self.num_heads * self.head_dim))
+            },
+        )?;
 
+        let hs = self.norm.forward(&hs)?;
+        hs.narrow(1, 1, block - 1)
+    }
+
+    fn run_draft_layers<F>(
+        &self,
+        noise_embedding: &Tensor,
+        q_cos: &Tensor,
+        q_sin: &Tensor,
+        mut attention: F,
+    ) -> Result<Tensor>
+    where
+        F: FnMut(usize, &DFlashLayer, &Tensor, &Tensor, &Tensor) -> Result<Tensor>,
+    {
+        let (batch, block, _) = noise_embedding.dims3()?;
+        let q_size = self.num_heads * self.head_dim;
+        let kv_size = self.num_kv_heads * self.head_dim;
         let mut hs = noise_embedding.to_dtype(self.dtype)?;
-        for (i, layer) in self.layers.iter().enumerate() {
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
             let residual = &hs;
             let mut x = layer.input_layernorm.forward(&hs)?;
             let attn_kernel = match &layer.attention_conv {
@@ -1106,39 +2049,30 @@ impl DFlashDraftModel {
                 }
                 None => None,
             };
-            let q = Self::heads_first(
-                &layer.q_norm.forward(&layer.q_proj.forward(&x)?.reshape((
-                    b,
+            let qkv = layer.qkv_proj.forward(&x)?;
+            let q = Self::heads_first(&layer.q_norm.forward(
+                &qkv.narrow(D::Minus1, 0, q_size)?.reshape((
+                    batch,
                     block,
                     self.num_heads,
                     self.head_dim,
-                ))?)?,
-            )?;
-            let k_noise = Self::heads_first(
-                &layer.k_norm.forward(&layer.k_proj.forward(&x)?.reshape((
-                    b,
+                ))?,
+            )?)?;
+            let k_noise = Self::heads_first(&layer.k_norm.forward(
+                &qkv.narrow(D::Minus1, q_size, kv_size)?.reshape((
+                    batch,
                     block,
                     self.num_kv_heads,
                     self.head_dim,
-                ))?)?,
+                ))?,
+            )?)?;
+            let q = candle_nn::rotary_emb::rope(&q, q_cos, q_sin)?;
+            let k_noise = candle_nn::rotary_emb::rope(&k_noise, q_cos, q_sin)?;
+            let v_noise = self.split_heads(
+                &qkv.narrow(D::Minus1, q_size + kv_size, kv_size)?,
+                self.num_kv_heads,
             )?;
-            // candle's fused rope kernel takes the batched [b, block, d/2] tables directly
-            let q = candle_nn::rotary_emb::rope(&q, &q_cos, &q_sin)?;
-            let k_noise = candle_nn::rotary_emb::rope(&k_noise, &q_cos, &q_sin)?;
-            let v_noise = self.split_heads(&layer.v_proj.forward(&x)?, self.num_kv_heads)?;
-            let k = Tensor::cat(&[ctx_k.narrow(0, i, 1)?.squeeze(0)?, k_noise], 2)?;
-            let v = Tensor::cat(&[ctx_v.narrow(0, i, 1)?.squeeze(0)?, v_noise], 2)?;
-            let mask = &kind_masks[&(layer.is_causal, layer.sliding_window)];
-            // GQA via repeat: tiny shapes, plain matmul attention
-            let k = repeat_kv(&k, groups)?;
-            let v = repeat_kv(&v, groups)?;
-            let att = (q.matmul(&k.transpose(2, 3)?)? * scale)?;
-            let att = att.broadcast_add(mask)?;
-            let att = candle_nn::ops::softmax_last_dim(&att)?;
-            let out = att.matmul(&v)?;
-            let out = out
-                .transpose(1, 2)?
-                .reshape((b, block, self.num_heads * self.head_dim))?;
+            let out = attention(layer_idx, layer, &q, &k_noise, &v_noise)?;
             let mut out = layer.o_proj.forward(&out)?;
             if let (Some(conv), Some(kernel)) = (&layer.attention_conv, attn_kernel) {
                 out = conv.finish(&out, &kernel)?;
@@ -1155,11 +2089,10 @@ impl DFlashDraftModel {
                 }
                 None => None,
             };
-            let gate = layer.gate_proj.forward(&x)?;
-            let up = layer.up_proj.forward(&x)?;
-            let mut out = layer.down_proj.forward(&crate::ops::mul_and_act(
-                &gate,
-                &up,
+            let gate_up = layer.gate_up_proj.forward(&x)?;
+            let mut out = layer.down_proj.forward(&crate::ops::split_mul_and_act(
+                &gate_up,
+                self.intermediate_size,
                 crate::layers::Activation::Silu,
             )?)?;
             if let (Some(conv), Some(kernel)) = (&layer.mlp_conv, mlp_kernel) {
@@ -1167,28 +2100,207 @@ impl DFlashDraftModel {
             }
             hs = (residual + out)?;
         }
+        Ok(hs)
+    }
 
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    fn draft_hidden_windowed(
+        &self,
+        seq_ids: &[usize],
+        noise_embedding: &Tensor,
+        start_positions: &[usize],
+        batch: usize,
+        block: usize,
+    ) -> Result<Tensor> {
+        let attention_batch = {
+            let pool = self
+                .windowed_pool
+                .as_ref()
+                .expect("windowed pool checked by caller")
+                .lock()
+                .expect("dflash windowed pool poisoned");
+            for (seq_id, start_pos) in seq_ids.iter().zip(start_positions) {
+                let state = pool.sequence(*seq_id).ok_or_else(|| {
+                    candle_core::Error::msg(format!(
+                        "DFlash draft requested for sequence {seq_id} without paged context"
+                    ))
+                })?;
+                if state.next_committed_pos != *start_pos {
+                    candle_core::bail!(
+                        "DFlash draft at position {start_pos} but paged context ends at {}",
+                        state.next_committed_pos
+                    );
+                }
+            }
+            let queries = seq_ids
+                .iter()
+                .map(|seq_id| WindowedKvQuery {
+                    seq_id: *seq_id,
+                    query_len: block,
+                })
+                .collect::<Vec<_>>();
+            pool.scratch_batch(&queries)?
+        };
+        let metadata = attention_batch.to_tensors(&self.device)?;
+
+        let (q_cos, q_sin) = {
+            let mut coss = Vec::with_capacity(batch);
+            let mut sins = Vec::with_capacity(batch);
+            for start_pos in start_positions {
+                let (cos, sin) = self.cos_sin(*start_pos, block)?;
+                coss.push(cos);
+                sins.push(sin);
+            }
+            (Tensor::stack(&coss, 0)?, Tensor::stack(&sins, 0)?)
+        };
+        self.draft_hidden_windowed_tensors(DFlashWindowedForward {
+            noise_embedding,
+            q_cos: &q_cos,
+            q_sin: &q_sin,
+            batch,
+            block,
+            attention_batch: &attention_batch,
+            metadata: &metadata,
+        })
+    }
+
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    fn draft_hidden_windowed_tensors(&self, forward: DFlashWindowedForward<'_>) -> Result<Tensor> {
+        let DFlashWindowedForward {
+            noise_embedding,
+            q_cos,
+            q_sin,
+            batch,
+            block,
+            attention_batch,
+            metadata,
+        } = forward;
+        let pool = self
+            .windowed_pool
+            .as_ref()
+            .expect("windowed pool checked by caller")
+            .lock()
+            .expect("dflash windowed pool poisoned");
+        #[allow(clippy::cast_precision_loss)]
+        let scale = 1f32 / (self.head_dim as f32).sqrt();
+        let hs = self.run_draft_layers(
+            noise_embedding,
+            q_cos,
+            q_sin,
+            |layer_idx, layer, q, k_noise, v_noise| {
+                let k_write = k_noise.transpose(1, 2)?.contiguous()?;
+                let v_write = v_noise.transpose(1, 2)?.contiguous()?;
+                let (key_cache, value_cache) = pool.layer_cache(layer_idx)?;
+                mistralrs_paged_attn::reshape_and_cache_flashinfer(
+                    &k_write,
+                    &v_write,
+                    &key_cache,
+                    &value_cache,
+                    &metadata.slot_mapping,
+                    mistralrs_paged_attn::DEFAULT_FP8_KV_CACHE_SCALES,
+                )?;
+                let (key_paged, value_paged) = pool.paged_attention_layer_cache(layer_idx)?;
+                let window = layer
+                    .sliding_window
+                    .expect("windowed pool requires finite windows");
+                let window_right = if layer.is_causal {
+                    Some(0)
+                } else {
+                    Some(window - 1)
+                };
+                let q = q.transpose(1, 2)?.contiguous()?.reshape((
+                    batch * block,
+                    self.num_heads,
+                    self.head_dim,
+                ))?;
+                let out = mistralrs_flash_attn::flash_attn_varlen_paged_windowed(
+                    &q,
+                    &key_paged,
+                    &value_paged,
+                    &metadata.cumulative_query_lens,
+                    &metadata.cumulative_kv_lens,
+                    &metadata.block_tables,
+                    None,
+                    attention_batch.max_query_len(),
+                    attention_batch.max_kv_len(),
+                    scale,
+                    Some(window - 1),
+                    window_right,
+                    pool.config().page_size(),
+                    None,
+                )?;
+                out.reshape((batch, block, self.num_heads * self.head_dim))
+            },
+        )?;
         let hs = self.norm.forward(&hs)?;
-        // Positions 1.. predict the drafts; position 0 carries the anchor
         hs.narrow(1, 1, block - 1)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    fn cuda_graph_tokens(
+        &self,
+        key: DFlashCudaGraphKey,
+        buffers: &DFlashCudaGraphBuffers,
+        attention_batch: &WindowedKvBatch,
+        token_embedding: &Arc<dyn QuantMethod>,
+        lm_head: &Arc<dyn QuantMethod>,
+    ) -> Result<Tensor> {
+        let mut noise = token_embedding
+            .embedding_forward(&buffers.token_ids.as_detached_tensor(), self.dtype)?;
+        if (self.input_embedding_scale - 1.0).abs() > f64::EPSILON {
+            noise = (noise * self.input_embedding_scale)?;
+        }
+        let rope_indices = buffers.rope_indices.as_detached_tensor();
+        let q_cos = self.rope_table.0.index_select(&rope_indices, 0)?.reshape((
+            key.batch_bucket,
+            key.block,
+            self.head_dim / 2,
+        ))?;
+        let q_sin = self.rope_table.1.index_select(&rope_indices, 0)?.reshape((
+            key.batch_bucket,
+            key.block,
+            self.head_dim / 2,
+        ))?;
+        let metadata = buffers.metadata();
+        let hidden = self.draft_hidden_windowed_tensors(DFlashWindowedForward {
+            noise_embedding: &noise,
+            q_cos: &q_cos,
+            q_sin: &q_sin,
+            batch: key.batch_bucket,
+            block: key.block,
+            attention_batch,
+            metadata: &metadata,
+        })?;
+        let mut logits = lm_head.forward(&hidden)?;
+        if (self.output_multiplier - 1.0).abs() > f64::EPSILON {
+            logits = (logits * self.output_multiplier)?;
+        }
+        let tokens = if key.use_selector {
+            self.selector
+                .as_ref()
+                .expect("selector graph key requires a selector")
+                .select_greedy_cuda(&hidden, &logits, &buffers.anchors.as_detached_tensor())?
+        } else {
+            logits.argmax(D::Minus1)?
+        };
+        tokens.contiguous()
     }
 
     /// One lm_head projection and one D2H finish every sequence's drafts: `hidden` is the
     /// `[batch, n, hidden]` output of `draft_hidden_batch`. Returns per-seq
     /// (tokens, logits `[n, vocab]`).
-    pub fn finish_drafts(
+    pub fn finish_greedy_drafts(
         &self,
         hidden: &Tensor,
         anchors: &[u32],
         lm_head: &Arc<dyn QuantMethod>,
-        greedy: bool,
     ) -> Result<Vec<(Vec<u32>, Tensor)>> {
         let mut logits = lm_head.forward(hidden)?; // [batch, n, vocab]
         if (self.output_multiplier - 1.0).abs() > f64::EPSILON {
             logits = (logits * self.output_multiplier)?;
         }
         let use_selector = std::env::var("MISTRALRS_DFLASH_NO_SELECTOR").is_err();
-        let tokens_per_seq = match (&self.selector, greedy && use_selector) {
+        let tokens_per_seq = match (&self.selector, use_selector) {
             (Some(selector), true) => selector.select_greedy_batch(hidden, &logits, anchors)?,
             _ => logits.argmax(D::Minus1)?.to_vec2::<u32>()?,
         };
@@ -1261,4 +2373,124 @@ fn repeat_kv(x: &Tensor, groups: usize) -> Result<Tensor> {
     x.unsqueeze(2)?
         .expand((b, kv_heads, groups, len, hd))?
         .reshape((b, kv_heads * groups, len, hd))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, sync::Arc};
+
+    use candle_core::{Device, Result, Tensor, D};
+    use mistralrs_quant::QuantMethod;
+
+    use super::{
+        dflash_adaptive_env_value, dflash_graph_host_rows, dflash_graph_plans, linear_from_weight,
+        select_dflash_depth, update_dormant_sequences, DFlashSequenceEviction,
+        ADAPT_FULL_DEPTH_MAX_BATCH,
+    };
+    use crate::speculative::SpeculativeGraphPlan;
+
+    #[test]
+    fn final_sequence_release_does_not_leave_dormant_ids() {
+        let mut dormant = HashSet::from([1, 2]);
+        update_dormant_sequences(&mut dormant, &[2, 3], DFlashSequenceEviction::Dormant);
+        assert_eq!(dormant, HashSet::from([1, 2, 3]));
+
+        update_dormant_sequences(&mut dormant, &[2, 3], DFlashSequenceEviction::Released);
+        assert_eq!(dormant, HashSet::from([1]));
+    }
+
+    #[test]
+    fn packed_projection_preserves_component_layout() -> Result<()> {
+        let device = Device::Cpu;
+        let input = Tensor::new(&[[2f32, 3., 5.], [7., 11., 13.]], &device)?;
+        let weights = [
+            Tensor::new(&[[1f32, 2., 3.], [4., 5., 6.]], &device)?,
+            Tensor::new(&[[7f32, 8., 9.]], &device)?,
+            Tensor::new(&[[10f32, 11., 12.]], &device)?,
+        ];
+        let components = weights
+            .iter()
+            .map(|weight| linear_from_weight(weight.clone(), None, &device))
+            .collect::<Result<Vec<Arc<dyn QuantMethod>>>>()?;
+        let packed_weight = Tensor::cat(&weights.iter().collect::<Vec<_>>(), 0)?;
+        let packed = linear_from_weight(packed_weight, None, &device)?.forward(&input)?;
+
+        let mut offset = 0;
+        for component in components {
+            let expected = component.forward(&input)?;
+            let rows = expected.dim(D::Minus1)?;
+            assert_eq!(
+                packed.narrow(D::Minus1, offset, rows)?.to_vec2::<f32>()?,
+                expected.to_vec2::<f32>()?
+            );
+            offset += rows;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn adaptive_depth_is_full_for_small_batches() {
+        assert_eq!(select_dflash_depth(true, 7, 1), 7);
+        assert_eq!(select_dflash_depth(true, 7, ADAPT_FULL_DEPTH_MAX_BATCH), 7);
+    }
+
+    #[test]
+    fn adaptive_depth_keeps_a_live_draft_at_large_batches() {
+        for max_n in 1..=7 {
+            for batch in [3, 8, 16] {
+                assert!(select_dflash_depth(true, max_n, batch) > 0);
+            }
+        }
+        assert_eq!(select_dflash_depth(true, 7, 16), 1);
+    }
+
+    #[test]
+    fn fixed_depth_ignores_batch_size() {
+        assert_eq!(select_dflash_depth(false, 7, 1), 7);
+        assert_eq!(select_dflash_depth(false, 7, 16), 7);
+    }
+
+    #[test]
+    fn adaptive_mode_requires_an_explicit_true_value() {
+        assert!(dflash_adaptive_env_value("1"));
+        assert!(dflash_adaptive_env_value("true"));
+        assert!(dflash_adaptive_env_value("TRUE"));
+        for value in ["", "0", "false", "yes", "on", "7"] {
+            assert!(!dflash_adaptive_env_value(value));
+        }
+    }
+
+    #[test]
+    fn graph_plans_cover_every_batch_without_a_zero_depth_gap() {
+        assert_eq!(
+            dflash_graph_plans(false, 7),
+            vec![SpeculativeGraphPlan::new(7, None)]
+        );
+        assert_eq!(
+            dflash_graph_plans(true, 7),
+            vec![
+                SpeculativeGraphPlan::new(7, Some(ADAPT_FULL_DEPTH_MAX_BATCH)),
+                SpeculativeGraphPlan::new(1, None),
+            ]
+        );
+        assert_eq!(
+            dflash_graph_plans(true, 1),
+            vec![SpeculativeGraphPlan::new(1, None)]
+        );
+    }
+
+    #[test]
+    fn graph_rows_pad_with_a_valid_alias() -> Result<()> {
+        let rows = dflash_graph_host_rows(&[5, 7], &[100, 200], 9, 4, 4)?;
+        assert_eq!(
+            rows.token_ids,
+            [5, 9, 9, 9, 7, 9, 9, 9, 7, 9, 9, 9, 7, 9, 9, 9]
+        );
+        assert_eq!(rows.anchors, [5, 7, 7, 7]);
+        assert_eq!(
+            rows.rope_indices,
+            [100, 101, 102, 103, 200, 201, 202, 203, 200, 201, 202, 203, 200, 201, 202, 203,]
+        );
+        Ok(())
+    }
 }

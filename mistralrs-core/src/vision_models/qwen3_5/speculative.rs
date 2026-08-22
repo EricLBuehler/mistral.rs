@@ -17,10 +17,10 @@ use crate::{
     pipeline::text_models_inputs_processor::FlashParams,
     speculative::{
         dflash::DFlashDraftModel, paged_rows::make_paged_rows_metadata,
-        proposer::sample_draft_rows, SpeculativeAttachInfo, SpeculativeCommitRow,
-        SpeculativeConfig, SpeculativeGraphState, SpeculativeKvCache, SpeculativePrefillCtx,
-        SpeculativeProposal, SpeculativeProposalBatch, SpeculativeProposeBatchCtx,
-        SpeculativeTargetMixin, TargetAttentionInputs,
+        proposer::sample_draft_rows, SpeculativeAttachInfo, SpeculativeBatchPlan,
+        SpeculativeCommitRow, SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState,
+        SpeculativeKvCache, SpeculativePrefillCtx, SpeculativeProposal, SpeculativeProposalBatch,
+        SpeculativeProposeBatchCtx, SpeculativeTargetMixin, TargetAttentionInputs,
     },
 };
 
@@ -38,10 +38,13 @@ pub const DEFAULT_MTP_N_PREDICT_LARGE: usize = 3;
 const MTP_LARGE_HIDDEN_SIZE: usize = 4096;
 // Verify cost grows with block width and quantized targets accept shorter blocks anyway; deeper
 // drafting stays available via --mtp-n-predict.
-const DFLASH_DEFAULT_MAX_DRAFTS: usize = 7;
 const MROPE_DIMS: usize = 3;
 // Feeds prompt rows whose next token is not known yet; their KV is rewritten before it is ever attended to
 const PLACEHOLDER_TOKEN: u32 = 0;
+
+fn dflash_batch_supports_exact_proposals(is_argmax: impl IntoIterator<Item = bool>) -> bool {
+    is_argmax.into_iter().all(|is_argmax| is_argmax)
+}
 
 /// The last prompt position of a sequence: its next token is only known once sampled, so the
 /// drafter processes it during bootstrap instead of prefill.
@@ -182,7 +185,7 @@ impl Qwen3_5Model {
         &mut self,
         config: crate::speculative::MtpConfig,
     ) -> Result<Option<SpeculativeAttachInfo>> {
-        let drafter = DFlashDraftModel::load(
+        let mut drafter = DFlashDraftModel::load(
             &config,
             self.text.layer_types.len(),
             self.text.cfg.hidden_size,
@@ -200,8 +203,19 @@ impl Qwen3_5Model {
             }
             Some(0) => candle_core::bail!("MTP n_predict must be at least 1."),
             Some(n) => n,
-            None => (block - 1).min(DFLASH_DEFAULT_MAX_DRAFTS),
+            None => (block - 1).min(crate::speculative::dflash::DEFAULT_MAX_DRAFTS),
         };
+        if self.text.supports_recurrent_speculative_checkpoints()
+            && self
+                .text
+                .cache
+                .hybrid()
+                .configure_checkpoint_lanes(n_predict + 1)?
+        {
+            self.text.device.synchronize()?;
+        }
+        let sequence_capacity = self.text.cache.hybrid().recurrent_capacity();
+        drafter.enable_windowed_kv(sequence_capacity)?;
         self.text
             .set_dflash_tap_layers(drafter.target_layer_ids.clone());
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
@@ -216,12 +230,8 @@ impl Qwen3_5Model {
             )?;
             *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
         }
-        // Explicit --mtp-n-predict pins the depth; the default adapts it to measured acceptance
-        let adaptive = match std::env::var("MISTRALRS_DFLASH_ADAPTIVE").ok().as_deref() {
-            Some("0" | "false") => false,
-            Some(_) => true,
-            None => config.n_predict.is_none(),
-        };
+        let adaptive =
+            config.n_predict.is_none() && crate::speculative::dflash::dflash_adaptive_requested();
         let adaptive = adaptive && drafter.enable_adaptive(n_predict);
         let kind = if drafter.has_selector() {
             "DFlash2"
@@ -229,7 +239,7 @@ impl Qwen3_5Model {
             "DFlash"
         };
         let depth = if adaptive {
-            format!("adaptive depth <= {n_predict}")
+            format!("adaptive depth 1..={n_predict}")
         } else {
             format!("depth {n_predict}")
         };
@@ -279,22 +289,31 @@ impl Qwen3_5Model {
         if batch == 0 || max_n == 0 {
             return Ok(None);
         }
-        // Must match what the driver just read via speculative_proposal_len; the adaptive update
-        // below only takes effect next step.
-        let n_predict = drafter.current_n(max_n);
+        if !dflash_batch_supports_exact_proposals(
+            ctx.sequences.iter().map(|seq| seq.sampler().is_argmax()),
+        ) {
+            return Ok(None);
+        }
+        let n_predict = ctx.proposal_len;
+        if n_predict == 0 {
+            return Ok(None);
+        }
+        if n_predict > max_n {
+            candle_core::bail!(
+                "DFlash proposal length {n_predict} exceeds configured maximum {max_n}"
+            );
+        }
         let Some(capture) = self.text.last_spec_capture() else {
             return Ok(None);
         };
         if capture.taps.len() != drafter.target_layer_ids.len() {
             return Ok(None);
         }
-        drafter.retain_seqs(ctx.seq_ids);
-
-        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
-        let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
+        if drafter.has_dormant_seq(ctx.seq_ids) {
+            return Ok(None);
+        }
 
         let mut appends = Vec::with_capacity(batch);
-        let mut accepted = Vec::with_capacity(batch);
         for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
             let (batch_idx, count) = ctx.target_rows[i];
             let base_len = ctx.base_lens[i];
@@ -303,11 +322,7 @@ impl Qwen3_5Model {
                 Some(next) if next <= base_len => {
                     // The committed rows since the last draft are the previous bonus token plus
                     // however many drafts survived verification
-                    let stepped = base_len - next;
-                    if stepped > 0 {
-                        accepted.push(stepped - 1);
-                    }
-                    stepped
+                    base_len - next
                 }
                 // Unknown or ahead (sequence restarted): resync from what this forward provides
                 _ => count.min(base_len),
@@ -332,12 +347,26 @@ impl Qwen3_5Model {
             }
         }
         drafter.append_ctx_batch(&appends)?;
+        if !drafter.contexts_ready_for_draft(ctx.seq_ids) {
+            return Ok(None);
+        }
+        let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
+        let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
+        if let Some(tokens) = drafter.greedy_proposals_cuda_graph(
+            ctx.seq_ids,
+            ctx.sampled_tokens,
+            ctx.base_lens,
+            n_predict,
+            self.text.token_embedding(),
+            lm_head,
+        )? {
+            let proposals = tokens.into_iter().map(SpeculativeProposal::new).collect();
+            return Ok(Some(SpeculativeProposalBatch::new(proposals)));
+        }
         let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
         let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
         // The lm_head weights are read once for the whole batch; drafts are chosen per sequence
-        let greedy = ctx.sequences.iter().all(|seq| seq.sampler().is_argmax());
-        let finished = drafter.finish_drafts(&hidden, ctx.sampled_tokens, lm_head, greedy)?;
-        drafter.adaptive_observe(&accepted, max_n, batch);
+        let finished = drafter.finish_greedy_drafts(&hidden, ctx.sampled_tokens, lm_head)?;
         let proposals = finished
             .into_iter()
             .map(|(tokens, logits)| SpeculativeProposal::with_logits(tokens, logits))
@@ -358,6 +387,7 @@ impl Qwen3_5Model {
         if capture.taps.len() != drafter.target_layer_ids.len() {
             return Ok(());
         }
+        drafter.activate_seqs(ctx.seq_ids);
         let mut appends = Vec::with_capacity(ctx.seq_ids.len());
         for (i, seq_id) in ctx.seq_ids.iter().enumerate() {
             let batch_idx = ctx.batch_indices[i];
@@ -385,10 +415,16 @@ impl Qwen3_5Model {
         ctx: SpeculativeProposeBatchCtx<'_>,
     ) -> Result<Option<SpeculativeProposalBatch>> {
         let head = self.mtp_head()?;
-        let n_predict = self.mtp_n_predict();
+        let max_n = self.mtp_n_predict();
+        let n_predict = ctx.proposal_len;
         let batch = ctx.sequences.len();
-        if batch == 0 || n_predict == 0 {
+        if batch == 0 || max_n == 0 {
             return Ok(None);
+        }
+        if n_predict == 0 || n_predict > max_n {
+            candle_core::bail!(
+                "MTP proposal length {n_predict} is outside the configured range 1..={max_n}"
+            );
         }
         if ctx.target_rows.len() != batch || ctx.base_lens.len() != batch {
             candle_core::bail!(
@@ -703,29 +739,44 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.mtp_n_predict() > 0
     }
 
-    fn speculative_proposal_len(&self) -> Option<usize> {
+    fn supports_recurrent_speculative_checkpoints(&self) -> bool {
+        self.text.supports_recurrent_speculative_checkpoints()
+    }
+
+    fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {
             return None;
         }
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
-            return Some(drafter.current_n(n));
+            return Some(
+                SpeculativeBatchPlan::new(drafter.plan_n(n, batch_size)).without_target_hiddens(),
+            );
         }
-        Some(n)
+        Some(SpeculativeBatchPlan::new(n))
     }
 
-    fn speculative_proposal_len_options(&self) -> Vec<usize> {
+    fn speculative_graph_plans(&self) -> Vec<SpeculativeGraphPlan> {
         let n = self.mtp_n_predict();
         if n == 0 {
             return Vec::new();
         }
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
-            let tiers = drafter.adaptive_depths(n);
-            if !tiers.is_empty() {
-                return tiers;
-            }
+            return drafter.graph_plans(n);
         }
-        vec![n]
+        vec![SpeculativeGraphPlan::new(n, None)]
+    }
+
+    fn speculative_bypass(&mut self, seq_ids: &[usize]) {
+        if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            drafter.mark_seqs_dormant(seq_ids);
+        }
+    }
+
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
+        if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+            drafter.release_seqs(seq_ids);
+        }
     }
 
     fn speculative_propose(
@@ -761,10 +812,26 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
     }
 
     fn speculative_commit(&mut self, rows: &[SpeculativeCommitRow]) -> Result<()> {
-        for row in rows.iter().filter(|row| !row.accepted_all) {
+        let checkpoint_rows = rows
+            .iter()
+            .map(|row| (row.batch_idx, row.keep_rows))
+            .collect::<Vec<_>>();
+        let checkpointed = {
+            let mut cache = self.text.cache.hybrid();
             self.text
-                .replay_recurrent_prefix(row.batch_idx, row.keep_rows)?;
+                .supports_recurrent_speculative_checkpoints_with_cache(&cache)
+                && cache.commit_speculative_rows(&checkpoint_rows)?
+        };
+        if checkpointed {
+            self.text.clear_gdn_replay_stash();
+            return Ok(());
         }
+        let rejected = rows
+            .iter()
+            .filter(|row| !row.accepted_all)
+            .map(|row| (row.batch_idx, row.keep_rows))
+            .collect::<Vec<_>>();
+        self.text.replay_recurrent_prefixes(&rejected)?;
         self.text.clear_gdn_replay_stash();
         Ok(())
     }
@@ -784,5 +851,17 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             })?;
         self.text.install_spec_graph_state(state);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::dflash_batch_supports_exact_proposals;
+
+    #[test]
+    fn dflash_requires_an_all_greedy_batch() {
+        assert!(dflash_batch_supports_exact_proposals([true, true]));
+        assert!(!dflash_batch_supports_exact_proposals([true, false]));
+        assert!(!dflash_batch_supports_exact_proposals([false]));
     }
 }

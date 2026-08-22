@@ -2,7 +2,97 @@ use core::ffi::{c_int, c_long, c_uint, c_void};
 
 use candle_core::cuda::cudarc::driver::sys::CUstream;
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Fa3Fp8DecodeScheduleParams {
+    pub cu_seqlens_q: *const c_int,
+    pub seqused_k: *const c_int,
+    pub scheduler_metadata: *mut c_int,
+    pub batch_size: c_int,
+    pub total_q: c_int,
+    pub num_q_heads: c_int,
+    pub num_kv_heads: c_int,
+    pub head_dim: c_int,
+    pub page_size: c_int,
+    pub max_seqlen_k: c_int,
+    pub num_splits: c_int,
+    pub num_sm: c_int,
+    pub device_id: c_int,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Fa3Fp8DecodeParams {
+    pub schedule: Fa3Fp8DecodeScheduleParams,
+    pub q: *const c_void,
+    pub k: *const c_void,
+    pub v: *const c_void,
+    pub out: *mut c_void,
+    pub softmax_lse: *mut f32,
+    pub out_accum: *mut f32,
+    pub softmax_lse_accum: *mut f32,
+    pub page_table: *const c_int,
+    pub q_descale: *const f32,
+    pub k_descale: *const f32,
+    pub v_descale: *const f32,
+    pub q_row_stride: i64,
+    pub q_head_stride: i64,
+    pub k_token_stride: i64,
+    pub k_head_stride: i64,
+    pub k_page_stride: i64,
+    pub v_token_stride: i64,
+    pub v_head_stride: i64,
+    pub v_page_stride: i64,
+    pub out_row_stride: i64,
+    pub out_head_stride: i64,
+    pub page_table_batch_stride: i64,
+    pub q_descale_batch_stride: i64,
+    pub q_descale_head_stride: i64,
+    pub k_descale_batch_stride: i64,
+    pub k_descale_head_stride: i64,
+    pub v_descale_batch_stride: i64,
+    pub v_descale_head_stride: i64,
+    pub num_pages: c_int,
+    pub max_pages_per_sequence: c_int,
+    pub softmax_scale: f32,
+    pub scheduler_metadata_prepared: c_int,
+}
+
 extern "C" {
+    #[cfg(has_fa3_fp8_paged)]
+    pub fn fa3_fp8_decode_materialize_paged_metadata(
+        paged_kv_indptr: *const c_int,
+        paged_kv_indices: *const c_int,
+        paged_kv_last_page_len: *const c_int,
+        page_table: *mut c_int,
+        seqused_k: *mut c_int,
+        batch_size: c_int,
+        page_table_batch_stride: c_int,
+        page_size: c_int,
+        stream: CUstream,
+    ) -> c_int;
+
+    #[cfg(has_fa3_fp8_paged)]
+    pub fn fa3_fp8_decode_prepare(
+        params: *const Fa3Fp8DecodeScheduleParams,
+        stream: CUstream,
+    ) -> c_int;
+
+    #[cfg(has_fa3_fp8_paged)]
+    pub fn fa3_fp8_decode_run(params: *const Fa3Fp8DecodeParams, stream: CUstream) -> c_int;
+
+    #[cfg(has_fa3_fp8_paged)]
+    pub fn fa3_bf16_to_e4m3_static(
+        input: *const c_void,
+        output: *mut c_void,
+        rows: c_int,
+        columns: c_int,
+        input_row_stride: i64,
+        output_row_stride: i64,
+        descale: *const f32,
+        stream: CUstream,
+    ) -> c_int;
+
     pub fn reshape_and_cache(
         key: *const c_void,
         value: *const c_void,
@@ -78,7 +168,10 @@ extern "C" {
         block_size: c_int,
         key_stride: c_int,
         value_stride: c_int,
+        k_scale: f32,
+        v_scale: f32,
         dtype: u32,
+        cache_dtype: u32,
         stream: CUstream,
     );
 
@@ -108,7 +201,10 @@ extern "C" {
         sm_scale: f32,
         window_left: c_int,
         logits_soft_cap: f32,
+        k_scale: f32,
+        v_scale: f32,
         dtype: u32,
+        cache_dtype: u32,
         stream: CUstream,
     ) -> c_int;
 
@@ -125,7 +221,10 @@ extern "C" {
         block_table_stride: c_int,
         num_kv_heads: c_int,
         head_size: c_int,
-        dtype: u32,
+        out_dtype: u32,
+        cache_dtype: u32,
+        k_scale: f32,
+        v_scale: f32,
         stream: CUstream,
     );
 
@@ -361,6 +460,17 @@ extern "C" {
     );
 
     pub fn copy_blocks_f32(
+        key_cache_ptrs: *mut c_void,
+        value_cache_ptrs: *mut c_void,
+        block_mapping: *const c_void,
+        num_layers: i32,
+        num_pairs: i32,
+        numel_per_block_key: i32,
+        numel_per_block_value: i32,
+        stream: i64,
+    );
+
+    pub fn copy_blocks_u8(
         key_cache_ptrs: *mut c_void,
         value_cache_ptrs: *mut c_void,
         block_mapping: *const c_void,

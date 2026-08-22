@@ -17,8 +17,8 @@ use crate::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     speculative::{
-        SpeculativeAttachInfo, SpeculativeConfig, SpeculativeGraphState, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeProposer,
+        SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeConfig, SpeculativeGraphState,
+        SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposer,
     },
     utils::unvarbuilder::UnVarBuilder,
     vision_models::multimodal_layout::{
@@ -1075,6 +1075,39 @@ impl SpeculativeGraphState for Gemma4SpecGraphState {
         }))
     }
 
+    fn for_real_batch(
+        &self,
+        real_batch: usize,
+    ) -> candle_core::Result<Box<dyn SpeculativeGraphState>> {
+        let hidden = self
+            .hidden
+            .as_ref()
+            .map(|hidden| match hidden.rank() {
+                3 => {
+                    let captured_batch = hidden.dim(0)?;
+                    if real_batch > captured_batch {
+                        candle_core::bail!(
+                            "Gemma 4 speculative batch {real_batch} exceeds captured batch {captured_batch}"
+                        );
+                    }
+                    if real_batch == captured_batch {
+                        Ok(hidden.clone())
+                    } else {
+                        hidden.narrow(0, 0, real_batch)
+                    }
+                }
+                2 if real_batch == 1 => Ok(hidden.clone()),
+                2 => candle_core::bail!(
+                    "Gemma 4 rank-2 speculative hidden state requires batch 1, got {real_batch}"
+                ),
+                rank => candle_core::bail!(
+                    "Gemma 4 speculative hidden state has unsupported rank {rank}"
+                ),
+            })
+            .transpose()?;
+        Ok(Box::new(Self { hidden }))
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -1132,11 +1165,12 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma4Model {
         self.mtp.lock().is_ok_and(|mtp| mtp.is_some())
     }
 
-    fn speculative_proposal_len(&self) -> Option<usize> {
+    fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {
         self.mtp
             .lock()
             .ok()
             .and_then(|mtp| mtp.as_ref().map(SpeculativeProposer::proposal_len))
+            .map(SpeculativeBatchPlan::new)
     }
 
     fn speculative_propose(
@@ -1212,7 +1246,8 @@ mod tests {
     use candle_core::{DType, Device, Tensor};
     use mistralrs_quant::{uqff_version_tensors, ShardedSafeTensors, UqffReader, UqffTensor};
 
-    use super::has_clippable_linear_prefix;
+    use super::{has_clippable_linear_prefix, Gemma4SpecGraphState};
+    use crate::speculative::SpeculativeGraphState;
 
     #[test]
     fn clippable_linears_detect_nested_weights_only_in_uqff() {
@@ -1246,5 +1281,19 @@ mod tests {
             assert!(!linear_vb.contains_tensor("linear.weight"));
             assert!(has_clippable_linear_prefix(&linear_vb));
         }
+    }
+
+    #[test]
+    fn speculative_graph_state_narrows_a_bucket_to_the_live_batch() {
+        let state = Gemma4SpecGraphState {
+            hidden: Some(Tensor::zeros((16, 8, 32), DType::F32, &Device::Cpu).unwrap()),
+        };
+
+        let state = state.for_real_batch(9).unwrap();
+        let state = state
+            .as_any()
+            .downcast_ref::<Gemma4SpecGraphState>()
+            .unwrap();
+        assert_eq!(state.hidden.as_ref().unwrap().dims(), &[9, 8, 32]);
     }
 }

@@ -96,5 +96,73 @@ fn split_paged_config(
         MemoryGpuConfig::ContextSize(tokens) => MemoryGpuConfig::ContextSize(share(tokens)),
     };
 
-    PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)
+    let mut split = PagedAttentionConfig::new(config.block_size, mem_gpu, config.cache_type)?;
+    split.serving_capacity = config.serving_capacity;
+    split.base_device_memory_reservation_bytes = config.base_device_memory_reservation_bytes;
+    split.primary_activation_memory_reservation_bytes =
+        config.primary_activation_memory_reservation_bytes;
+    split.mapped_activation_memory_reservation_bytes =
+        config.mapped_activation_memory_reservation_bytes;
+    split.recurrent_checkpoint_lanes = config.recurrent_checkpoint_lanes;
+    split.resolve_memory_utilization_after_load =
+        config.resolve_memory_utilization_after_load && model_weight == active_weight;
+    Ok(split)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PagedCacheType;
+
+    #[test]
+    fn split_preserves_base_device_memory_reservation() -> anyhow::Result<()> {
+        let mut config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?
+        .with_serving_capacity(16)?
+        .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?
+        .with_recurrent_checkpoint_lanes(8)?;
+        config.reserve_activation_memory(512 * 1024 * 1024, 256 * 1024 * 1024);
+
+        let split = split_paged_config(config, 1, 2)?;
+        assert_eq!(split.serving_capacity, Some(16));
+        assert_eq!(
+            split.base_device_memory_reservation_bytes,
+            4 * 1024 * 1024 * 1024
+        );
+        assert_eq!(
+            split.primary_activation_memory_reservation_bytes,
+            512 * 1024 * 1024
+        );
+        assert_eq!(
+            split.mapped_activation_memory_reservation_bytes,
+            256 * 1024 * 1024
+        );
+        assert_eq!(split.recurrent_checkpoint_lanes, 8);
+        assert!(!split.resolve_memory_utilization_after_load);
+        assert!(matches!(
+            split.mem_gpu,
+            MemoryGpuConfig::Utilization(value) if value == 0.45
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn single_model_plan_keeps_runtime_utilization_resolution() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::Utilization(0.9),
+            PagedCacheType::Auto,
+        )?;
+
+        let split = split_paged_config(config, 16, 16)?;
+        assert!(split.resolve_memory_utilization_after_load);
+        assert!(matches!(
+            split.mem_gpu,
+            MemoryGpuConfig::Utilization(value) if value == 0.9
+        ));
+        Ok(())
+    }
 }

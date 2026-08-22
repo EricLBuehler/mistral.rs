@@ -1,5 +1,11 @@
 use std::collections::HashMap;
 
+#[cfg(feature = "cuda")]
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use candle_core::Result;
 use candle_core::{DeviceLocation, Tensor};
@@ -9,6 +15,8 @@ use crate::paged_attention::attention_backend::{
 };
 
 mod metadata;
+#[cfg(feature = "cuda")]
+pub(crate) use metadata::make_fa3_decode_state;
 pub(crate) use metadata::{
     decode_split_capacity_pages, decode_split_pages, flashinfer_metadata, flashinfer_paged_kv,
     flashinfer_tile_plan, flashinfer_view, make_paged_kv_decode_tensors,
@@ -17,6 +25,126 @@ pub(crate) use metadata::{
 
 // Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.
 pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub(crate) const FA3_DECODE_NUM_SPLITS: usize = 32;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+const FA3_DECODE_HEAD_DIM: usize = 256;
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum Fa3DecodeView {
+    Logical,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) struct Fa3DecodeScheduleKey {
+    pub device: DeviceLocation,
+    pub view: Fa3DecodeView,
+    pub batch: usize,
+    pub q_heads: usize,
+    pub kv_heads: usize,
+    pub head_dim: usize,
+    pub page_size: usize,
+    pub num_splits: usize,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeScheduleKey {
+    pub(crate) fn supported(&self) -> bool {
+        self.batch > 0
+            && self.q_heads > 0
+            && self.kv_heads > 0
+            && self.q_heads.is_multiple_of(self.kv_heads)
+            && self.head_dim == FA3_DECODE_HEAD_DIM
+            && self.page_size > 0
+            && self.num_splits == FA3_DECODE_NUM_SPLITS
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Debug)]
+pub(crate) struct Fa3DecodeBuffers {
+    pub query: Tensor,
+    pub scheduler_metadata: Tensor,
+    pub output_accum: Tensor,
+    pub lse_accum: Tensor,
+    pub output_lse: Tensor,
+    pub cu_seqlens_q: Tensor,
+    pub page_table: Tensor,
+    pub seqused_k: Tensor,
+    pub max_pages_per_sequence: usize,
+    pub num_sm: usize,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeBuffers {
+    pub(crate) fn schedule(
+        &self,
+        key: Fa3DecodeScheduleKey,
+    ) -> Result<mistralrs_paged_attn::Fa3DecodeSchedule> {
+        let DeviceLocation::Cuda { gpu_id } = key.device else {
+            candle_core::bail!("FA3 decode state must be on CUDA");
+        };
+        let max_seqlen_k = self
+            .max_pages_per_sequence
+            .checked_mul(key.page_size)
+            .ok_or_else(|| candle_core::Error::msg("FA3 maximum KV length overflow"))?;
+        Ok(mistralrs_paged_attn::Fa3DecodeSchedule {
+            batch_size: key.batch,
+            total_q: key.batch,
+            q_heads: key.q_heads,
+            kv_heads: key.kv_heads,
+            head_dim: key.head_dim,
+            page_size: key.page_size,
+            max_seqlen_k,
+            num_splits: key.num_splits,
+            num_sm: self.num_sm,
+            device_id: gpu_id,
+        })
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Fa3DecodeState {
+    schedules: HashMap<Fa3DecodeScheduleKey, Fa3DecodeBuffers>,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeState {
+    pub(crate) fn insert(&mut self, key: Fa3DecodeScheduleKey, buffers: Fa3DecodeBuffers) {
+        self.schedules.insert(key, buffers);
+    }
+
+    pub(crate) fn get(&self, key: &Fa3DecodeScheduleKey) -> Option<&Fa3DecodeBuffers> {
+        self.schedules.get(key)
+    }
+
+    pub(crate) fn schedules(
+        &self,
+    ) -> impl Iterator<Item = (&Fa3DecodeScheduleKey, &Fa3DecodeBuffers)> {
+        self.schedules.iter()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.schedules.is_empty()
+    }
+}
+
+#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Fa3DecodeState;
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+pub(crate) struct Fa3DecodePrepare<'a> {
+    pub key: Fa3DecodeScheduleKey,
+    pub paged_kv_indptr: &'a Tensor,
+    pub paged_kv_indices: &'a Tensor,
+    pub paged_kv_last_page_len: &'a Tensor,
+    pub buffers: &'a Fa3DecodeBuffers,
+}
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
@@ -63,6 +191,10 @@ pub struct FlashInferMetadata {
     pub views: FlashInferPagedAttentionViews,
     pub decode_tmp_v: Option<DeviceTensorMap>,
     pub decode_tmp_s: Option<DeviceTensorMap>,
+    #[cfg_attr(not(all(feature = "cuda", target_family = "unix")), allow(dead_code))]
+    pub(crate) fa3_decode: Option<Fa3DecodeState>,
+    #[cfg(feature = "cuda")]
+    pub(crate) decode_tile_plan_used: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(all(feature = "cuda", target_family = "unix"))]
@@ -148,15 +280,79 @@ impl FlashInferPagedAttentionViews {
             &self.logical
         }
     }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    pub(crate) fn fa3_view(&self, view: Fa3DecodeView) -> &FlashInferPagedAttentionView {
+        match view {
+            Fa3DecodeView::Logical => &self.logical,
+        }
+    }
 }
 
 impl FlashInferMetadata {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn track_decode_tile_plan(mut self) -> Self {
+        self.decode_tile_plan_used = Some(Arc::new(AtomicBool::new(false)));
+        self
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn decode_tile_plan_was_used(&self) -> bool {
+        self.decode_tile_plan_used
+            .as_ref()
+            .is_some_and(|used| used.load(Ordering::Relaxed))
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    pub(crate) fn fa3_decode_buffers(
+        &self,
+        key: &Fa3DecodeScheduleKey,
+    ) -> Option<&Fa3DecodeBuffers> {
+        self.fa3_decode.as_ref()?.get(key)
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    pub(crate) fn for_each_fa3_decode_schedule(
+        &self,
+        mut f: impl FnMut(Fa3DecodePrepare<'_>) -> Result<()>,
+    ) -> Result<()> {
+        let Some(state) = self.fa3_decode.as_ref() else {
+            return Ok(());
+        };
+        for (&key, buffers) in state.schedules() {
+            let view = self.views.fa3_view(key.view);
+            f(Fa3DecodePrepare {
+                key,
+                paged_kv_indptr: metadata_tensor(
+                    &view.paged_kv.indptr,
+                    &key.device,
+                    "fa3_paged_kv_indptr",
+                )?,
+                paged_kv_indices: metadata_tensor(
+                    &view.paged_kv.indices,
+                    &key.device,
+                    "fa3_paged_kv_indices",
+                )?,
+                paged_kv_last_page_len: metadata_tensor(
+                    &view.paged_kv.last_page_len,
+                    &key.device,
+                    "fa3_paged_kv_last_page_len",
+                )?,
+                buffers,
+            })?;
+        }
+        Ok(())
+    }
+
     #[cfg(all(feature = "cuda", target_family = "unix"))]
     pub(crate) fn decode_metadata(
         &self,
         device: &DeviceLocation,
         sliding_window: Option<usize>,
     ) -> Result<FlashInferDecodeMetadata<'_>> {
+        if let Some(used) = self.decode_tile_plan_used.as_ref() {
+            used.store(true, Ordering::Relaxed);
+        }
         let view = self.views.select(sliding_window);
         Ok(FlashInferDecodeMetadata {
             paged_kv_indptr: metadata_tensor(&view.paged_kv.indptr, device, "paged_kv_indptr")?,
@@ -212,6 +408,10 @@ fn metadata_tensor<'a>(
 #[cfg(test)]
 mod tests {
     use super::supports_flashinfer_group_size;
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    use super::{Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    use candle_core::DeviceLocation;
 
     #[test]
     fn flashinfer_group_size_matches_kernel_instantiations() {
@@ -224,5 +424,27 @@ mod tests {
         }
         assert!(!supports_flashinfer_group_size(14, 0));
         assert!(!supports_flashinfer_group_size(15, 2));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_schedule_capability_is_shape_based() {
+        let key = Fa3DecodeScheduleKey {
+            device: DeviceLocation::Cuda { gpu_id: 0 },
+            view: Fa3DecodeView::Logical,
+            batch: 16,
+            q_heads: 32,
+            kv_heads: 4,
+            head_dim: 256,
+            page_size: 32,
+            num_splits: FA3_DECODE_NUM_SPLITS,
+        };
+        assert!(key.supported());
+        assert!(!Fa3DecodeScheduleKey {
+            head_dim: 128,
+            ..key
+        }
+        .supported());
+        assert!(!Fa3DecodeScheduleKey { q_heads: 30, ..key }.supported());
     }
 }

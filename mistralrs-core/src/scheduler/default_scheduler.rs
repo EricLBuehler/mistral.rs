@@ -343,6 +343,13 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
             .filter_map(|seq| seq.recurrent_state_idx())
             .collect()
     }
+    fn get_finished_sequence_ids(&self) -> Vec<usize> {
+        self.running
+            .iter()
+            .filter(|seq| seq.is_finished_paged_attn())
+            .map(|seq| *seq.id())
+            .collect()
+    }
     fn kv_cache_manager(&self) -> Option<Arc<tokio::sync::Mutex<KVCacheManager>>> {
         None
     }

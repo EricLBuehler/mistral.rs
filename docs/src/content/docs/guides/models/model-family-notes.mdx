@@ -60,7 +60,16 @@ runner.send_chat_completion_request(
 </TabItem>
 </Tabs>
 
-Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID directly when you want those weights instead of runtime [ISQ (in-situ quantization)](/reference/quantization-types/).
+Qwen3 also publishes FP8 pre-quantized checkpoints; pass the FP8 model ID directly when you want
+those weights instead of runtime [ISQ (in-situ quantization)](/reference/quantization-types/).
+For example, Qwen3.8 can serve published block-FP8 weights and an FP8 paged KV cache together:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-27B-FP8 --pa-cache-type f8e4m3 --max-seqs 16
+```
+
+The checkpoint's dynamic activation scaling and `modules_to_not_convert` declarations are applied
+automatically; `--quant` is not needed for a pre-quantized FP8 repository.
 
 ## MoE models and MoQE
 

@@ -1,16 +1,16 @@
 //! ## mistral.rs instance for server builder.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig, ModelSelected,
-    MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory, AutoDeviceMapParams,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
+    LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig,
+    ModelSelected, MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest,
+    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -82,13 +82,17 @@ pub mod defaults {
 
     use std::sync::Arc;
 
-    use mistralrs_core::PagedCacheType;
+    use mistralrs_core::{
+        PagedCacheType, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL, DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    };
 
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
     pub const MODEL: Option<mistralrs_core::ModelSelected> = None;
     pub const MAX_SEQS: usize = 16;
+    pub const MAX_NUM_BATCHED_TOKENS: usize = DEFAULT_MAX_NUM_BATCHED_TOKENS;
+    pub const MAX_DECODE_STEPS_BEFORE_PREFILL: usize = DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL;
     pub const NO_KV_CACHE: bool = false;
     pub const CHAT_TEMPLATE: Option<String> = None;
     pub const JINJA_EXPLICIT: Option<String> = None;
@@ -170,6 +174,12 @@ pub struct MistralRsForServerBuilder {
 
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     max_seqs: usize,
+
+    /// Maximum tokens processed by one paged-attention scheduler step.
+    max_num_batched_tokens: NonZeroUsize,
+
+    /// Maximum decode steps before a waiting prefill batch is admitted.
+    max_decode_steps_before_prefill: NonZeroUsize,
 
     /// Use no KV cache.
     no_kv_cache: bool,
@@ -267,6 +277,11 @@ impl Default for MistralRsForServerBuilder {
             models: Vec::new(),
             default_model_id: None,
             max_seqs: defaults::MAX_SEQS,
+            max_num_batched_tokens: NonZeroUsize::new(defaults::MAX_NUM_BATCHED_TOKENS).unwrap(),
+            max_decode_steps_before_prefill: NonZeroUsize::new(
+                defaults::MAX_DECODE_STEPS_BEFORE_PREFILL,
+            )
+            .unwrap(),
             no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: defaults::CHAT_TEMPLATE,
             jinja_explicit: defaults::JINJA_EXPLICIT,
@@ -409,6 +424,21 @@ impl MistralRsForServerBuilder {
     /// Sets the maximum number of concurrent sequences.
     pub fn with_max_seqs(mut self, max_seqs: usize) -> Self {
         self.max_seqs = max_seqs;
+        self
+    }
+
+    /// Sets the maximum number of tokens processed by one paged-attention scheduler step.
+    pub fn with_max_num_batched_tokens(mut self, max_num_batched_tokens: NonZeroUsize) -> Self {
+        self.max_num_batched_tokens = max_num_batched_tokens;
+        self
+    }
+
+    /// Sets the maximum decode steps before a waiting prefill batch is admitted.
+    pub fn with_max_decode_steps_before_prefill(
+        mut self,
+        max_decode_steps_before_prefill: NonZeroUsize,
+    ) -> Self {
+        self.max_decode_steps_before_prefill = max_decode_steps_before_prefill;
         self
     }
 
@@ -711,13 +741,20 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = init_cache_config(
-            self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
-            self.paged_cache_type,
-            !paged_attn,
+        let cache_config = reserve_external_mtp_memory(
+            init_cache_config(
+                self.paged_attn_block_size,
+                self.paged_attn_gpu_mem,
+                self.paged_attn_gpu_mem_usage,
+                self.paged_ctxt_len,
+                self.paged_cache_type,
+                !paged_attn,
+            )?
+            .map(|config| config.with_serving_capacity(self.max_seqs))
+            .transpose()?,
+            self.mtp_config.as_ref(),
+            &dtype,
+            &device,
         )?;
 
         // Clone values needed for loader config before they're moved
@@ -764,7 +801,14 @@ impl MistralRsForServerBuilder {
                 ))?;
         }
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config = init_scheduler_config(
+            &cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.max_num_batched_tokens.get(),
+            self.max_decode_steps_before_prefill.get(),
+        )
+        .await;
 
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
@@ -881,8 +925,10 @@ impl MistralRsForServerBuilder {
             self.paged_ctxt_len,
             self.paged_cache_type,
             !paged_attn,
-        )?;
-        let paged_kv_plan = plan_paged_kv(
+        )?
+        .map(|config| config.with_serving_capacity(self.max_seqs))
+        .transpose()?;
+        let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
                 .iter()
@@ -893,6 +939,10 @@ impl MistralRsForServerBuilder {
                 .collect::<Vec<_>>(),
             Default::default(),
         )?;
+        if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
+            *first =
+                reserve_external_mtp_memory(*first, self.mtp_config.as_ref(), &dtype, &device)?;
+        }
         let first_cache_config = paged_kv_plan.paged_attn[0];
 
         let isq = first_model
@@ -950,8 +1000,14 @@ impl MistralRsForServerBuilder {
         }
         loaded_model_ids.push(first_primary_id.clone());
 
-        let scheduler_config =
-            init_scheduler_config(&first_cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config = init_scheduler_config(
+            &first_cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.max_num_batched_tokens.get(),
+            self.max_decode_steps_before_prefill.get(),
+        )
+        .await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
         let first_loader_config = ModelLoaderConfig {
@@ -1068,6 +1124,8 @@ impl MistralRsForServerBuilder {
                 &paged_kv_plan.paged_attn[model_index],
                 &pipeline,
                 self.max_seqs,
+                self.max_num_batched_tokens.get(),
+                self.max_decode_steps_before_prefill.get(),
             )
             .await;
 
@@ -1358,12 +1416,16 @@ async fn init_scheduler_config(
     cache_config: &Option<PagedAttentionConfig>,
     pipeline: &LoadedPipeline,
     args_max_seqs: usize,
+    max_num_batched_tokens: usize,
+    max_decode_steps_before_prefill: usize,
 ) -> SchedulerConfig {
     if cache_config.is_some() {
         // Handle case where we may have device mapping
         if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: args_max_seqs,
+                max_num_batched_tokens,
+                max_decode_steps_before_prefill,
                 config: cache_config.clone(),
             }
         } else {

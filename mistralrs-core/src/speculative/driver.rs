@@ -14,12 +14,25 @@ use crate::IntervalLogger;
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
 use super::proposer::{SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposeBatchCtx};
 use super::staging::{staged_batch_state, StagedBatchState};
-use super::verifier::{finish_verified_step, VerificationOutcome};
+use super::verifier::{finish_verified_step, VerificationInput, VerificationOutcome};
+#[cfg(feature = "cuda")]
+use super::verifier::{greedy_device_verify_batch, GreedyDeviceVerifyInput};
+use super::{SpeculativeBatchObservation, SpeculativeBatchPlan};
+
+struct PreparedVerification {
+    base_len: usize,
+    proposal: Vec<u32>,
+    proposal_logits: Option<Tensor>,
+}
 
 pub trait SpeculativePipelineExt: Pipeline {
     fn has_speculative_proposer(&self) -> bool;
 
-    fn speculative_proposal_len(&self) -> Option<usize>;
+    fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan>;
+
+    fn speculative_observe(&self, observation: SpeculativeBatchObservation);
+
+    fn speculative_bypass(&mut self, seq_ids: &[usize]);
 
     fn speculative_target_hiddens(&self, rows: &[(usize, usize)]) -> Result<Option<Tensor>>;
 
@@ -88,6 +101,13 @@ where
         StagedBatchState::Mixed => {
             trim_mixed_staged_allocations(seqs, cache)?;
             clear_staged_speculative_tokens(seqs);
+            let Some(plan) = target.speculative_plan(seqs.len()) else {
+                return Ok(false);
+            };
+            if plan.proposal_len == 0 {
+                mark_batch_bypassed(target, seqs);
+                return Ok(false);
+            }
             bootstrap_staged_batch(
                 target,
                 seqs,
@@ -96,11 +116,19 @@ where
                 disable_eos_stop,
                 rng,
                 cache,
+                plan,
             )
             .await?;
             Ok(true)
         }
         StagedBatchState::None => {
+            let Some(plan) = target.speculative_plan(seqs.len()) else {
+                return Ok(false);
+            };
+            if plan.proposal_len == 0 {
+                mark_batch_bypassed(target, seqs);
+                return Ok(false);
+            }
             bootstrap_staged_batch(
                 target,
                 seqs,
@@ -109,6 +137,7 @@ where
                 disable_eos_stop,
                 rng,
                 cache,
+                plan,
             )
             .await?;
             Ok(true)
@@ -143,6 +172,7 @@ async fn bootstrap_staged_batch<P, C>(
     disable_eos_stop: bool,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
+    plan: SpeculativeBatchPlan,
 ) -> Result<()>
 where
     P: SpeculativePipelineExt,
@@ -192,6 +222,7 @@ where
         &hidden_rows,
         rng,
         cache,
+        Some(plan),
     )
 }
 
@@ -211,14 +242,12 @@ where
     P: SpeculativePipelineExt,
     C: SpeculativeCacheAccess,
 {
-    let mut outcomes: Vec<Option<VerificationOutcome>> = Vec::with_capacity(seqs.len());
+    let mut prepared = Vec::with_capacity(seqs.len());
     let mut cache_guards: Vec<Option<C::Guard>> = Vec::with_capacity(seqs.len());
-    let mut cache_outcomes: Vec<Option<SpeculativeCacheOutcome>> = Vec::with_capacity(seqs.len());
-    for (seq, logits) in seqs.iter_mut().zip(logits.iter()) {
+    for seq in seqs.iter_mut() {
         let Some(base_len) = seq.get_toks().len().checked_sub(1) else {
             cache_guards.push(None);
-            cache_outcomes.push(None);
-            outcomes.push(None);
+            prepared.push(None);
             continue;
         };
         let proposal = seq.take_staged_speculative_tokens();
@@ -229,23 +258,72 @@ where
             }
             seq.clear_staged_speculative_tokens();
             cache_guards.push(None);
-            cache_outcomes.push(None);
-            outcomes.push(None);
+            prepared.push(None);
             continue;
         }
 
-        let cache_guard = cache.guard_for_reserved(*seq.id(), base_len, staged_len + 1);
+        cache_guards.push(Some(cache.guard_for_reserved(
+            *seq.id(),
+            base_len,
+            staged_len + 1,
+        )));
+        prepared.push(Some(PreparedVerification {
+            base_len,
+            proposal,
+            proposal_logits,
+        }));
+    }
+
+    #[cfg(feature = "cuda")]
+    let mut device_tokens = {
+        let active_indices = prepared
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, prepared)| prepared.as_ref().map(|_| idx))
+            .collect::<Vec<_>>();
+        let inputs = active_indices
+            .iter()
+            .map(|&idx| GreedyDeviceVerifyInput {
+                seq: seqs[idx],
+                logits: &logits[idx],
+            })
+            .collect::<Vec<_>>();
+        let verified = greedy_device_verify_batch(&inputs)?;
+        let mut aligned = std::iter::repeat_with(|| None)
+            .take(seqs.len())
+            .collect::<Vec<_>>();
+        for (idx, tokens) in active_indices.into_iter().zip(verified) {
+            aligned[idx] = tokens;
+        }
+        aligned
+    };
+    #[cfg(not(feature = "cuda"))]
+    let mut device_tokens = std::iter::repeat_with(|| None)
+        .take(seqs.len())
+        .collect::<Vec<Option<Vec<u32>>>>();
+
+    let mut outcomes: Vec<Option<VerificationOutcome>> = Vec::with_capacity(seqs.len());
+    let mut cache_outcomes: Vec<Option<SpeculativeCacheOutcome>> = Vec::with_capacity(seqs.len());
+    for (idx, (seq, logits)) in seqs.iter_mut().zip(logits.iter()).enumerate() {
+        let Some(prepared) = prepared[idx].take() else {
+            cache_outcomes.push(None);
+            outcomes.push(None);
+            continue;
+        };
         let outcome = finish_verified_step(
             target,
             seq,
-            logits.clone(),
-            proposal,
-            proposal_logits,
-            base_len,
+            VerificationInput {
+                verify_logits: logits.clone(),
+                proposal: prepared.proposal,
+                proposal_logits: prepared.proposal_logits,
+                base_len: prepared.base_len,
+                anchor_to_emit: None,
+                device_tokens: device_tokens[idx].take(),
+            },
             prefix_cacher,
             disable_eos_stop,
             rng.clone(),
-            None,
         )
         .await?;
         let accepted_all = outcome.accepted_drafts == outcome.proposed_drafts;
@@ -253,7 +331,6 @@ where
             keep_len: outcome.keep_len,
             accepted_all,
         }));
-        cache_guards.push(Some(cache_guard));
         outcomes.push(Some(outcome));
     }
     cache.finish_verification_batch(&mut cache_guards, seqs, &cache_outcomes)?;
@@ -301,6 +378,15 @@ where
         num_accepted_tokens,
         &accepted_per_pos,
     );
+    if num_drafts > 0 {
+        target.speculative_observe(SpeculativeBatchObservation {
+            batch_size: seqs.len(),
+            proposal_len: staged_len,
+            accepted_drafts: num_accepted_tokens,
+            sequences: num_drafts,
+            proposed_drafts: num_draft_tokens,
+        });
+    }
     for (idx, outcome) in outcomes.iter().enumerate() {
         let Some(outcome) = outcome else {
             continue;
@@ -323,6 +409,7 @@ where
         &hidden_rows,
         rng,
         cache,
+        None,
     )
 }
 
@@ -336,6 +423,7 @@ fn propose_and_stage_batch<P, C>(
     hidden_rows: &[(usize, usize)],
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     cache: &C,
+    plan: Option<SpeculativeBatchPlan>,
 ) -> Result<()>
 where
     P: SpeculativePipelineExt,
@@ -358,11 +446,17 @@ where
     if active_indices.is_empty() {
         return Ok(());
     }
-    let Some(proposal_len) = target.speculative_proposal_len() else {
+    let Some(plan) = plan.or_else(|| target.speculative_plan(active_indices.len())) else {
         clear_active_staged(seqs, active_indices);
         return Ok(());
     };
+    let proposal_len = plan.proposal_len;
     if proposal_len == 0 {
+        let seq_ids = active_indices
+            .iter()
+            .map(|idx| *seqs[*idx].id())
+            .collect::<Vec<_>>();
+        target.speculative_bypass(&seq_ids);
         clear_active_staged(seqs, active_indices);
         return Ok(());
     }
@@ -379,12 +473,16 @@ where
         return Ok(());
     }
 
-    let target_hiddens = match target.speculative_target_hiddens(hidden_rows)? {
-        Some(hidden) => Some(hidden),
-        None => {
-            clear_active_staged(seqs, active_indices);
-            return Ok(());
+    let target_hiddens = if plan.needs_target_hiddens {
+        match target.speculative_target_hiddens(hidden_rows)? {
+            Some(hidden) => Some(hidden),
+            None => {
+                clear_active_staged(seqs, active_indices);
+                return Ok(());
+            }
         }
+    } else {
+        None
     };
 
     let seq_ids = active_indices
@@ -401,6 +499,7 @@ where
             .map(|(batch_idx, accepted)| (*batch_idx, accepted + 1))
             .collect::<Vec<_>>();
         target.speculative_propose(SpeculativeProposeBatchCtx {
+            proposal_len,
             sampled_tokens,
             sampled_tokens_emitted: true,
             seq_ids: &seq_ids,
@@ -434,6 +533,14 @@ where
     }
 
     Ok(())
+}
+
+fn mark_batch_bypassed<P>(target: &mut P, seqs: &[&mut Sequence])
+where
+    P: SpeculativePipelineExt,
+{
+    let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
+    target.speculative_bypass(&seq_ids);
 }
 
 fn clear_active_staged(seqs: &mut [&mut Sequence], active_indices: &[usize]) {

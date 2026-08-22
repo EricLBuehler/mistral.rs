@@ -198,7 +198,9 @@ loads, [save the result as UQFF](/guides/quantization/uqff/).
 - **AFQ** (`afq2`-`afq8`): affine quantization optimized for Apple Silicon. Runs on Metal
   (native kernels), CUDA (dedicated backend), and CPU (fallback).
 - **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
-- **FP8** (`fp8`): native FP8 matmul on NVIDIA compute capability 8.9+.
+- **FP8** (`fp8`): E4M3 weights on CUDA. Published block-scaled checkpoints load their original
+  scales and activation scheme; Hopper uses a CUTLASS W8A8 provider for 128x128 weights with
+  dynamic 1x128 activation scaling.
 - **F8Q8** (`f8q8`): CPU-only 8-bit format.
 - **MXFP4** (4-bit microscaling): CUDA and Metal; CPU is not supported.
 - **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.

@@ -659,6 +659,7 @@ impl DecoderLayer {
                 let mut segment_cache = GdnLayerCache {
                     conv_state: cache.conv_state.narrow(0, segment.state_index, 1)?,
                     recurrent_state: cache.recurrent_state.narrow(0, segment.state_index, 1)?,
+                    state_layout: cache.state_layout,
                     slots: None,
                 };
                 outputs.push(mistralrs_quant::with_lora_execution_row_range(
@@ -890,11 +891,11 @@ impl Model {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
                 recurrent_dtype: Some(DType::F32),
             },
         };
@@ -1064,6 +1065,7 @@ impl Model {
                             GdnLayerCache::gathered(
                                 pool.gather_conv_state(&indices)?,
                                 pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
                             )
                         } else {
                             GdnLayerCache::checkout(pool, &indices)?

@@ -1,14 +1,24 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt,
+    ptr::NonNull,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+};
 
-use candle_core::cuda_backend::cudarc::driver::{sys, CudaStream};
-use candle_core::{DType, Device, DeviceLocation, Tensor, Var};
+use candle_core::cuda_backend::cudarc::driver::{
+    sys, CudaEvent, CudaStream, DevicePtr, PinnedHostSlice,
+};
+use candle_core::{DType, Device, DeviceLocation, Storage, Tensor, Var};
 
 #[cfg(target_family = "unix")]
 use crate::paged_attention::plan::DecodePlan;
 use crate::{
     flashinfer::{
-        FlashInferMetadata, FlashInferPagedAttentionView, FlashInferPagedAttentionViews,
-        FlashInferPagedKv, FlashInferTilePlan,
+        make_fa3_decode_state, Fa3DecodeState, FlashInferMetadata, FlashInferPagedAttentionView,
+        FlashInferPagedAttentionViews, FlashInferPagedKv, FlashInferTilePlan,
     },
     paged_attention::{AttentionBackendKind, ModelConfigLike},
 };
@@ -18,7 +28,8 @@ use crate::kv_cache::HybridCache;
 use crate::paged_attention::_PAD_SLOT_ID;
 use crate::pipeline::{
     text_models_inputs_processor::{
-        make_flash_params, DecodePagedRows, FlashParams, PagedAttentionInputMetadata,
+        make_flash_params, DecodePagedRows, DecodePagedRowsGraphKey, FlashParams,
+        PagedAttentionInputMetadata, PagedDecodeMetadataRequirements,
     },
     text_positions_tensor, DecodeGraphPrecaptureCtx,
 };
@@ -32,6 +43,17 @@ pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 // Batches up to this size get their own graph; larger ones pad up to the next power of two.
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
+pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
+const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
+const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
+static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
+static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
+    OnceLock::new();
+
+struct MemoryPoolScopeState {
+    guards: usize,
+    release_threshold: u64,
+}
 
 /// Graph batch bucket a decode batch pads up to, or None when it is too large to graph.
 pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
@@ -46,13 +68,42 @@ pub(crate) fn cuda_graph_batch_bucket(batch: usize) -> Option<usize> {
 }
 
 /// The batch buckets captured ahead of time at load.
-pub(crate) fn cuda_graph_precapture_batches() -> std::ops::RangeInclusive<usize> {
-    1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS
+pub(crate) fn cuda_graph_precapture_batches() -> impl Iterator<Item = usize> {
+    (1..=CUDA_GRAPH_EXACT_BATCH_BUCKETS).chain(std::iter::once(CUDA_GRAPH_PRECAPTURE_MAX_BATCH))
 }
 
-/// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for every read, skip
-/// their KV writes and point at the hybrid pad slot, so the model can run them and their outputs be
-/// dropped.
+pub(crate) fn cuda_graph_startup_capture_allowed(
+    has_speculative_proposer: bool,
+    q_len: usize,
+) -> bool {
+    q_len > 0 && (q_len == 1 || !has_speculative_proposer)
+}
+
+pub(crate) fn prepare_fa3_decode_schedules(
+    metadata: &PagedAttentionInputMetadata,
+) -> candle_core::Result<()> {
+    let Some(flashinfer) = metadata.flashinfer.as_ref() else {
+        return Ok(());
+    };
+    flashinfer.for_each_fa3_decode_schedule(|prepare| {
+        mistralrs_paged_attn::fa3_prepare_decode_metadata(
+            mistralrs_paged_attn::Fa3DecodeMetadata {
+                paged_kv_indptr: prepare.paged_kv_indptr,
+                paged_kv_indices: prepare.paged_kv_indices,
+                paged_kv_last_page_len: prepare.paged_kv_last_page_len,
+                page_table: &prepare.buffers.page_table,
+                seqused_k: &prepare.buffers.seqused_k,
+                cu_seqlens_q: &prepare.buffers.cu_seqlens_q,
+                scheduler_metadata: &prepare.buffers.scheduler_metadata,
+            },
+            prepare.buffers.schedule(prepare.key)?,
+        )
+    })
+}
+
+/// One decode step, padded up to its graph batch bucket. Pad rows alias row 0 for reads and skip
+/// their KV and recurrent writes, so the model can run them and drop their outputs.
+#[derive(Clone)]
 pub(crate) struct CudaGraphDecodeStep {
     pub(crate) input_ids: Tensor,
     pub(crate) seqlen_offsets: Vec<usize>,
@@ -155,6 +206,134 @@ impl CudaGraphDecodeStep {
         let rows = tensor.dim(0)? / batch * self.real_batch;
         tensor.narrow(0, 0, rows)
     }
+
+    fn one_token_continuation(&self, input_ids: Tensor) -> candle_core::Result<Option<Self>> {
+        let (batch, q_len) = input_ids.dims2()?;
+        let Some(rows) = self.metadata.decode_rows.as_ref() else {
+            return Ok(None);
+        };
+        if q_len != 1
+            || rows.query_len != 1
+            || rows.decode_window != 1
+            || batch != self.batch()
+            || rows.batch_size() != batch
+            || self.real_batch == 0
+            || self.real_batch > batch
+            || self.seqlen_offsets.len() != batch
+            || self.context_lens.len() != batch
+            || self.position_ids.len() != batch
+        {
+            return Ok(None);
+        }
+
+        let mut slot_mappings = Vec::with_capacity(self.real_batch);
+        let mut block_tables = Vec::with_capacity(self.real_batch);
+        let mut context_lens = Vec::with_capacity(self.real_batch);
+        let mut full_block_tables = Vec::with_capacity(self.real_batch);
+        let mut full_context_lens = Vec::with_capacity(self.real_batch);
+        for row in 0..self.real_batch {
+            let Some(&current_slot) = rows.slot_mappings[row].first() else {
+                return Ok(None);
+            };
+            let Ok(current_slot) = usize::try_from(current_slot) else {
+                return Ok(None);
+            };
+            let full_table = &rows.full_block_tables[row];
+            let current_block = current_slot / rows.block_size;
+            let Some(current_block_idx) =
+                full_table.iter().position(|&block| block == current_block)
+            else {
+                return Ok(None);
+            };
+            let current_block_offset = current_slot % rows.block_size;
+            let (next_block_idx, next_slot) = if current_block_offset + 1 < rows.block_size {
+                (current_block_idx, current_slot + 1)
+            } else {
+                let next_block_idx = current_block_idx + 1;
+                let Some(&next_block) = full_table.get(next_block_idx) else {
+                    return Ok(None);
+                };
+                let Some(next_slot) = next_block.checked_mul(rows.block_size) else {
+                    return Ok(None);
+                };
+                (next_block_idx, next_slot)
+            };
+            let Ok(next_slot) = i64::try_from(next_slot) else {
+                return Ok(None);
+            };
+            let Some(next_full_context_len) = rows.full_context_lens[row].checked_add(1) else {
+                return Ok(None);
+            };
+
+            let (paged_table, paged_context_len) = match rows.sliding_window {
+                Some(window) => {
+                    let window_start = next_full_context_len.saturating_sub(window);
+                    let block_aligned_start = window_start / rows.block_size * rows.block_size;
+                    let paged_context_len = next_full_context_len - block_aligned_start;
+                    let needed_blocks = paged_context_len.div_ceil(rows.block_size);
+                    let table_end = next_block_idx + 1;
+                    let table_start = table_end.saturating_sub(needed_blocks);
+                    (
+                        full_table[table_start..table_end].to_vec(),
+                        paged_context_len,
+                    )
+                }
+                None => (full_table.clone(), next_full_context_len),
+            };
+            slot_mappings.push(vec![next_slot]);
+            block_tables.push(paged_table);
+            context_lens.push(paged_context_len);
+            full_block_tables.push(full_table.clone());
+            full_context_lens.push(next_full_context_len);
+        }
+
+        let rows = Arc::new(
+            DecodePagedRows {
+                slot_mappings,
+                block_tables,
+                context_lens,
+                full_block_tables,
+                full_context_lens,
+                query_len: 1,
+                block_size: rows.block_size,
+                use_standard_metadata: rows.use_standard_metadata,
+                max_paged_context_len: rows.max_paged_context_len,
+                sliding_window: rows.sliding_window,
+                decode_window: rows.decode_window,
+                devices: rows.devices.clone(),
+                num_kv_heads: rows.num_kv_heads,
+            }
+            .padded(batch),
+        );
+        let metadata = rows.build_graph_staged().map_err(candle_core::Error::msg)?;
+        let Some(mut seqlen_offsets) = self.seqlen_offsets[..self.real_batch]
+            .iter()
+            .map(|offset| offset.checked_add(1))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        seqlen_offsets.resize(batch, seqlen_offsets[0]);
+        let mut context_lens = self.context_lens[..self.real_batch].to_vec();
+        context_lens.resize(batch, context_lens[0]);
+        let Some(mut position_ids) = self.position_ids[..self.real_batch]
+            .iter()
+            .map(|position| position.checked_add(1))
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        position_ids.resize(batch, position_ids[0]);
+        Ok(Some(Self {
+            input_ids,
+            seqlen_offsets,
+            context_lens,
+            position_ids,
+            metadata,
+            state_indices: self.state_indices.clone(),
+            real_batch: self.real_batch,
+        }))
+    }
 }
 
 /// A fabricated batch-1 decode step (token 0 at position 0 over one block, no KV writes) that the
@@ -193,7 +372,7 @@ impl CudaGraphPrecaptureInputs {
             devices,
             num_kv_heads: ctx.num_kv_heads,
         });
-        let metadata = rows.build().map_err(candle_core::Error::msg)?;
+        let metadata = rows.build_materialized().map_err(candle_core::Error::msg)?;
         let q_len_u32 = u32::try_from(q_len).map_err(candle_core::Error::wrap)?;
         let flash_meta = if crate::using_flash_attn() {
             make_flash_params(
@@ -238,19 +417,17 @@ impl CudaGraphPrecaptureInputs {
 
 pub(crate) struct HybridGraphSlots {
     pub(crate) real: Vec<u32>,
-    pub(crate) pad_slot: u32,
-    // Allocating the pad slot reallocated the pools, invalidating every captured graph
+    // Reserving graph capacity may reallocate the pools, invalidating every captured graph.
     pub(crate) grew: bool,
 }
 
-/// The batch's live recurrent slots plus the scratch slot pad rows write into.
+/// The batch's live recurrent slots after reserving graph capacity.
 pub(crate) fn hybrid_graph_slots(cache: &mut HybridCache) -> Option<HybridGraphSlots> {
     let real = cache.state_indices_host()?.to_vec();
     let capacity = cache.recurrent_capacity();
-    let pad_slot = cache.graph_pad_slot()?;
+    cache.graph_pad_slot()?;
     Some(HybridGraphSlots {
         real,
-        pad_slot: u32::try_from(pad_slot).ok()?,
         grew: cache.recurrent_capacity() != capacity,
     })
 }
@@ -272,13 +449,13 @@ pub(crate) fn install_hybrid_graph_state_indices(
     Ok(vars)
 }
 
-fn copy_state_indices(dst: &CudaGraphVarMap, host: &[u32]) -> candle_core::Result<()> {
-    for var in dst.values() {
-        var.set(&Tensor::from_vec(
-            host.to_vec(),
-            (host.len(),),
-            var.device(),
-        )?)?;
+fn copy_state_indices(
+    dst: &CudaGraphVarMap,
+    host: &[u32],
+    host_staging: &mut CudaGraphHostStaging,
+) -> candle_core::Result<()> {
+    for (location, var) in dst {
+        host_staging.copy_from_u32_slice("state_indices", *location, host, var)?;
     }
     Ok(())
 }
@@ -356,6 +533,10 @@ impl CudaGraphHandle {
         let _ = self.stream.context().check_err();
         Ok(())
     }
+
+    pub(crate) fn stream(&self) -> &Arc<CudaStream> {
+        &self.stream
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -366,6 +547,7 @@ pub(crate) struct CudaDecodeGraphKey {
     max_context_len: Option<usize>,
     full_max_context_len: Option<usize>,
     tensors: Vec<CudaGraphTensorKey>,
+    decode_rows: Option<DecodePagedRowsGraphKey>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -382,6 +564,68 @@ type FlashInferDecodeScratchMaps = (
     Option<HashMap<DeviceLocation, Tensor>>,
 );
 
+struct CudaGraphPinnedAllocation<T> {
+    allocation: PinnedHostSlice<T>,
+    ptr: NonNull<T>,
+}
+
+// The allocation owns the pointer and all accesses require an exclusive borrow.
+unsafe impl<T: Send> Send for CudaGraphPinnedAllocation<T> {}
+
+impl<T> CudaGraphPinnedAllocation<T> {
+    fn as_mut_slice(&mut self) -> &mut [T] {
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr(), self.allocation.len()) }
+    }
+
+    fn as_ptr(&self) -> *const T {
+        self.ptr.as_ptr()
+    }
+}
+
+enum CudaGraphPinnedData {
+    U8(CudaGraphPinnedAllocation<u8>),
+    U32(CudaGraphPinnedAllocation<u32>),
+    I32(CudaGraphPinnedAllocation<i32>),
+    I64(CudaGraphPinnedAllocation<i64>),
+}
+
+struct CudaGraphPinnedBuffer {
+    data: CudaGraphPinnedData,
+    initialized: bool,
+}
+
+struct CudaGraphCopyCompletion {
+    event: CudaEvent,
+    stream: Arc<CudaStream>,
+    pending: bool,
+    active: bool,
+    ordered_after_graph: bool,
+}
+
+pub(crate) struct CudaGraphHostStaging {
+    buffers: HashMap<(&'static str, DeviceLocation), CudaGraphPinnedBuffer>,
+    completions: HashMap<DeviceLocation, CudaGraphCopyCompletion>,
+    graph_complete: CudaEvent,
+    graph_stream: Arc<CudaStream>,
+    graph_pending: bool,
+}
+
+fn same_cuda_stream(left: &CudaStream, right: &CudaStream) -> bool {
+    Arc::ptr_eq(left.context(), right.context()) && left.cu_stream() == right.cu_stream()
+}
+
+impl Drop for CudaGraphHostStaging {
+    fn drop(&mut self) {
+        for completion in self.completions.values() {
+            if completion.pending {
+                let _ = completion.event.synchronize();
+            } else if completion.active {
+                let _ = completion.stream.synchronize();
+            }
+        }
+    }
+}
+
 pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) key: CudaDecodeGraphKey,
     pub(crate) input_ids: &'a Tensor,
@@ -390,12 +634,15 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) kv_cache: &'a [(Tensor, Tensor)],
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
     pub(crate) model_metadata: Option<&'a (dyn ModelConfigLike + Send + Sync)>,
+    pub(crate) activation_dtype: DType,
     pub(crate) warmup_logits: &'a Tensor,
     pub(crate) state_indices: Option<CudaGraphVarMap>,
     pub(crate) real_batch: usize,
 }
 
 pub(crate) struct CudaDecodeGraphMetadataBuffers {
+    requirements: PagedDecodeMetadataRequirements,
+    flashinfer_views_alias: bool,
     slot_mappings: CudaGraphVarMap,
     block_tables: Option<CudaGraphVarMap>,
     context_lens: Option<CudaGraphVarMap>,
@@ -419,6 +666,7 @@ pub(crate) struct CudaDecodeGraphMetadataBuffers {
     full_paged_kv_block_valid_mask: Option<CudaGraphVarMap>,
     flashinfer_decode_tmp_v: Option<HashMap<DeviceLocation, Tensor>>,
     flashinfer_decode_tmp_s: Option<HashMap<DeviceLocation, Tensor>>,
+    fa3_decode: Option<Fa3DecodeState>,
     rope_positions: CudaGraphVarMap,
 }
 
@@ -428,100 +676,27 @@ impl CudaDecodeGraphKey {
         metadata: &PagedAttentionInputMetadata,
         block_size: usize,
     ) -> candle_core::Result<Self> {
+        let decode_rows = metadata.decode_rows.as_ref().map(|rows| rows.graph_key());
         let mut tensors = Vec::new();
-        push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
-        push_graph_tensor_keys("block_tables", metadata.block_tables.as_ref(), &mut tensors);
-        push_graph_tensor_keys("context_lens", metadata.context_lens.as_ref(), &mut tensors);
-        push_graph_tensor_keys(
-            "full_block_tables",
-            metadata.full_block_tables.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_context_lens",
-            metadata.full_context_lens.as_ref(),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_indptr",
-            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_indices",
-            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_last_page_len",
-            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_indptr",
-            flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_indices",
-            flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_last_page_len",
-            flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_request_indices",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_tile_indices",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_o_indptr",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_chunk_size",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "paged_kv_block_valid_mask",
-            flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_request_indices",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_tile_indices",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_o_indptr",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_chunk_size",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
-            &mut tensors,
-        );
-        push_graph_tensor_keys(
-            "full_paged_kv_block_valid_mask",
-            flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-            &mut tensors,
-        );
+        if decode_rows.is_none() {
+            push_graph_tensor_keys("slot_mappings", Some(&metadata.slot_mappings), &mut tensors);
+            push_graph_tensor_keys("block_tables", metadata.block_tables.as_ref(), &mut tensors);
+            push_graph_tensor_keys("context_lens", metadata.context_lens.as_ref(), &mut tensors);
+            push_graph_tensor_keys(
+                "full_block_tables",
+                metadata.full_block_tables.as_ref(),
+                &mut tensors,
+            );
+            push_graph_tensor_keys(
+                "full_context_lens",
+                metadata.full_context_lens.as_ref(),
+                &mut tensors,
+            );
+            push_flashinfer_graph_tensor_keys(metadata, &mut tensors);
+            if flashinfer_views_alias(metadata) {
+                tensors.retain(|tensor| !tensor.name.starts_with("full_"));
+            }
+        }
         tensors.sort_by(|a, b| {
             a.name.cmp(b.name).then_with(|| {
                 device_location_sort_key(&a.location).cmp(&device_location_sort_key(&b.location))
@@ -532,15 +707,26 @@ impl CudaDecodeGraphKey {
             device: input_ids.device().location(),
             input_shape: input_ids.dims().to_vec(),
             input_dtype: input_ids.dtype(),
-            max_context_len: graph_context_len(
-                metadata.max_context_len,
-                bucket_context_len(metadata.block_tables.as_ref(), block_size),
-            ),
-            full_max_context_len: graph_context_len(
-                metadata.full_max_context_len,
-                bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
-            ),
+            max_context_len: decode_rows
+                .is_none()
+                .then(|| {
+                    graph_context_len(
+                        metadata.max_context_len,
+                        bucket_context_len(metadata.block_tables.as_ref(), block_size),
+                    )
+                })
+                .flatten(),
+            full_max_context_len: decode_rows
+                .is_none()
+                .then(|| {
+                    graph_context_len(
+                        metadata.full_max_context_len,
+                        bucket_context_len(metadata.full_block_tables.as_ref(), block_size),
+                    )
+                })
+                .flatten(),
             tensors,
+            decode_rows,
         })
     }
 }
@@ -553,6 +739,7 @@ impl CudaDecodeGraphMetadataBuffers {
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
         model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+        activation_dtype: DType,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
         let rope_positions =
@@ -562,13 +749,43 @@ impl CudaDecodeGraphMetadataBuffers {
             seqlen_offsets.len(),
             kv_cache,
             model_metadata,
+            activation_dtype,
         )?;
-        let buffers = Self {
+        let fa3_decode = metadata
+            .flashinfer
+            .as_ref()
+            .map(|flashinfer| {
+                make_fa3_decode_state(
+                    flashinfer,
+                    seqlen_offsets.len(),
+                    kv_cache,
+                    model_metadata,
+                    activation_dtype,
+                )
+            })
+            .transpose()?
+            .flatten();
+        let flashinfer_views_alias = flashinfer_views_alias(metadata);
+        let requirements = PagedDecodeMetadataRequirements::graph(
+            metadata.block_tables.is_some(),
+            metadata.context_lens.is_some(),
+            metadata.flashinfer.is_some(),
+            metadata.flashinfer.is_some(),
+        );
+        let mut buffers = Self {
+            requirements,
+            flashinfer_views_alias,
             slot_mappings,
             block_tables: option_var_map_from_tensor_map(metadata.block_tables.as_ref())?,
             context_lens: option_var_map_from_tensor_map(metadata.context_lens.as_ref())?,
-            full_block_tables: option_var_map_from_tensor_map(metadata.full_block_tables.as_ref())?,
-            full_context_lens: option_var_map_from_tensor_map(metadata.full_context_lens.as_ref())?,
+            full_block_tables: option_var_map_from_tensor_map_if_distinct(
+                metadata.full_block_tables.as_ref(),
+                flashinfer_views_alias,
+            )?,
+            full_context_lens: option_var_map_from_tensor_map_if_distinct(
+                metadata.full_context_lens.as_ref(),
+                flashinfer_views_alias,
+            )?,
             paged_kv_indptr: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
             )?,
@@ -578,14 +795,17 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_last_page_len: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
             )?,
-            full_paged_kv_indptr: option_var_map_from_tensor_map(
+            full_paged_kv_indptr: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_indices: option_var_map_from_tensor_map(
+            full_paged_kv_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_last_page_len: option_var_map_from_tensor_map(
+            full_paged_kv_last_page_len: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
+                flashinfer_views_alias,
             )?,
             paged_kv_request_indices: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
@@ -602,145 +822,187 @@ impl CudaDecodeGraphMetadataBuffers {
             paged_kv_block_valid_mask: option_var_map_from_tensor_map(
                 flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
             )?,
-            full_paged_kv_request_indices: option_var_map_from_tensor_map(
+            full_paged_kv_request_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_tile_indices: option_var_map_from_tensor_map(
+            full_paged_kv_tile_indices: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_o_indptr: option_var_map_from_tensor_map(
+            full_paged_kv_o_indptr: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_chunk_size: option_var_map_from_tensor_map(
+            full_paged_kv_chunk_size: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
+                flashinfer_views_alias,
             )?,
-            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map(
+            full_paged_kv_block_valid_mask: option_var_map_from_tensor_map_if_distinct(
                 flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
+                flashinfer_views_alias,
             )?,
             flashinfer_decode_tmp_v,
             flashinfer_decode_tmp_s,
+            fa3_decode,
             rope_positions,
         };
+        if flashinfer_views_alias {
+            buffers.full_block_tables = buffers.block_tables.clone();
+            buffers.full_context_lens = buffers.context_lens.clone();
+            buffers.full_paged_kv_indptr = buffers.paged_kv_indptr.clone();
+            buffers.full_paged_kv_indices = buffers.paged_kv_indices.clone();
+            buffers.full_paged_kv_last_page_len = buffers.paged_kv_last_page_len.clone();
+            buffers.full_paged_kv_request_indices = buffers.paged_kv_request_indices.clone();
+            buffers.full_paged_kv_tile_indices = buffers.paged_kv_tile_indices.clone();
+            buffers.full_paged_kv_o_indptr = buffers.paged_kv_o_indptr.clone();
+            buffers.full_paged_kv_chunk_size = buffers.paged_kv_chunk_size.clone();
+            buffers.full_paged_kv_block_valid_mask = buffers.paged_kv_block_valid_mask.clone();
+        }
         let metadata = buffers.metadata_from(metadata, block_size);
         Ok((buffers, metadata))
     }
 
-    pub(crate) fn copy_from(
+    fn finish_capture(&mut self, metadata: &PagedAttentionInputMetadata) {
+        let tile_plan_used = metadata
+            .flashinfer
+            .as_ref()
+            .is_some_and(FlashInferMetadata::decode_tile_plan_was_used);
+        self.requirements = PagedDecodeMetadataRequirements::graph(
+            self.block_tables.is_some(),
+            self.context_lens.is_some(),
+            self.fa3_decode.is_some() || tile_plan_used,
+            tile_plan_used,
+        );
+    }
+
+    fn copy_from(
         &mut self,
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
         seq_len: usize,
+        host_staging: &mut CudaGraphHostStaging,
     ) -> candle_core::Result<()> {
+        let graph_update = if metadata.has_host_staged_decode_tensors() {
+            Some(
+                metadata
+                    .decode_rows
+                    .as_ref()
+                    .expect("host-staged decode metadata requires source rows")
+                    .build_graph_update(self.requirements)
+                    .map_err(candle_core::Error::msg)?,
+            )
+        } else {
+            None
+        };
+        let metadata = graph_update.as_ref().unwrap_or(metadata);
         copy_var_map(
             &self.slot_mappings,
             &metadata.slot_mappings,
             "slot_mappings",
+            host_staging,
         )?;
-        copy_option_var_map(
-            &self.context_lens,
-            metadata.context_lens.as_ref(),
-            "context_lens",
-        )?;
-        copy_option_var_map(
-            &self.full_context_lens,
-            metadata.full_context_lens.as_ref(),
-            "full_context_lens",
-        )?;
-        copy_option_var_map(
-            &self.paged_kv_last_page_len,
-            flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
-            "paged_kv_last_page_len",
-        )?;
-        copy_option_var_map(
-            &self.full_paged_kv_last_page_len,
-            flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
-            "full_paged_kv_last_page_len",
-        )?;
-        {
+        if self.requirements.context_lens {
+            copy_option_var_map(
+                &self.context_lens,
+                metadata.context_lens.as_ref(),
+                "context_lens",
+                host_staging,
+            )?;
+            if !self.flashinfer_views_alias {
+                copy_option_var_map(
+                    &self.full_context_lens,
+                    metadata.full_context_lens.as_ref(),
+                    "full_context_lens",
+                    host_staging,
+                )?;
+            }
+        }
+        if self.requirements.block_tables {
             copy_option_var_map(
                 &self.block_tables,
                 metadata.block_tables.as_ref(),
                 "block_tables",
+                host_staging,
+            )?;
+            if !self.flashinfer_views_alias {
+                copy_option_var_map(
+                    &self.full_block_tables,
+                    metadata.full_block_tables.as_ref(),
+                    "full_block_tables",
+                    host_staging,
+                )?;
+            }
+        }
+        if self.requirements.flashinfer_paged_kv {
+            copy_option_var_map(
+                &self.paged_kv_last_page_len,
+                flashinfer_paged_view(metadata).map(|view| &view.paged_kv.last_page_len),
+                "paged_kv_last_page_len",
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indptr,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indptr),
                 "paged_kv_indptr",
+                host_staging,
             )?;
             copy_option_var_map(
                 &self.paged_kv_indices,
                 flashinfer_paged_view(metadata).map(|view| &view.paged_kv.indices),
                 "paged_kv_indices",
+                host_staging,
             )?;
-            copy_option_var_map(
-                &self.paged_kv_request_indices,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.request_indices),
-                "paged_kv_request_indices",
-            )?;
-            copy_option_var_map(
-                &self.paged_kv_tile_indices,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
-                "paged_kv_tile_indices",
-            )?;
-            copy_option_var_map(
-                &self.paged_kv_o_indptr,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.o_indptr),
-                "paged_kv_o_indptr",
-            )?;
-            copy_option_var_map(
-                &self.paged_kv_chunk_size,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
-                "paged_kv_chunk_size",
-            )?;
-            copy_option_var_map(
-                &self.paged_kv_block_valid_mask,
-                flashinfer_paged_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-                "paged_kv_block_valid_mask",
-            )?;
+            if !self.flashinfer_views_alias {
+                copy_option_var_map(
+                    &self.full_paged_kv_last_page_len,
+                    flashinfer_full_view(metadata).map(|view| &view.paged_kv.last_page_len),
+                    "full_paged_kv_last_page_len",
+                    host_staging,
+                )?;
+                copy_option_var_map(
+                    &self.full_paged_kv_indptr,
+                    flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
+                    "full_paged_kv_indptr",
+                    host_staging,
+                )?;
+                copy_option_var_map(
+                    &self.full_paged_kv_indices,
+                    flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
+                    "full_paged_kv_indices",
+                    host_staging,
+                )?;
+            }
         }
-        {
-            copy_option_var_map(
-                &self.full_block_tables,
-                metadata.full_block_tables.as_ref(),
-                "full_block_tables",
+        if self.requirements.flashinfer_tile_plan {
+            copy_flashinfer_tile_plan(
+                metadata,
+                false,
+                FlashInferTilePlanVars {
+                    request_indices: &self.paged_kv_request_indices,
+                    kv_tile_indices: &self.paged_kv_tile_indices,
+                    o_indptr: &self.paged_kv_o_indptr,
+                    kv_chunk_size: &self.paged_kv_chunk_size,
+                    block_valid_mask: &self.paged_kv_block_valid_mask,
+                },
+                host_staging,
             )?;
-            copy_option_var_map(
-                &self.full_paged_kv_indptr,
-                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indptr),
-                "full_paged_kv_indptr",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_indices,
-                flashinfer_full_view(metadata).map(|view| &view.paged_kv.indices),
-                "full_paged_kv_indices",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_request_indices,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.request_indices),
-                "full_paged_kv_request_indices",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_tile_indices,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_tile_indices),
-                "full_paged_kv_tile_indices",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_o_indptr,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.o_indptr),
-                "full_paged_kv_o_indptr",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_chunk_size,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.kv_chunk_size),
-                "full_paged_kv_chunk_size",
-            )?;
-            copy_option_var_map(
-                &self.full_paged_kv_block_valid_mask,
-                flashinfer_full_view(metadata).map(|view| &view.tile_plan.block_valid_mask),
-                "full_paged_kv_block_valid_mask",
-            )?;
+            if !self.flashinfer_views_alias {
+                copy_flashinfer_tile_plan(
+                    metadata,
+                    true,
+                    FlashInferTilePlanVars {
+                        request_indices: &self.full_paged_kv_request_indices,
+                        kv_tile_indices: &self.full_paged_kv_tile_indices,
+                        o_indptr: &self.full_paged_kv_o_indptr,
+                        kv_chunk_size: &self.full_paged_kv_chunk_size,
+                        block_valid_mask: &self.full_paged_kv_block_valid_mask,
+                    },
+                    host_staging,
+                )?;
+            }
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len)?;
+        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len, host_staging)?;
         Ok(())
     }
 
@@ -795,11 +1057,16 @@ impl CudaDecodeGraphMetadataBuffers {
             None
         };
 
-        Some(FlashInferMetadata {
-            views: FlashInferPagedAttentionViews { logical, sliding },
-            decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
-            decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
-        })
+        Some(
+            FlashInferMetadata {
+                views: FlashInferPagedAttentionViews { logical, sliding },
+                decode_tmp_v: self.flashinfer_decode_tmp_v.clone(),
+                decode_tmp_s: self.flashinfer_decode_tmp_s.clone(),
+                fa3_decode: self.fa3_decode.clone(),
+                decode_tile_plan_used: None,
+            }
+            .track_decode_tile_plan(),
+        )
     }
 
     fn metadata_from(
@@ -844,9 +1111,111 @@ impl CudaDecodeGraphMetadataBuffers {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct CudaGraphSpecStateUsage {
+    bytes: HashMap<DeviceLocation, usize>,
+    device_totals: HashMap<DeviceLocation, usize>,
+}
+
+impl CudaGraphSpecStateUsage {
+    fn from_state(state: &dyn SpeculativeGraphState) -> candle_core::Result<Self> {
+        let mut usage = Self::default();
+        for tensor in state.tensors() {
+            let location = tensor.device().location();
+            let bytes = tensor
+                .elem_count()
+                .saturating_mul(tensor.dtype().size_in_bytes());
+            usage
+                .bytes
+                .entry(location)
+                .and_modify(|total| *total = total.saturating_add(bytes))
+                .or_insert(bytes);
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                usage.device_totals.entry(location)
+            {
+                let Device::Cuda(device) = tensor.device() else {
+                    candle_core::bail!("CUDA graph speculative state expected CUDA tensors");
+                };
+                let (_, total) = device
+                    .cuda_stream()
+                    .context()
+                    .mem_get_info()
+                    .map_err(candle_core::Error::wrap)?;
+                entry.insert(total);
+            }
+        }
+        Ok(usage)
+    }
+
+    fn total_bytes(&self) -> usize {
+        self.bytes
+            .values()
+            .fold(0usize, |total, bytes| total.saturating_add(*bytes))
+    }
+}
+
+fn default_spec_state_budget(total: usize) -> usize {
+    total.saturating_mul(CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT) / 100
+}
+
+fn configured_spec_state_budget(total: usize) -> usize {
+    std::env::var(CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or_else(|| default_spec_state_budget(total))
+}
+
+fn spec_state_eviction_plan(
+    existing: &[CudaGraphSpecStateUsage],
+    incoming: &CudaGraphSpecStateUsage,
+    budgets: &HashMap<DeviceLocation, usize>,
+) -> Vec<usize> {
+    let mut totals = incoming.bytes.clone();
+    for usage in existing {
+        for (location, bytes) in &usage.bytes {
+            totals
+                .entry(*location)
+                .and_modify(|total| *total = total.saturating_add(*bytes))
+                .or_insert(*bytes);
+        }
+    }
+
+    let mut retained = vec![true; existing.len()];
+    let mut evictions = Vec::new();
+    loop {
+        let over_budget = totals
+            .iter()
+            .filter_map(|(location, bytes)| {
+                (*bytes > budgets.get(location).copied().unwrap_or(usize::MAX)).then_some(*location)
+            })
+            .collect::<Vec<_>>();
+        if over_budget.is_empty() {
+            break;
+        }
+        let Some((idx, usage)) = existing.iter().enumerate().find(|(idx, usage)| {
+            retained[*idx]
+                && over_budget
+                    .iter()
+                    .any(|location| usage.bytes.get(location).is_some_and(|bytes| *bytes > 0))
+        }) else {
+            break;
+        };
+        retained[idx] = false;
+        evictions.push(idx);
+        for (location, bytes) in &usage.bytes {
+            totals
+                .entry(*location)
+                .and_modify(|total| *total = total.saturating_sub(*bytes));
+        }
+    }
+    evictions
+}
+
 pub(crate) struct CudaDecodeGraphEntry {
+    generation: u64,
+    replay_epoch: u64,
     key: CudaDecodeGraphKey,
-    graph: CudaGraphHandle,
+    host_staging: CudaGraphHostStaging,
     input_ids: Var,
     metadata_buffers: CudaDecodeGraphMetadataBuffers,
     state_indices: Option<CudaGraphVarMap>,
@@ -854,28 +1223,231 @@ pub(crate) struct CudaDecodeGraphEntry {
     logits: Tensor,
     // Proposer-facing outputs living in persistent buffers the replay refreshes
     spec_state: Option<Arc<dyn SpeculativeGraphState>>,
+    spec_state_usage: CudaGraphSpecStateUsage,
+    // Must stay last so graph-backed tensors enqueue their frees before the graph exec is destroyed.
+    graph: CudaGraphHandle,
+}
+
+pub struct CudaDecodeGraphLaunch {
+    generation: u64,
+    replay_epoch: u64,
+    key: CudaDecodeGraphKey,
+    input_ids: Tensor,
+    graph_stream: Arc<CudaStream>,
+    real_batch: usize,
+    source: CudaGraphDecodeStep,
+}
+
+impl CudaDecodeGraphLaunch {
+    pub(crate) fn resident_input(&self) -> &Tensor {
+        &self.input_ids
+    }
+
+    pub(crate) fn graph_stream(&self) -> &Arc<CudaStream> {
+        &self.graph_stream
+    }
+
+    #[cfg(test)]
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(crate) fn real_batch(&self) -> usize {
+        self.real_batch
+    }
+
+    fn one_token_continuation(&self) -> candle_core::Result<Option<CudaGraphDecodeStep>> {
+        let Some(continuation) = self.source.one_token_continuation(self.input_ids.clone())? else {
+            return Ok(None);
+        };
+        let key = CudaDecodeGraphKey::new(
+            &continuation.input_ids,
+            &continuation.metadata,
+            continuation
+                .metadata
+                .decode_rows
+                .as_ref()
+                .expect("continuation must retain decode rows")
+                .block_size,
+        )?;
+        Ok((key == self.key).then_some(continuation))
+    }
+
+    fn matches(&self, entry: &CudaDecodeGraphEntry) -> bool {
+        self.generation == entry.generation
+            && self.replay_epoch == entry.replay_epoch
+            && self.key == entry.key
+    }
+}
+
+impl fmt::Debug for CudaDecodeGraphLaunch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CudaDecodeGraphLaunch")
+            .field("generation", &self.generation)
+            .field("replay_epoch", &self.replay_epoch)
+            .field("input_shape", &self.input_ids.shape())
+            .field("input_device", self.input_ids.device())
+            .field("real_batch", &self.real_batch)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum CudaDecodeGraphReplayInput<'a> {
+    Host,
+    Resident(&'a CudaDecodeGraphLaunch),
 }
 
 impl CudaDecodeGraphEntry {
     pub(crate) fn with_spec_state(
         mut self,
         spec_state: Option<Box<dyn SpeculativeGraphState>>,
+        usage: Option<CudaGraphSpecStateUsage>,
     ) -> Self {
+        assert_eq!(spec_state.is_some(), usage.is_some());
         self.spec_state = spec_state.map(Arc::from);
+        self.spec_state_usage = usage.unwrap_or_default();
         self
+    }
+
+    fn launch(
+        &self,
+        step: &CudaGraphDecodeStep,
+        replay_epoch: u64,
+    ) -> candle_core::Result<Option<CudaDecodeGraphLaunch>> {
+        let input_ids = self.input_ids.as_detached_tensor();
+        let (batch, q_len) = input_ids.dims2()?;
+        if input_ids.dtype() != DType::U32
+            || q_len != 1
+            || !input_ids.is_contiguous()
+            || self.spec_state.is_some()
+        {
+            return Ok(None);
+        }
+        if step.real_batch > batch {
+            candle_core::bail!(
+                "CUDA graph resident input has batch capacity {batch}, smaller than {} live rows",
+                step.real_batch
+            );
+        }
+        Ok(Some(CudaDecodeGraphLaunch {
+            generation: self.generation,
+            replay_epoch,
+            key: self.key.clone(),
+            input_ids,
+            graph_stream: self.graph.stream.clone(),
+            real_batch: step.real_batch,
+            source: step.clone(),
+        }))
+    }
+
+    fn release(self) -> (Arc<CudaStream>, candle_core::Result<()>) {
+        let Self {
+            generation: _,
+            replay_epoch,
+            key: _,
+            host_staging,
+            input_ids,
+            metadata_buffers,
+            state_indices,
+            _metadata,
+            logits,
+            spec_state,
+            spec_state_usage: _,
+            graph,
+        } = self;
+        let stream = graph.stream.clone();
+        let mut release_result = stream
+            .synchronize()
+            .map_err(candle_core::Error::wrap)
+            .map_err(|err| err.context("CUDA graph entry release wait failed"));
+        drop_cuda_graph_entry_resource(host_staging, &stream, "host staging", &mut release_result);
+        drop_cuda_graph_entry_resource(
+            spec_state,
+            &stream,
+            "speculative state",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_logits(logits, &stream, replay_epoch, &mut release_result);
+        drop_cuda_graph_entry_resource(
+            _metadata,
+            &stream,
+            "paged-attention metadata",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(
+            state_indices,
+            &stream,
+            "state indices",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(
+            metadata_buffers,
+            &stream,
+            "metadata buffers",
+            &mut release_result,
+        );
+        drop_cuda_graph_entry_resource(input_ids, &stream, "input ids", &mut release_result);
+        let storage_result = stream
+            .synchronize()
+            .map_err(candle_core::Error::wrap)
+            .map_err(|err| err.context("CUDA graph entry storage release failed"));
+        if release_result.is_ok() {
+            release_result = storage_result;
+        }
+        drop(graph);
+        (stream, release_result)
+    }
+}
+
+fn drop_cuda_graph_entry_logits(
+    logits: Tensor,
+    stream: &Arc<CudaStream>,
+    replay_epoch: u64,
+    release_result: &mut candle_core::Result<()>,
+) {
+    drop(logits);
+    if let Err(err) = stream.context().check_err() {
+        // Alloc nodes have no materialized allocation before first launch, but CudaSlice::drop still frees them.
+        if replay_epoch == 0 && err.0 == sys::CUresult::CUDA_ERROR_INVALID_VALUE {
+            return;
+        }
+        if release_result.is_ok() {
+            *release_result = Err(
+                candle_core::Error::wrap(err).context("CUDA graph entry logits release failed")
+            );
+        }
+    }
+}
+
+fn drop_cuda_graph_entry_resource<T>(
+    resource: T,
+    stream: &Arc<CudaStream>,
+    name: &'static str,
+    release_result: &mut candle_core::Result<()>,
+) {
+    drop(resource);
+    if let Err(err) = stream.context().check_err() {
+        if release_result.is_ok() {
+            *release_result = Err(candle_core::Error::wrap(err)
+                .context(format!("CUDA graph entry {name} release failed")));
+        }
     }
 }
 
 pub(crate) struct CudaDecodeGraphReplay {
     pub(crate) logits: Tensor,
     pub(crate) spec_state: Option<Arc<dyn SpeculativeGraphState>>,
+    pub(crate) launch: Option<CudaDecodeGraphLaunch>,
 }
 
 #[derive(Default)]
 pub(crate) struct CudaDecodeGraphState {
     entries: Vec<CudaDecodeGraphEntry>,
+    spec_state_budgets: HashMap<DeviceLocation, usize>,
     disabled: bool,
     suspended: bool,
+    eager_retry_blocked: bool,
 }
 
 impl CudaDecodeGraphState {
@@ -888,8 +1460,17 @@ impl CudaDecodeGraphState {
         self.clear();
     }
 
+    pub(crate) fn take_eager_retry_allowed(&mut self) -> bool {
+        !std::mem::take(&mut self.eager_retry_blocked)
+    }
+
+    pub(crate) fn block_eager_retry(&mut self) {
+        self.eager_retry_blocked = true;
+    }
+
     pub(crate) fn clear(&mut self) {
-        self.entries.clear();
+        self.eager_retry_blocked = false;
+        release_cuda_graph_entries(std::mem::take(&mut self.entries));
     }
 
     pub(crate) fn suspend(&mut self) {
@@ -910,40 +1491,223 @@ impl CudaDecodeGraphState {
         &mut self,
         key: &CudaDecodeGraphKey,
         step: &CudaGraphDecodeStep,
+        input: CudaDecodeGraphReplayInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
         let Some(pos) = self.entries.iter().position(|entry| entry.key == *key) else {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
-        entry.input_ids.set(&step.input_ids)?;
-        let (_, seq_len) = step.input_ids.dims2()?;
-        entry
-            .metadata_buffers
-            .copy_from(&step.metadata, &step.seqlen_offsets, seq_len)?;
-        match (&entry.state_indices, &step.state_indices) {
-            (Some(dst), Some(host)) => copy_state_indices(dst, host)?,
-            (None, None) => {}
-            _ => candle_core::bail!(
-                "hybrid state indices changed optional state during CUDA graph replay"
-            ),
-        }
-        entry
-            .graph
-            .launch()
-            .map_err(|err| err.context("CUDA graph replay launch failed"))?;
-        let replay = CudaDecodeGraphReplay {
-            logits: step.narrow_rows(&entry.logits)?,
-            spec_state: entry.spec_state.clone(),
+        let prelaunch = (|| -> candle_core::Result<_> {
+            match input {
+                CudaDecodeGraphReplayInput::Host => {
+                    entry.input_ids.set(&step.input_ids).map_err(|err| {
+                        err.context(format!(
+                            "CUDA graph input update failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                            entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                        ))
+                    })?
+                }
+                CudaDecodeGraphReplayInput::Resident(launch) => {
+                    if !launch.matches(&entry) || launch.real_batch != step.real_batch {
+                        return Ok(None);
+                    }
+                }
+            }
+            let replay_epoch = entry
+                .replay_epoch
+                .checked_add(1)
+                .expect("CUDA decode graph replay epoch overflow");
+            let spec_state = entry
+                .spec_state
+                .as_deref()
+                .map(|state| state.for_real_batch(step.real_batch))
+                .transpose()?
+                .map(Arc::from);
+            let replay = CudaDecodeGraphReplay {
+                logits: step.narrow_rows(&entry.logits)?,
+                spec_state,
+                launch: entry.launch(step, replay_epoch)?,
+            };
+            let (_, seq_len) = step.input_ids.dims2()?;
+            let metadata_buffers = &mut entry.metadata_buffers;
+            let state_indices = &entry.state_indices;
+            entry
+                .host_staging
+                .update(|host_staging| {
+                    metadata_buffers.copy_from(
+                        &step.metadata,
+                        &step.seqlen_offsets,
+                        seq_len,
+                        host_staging,
+                    )?;
+                    match (state_indices, &step.state_indices) {
+                        (Some(dst), Some(host)) => copy_state_indices(dst, host, host_staging),
+                        (None, None) => Ok(()),
+                        _ => candle_core::bail!(
+                            "hybrid state indices changed optional state during CUDA graph replay"
+                        ),
+                    }
+                })
+                .map_err(|err| {
+                    err.context(format!(
+                        "CUDA graph metadata update failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                        entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                    ))
+                })?;
+            entry.host_staging.order_before_graph().map_err(|err| {
+                err.context(format!(
+                    "CUDA graph metadata ordering failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                    entry.generation, entry.replay_epoch, step.real_batch, entry.key
+                ))
+            })?;
+            Ok(Some((replay_epoch, replay)))
+        })();
+        let (replay_epoch, mut replay) = match prelaunch {
+            Ok(Some(prelaunch)) => prelaunch,
+            Ok(None) => {
+                self.entries.push(entry);
+                return Ok(None);
+            }
+            Err(err) => {
+                self.entries.push(entry);
+                return Err(err);
+            }
         };
+        if let Err(err) = entry.graph.launch().map_err(|err| {
+            err.context(format!(
+                "CUDA graph replay launch failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                entry.generation, entry.replay_epoch, step.real_batch, entry.key
+            ))
+        }) {
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return Err(err);
+        }
+        if let Err(record_err) = entry.host_staging.record_graph_complete().map_err(|err| {
+            err.context(format!(
+                "CUDA graph completion recording failed for generation {}, replay epoch {}, {} live rows, key {:?}",
+                entry.generation, entry.replay_epoch, step.real_batch, entry.key
+            ))
+        }) {
+            let synchronize_result = entry
+                .graph
+                .stream()
+                .synchronize()
+                .map_err(candle_core::Error::wrap)
+                .map_err(|err| err.context("CUDA graph replay recovery synchronization failed"));
+            entry.replay_epoch = replay_epoch;
+            replay.launch = None;
+            self.disabled = true;
+            self.block_eager_retry();
+            self.entries.push(entry);
+            return match synchronize_result {
+                Ok(()) => {
+                    tracing::warn!(
+                        "CUDA decode graphs retired after completion recording error: {record_err:?}"
+                    );
+                    Ok(Some(replay))
+                }
+                Err(synchronize_err) => {
+                    tracing::warn!(
+                        "CUDA decode graph completion recording and recovery synchronization failed: {record_err:?}; {synchronize_err:?}"
+                    );
+                    Err(candle_core::Error::msg(format!(
+                        "{record_err}; CUDA graph state may have advanced and recovery failed: {synchronize_err}"
+                    )))
+                }
+            };
+        }
+        entry.replay_epoch = replay_epoch;
         self.entries.push(entry);
         Ok(Some(replay))
     }
 
-    pub(crate) fn insert(&mut self, entry: CudaDecodeGraphEntry) {
+    pub(crate) fn replay_one_token(
+        &mut self,
+        launch: CudaDecodeGraphLaunch,
+    ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        let Some(step) = launch.one_token_continuation()? else {
+            return Ok(None);
+        };
+        self.replay(
+            &launch.key,
+            &step,
+            CudaDecodeGraphReplayInput::Resident(&launch),
+        )
+    }
+
+    pub(crate) fn prepare_spec_state_admission(
+        &mut self,
+        spec_state: &dyn SpeculativeGraphState,
+    ) -> candle_core::Result<CudaGraphSpecStateUsage> {
+        let usage = CudaGraphSpecStateUsage::from_state(spec_state)?;
+        self.evict_for_spec_state(&usage);
+        Ok(usage)
+    }
+
+    pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
+        self.evict_for_spec_state(&entry.spec_state_usage);
         if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-            self.entries.remove(0);
+            release_cuda_graph_entries(vec![self.entries.remove(0)]);
         }
+        entry.generation = self.allocate_generation();
         self.entries.push(entry);
+    }
+
+    fn evict_for_spec_state(&mut self, incoming: &CudaGraphSpecStateUsage) {
+        for (location, total) in &incoming.device_totals {
+            self.spec_state_budgets
+                .entry(*location)
+                .or_insert_with(|| configured_spec_state_budget(*total));
+        }
+        let usages = self
+            .entries
+            .iter()
+            .map(|entry| entry.spec_state_usage.clone())
+            .collect::<Vec<_>>();
+        let mut evictions = spec_state_eviction_plan(&usages, incoming, &self.spec_state_budgets);
+        if !evictions.is_empty() {
+            tracing::debug!(
+                entries = evictions.len(),
+                incoming_bytes = incoming.total_bytes(),
+                "Evicting CUDA graphs to stay within the speculative state budget"
+            );
+            evictions.sort_unstable();
+            let mut entries = Vec::with_capacity(evictions.len());
+            for idx in evictions.into_iter().rev() {
+                entries.push(self.entries.remove(idx));
+            }
+            release_cuda_graph_entries(entries);
+        }
+    }
+
+    fn allocate_generation(&mut self) -> u64 {
+        NEXT_CUDA_DECODE_GRAPH_GENERATION
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |generation| {
+                generation.checked_add(1)
+            })
+            .expect("CUDA decode graph generation overflow")
+    }
+}
+
+fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
+    let mut streams = Vec::new();
+    for entry in entries {
+        let (stream, release_result) = entry.release();
+        if let Err(err) = release_result {
+            tracing::warn!("Failed to release CUDA graph entry storage: {err:?}");
+        }
+        if !streams.iter().any(|known: &Arc<CudaStream>| {
+            known.context().cu_device() == stream.context().cu_device()
+        }) {
+            streams.push(stream);
+        }
+    }
+    for stream in streams {
+        if let Err(err) = trim_cuda_graph_memory(&stream) {
+            tracing::warn!("Failed to trim released CUDA graph memory: {err:?}");
+        }
     }
 }
 
@@ -962,33 +1726,33 @@ where
         kv_cache,
         metadata,
         model_metadata,
+        activation_dtype,
         warmup_logits,
         state_indices,
         real_batch,
     } = ctx;
+    let materialized_metadata = metadata
+        .materialize_decode_tensors()
+        .map_err(candle_core::Error::msg)?;
+    let metadata = &materialized_metadata;
     let (batch, seq_len) = input_ids.dims2()?;
     let input_ids = Var::from_tensor(input_ids)?;
-    let (metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
+    let (mut metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
         metadata,
         seqlen_offsets,
         seq_len,
         block_size,
         kv_cache,
         model_metadata,
+        activation_dtype,
     )?;
     let graph_input_ids = input_ids.as_detached_tensor();
-    let graph_logits = unsafe {
-        Tensor::empty(
-            warmup_logits.shape().clone(),
-            warmup_logits.dtype(),
-            warmup_logits.device(),
-        )?
-    };
     let Device::Cuda(cuda_device) = graph_input_ids.device() else {
         candle_core::bail!("CUDA graph decode expected CUDA input ids");
     };
     graph_input_ids.device().synchronize()?;
     let stream = cuda_device.cuda_stream();
+    let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
     let restore_event_tracking = disable_event_tracking_for_capture(&stream);
     let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
 
@@ -1000,6 +1764,12 @@ where
         );
     }
 
+    if let Err(err) = prepare_fa3_decode_schedules(&metadata) {
+        end_cuda_capture_discard(&stream);
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        return Err(err.context("FA3 decode preparation capture failed"));
+    }
+
     let logits = match forward(&graph_input_ids, &metadata) {
         Ok(logits) => logits,
         Err(err) => {
@@ -1008,12 +1778,17 @@ where
             return Err(err.context("CUDA graph captured forward failed"));
         }
     };
-    if let Err(err) = crate::cuda::graph::copy_tensor(&logits, &graph_logits) {
+    if logits.shape() != warmup_logits.shape()
+        || logits.dtype() != warmup_logits.dtype()
+        || logits.device().location() != warmup_logits.device().location()
+        || !logits.is_contiguous()
+    {
         end_cuda_capture_discard(&stream);
         restore_event_tracking_after_capture(&stream, restore_event_tracking);
-        return Err(err.context("CUDA graph output copy capture failed"));
+        return Err(candle_core::Error::msg(
+            "captured CUDA graph logits do not match the contiguous warmup output",
+        ));
     }
-    drop(logits);
 
     let graph = match CudaGraphHandle::end_capture(&stream) {
         Ok(Some(graph)) => graph,
@@ -1031,19 +1806,25 @@ where
     restore_event_tracking_after_capture(&stream, restore_event_tracking);
 
     graph.upload()?;
+    metadata_buffers.finish_capture(&metadata);
+    let host_staging = CudaGraphHostStaging::new(graph.stream.clone())?;
     tracing::debug!(
         "Captured CUDA decode graph: batch bucket {batch} ({real_batch} live rows), {seq_len} query tokens"
     );
 
     Ok(CudaDecodeGraphEntry {
+        generation: 0,
+        replay_epoch: 0,
         key,
-        graph,
+        host_staging,
         input_ids,
         metadata_buffers,
         state_indices,
         _metadata: metadata,
-        logits: graph_logits,
+        logits,
         spec_state: None,
+        spec_state_usage: CudaGraphSpecStateUsage::default(),
+        graph,
     })
 }
 
@@ -1077,36 +1858,187 @@ pub(crate) fn cuda_decode_graph_supported_for_model(
     }
 }
 
-pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
-    if !stream.context().has_async_alloc() {
-        return Ok(());
-    }
+#[must_use]
+pub(crate) struct CudaGraphMemoryPoolGuard {
+    stream: Arc<CudaStream>,
+    pool: Option<usize>,
+}
 
-    stream
-        .context()
-        .bind_to_thread()
-        .map_err(candle_core::Error::wrap)?;
-    let dev = stream.context().cu_device();
-    let mut pool = std::ptr::null_mut();
-    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, dev) };
+impl Drop for CudaGraphMemoryPoolGuard {
+    fn drop(&mut self) {
+        let Some(pool) = self.pool else { return };
+        if let Err(err) = self.stream.context().bind_to_thread() {
+            tracing::warn!("Failed to bind CUDA context while restoring graph memory pool: {err}");
+        }
+        let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+        let mut scopes = scopes
+            .lock()
+            .expect("CUDA graph memory pool scopes poisoned");
+        let Some(scope) = scopes.get_mut(&pool) else {
+            tracing::warn!("CUDA graph memory pool scope disappeared before restoration");
+            return;
+        };
+        scope.guards = scope
+            .guards
+            .checked_sub(1)
+            .expect("CUDA graph memory pool guard underflow");
+        if scope.guards != 0 {
+            return;
+        }
+        let release_threshold = scope.release_threshold;
+        let pool_ptr = pool as sys::CUmemoryPool;
+        if let Err(err) = set_memory_pool_release_threshold(pool_ptr, release_threshold) {
+            tracing::warn!("Failed to restore CUDA graph memory pool threshold: {err:?}");
+        }
+        let _ = self.stream.synchronize();
+        if let Err(err) = trim_cuda_graph_memory_bound(&self.stream) {
+            tracing::warn!("Failed to trim CUDA graph memory after capture: {err:?}");
+        }
+        scopes.remove(&pool);
+    }
+}
+
+fn memory_pool_release_threshold(pool: sys::CUmemoryPool) -> candle_core::Result<u64> {
+    let mut value = 0u64;
+    let result = unsafe {
+        sys::cuMemPoolGetAttribute(
+            pool,
+            sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
+            (&mut value as *mut u64).cast(),
+        )
+    };
     if result != sys::CUresult::CUDA_SUCCESS {
         return Err(candle_core::Error::msg(format!("{result:?}"))
-            .context("CUDA graph mempool lookup failed"));
+            .context("CUDA graph mempool release threshold lookup failed"));
     }
+    Ok(value)
+}
 
-    let mut release_threshold = u64::MAX;
+fn set_memory_pool_release_threshold(
+    pool: sys::CUmemoryPool,
+    mut value: u64,
+) -> candle_core::Result<()> {
     let result = unsafe {
         sys::cuMemPoolSetAttribute(
             pool,
             sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_RELEASE_THRESHOLD,
-            (&mut release_threshold as *mut u64).cast(),
+            (&mut value as *mut u64).cast(),
         )
     };
     if result != sys::CUresult::CUDA_SUCCESS {
         return Err(candle_core::Error::msg(format!("{result:?}"))
             .context("CUDA graph mempool release threshold setup failed"));
     }
+    Ok(())
+}
 
+fn cuda_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<sys::CUmemoryPool> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)?;
+    let mut pool = std::ptr::null_mut();
+    let result = unsafe { sys::cuDeviceGetMemPool(&mut pool, stream.context().cu_device()) };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph mempool lookup failed"));
+    }
+    Ok(pool)
+}
+
+fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    let result = unsafe { sys::cuDeviceGraphMemTrim(stream.context().cu_device()) };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(
+            candle_core::Error::msg(format!("{result:?}")).context("CUDA graph memory trim failed")
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn cuda_graph_memory_attribute(
+    stream: &Arc<CudaStream>,
+    attribute: sys::CUgraphMem_attribute,
+) -> candle_core::Result<usize> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)?;
+    let mut value = 0usize;
+    let result = unsafe {
+        sys::cuDeviceGetGraphMemAttribute(
+            stream.context().cu_device(),
+            attribute,
+            (&mut value as *mut usize).cast(),
+        )
+    };
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(candle_core::Error::msg(format!("{result:?}"))
+            .context("CUDA graph memory attribute lookup failed"));
+    }
+    Ok(value)
+}
+
+pub(crate) fn trim_cuda_graph_memory(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
+    stream
+        .context()
+        .bind_to_thread()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("CUDA graph memory trim context bind failed"))?;
+    let pool = cuda_memory_pool(stream)? as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    if scopes.contains_key(&pool) {
+        return Ok(());
+    }
+    stream
+        .synchronize()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("CUDA graph memory trim synchronization failed"))?;
+    trim_cuda_graph_memory_bound(stream)
+}
+
+pub(crate) fn prepare_cuda_graph_memory_pool(
+    stream: &Arc<CudaStream>,
+) -> candle_core::Result<CudaGraphMemoryPoolGuard> {
+    if !stream.context().has_async_alloc() {
+        return Ok(CudaGraphMemoryPoolGuard {
+            stream: stream.clone(),
+            pool: None,
+        });
+    }
+
+    let pool = cuda_memory_pool(stream)?;
+    let pool_key = pool as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let mut scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    if let Some(scope) = scopes.get_mut(&pool_key) {
+        scope.guards = scope
+            .guards
+            .checked_add(1)
+            .expect("CUDA graph memory pool guard overflow");
+    } else {
+        let release_threshold = memory_pool_release_threshold(pool)?;
+        set_memory_pool_release_threshold(pool, u64::MAX)?;
+        scopes.insert(
+            pool_key,
+            MemoryPoolScopeState {
+                guards: 1,
+                release_threshold,
+            },
+        );
+    }
+    drop(scopes);
+
+    let guard = CudaGraphMemoryPoolGuard {
+        stream: stream.clone(),
+        pool: Some(pool_key),
+    };
     for attr in [
         sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_FOLLOW_EVENT_DEPENDENCIES,
         sys::CUmemPool_attribute::CU_MEMPOOL_ATTR_REUSE_ALLOW_OPPORTUNISTIC,
@@ -1121,7 +2053,7 @@ pub(crate) fn prepare_cuda_graph_memory_pool(stream: &Arc<CudaStream>) -> candle
         }
     }
 
-    Ok(())
+    Ok(guard)
 }
 
 fn flashinfer_decode_scratch_maps(
@@ -1129,6 +2061,7 @@ fn flashinfer_decode_scratch_maps(
     batch: usize,
     kv_cache: &[(Tensor, Tensor)],
     model_metadata: Option<&(dyn ModelConfigLike + Send + Sync)>,
+    activation_dtype: DType,
 ) -> candle_core::Result<FlashInferDecodeScratchMaps> {
     let Some(model_metadata) = model_metadata else {
         return Ok((None, None));
@@ -1157,12 +2090,12 @@ fn flashinfer_decode_scratch_maps(
         let num_qo_heads = model_metadata.num_attn_heads_for_layer(layer_idx);
         let entry = specs.entry(location).or_insert((
             key_cache.device().clone(),
-            key_cache.dtype(),
+            activation_dtype,
             num_qo_heads,
             head_dim,
         ));
-        if entry.1 != key_cache.dtype() {
-            candle_core::bail!("FlashInfer graph scratch expects one dtype per device");
+        if entry.1 != activation_dtype {
+            candle_core::bail!("FlashInfer graph scratch expects one activation dtype per device");
         }
         entry.2 = entry.2.max(num_qo_heads);
         entry.3 = entry.3.max(head_dim);
@@ -1257,6 +2190,94 @@ fn push_graph_tensor_keys(
     }
 }
 
+fn push_flashinfer_graph_tensor_keys(
+    metadata: &PagedAttentionInputMetadata,
+    keys: &mut Vec<CudaGraphTensorKey>,
+) {
+    let paged = flashinfer_paged_view(metadata);
+    let full = flashinfer_full_view(metadata);
+    push_graph_tensor_keys(
+        "paged_kv_indptr",
+        paged.map(|view| &view.paged_kv.indptr),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_indices",
+        paged.map(|view| &view.paged_kv.indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_last_page_len",
+        paged.map(|view| &view.paged_kv.last_page_len),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_indptr",
+        full.map(|view| &view.paged_kv.indptr),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_indices",
+        full.map(|view| &view.paged_kv.indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_last_page_len",
+        full.map(|view| &view.paged_kv.last_page_len),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_request_indices",
+        paged.map(|view| &view.tile_plan.request_indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_tile_indices",
+        paged.map(|view| &view.tile_plan.kv_tile_indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_o_indptr",
+        paged.map(|view| &view.tile_plan.o_indptr),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_chunk_size",
+        paged.map(|view| &view.tile_plan.kv_chunk_size),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "paged_kv_block_valid_mask",
+        paged.map(|view| &view.tile_plan.block_valid_mask),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_request_indices",
+        full.map(|view| &view.tile_plan.request_indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_tile_indices",
+        full.map(|view| &view.tile_plan.kv_tile_indices),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_o_indptr",
+        full.map(|view| &view.tile_plan.o_indptr),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_chunk_size",
+        full.map(|view| &view.tile_plan.kv_chunk_size),
+        keys,
+    );
+    push_graph_tensor_keys(
+        "full_paged_kv_block_valid_mask",
+        full.map(|view| &view.tile_plan.block_valid_mask),
+        keys,
+    );
+}
+
 fn flashinfer_paged_view(
     metadata: &PagedAttentionInputMetadata,
 ) -> Option<&FlashInferPagedAttentionView> {
@@ -1268,6 +2289,13 @@ fn flashinfer_full_view(
     metadata: &PagedAttentionInputMetadata,
 ) -> Option<&FlashInferPagedAttentionView> {
     Some(&metadata.flashinfer.as_ref()?.views.logical)
+}
+
+fn flashinfer_views_alias(metadata: &PagedAttentionInputMetadata) -> bool {
+    metadata
+        .flashinfer
+        .as_ref()
+        .is_some_and(|flashinfer| flashinfer.views.sliding.is_none())
 }
 
 fn flashinfer_paged_kv_from_vars(
@@ -1362,6 +2390,17 @@ fn option_var_map_from_tensor_map(
     map.map(var_map_from_tensor_map).transpose()
 }
 
+fn option_var_map_from_tensor_map_if_distinct(
+    map: Option<&HashMap<DeviceLocation, Tensor>>,
+    aliases_existing: bool,
+) -> candle_core::Result<Option<CudaGraphVarMap>> {
+    if aliases_existing {
+        Ok(None)
+    } else {
+        option_var_map_from_tensor_map(map)
+    }
+}
+
 fn tensor_map_from_var_map(map: &CudaGraphVarMap) -> HashMap<DeviceLocation, Tensor> {
     map.iter()
         .map(|(location, var)| (*location, var.as_detached_tensor()))
@@ -1374,10 +2413,391 @@ fn option_tensor_map_from_var_map(
     map.as_ref().map(tensor_map_from_var_map)
 }
 
+impl CudaGraphPinnedBuffer {
+    fn new(dst: &Var) -> candle_core::Result<Self> {
+        let Device::Cuda(device) = dst.device() else {
+            candle_core::bail!("CUDA graph host staging requires a CUDA destination");
+        };
+        let stream = device.cuda_stream();
+        let context = stream.context();
+        let len = dst.elem_count();
+        macro_rules! allocate {
+            ($variant:ident, $ty:ty) => {{
+                let mut allocation = unsafe {
+                    context
+                        .alloc_pinned::<$ty>(len)
+                        .map_err(candle_core::Error::wrap)?
+                };
+                let ptr = NonNull::new(allocation.as_mut_ptr().map_err(candle_core::Error::wrap)?)
+                    .ok_or_else(|| {
+                        candle_core::Error::msg("CUDA returned a null pinned pointer")
+                    })?;
+                CudaGraphPinnedData::$variant(CudaGraphPinnedAllocation { allocation, ptr })
+            }};
+        }
+        let data = match dst.dtype() {
+            DType::U8 => allocate!(U8, u8),
+            DType::U32 => allocate!(U32, u32),
+            DType::I32 => allocate!(I32, i32),
+            DType::I64 => allocate!(I64, i64),
+            dtype => candle_core::bail!(
+                "CUDA graph host staging does not support metadata dtype {dtype:?}"
+            ),
+        };
+        Ok(Self {
+            data,
+            initialized: false,
+        })
+    }
+
+    fn copy_from(
+        &mut self,
+        src: &Tensor,
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if src.shape() != dst.shape() || src.dtype() != dst.dtype() {
+            candle_core::bail!("CUDA graph host staging expected matching tensors");
+        }
+        let (src_storage, src_layout) = src.storage_and_layout();
+        let Storage::Cpu(src_storage) = &*src_storage else {
+            candle_core::bail!("CUDA graph host staging expected CPU source metadata");
+        };
+        if !src_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous source metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA destination metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous destination metadata");
+        }
+        let len = src.elem_count();
+        let src_offset = src_layout.start_offset();
+        let dst_offset = dst_layout.start_offset();
+
+        macro_rules! stage_and_copy {
+            ($variant:ident, $ty:ty) => {{
+                let CudaGraphPinnedData::$variant(host) = &mut self.data else {
+                    candle_core::bail!("CUDA graph host staging dtype changed");
+                };
+                let src = src_storage.as_slice::<$ty>()?;
+                let src = &src[src_offset..src_offset + len];
+                let host_slice = host.as_mut_slice();
+                if self.initialized && host_slice == src {
+                    return Ok(());
+                }
+                host_slice.copy_from_slice(src);
+                self.initialized = true;
+                let dst = dst_storage.as_cuda_slice::<$ty>()?;
+                let dst = dst.slice(dst_offset..dst_offset + len);
+                let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+                let result = unsafe {
+                    sys::cuMemcpyHtoDAsync_v2(
+                        dst_ptr,
+                        host.as_ptr().cast(),
+                        len * std::mem::size_of::<$ty>(),
+                        stream.cu_stream(),
+                    )
+                };
+                if result != sys::CUresult::CUDA_SUCCESS {
+                    return Err(candle_core::Error::msg(format!("{result:?}"))
+                        .context("CUDA graph metadata H2D copy failed"));
+                }
+            }};
+        }
+
+        match src.dtype() {
+            DType::U8 => stage_and_copy!(U8, u8),
+            DType::U32 => stage_and_copy!(U32, u32),
+            DType::I32 => stage_and_copy!(I32, i32),
+            DType::I64 => stage_and_copy!(I64, i64),
+            dtype => candle_core::bail!(
+                "CUDA graph host staging does not support metadata dtype {dtype:?}"
+            ),
+        }
+        Ok(())
+    }
+
+    fn copy_from_u32_slice(
+        &mut self,
+        src: &[u32],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if dst.dtype() != DType::U32 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching u32 state indices");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA state indices");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous state indices");
+        }
+        let CudaGraphPinnedData::U32(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging state index dtype changed");
+        };
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
+        let dst = dst_storage.as_cuda_slice::<u32>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(src),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph state index H2D copy failed"));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
+    fn copy_from_i64_slice(
+        &mut self,
+        src: &[i64],
+        dst: &Var,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        if dst.dtype() != DType::I64 || dst.elem_count() != src.len() {
+            candle_core::bail!("CUDA graph host staging expected matching i64 metadata");
+        }
+        let (dst_storage, dst_layout) = dst.storage_and_layout();
+        let Storage::Cuda(dst_storage) = &*dst_storage else {
+            candle_core::bail!("CUDA graph host staging expected CUDA i64 metadata");
+        };
+        if !dst_layout.is_contiguous() {
+            candle_core::bail!("CUDA graph host staging expected contiguous i64 metadata");
+        }
+        let CudaGraphPinnedData::I64(host) = &mut self.data else {
+            candle_core::bail!("CUDA graph host staging i64 metadata dtype changed");
+        };
+        let host_slice = host.as_mut_slice();
+        if self.initialized && host_slice == src {
+            return Ok(());
+        }
+        host_slice.copy_from_slice(src);
+        self.initialized = true;
+        let dst = dst_storage.as_cuda_slice::<i64>()?;
+        let dst_offset = dst_layout.start_offset();
+        let dst = dst.slice(dst_offset..dst_offset + src.len());
+        let (dst_ptr, _dst_guard) = dst.device_ptr(stream);
+        let result = unsafe {
+            sys::cuMemcpyHtoDAsync_v2(
+                dst_ptr,
+                host.as_ptr().cast(),
+                std::mem::size_of_val(src),
+                stream.cu_stream(),
+            )
+        };
+        if result != sys::CUresult::CUDA_SUCCESS {
+            return Err(candle_core::Error::msg(format!("{result:?}"))
+                .context("CUDA graph i64 metadata H2D copy failed"));
+        }
+        Ok(())
+    }
+}
+
+impl CudaGraphHostStaging {
+    pub(crate) fn new(graph_stream: Arc<CudaStream>) -> candle_core::Result<Self> {
+        let graph_complete = graph_stream
+            .context()
+            .new_event(None)
+            .map_err(candle_core::Error::wrap)?;
+        Ok(Self {
+            buffers: HashMap::new(),
+            completions: HashMap::new(),
+            graph_complete,
+            graph_stream,
+            graph_pending: false,
+        })
+    }
+
+    pub(crate) fn update(
+        &mut self,
+        copy: impl FnOnce(&mut Self) -> candle_core::Result<()>,
+    ) -> candle_core::Result<()> {
+        self.begin_update()?;
+        let copy_result = copy(self);
+        let finish_result = self.finish_update();
+        copy_result.and(finish_result)
+    }
+
+    fn begin_update(&mut self) -> candle_core::Result<()> {
+        for completion in self.completions.values_mut() {
+            completion.ordered_after_graph = false;
+            if completion.active {
+                completion
+                    .stream
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                completion.active = false;
+            }
+            if completion.pending {
+                completion
+                    .event
+                    .synchronize()
+                    .map_err(candle_core::Error::wrap)?;
+                completion.pending = false;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_update(&mut self) -> candle_core::Result<()> {
+        let mut result = Ok(());
+        for completion in self.completions.values_mut() {
+            if !completion.active {
+                continue;
+            }
+            match completion.event.record(&completion.stream) {
+                Ok(()) => {
+                    completion.pending = true;
+                    completion.active = false;
+                }
+                Err(err) => {
+                    completion.pending = false;
+                    if completion.stream.synchronize().is_ok() {
+                        completion.active = false;
+                    }
+                    if result.is_ok() {
+                        result = Err(candle_core::Error::wrap(err));
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    pub(crate) fn order_before_graph(&self) -> candle_core::Result<()> {
+        for completion in self.completions.values() {
+            if completion.pending && !same_cuda_stream(&completion.stream, &self.graph_stream) {
+                self.graph_stream
+                    .wait(&completion.event)
+                    .map_err(candle_core::Error::wrap)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_graph_complete(&mut self) -> candle_core::Result<()> {
+        self.graph_complete
+            .record(&self.graph_stream)
+            .map_err(candle_core::Error::wrap)?;
+        self.graph_pending = true;
+        Ok(())
+    }
+
+    fn prepare_copy(
+        &mut self,
+        location: DeviceLocation,
+        stream: &Arc<CudaStream>,
+    ) -> candle_core::Result<()> {
+        let completion = match self.completions.entry(location) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let event = stream
+                    .context()
+                    .new_event(Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC))
+                    .map_err(candle_core::Error::wrap)?;
+                entry.insert(CudaGraphCopyCompletion {
+                    event,
+                    stream: stream.clone(),
+                    pending: false,
+                    active: false,
+                    ordered_after_graph: false,
+                })
+            }
+        };
+        if !same_cuda_stream(&completion.stream, stream) {
+            candle_core::bail!("CUDA graph metadata stream changed during replay");
+        }
+        if self.graph_pending && !completion.ordered_after_graph {
+            if !same_cuda_stream(&completion.stream, &self.graph_stream) {
+                completion
+                    .stream
+                    .wait(&self.graph_complete)
+                    .map_err(candle_core::Error::wrap)?;
+            }
+            completion.ordered_after_graph = true;
+        }
+        completion.active = true;
+        Ok(())
+    }
+
+    fn copy_from(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &Tensor,
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from(src, dst, &stream)
+    }
+
+    pub(crate) fn copy_from_u32_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[u32],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_u32_slice(src, dst, &stream)
+    }
+
+    #[cfg(all(feature = "flash-attn", target_family = "unix"))]
+    pub(crate) fn copy_from_i64_slice(
+        &mut self,
+        name: &'static str,
+        location: DeviceLocation,
+        src: &[i64],
+        dst: &Var,
+    ) -> candle_core::Result<()> {
+        let stream = dst.device().as_cuda_device()?.cuda_stream();
+        self.prepare_copy(location, &stream)?;
+        let buffer = match self.buffers.entry((name, location)) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(CudaGraphPinnedBuffer::new(dst)?)
+            }
+        };
+        buffer.copy_from_i64_slice(src, dst, &stream)
+    }
+}
+
 fn copy_var_map(
     dst: &CudaGraphVarMap,
     src: &HashMap<DeviceLocation, Tensor>,
-    name: &str,
+    name: &'static str,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     if dst.len() != src.len() {
         candle_core::bail!("{name} device count changed during CUDA graph replay");
@@ -1386,7 +2806,11 @@ fn copy_var_map(
         let src = src
             .get(location)
             .ok_or_else(|| candle_core::Error::msg(format!("{name} missing {location:?}")))?;
-        dst.set(src)?;
+        if src.device().is_cpu() && dst.device().is_cuda() {
+            host_staging.copy_from(name, *location, src, dst)?;
+        } else {
+            dst.set(src)?;
+        }
     }
     Ok(())
 }
@@ -1394,13 +2818,85 @@ fn copy_var_map(
 fn copy_option_var_map(
     dst: &Option<CudaGraphVarMap>,
     src: Option<&HashMap<DeviceLocation, Tensor>>,
-    name: &str,
+    name: &'static str,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
     match (dst, src) {
-        (Some(dst), Some(src)) => copy_var_map(dst, src, name),
+        (Some(dst), Some(src)) => copy_var_map(dst, src, name, host_staging),
         (None, None) => Ok(()),
         _ => candle_core::bail!("{name} changed optional state during CUDA graph replay"),
     }
+}
+
+struct FlashInferTilePlanVars<'a> {
+    request_indices: &'a Option<CudaGraphVarMap>,
+    kv_tile_indices: &'a Option<CudaGraphVarMap>,
+    o_indptr: &'a Option<CudaGraphVarMap>,
+    kv_chunk_size: &'a Option<CudaGraphVarMap>,
+    block_valid_mask: &'a Option<CudaGraphVarMap>,
+}
+
+fn copy_flashinfer_tile_plan(
+    metadata: &PagedAttentionInputMetadata,
+    full: bool,
+    vars: FlashInferTilePlanVars<'_>,
+    host_staging: &mut CudaGraphHostStaging,
+) -> candle_core::Result<()> {
+    let view = if full {
+        flashinfer_full_view(metadata)
+    } else {
+        flashinfer_paged_view(metadata)
+    };
+    copy_option_var_map(
+        vars.request_indices,
+        view.map(|view| &view.tile_plan.request_indices),
+        if full {
+            "full_paged_kv_request_indices"
+        } else {
+            "paged_kv_request_indices"
+        },
+        host_staging,
+    )?;
+    copy_option_var_map(
+        vars.kv_tile_indices,
+        view.map(|view| &view.tile_plan.kv_tile_indices),
+        if full {
+            "full_paged_kv_tile_indices"
+        } else {
+            "paged_kv_tile_indices"
+        },
+        host_staging,
+    )?;
+    copy_option_var_map(
+        vars.o_indptr,
+        view.map(|view| &view.tile_plan.o_indptr),
+        if full {
+            "full_paged_kv_o_indptr"
+        } else {
+            "paged_kv_o_indptr"
+        },
+        host_staging,
+    )?;
+    copy_option_var_map(
+        vars.kv_chunk_size,
+        view.map(|view| &view.tile_plan.kv_chunk_size),
+        if full {
+            "full_paged_kv_chunk_size"
+        } else {
+            "paged_kv_chunk_size"
+        },
+        host_staging,
+    )?;
+    copy_option_var_map(
+        vars.block_valid_mask,
+        view.map(|view| &view.tile_plan.block_valid_mask),
+        if full {
+            "full_paged_kv_block_valid_mask"
+        } else {
+            "paged_kv_block_valid_mask"
+        },
+        host_staging,
+    )
 }
 
 fn rope_positions_var_map(
@@ -1421,10 +2917,15 @@ fn copy_rope_positions(
     dst: &CudaGraphVarMap,
     seqlen_offsets: &[usize],
     seq_len: usize,
+    host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
-    for dst in dst.values() {
-        let positions = text_positions_tensor(seqlen_offsets, seq_len, dst.device())?;
-        dst.set(&positions)?;
+    let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
+    for (location, dst) in dst {
+        if dst.device().is_cuda() {
+            host_staging.copy_from("rope_positions", *location, &positions, dst)?;
+        } else {
+            dst.set(&positions)?;
+        }
     }
     Ok(())
 }
@@ -1432,6 +2933,16 @@ fn copy_rope_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn spec_usage(bytes: &[(usize, usize)]) -> CudaGraphSpecStateUsage {
+        CudaGraphSpecStateUsage {
+            bytes: bytes
+                .iter()
+                .map(|(gpu_id, bytes)| (DeviceLocation::Cuda { gpu_id: *gpu_id }, *bytes))
+                .collect(),
+            device_totals: HashMap::new(),
+        }
+    }
 
     #[test]
     fn batch_buckets_are_exact_then_power_of_two() {
@@ -1453,6 +2964,22 @@ mod tests {
     }
 
     #[test]
+    fn precapture_includes_the_first_power_of_two_bucket() {
+        assert_eq!(
+            cuda_graph_precapture_batches().collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 16]
+        );
+    }
+
+    #[test]
+    fn startup_precapture_defers_speculative_multi_token_widths() {
+        assert!(cuda_graph_startup_capture_allowed(true, 1));
+        assert!(!cuda_graph_startup_capture_allowed(true, 4));
+        assert!(!cuda_graph_startup_capture_allowed(true, 8));
+        assert!(cuda_graph_startup_capture_allowed(false, 8));
+    }
+
+    #[test]
     fn graph_context_len_tracks_paged_attention_partitions() {
         assert_eq!(graph_context_len(Some(1), Some(2048)), Some(512));
         assert_eq!(graph_context_len(Some(512), Some(2048)), Some(512));
@@ -1468,6 +2995,355 @@ mod tests {
     }
 
     #[test]
+    fn decode_row_graph_key_is_independent_of_materialization() {
+        let table = vec![1, 2, 3, 4];
+        let rows = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![127]],
+            block_tables: vec![table.clone()],
+            context_lens: vec![128],
+            full_block_tables: vec![table],
+            full_context_lens: vec![128],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 1_604_288,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 4,
+        });
+        let staged = rows.build_graph_staged().unwrap();
+        let materialized = rows.build_materialized().unwrap();
+        let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
+        let staged_key = CudaDecodeGraphKey::new(&input_ids, &staged, 32).unwrap();
+        let materialized_key = CudaDecodeGraphKey::new(&input_ids, &materialized, 32).unwrap();
+        assert_eq!(staged_key, materialized_key);
+        assert!(staged_key.tensors.is_empty());
+        assert!(staged_key.decode_rows.is_some());
+
+        let mut next_bucket_rows = (*rows).clone();
+        next_bucket_rows.block_tables = vec![(1..=17).collect()];
+        next_bucket_rows.full_block_tables = next_bucket_rows.block_tables.clone();
+        next_bucket_rows.context_lens = vec![513];
+        next_bucket_rows.full_context_lens = vec![513];
+        let next_bucket = Arc::new(next_bucket_rows).build_graph_staged().unwrap();
+        let next_bucket_key = CudaDecodeGraphKey::new(&input_ids, &next_bucket, 32).unwrap();
+        assert_ne!(staged_key, next_bucket_key);
+    }
+
+    #[test]
+    fn graph_buffers_share_unsliding_flashinfer_metadata() {
+        let table = vec![1, 2, 3, 4];
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![127]],
+            block_tables: vec![table.clone()],
+            context_lens: vec![128],
+            full_block_tables: vec![table],
+            full_context_lens: vec![128],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 1_604_288,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 4,
+        })
+        .build()
+        .unwrap();
+        let input_ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu).unwrap();
+        let key = CudaDecodeGraphKey::new(&input_ids, &metadata, 32).unwrap();
+        assert!(key
+            .tensors
+            .iter()
+            .all(|tensor| !tensor.name.starts_with("full_")));
+
+        let (buffers, _) =
+            CudaDecodeGraphMetadataBuffers::new(&metadata, &[127], 1, 32, &[], None, DType::F32)
+                .unwrap();
+        assert!(buffers.flashinfer_views_alias);
+        let location = Device::Cpu.location();
+        assert_eq!(
+            buffers.paged_kv_indices.as_ref().unwrap()[&location].id(),
+            buffers.full_paged_kv_indices.as_ref().unwrap()[&location].id()
+        );
+        assert_eq!(
+            buffers.paged_kv_request_indices.as_ref().unwrap()[&location].id(),
+            buffers.full_paged_kv_request_indices.as_ref().unwrap()[&location].id()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_metadata_replay_updates_persistent_cuda_buffers() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let rows = |table: Vec<usize>, context_len: usize| -> anyhow::Result<_> {
+            Ok(Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![i64::try_from(context_len - 1)?]],
+                block_tables: vec![table.clone()],
+                context_lens: vec![context_len],
+                full_block_tables: vec![table],
+                full_context_lens: vec![context_len],
+                query_len: 1,
+                block_size: 32,
+                use_standard_metadata: false,
+                max_paged_context_len: 1_604_288,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![device.clone()],
+                num_kv_heads: 4,
+            }))
+        };
+        let initial = rows(vec![1, 2, 3, 4], 128)?.build_materialized()?;
+        let updated = rows(vec![5, 6, 7, 8, 9, 10, 11, 12], 256)?.build()?;
+        assert!(updated.has_host_staged_decode_tensors());
+
+        let (mut buffers, _) =
+            CudaDecodeGraphMetadataBuffers::new(&initial, &[127], 1, 32, &[], None, DType::F32)?;
+        let location = device.location();
+        let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
+        let mut state_indices_map = HashMap::from([(location, state_indices)]);
+        let mut host_staging = CudaGraphHostStaging::new(device.as_cuda_device()?.cuda_stream())?;
+        host_staging.update(|host_staging| {
+            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
+        })?;
+        host_staging.update(|host_staging| {
+            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            copy_state_indices(&state_indices_map, &[11, 13, 17], host_staging)
+        })?;
+        device.synchronize()?;
+
+        let indices = buffers.paged_kv_indices.as_ref().unwrap()[&location]
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<i32>()?;
+        assert_eq!(&indices[..8], &[5, 6, 7, 8, 9, 10, 11, 12]);
+        let positions = buffers.rope_positions[&location]
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        assert_eq!(positions, vec![255]);
+        assert!(host_staging.buffers.len() > 1);
+        assert_eq!(host_staging.completions.len(), 1);
+
+        let state_indices = state_indices_map
+            .remove(&location)
+            .unwrap()
+            .as_detached_tensor()
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u32>()?;
+        assert_eq!(state_indices, vec![11, 13, 17]);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_staging_orders_secondary_streams_both_directions() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let graph_stream = device.as_cuda_device()?.cuda_stream();
+        let copy_stream = graph_stream.fork()?;
+        assert!(!same_cuda_stream(&graph_stream, &copy_stream));
+        let location = device.location();
+        let mut staging = CudaGraphHostStaging::new(graph_stream.clone())?;
+
+        staging.record_graph_complete()?;
+        staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
+        assert!(staging.completions[&location].ordered_after_graph);
+        staging.order_before_graph()?;
+
+        staging.record_graph_complete()?;
+        staging.update(|staging| staging.prepare_copy(location, &copy_stream))?;
+        assert!(staging.completions[&location].ordered_after_graph);
+        staging.order_before_graph()?;
+        graph_stream.synchronize()?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_memory_pool_scope_restores_release_threshold() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let pool = cuda_memory_pool(&stream)?;
+        let original = memory_pool_release_threshold(pool)?;
+
+        let first = prepare_cuda_graph_memory_pool(&stream)?;
+        let second = prepare_cuda_graph_memory_pool(&stream)?;
+        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        drop(first);
+        assert_eq!(memory_pool_release_threshold(pool)?, u64::MAX);
+        drop(second);
+        assert_eq!(memory_pool_release_threshold(pool)?, original);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
+        let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
+        let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
+
+        let guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let output = input.as_detached_tensor().affine(2.0, 1.0)?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+        graph.launch()?;
+        stream.synchronize()?;
+        drop(output);
+        stream.synchronize()?;
+        drop(graph);
+        drop(guard);
+
+        trim_cuda_graph_memory(&stream)?;
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, used_attribute)?,
+            used_before
+        );
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, reserved_attribute)?,
+            reserved_before
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let used_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_USED_MEM_CURRENT;
+        let reserved_attribute = sys::CUgraphMem_attribute::CU_GRAPH_MEM_ATTR_RESERVED_MEM_CURRENT;
+        let used_before = cuda_graph_memory_attribute(&stream, used_attribute)?;
+        let reserved_before = cuda_graph_memory_attribute(&stream, reserved_attribute)?;
+
+        let guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let logits = input.as_detached_tensor().affine(2.0, 1.0)?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        let mut release_result = Ok(());
+        drop_cuda_graph_entry_logits(logits, &stream, 0, &mut release_result);
+        release_result?;
+        drop(graph);
+        drop(guard);
+        trim_cuda_graph_memory(&stream)?;
+
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, used_attribute)?,
+            used_before
+        );
+        assert_eq!(
+            cuda_graph_memory_attribute(&stream, reserved_attribute)?,
+            reserved_before
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_replay_retains_captured_output_storage() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let cuda_device = device.as_cuda_device()?;
+        let stream = cuda_device.cuda_stream();
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+
+        let input = Var::from_tensor(&Tensor::from_vec(vec![1f32, 2.0], 2, &device)?)?;
+        let warmup = input.as_detached_tensor().affine(2.0, 1.0)?;
+        device.synchronize()?;
+        drop(warmup);
+
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let output = input.as_detached_tensor().affine(2.0, 1.0)?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        for (values, expected) in [
+            (vec![3f32, 5.0], vec![7f32, 11.0]),
+            (vec![8f32, 13.0], vec![17f32, 27.0]),
+        ] {
+            input.set(&Tensor::from_vec(values, 2, &device)?)?;
+            graph.launch()?;
+            stream.synchronize()?;
+            assert_eq!(output.to_vec1::<f32>()?, expected);
+        }
+
+        drop(graph);
+        drop(output);
+        device.synchronize()?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_copy_supports_dense_row_source() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let cuda_device = device.as_cuda_device()?;
+        let stream = cuda_device.cuda_stream();
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+
+        let input = Var::from_tensor(&Tensor::from_vec(
+            (1u16..=16).map(f32::from).collect::<Vec<_>>(),
+            (2, 2, 4),
+            &device,
+        )?)?;
+        let output = Var::from_tensor(&Tensor::zeros((2, 2, 2), DType::F32, &device)?)?;
+        let source = input.as_detached_tensor().narrow(2, 1, 2)?;
+        assert!(!source.is_contiguous());
+
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        crate::cuda::graph::copy_tensor(&source, &output.as_detached_tensor())?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        graph.launch()?;
+        stream.synchronize()?;
+        assert_eq!(
+            output.as_detached_tensor().to_vec3::<f32>()?,
+            vec![
+                vec![vec![2.0, 3.0], vec![6.0, 7.0]],
+                vec![vec![10.0, 11.0], vec![14.0, 15.0]],
+            ]
+        );
+
+        input.set(&Tensor::from_vec(
+            (1u16..=16).rev().map(f32::from).collect::<Vec<_>>(),
+            (2, 2, 4),
+            &device,
+        )?)?;
+        graph.launch()?;
+        stream.synchronize()?;
+        assert_eq!(
+            output.as_detached_tensor().to_vec3::<f32>()?,
+            vec![
+                vec![vec![15.0, 14.0], vec![11.0, 10.0]],
+                vec![vec![7.0, 6.0], vec![3.0, 2.0]],
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn graph_suspension_does_not_clear_permanent_disable() {
         let mut state = CudaDecodeGraphState::default();
         state.suspend();
@@ -1478,5 +3354,234 @@ mod tests {
         state.suspend();
         state.resume();
         assert!(state.disabled());
+    }
+
+    #[test]
+    fn eager_retry_block_applies_to_one_failed_step() {
+        let mut state = CudaDecodeGraphState::default();
+        assert!(state.take_eager_retry_allowed());
+        state.block_eager_retry();
+        assert!(!state.take_eager_retry_allowed());
+        assert!(state.take_eager_retry_allowed());
+        state.block_eager_retry();
+        state.clear();
+        assert!(state.take_eager_retry_allowed());
+    }
+
+    #[test]
+    fn graph_generations_are_not_reused_after_cleanup() {
+        let mut state = CudaDecodeGraphState::default();
+        let first = state.allocate_generation();
+        state.clear();
+        let second = state.allocate_generation();
+        state.suspend();
+        state.resume();
+        let third = state.allocate_generation();
+        assert!(first < second && second < third);
+    }
+
+    #[test]
+    fn speculative_state_budget_is_four_percent_by_default() {
+        assert_eq!(default_spec_state_budget(100), 4);
+        assert_eq!(default_spec_state_budget(98_000), 3_920);
+    }
+
+    #[test]
+    fn speculative_state_budget_evicts_lru_entries_per_device() {
+        let gpu0 = DeviceLocation::Cuda { gpu_id: 0 };
+        let gpu1 = DeviceLocation::Cuda { gpu_id: 1 };
+        let budgets = HashMap::from([(gpu0, 100), (gpu1, 100)]);
+        let existing = vec![
+            spec_usage(&[]),
+            spec_usage(&[(0, 40)]),
+            spec_usage(&[(1, 60)]),
+        ];
+
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(1, 50)]), &budgets),
+            vec![2]
+        );
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(0, 120)]), &budgets),
+            vec![1]
+        );
+        let existing = vec![
+            spec_usage(&[(0, 30)]),
+            spec_usage(&[(0, 50)]),
+            spec_usage(&[(0, 10)]),
+        ];
+        assert_eq!(
+            spec_state_eviction_plan(&existing, &spec_usage(&[(0, 60)]), &budgets),
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn one_token_continuation_advances_host_decode_state() -> anyhow::Result<()> {
+        let rows = Arc::new(
+            DecodePagedRows {
+                slot_mappings: vec![vec![39]],
+                block_tables: vec![vec![9]],
+                context_lens: vec![4],
+                full_block_tables: vec![vec![9, 17]],
+                full_context_lens: vec![4],
+                query_len: 1,
+                block_size: 4,
+                use_standard_metadata: false,
+                max_paged_context_len: 64,
+                sliding_window: Some(4),
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            }
+            .padded(2),
+        );
+        let step = CudaGraphDecodeStep {
+            input_ids: Tensor::zeros((2, 1), DType::U32, &Device::Cpu)?,
+            seqlen_offsets: vec![3, 3],
+            context_lens: vec![(0, 1), (0, 1)],
+            position_ids: vec![4, 4],
+            metadata: rows.build_graph_staged()?,
+            state_indices: Some(vec![2, 5]),
+            real_batch: 1,
+        };
+        let continuation = step
+            .one_token_continuation(step.input_ids.clone())?
+            .expect("next allocated block should permit one token");
+        let rows = continuation.metadata.decode_rows.as_ref().unwrap();
+        assert_eq!(rows.slot_mappings, vec![vec![68], vec![_PAD_SLOT_ID]]);
+        assert_eq!(rows.block_tables, vec![vec![9, 17], vec![9, 17]]);
+        assert_eq!(rows.context_lens, vec![5, 5]);
+        assert_eq!(rows.full_context_lens, vec![5, 5]);
+        assert_eq!(continuation.seqlen_offsets, vec![4, 4]);
+        assert_eq!(continuation.context_lens, vec![(0, 1), (0, 1)]);
+        assert_eq!(continuation.position_ids, vec![5, 5]);
+        assert_eq!(continuation.state_indices, Some(vec![2, 5]));
+        Ok(())
+    }
+
+    #[test]
+    fn one_token_continuation_requires_an_allocated_boundary_slot() -> anyhow::Result<()> {
+        let rows = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![39]],
+            block_tables: vec![vec![9]],
+            context_lens: vec![4],
+            full_block_tables: vec![vec![9]],
+            full_context_lens: vec![4],
+            query_len: 1,
+            block_size: 4,
+            use_standard_metadata: false,
+            max_paged_context_len: 64,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 1,
+        });
+        let step = CudaGraphDecodeStep {
+            input_ids: Tensor::zeros((1, 1), DType::U32, &Device::Cpu)?,
+            seqlen_offsets: vec![3],
+            context_lens: vec![(0, 1)],
+            position_ids: vec![4],
+            metadata: rows.build_graph_staged()?,
+            state_indices: None,
+            real_batch: 1,
+        };
+        assert!(step
+            .one_token_continuation(step.input_ids.clone())?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn resident_replay_skips_the_host_input_update() -> anyhow::Result<()> {
+        let device = Device::new_cuda(0)?;
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![0]],
+            block_tables: vec![vec![0]],
+            context_lens: vec![1],
+            full_block_tables: vec![vec![0]],
+            full_context_lens: vec![1],
+            query_len: 1,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 32,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![device.clone()],
+            num_kv_heads: 1,
+        })
+        .build_materialized()?;
+        let initial_ids = Tensor::from_vec(vec![1u32], (1, 1), &device)?;
+        let key = CudaDecodeGraphKey::new(&initial_ids, &metadata, 32)?;
+        let warmup_logits = initial_ids.to_dtype(DType::F32)?;
+        let entry = capture_cuda_decode_graph(
+            CudaDecodeGraphCaptureCtx {
+                key: key.clone(),
+                input_ids: &initial_ids,
+                seqlen_offsets: &[0],
+                block_size: 32,
+                kv_cache: &[],
+                metadata: &metadata,
+                model_metadata: None,
+                activation_dtype: DType::F32,
+                warmup_logits: &warmup_logits,
+                state_indices: None,
+                real_batch: 1,
+            },
+            |input_ids, _| input_ids.to_dtype(DType::F32),
+        )?;
+        let mut state = CudaDecodeGraphState::default();
+        state.insert(entry);
+
+        let step = |token: u32| -> candle_core::Result<CudaGraphDecodeStep> {
+            Ok(CudaGraphDecodeStep {
+                input_ids: Tensor::from_vec(vec![token], (1, 1), &device)?,
+                seqlen_offsets: vec![0],
+                context_lens: vec![(0, 1)],
+                position_ids: vec![0],
+                metadata: metadata.clone(),
+                state_indices: None,
+                real_batch: 1,
+            })
+        };
+        let host_step = step(7)?;
+        let host_replay = state
+            .replay(&key, &host_step, CudaDecodeGraphReplayInput::Host)?
+            .expect("captured graph missing");
+        let launch = host_replay.launch.expect("qlen=1 launch missing");
+        launch.graph_stream().synchronize()?;
+        assert_eq!(host_replay.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+
+        let resident_step = step(13)?;
+        let resident_replay = state
+            .replay(
+                &key,
+                &resident_step,
+                CudaDecodeGraphReplayInput::Resident(&launch),
+            )?
+            .expect("resident graph entry changed");
+        resident_replay
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(resident_replay.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        let resident_launch = resident_replay.launch.unwrap();
+        assert_eq!(resident_launch.generation(), launch.generation());
+        assert!(resident_launch.one_token_continuation()?.is_some());
+        assert!(state.replay_one_token(launch)?.is_none());
+        let lookahead = state
+            .replay_one_token(resident_launch)?
+            .expect("one-token continuation should retain the graph key");
+        lookahead
+            .launch
+            .as_ref()
+            .unwrap()
+            .graph_stream()
+            .synchronize()?;
+        assert_eq!(lookahead.logits.to_vec2::<f32>()?, vec![vec![7.0]]);
+        Ok(())
     }
 }

@@ -80,6 +80,11 @@ Two more flags tune the cache itself:
 - `--pa-block-size <n>`: block size (default 32).
 - `--pa-cache-type`: KV cache quantization (`auto` or `f8e4m3`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
 
+Scheduler memory and latency are controlled independently:
+
+- `--max-num-batched-tokens <n>`: batch-wide prompt-token budget (default 4096).
+- `--max-decode-steps-before-prefill <n>`: maximum decode turns before a waiting prompt receives service (default 8).
+
 See the [serve flag reference](/reference/cli/serve/) for all `--pa-*` flags.
 
 ## How it works
@@ -100,7 +105,15 @@ On CUDA, paged attention dispatches to one of three paths:
 - Eligible prefill chunks: also use FlashInfer.
 - Generic fallback: when a request falls outside those constraints, the runtime gathers blocks and then dispatches to the available attention backend.
 
-Long CUDA prompts are chunked internally with a 4096-token default chunk size. This keeps paged prefill throughput stable at long context and lets long prompts use the paged prefill kernels instead of one very large dispatch. Chunking is internal and does not change the visible prompt, logits, or generated text.
+CUDA prompts are chunked from the batch-wide token budget. The per-sequence chunk is the budget
+divided by the admitted prompt batch size, so peak prefill work stays bounded as concurrency grows.
+Chunking is internal and does not change the visible prompt, logits, or generated text.
+
+`f8e4m3` stores K and V at half the bytes of BF16. CUDA accepts FP16, BF16, or FP32 activations and
+converts at cache-write time; FlashInfer decode applies the K scale to logits and the V scale to
+outputs without gathering a full-precision cache. Scales are immutable for the cache lifetime, so
+previously written entries are never reinterpreted. The default scale is 1.0, matching the common
+vLLM and SGLang serving configuration. FP8 cache is not currently supported for MLA layouts.
 
 To compare with the non-FlashInfer paged decode path, disable the FlashInfer cache layout:
 

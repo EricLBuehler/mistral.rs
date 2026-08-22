@@ -1112,7 +1112,7 @@ impl Model {
                 recurrent: RecurrentLayerConfig {
                     conv_dim: cfg.hidden_size,
                     conv_width: cfg.conv_l_cache,
-                    state_dims: Vec::new(),
+                    state: crate::kv_cache::RecurrentStateSpec::Opaque { dims: Vec::new() },
                     recurrent_dtype: None,
                 },
             },

@@ -4,7 +4,8 @@ use rayon::prelude::*;
 use super::cache::GdnLayerCache;
 use super::config::{GdnDims, GdnVHeadLayout};
 #[cfg(feature = "cuda")]
-use crate::cuda::gdn::{GdnStateSlots, RecurrenceInputs};
+use crate::cuda::gdn::{FusedDecodeRecurrence, GdnStateSlots, RecurrenceInputs};
+use crate::kv_cache::RecurrentStateLayout;
 use crate::pipeline::RecurrentBatchKind;
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -256,6 +257,12 @@ fn decode_recurrence_cpu_from_convolved(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
+    if cache.state_layout != RecurrentStateLayout::GdnKeyMajor {
+        candle_core::bail!(
+            "CPU GDN recurrence requires key-major state, got {:?}",
+            cache.state_layout
+        );
+    }
     let dev = mixed_qkv.device();
     let mixed_f32 = mixed_qkv.to_dtype(DType::F32)?.contiguous()?;
     let b_f32 = b.to_dtype(DType::F32)?.contiguous()?;
@@ -412,29 +419,33 @@ fn recurrence_cuda_from_convolved(
     dtype: DType,
 ) -> Result<Tensor> {
     let mixed_qkv = mixed_qkv.contiguous()?;
-    let b = b.contiguous()?;
-    let a = a.contiguous()?;
+    let (b, a) = if seq_len == 1 {
+        (b.clone(), a.clone())
+    } else {
+        (b.contiguous()?, a.contiguous()?)
+    };
     let a_log = a_log.to_dtype(DType::F32)?.contiguous()?;
     let dt_bias = dt_bias.to_dtype(DType::F32)?.contiguous()?;
     let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;
     let slots = GdnStateSlots::from_option(cache.slots.as_ref());
 
     let out_bh = if seq_len == 1 {
-        crate::cuda::gdn::fused_decode_recurrence_cuda(
-            &mixed_qkv,
-            &b,
-            &a,
-            &a_log,
-            &dt_bias,
-            &mut state_flat,
+        crate::cuda::gdn::fused_decode_recurrence_cuda(FusedDecodeRecurrence {
+            mixed_qkv: &mixed_qkv,
+            b: &b,
+            a: &a,
+            a_log: &a_log,
+            dt_bias: &dt_bias,
+            state: &mut state_flat,
             batch_size,
-            dims.num_k_heads,
-            dims.num_v_heads,
-            dims.head_k_dim,
-            dims.head_v_dim,
-            dims.v_head_layout == GdnVHeadLayout::Tiled,
+            num_k_heads: dims.num_k_heads,
+            num_v_heads: dims.num_v_heads,
+            head_k_dim: dims.head_k_dim,
+            head_v_dim: dims.head_v_dim,
+            tiled_v_heads: dims.v_head_layout == GdnVHeadLayout::Tiled,
+            state_layout: cache.state_layout,
             slots,
-        )?
+        })?
     } else {
         let (q_bh, k_bh, v_bh, g_bh, beta_bh) = crate::cuda::gdn::prepare_recurrence_inputs_cuda(
             &mixed_qkv,
@@ -457,7 +468,13 @@ fn recurrence_cuda_from_convolved(
             g: &g_bh,
             beta: &beta_bh,
         };
-        if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
+        if cache.state_layout == RecurrentStateLayout::GdnValueMajor {
+            crate::cuda::gdn::vmajor_warp_gated_delta_rule_recurrence_cuda(
+                inputs,
+                &mut state_flat,
+                slots,
+            )?
+        } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
             crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
         } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
             crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(
@@ -497,6 +514,12 @@ pub fn apply_recurrence(
         return recurrence_metal(q, k, v, g, beta, dims, batch_size, seq_len, cache, dtype);
     }
 
+    if cache.state_layout != RecurrentStateLayout::GdnKeyMajor {
+        candle_core::bail!(
+            "CPU GDN recurrence requires key-major state, got {:?}",
+            cache.state_layout
+        );
+    }
     gated_delta_rule_recurrence(q, k, v, g, beta, &mut cache.recurrent_state)
 }
 
@@ -529,7 +552,13 @@ fn recurrence_cuda(
         beta: &beta_bh,
     };
 
-    let out_bh = if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
+    let out_bh = if cache.state_layout == RecurrentStateLayout::GdnValueMajor {
+        crate::cuda::gdn::vmajor_warp_gated_delta_rule_recurrence_cuda(
+            inputs,
+            &mut state_flat,
+            slots,
+        )?
+    } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD && use_warp_prefill_recurrence(dims) {
         crate::cuda::gdn::warp_gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
     } else if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
         crate::cuda::gdn::chunked_gated_delta_rule_recurrence_cuda(inputs, &mut state_flat, slots)?
@@ -554,6 +583,12 @@ fn recurrence_metal(
     cache: &mut GdnLayerCache,
     dtype: DType,
 ) -> Result<Tensor> {
+    if cache.state_layout != RecurrentStateLayout::GdnKeyMajor {
+        candle_core::bail!(
+            "Metal GDN recurrence requires key-major state, got {:?}",
+            cache.state_layout
+        );
+    }
     let q_bh = prepare_q_for_backend(q, dims, batch_size, seq_len)?;
     let k_bh = prepare_kv_for_backend(k, dims, batch_size, seq_len, dims.head_k_dim)?;
     let v_bh = prepare_kv_for_backend(v, dims, batch_size, seq_len, dims.head_v_dim)?;
@@ -627,13 +662,39 @@ fn prepare_gate_for_backend(
 }
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
+fn recurrent_physical_dims(layout: RecurrentStateLayout, dims: &GdnDims) -> Result<(usize, usize)> {
+    match layout {
+        RecurrentStateLayout::GdnKeyMajor => Ok((dims.head_k_dim, dims.head_v_dim)),
+        RecurrentStateLayout::GdnValueMajor => Ok((dims.head_v_dim, dims.head_k_dim)),
+        RecurrentStateLayout::Opaque => candle_core::bail!("GDN cache has opaque state layout"),
+    }
+}
+
+#[cfg(any(feature = "cuda", feature = "metal"))]
 fn prepare_state_for_backend(
     cache: &GdnLayerCache,
     dims: &GdnDims,
     batch_size: usize,
 ) -> Result<Tensor> {
+    let (physical_dim_2, physical_dim_3) = recurrent_physical_dims(cache.state_layout, dims)?;
+    let state_dims = cache.recurrent_state.dims4()?;
+    if state_dims.1 != dims.num_v_heads
+        || state_dims.2 != physical_dim_2
+        || state_dims.3 != physical_dim_3
+    {
+        candle_core::bail!(
+            "GDN {:?} state shape mismatch: got {:?}, expected [B, {}, {}, {}]",
+            cache.state_layout,
+            cache.recurrent_state.dims(),
+            dims.num_v_heads,
+            physical_dim_2,
+            physical_dim_3
+        );
+    }
     if cache.slots.is_some() {
-        // The pool is f32 and contiguous by construction; kernels address rows through the slot table
+        if cache.recurrent_state.dtype() != DType::F32 || !cache.recurrent_state.is_contiguous() {
+            candle_core::bail!("pooled GDN recurrent state must be contiguous f32");
+        }
         return Ok(cache.recurrent_state.clone());
     }
     cache
@@ -641,8 +702,8 @@ fn prepare_state_for_backend(
         .to_dtype(DType::F32)?
         .reshape((
             batch_size * dims.num_v_heads,
-            dims.head_k_dim,
-            dims.head_v_dim,
+            physical_dim_2,
+            physical_dim_3,
         ))?
         .contiguous()
 }
@@ -658,20 +719,15 @@ fn finish_recurrence(
     dtype: DType,
 ) -> Result<Tensor> {
     if cache.slots.is_none() {
+        let (physical_dim_2, physical_dim_3) = recurrent_physical_dims(cache.state_layout, dims)?;
         cache.recurrent_state = state_flat
-            .reshape((
-                batch_size,
-                dims.num_v_heads,
-                dims.head_k_dim,
-                dims.head_v_dim,
-            ))?
+            .reshape((batch_size, dims.num_v_heads, physical_dim_2, physical_dim_3))?
             .to_dtype(cache.recurrent_state.dtype())?;
     }
 
     out_bh
         .reshape((batch_size, dims.num_v_heads, seq_len, dims.head_v_dim))?
         .transpose(1, 2)?
-        .contiguous()?
         .to_dtype(dtype)
 }
 
@@ -705,17 +761,15 @@ fn causal_conv1d_update(
         return causal_conv1d_update_cpu(x, conv1d_weight, dims, cache);
     }
 
-    let x_t = x.transpose(1, 2)?.contiguous()?;
-
     #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() {
+    if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
         let conv_state = cache.conv_state.contiguous()?;
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
-            &x_t,
+            x,
             &weight,
             &conv_state,
             dims.conv_kernel_size,
@@ -723,8 +777,10 @@ fn causal_conv1d_update(
             GdnStateSlots::from_option(cache.slots.as_ref()),
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
+
+    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
     if x_t.device().is_metal() {
@@ -827,16 +883,15 @@ fn causal_conv1d_full(
     cache: &mut GdnLayerCache,
 ) -> Result<Tensor> {
     let (batch_size, seq_len, conv_dim) = x.dims3()?;
-    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "cuda")]
-    if x_t.device().is_cuda() {
+    if x.device().is_cuda() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
         let (output, new_conv_state) = crate::cuda::gdn::causal_conv1d_cuda(
-            &x_t,
+            x,
             &weight,
             &cache.conv_state,
             dims.conv_kernel_size,
@@ -844,8 +899,10 @@ fn causal_conv1d_full(
             GdnStateSlots::from_option(cache.slots.as_ref()),
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
+
+    let x_t = x.transpose(1, 2)?.contiguous()?;
 
     #[cfg(feature = "metal")]
     if x_t.device().is_metal() {
@@ -1200,6 +1257,7 @@ mod tests {
         let mut fast_cache = GdnLayerCache {
             conv_state: conv_state.clone(),
             recurrent_state: initial_state.clone(),
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
         let fast = decode_recurrence_cpu_from_convolved(
@@ -1228,6 +1286,7 @@ mod tests {
         let mut reference_cache = GdnLayerCache {
             conv_state,
             recurrent_state: initial_state,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
         let reference = gated_delta_rule_recurrence(
@@ -1398,6 +1457,7 @@ mod tests {
         let mut grouped_cache = GdnLayerCache {
             conv_state: conv_state_grouped.clone(),
             recurrent_state: recurrent_state_grouped.clone(),
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
         let mut tiled_cache = GdnLayerCache {
@@ -1407,6 +1467,7 @@ mod tests {
                 1,
                 &head_runtime_to_grouped,
             )?,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
 
@@ -1686,11 +1747,13 @@ mod tests {
         let mut fast_cache = GdnLayerCache {
             conv_state: initial_state.clone(),
             recurrent_state: recurrent_state.clone(),
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
         let mut reference_cache = GdnLayerCache {
             conv_state: initial_state,
             recurrent_state,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
 
@@ -1741,11 +1804,13 @@ mod tests {
         let mut one_shot_cache = GdnLayerCache {
             conv_state: conv_state.clone(),
             recurrent_state: recurrent_state.clone(),
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
         let mut chunked_cache = GdnLayerCache {
             conv_state,
             recurrent_state,
+            state_layout: RecurrentStateLayout::GdnKeyMajor,
             slots: None,
         };
 

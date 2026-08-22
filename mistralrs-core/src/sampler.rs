@@ -322,6 +322,111 @@ pub(crate) enum CudaBatchSamplingKind {
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) struct CudaTop1BatchCompletion {
+    pub(crate) token_ids: Vec<u32>,
+    pub(crate) packed: Option<Vec<[f32; crate::ops::CUDA_TOP1_PACKED_WIDTH]>>,
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) struct CudaTop1BatchSubmission {
+    cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
+    submission: Option<crate::ops::CudaTop1Submission>,
+}
+
+#[cfg(feature = "cuda")]
+impl CudaTop1BatchSubmission {
+    pub(crate) fn batch_size(&self) -> usize {
+        self.submission
+            .as_ref()
+            .expect("CUDA top-1 submission was already completed")
+            .batch_size()
+    }
+
+    pub(crate) fn wait_on(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_wait_on(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn release_after(
+        &self,
+        stream: &Arc<candle_core::cuda_backend::cudarc::driver::CudaStream>,
+    ) -> Result<()> {
+        let mut cache = self.cache.lock().unwrap();
+        crate::ops::cuda_top1_device_tokens_release_after(
+            cache
+                .as_mut()
+                .expect("CUDA top-1 workspace exists while its submission is active"),
+            self.submission
+                .as_ref()
+                .expect("CUDA top-1 submission was already completed"),
+            stream,
+        )
+    }
+
+    pub(crate) fn complete(mut self) -> Result<CudaTop1BatchCompletion> {
+        let submission = self
+            .submission
+            .as_ref()
+            .expect("CUDA top-1 submission was already completed");
+        submission.wait()?;
+        let (token_ids, packed) = {
+            let mut cache = self.cache.lock().unwrap();
+            let completion = crate::ops::cuda_top1_submission_complete(
+                cache
+                    .as_mut()
+                    .expect("CUDA top-1 workspace exists while its submission is active"),
+                submission,
+            )?;
+            let token_ids = completion.token_ids().to_vec();
+            let packed = completion.packed().map(|values| {
+                values
+                    .chunks_exact(crate::ops::CUDA_TOP1_PACKED_WIDTH)
+                    .map(|row| [row[0], row[1]])
+                    .collect()
+            });
+            (token_ids, packed)
+        };
+        self.submission = None;
+        if packed.is_none()
+            && token_ids
+                .iter()
+                .any(|&token| token == crate::ops::CUDA_TOP1_INVALID_TOKEN)
+        {
+            candle_core::bail!("invalid CUDA top-1 output");
+        }
+        Ok(CudaTop1BatchCompletion { token_ids, packed })
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for CudaTop1BatchSubmission {
+    fn drop(&mut self) {
+        let Some(submission) = self.submission.take() else {
+            return;
+        };
+        let _ = submission.wait();
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(workspace) = cache.as_mut() {
+            let _ = crate::ops::cuda_top1_submission_cancel(workspace, &submission);
+        }
+    }
+}
+
+#[cfg(feature = "cuda")]
 impl CudaBatchSamplingKind {
     pub(crate) fn is_argmax(self) -> bool {
         matches!(self, Self::Greedy | Self::TopK { k: 1 })
@@ -672,6 +777,58 @@ impl Sampler {
             logprob: 0.0,
             top_logprobs: None,
             bytes: None,
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn sample_cuda_top1_batch(&self, logits: &Tensor) -> Result<Vec<[f32; 2]>> {
+        self.submit_cuda_top1_batch(logits, true)?
+            .complete()?
+            .packed
+            .ok_or_else(|| candle_core::Error::Msg("missing CUDA top-1 packed output".to_string()))
+    }
+
+    #[cfg(feature = "cuda")]
+    fn submit_cuda_top1_batch(
+        &self,
+        logits: &Tensor,
+        packed: bool,
+    ) -> Result<CudaTop1BatchSubmission> {
+        let submission = {
+            let mut cache = self.top1_cache.lock().unwrap();
+            if packed {
+                crate::ops::cuda_top1_logits_f32_submit_batched_packed(logits, &mut cache)?
+            } else {
+                crate::ops::cuda_top1_logits_f32_submit_batched(logits, &mut cache)?
+            }
+        };
+        Ok(CudaTop1BatchSubmission {
+            cache: self.top1_cache.clone(),
+            submission: Some(submission),
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_top1_batch_owned(
+        &self,
+        logits: &Tensor,
+    ) -> Result<CudaTop1BatchSubmission> {
+        self.submit_cuda_top1_batch(logits, false)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn submit_cuda_top1_batch_into(
+        &self,
+        logits: &Tensor,
+        token_ids_dst: &Tensor,
+    ) -> Result<CudaTop1BatchSubmission> {
+        let submission = {
+            let mut cache = self.top1_cache.lock().unwrap();
+            crate::ops::cuda_top1_logits_f32_submit_batched_into(logits, token_ids_dst, &mut cache)?
+        };
+        Ok(CudaTop1BatchSubmission {
+            cache: self.top1_cache.clone(),
+            submission: Some(submission),
         })
     }
 
