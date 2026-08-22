@@ -32,6 +32,7 @@ extend-ignore-re = [
     "mxfp4_get_max_smem_optin",
     "alog",
     "ba",
+    "pre_layrnorm",
     # mmq_gguf CUDA kernels (ggml port)
     "ggml_cuda_get_max_cpy_bytes",
     "nb_per_cpy",
