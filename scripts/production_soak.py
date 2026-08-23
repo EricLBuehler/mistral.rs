@@ -71,7 +71,7 @@ DEFAULT_MIN_OVERLAP_BASELINE_COMPLETIONS = 2
 RETRIEVAL_PADDING_SLACK_TOKENS = 64
 RETRIEVAL_SOURCE_MARGIN_TOKENS = 256
 RETRIEVAL_INITIAL_SAMPLE_ROWS = 512
-RETRIEVAL_PADDING_PROBES = (1, 2, 8)
+RETRIEVAL_PADDING_ADJUSTMENT_STEPS = 64
 RETRIEVAL_PADDING_CANDIDATES = (
     " x",
     " z",
@@ -433,7 +433,7 @@ class TokenizerAdapter:
         if candidate_tokens <= 0:
             raise ValueError(f"target length {target_tokens} leaves no room for retrieval data")
         visited: set[int] = set()
-        best_below: tuple[int, str, int] | None = None
+        below_candidates: list[tuple[int, str, int]] = []
         for _ in range(RETRIEVAL_LENGTH_REFINEMENT_STEPS):
             if candidate_tokens in visited:
                 break
@@ -442,35 +442,40 @@ class TokenizerAdapter:
             actual = self.count(text)
             if actual == target_tokens:
                 return text, expected
-            if actual < target_tokens and (
-                best_below is None or actual > best_below[2]
-            ):
-                best_below = (candidate_tokens, text, actual)
+            if actual < target_tokens:
+                below_candidates.append((candidate_tokens, text, actual))
             candidate_tokens = max(
                 1,
                 min(len(filler_ids), candidate_tokens + target_tokens - actual),
             )
-        if best_below is None:
+        if not below_candidates:
             raise RuntimeError(
                 f"could not construct a retrieval prompt below {target_tokens} tokens"
             )
-        candidate_tokens, text, actual = best_below
-        deficit = target_tokens - actual
-
-        probes = sorted({min(deficit, count) for count in RETRIEVAL_PADDING_PROBES})
-        for unit in RETRIEVAL_PADDING_CANDIDATES:
-            if self.count(unit) != 1:
-                continue
-            if any(
-                self.count(build(candidate_tokens, unit * count)) != actual + count
-                for count in probes
-            ):
-                continue
-            text = build(candidate_tokens, unit * deficit)
-            if self.count(text) == target_tokens:
-                return text, expected
+        padding_adjustments = [0]
+        for step in range(1, RETRIEVAL_PADDING_ADJUSTMENT_STEPS + 1):
+            padding_adjustments.extend((-step, step))
+        below_candidates.sort(
+            key=lambda candidate: abs(
+                target_tokens - candidate[2] - RETRIEVAL_PADDING_SLACK_TOKENS
+            )
+        )
+        for candidate_tokens, _, actual in below_candidates:
+            deficit = target_tokens - actual
+            for unit in RETRIEVAL_PADDING_CANDIDATES:
+                if self.count(unit) != 1:
+                    continue
+                for adjustment in padding_adjustments:
+                    padding_tokens = deficit + adjustment
+                    if padding_tokens <= 0:
+                        continue
+                    text = build(candidate_tokens, unit * padding_tokens)
+                    if self.count(text) == target_tokens:
+                        return text, expected
+        candidate_tokens, _, actual = max(below_candidates, key=lambda candidate: candidate[2])
         raise RuntimeError(
-            f"could not find stable one-token padding for a {target_tokens}-token retrieval prompt"
+            f"could not fit a {target_tokens}-token retrieval prompt from "
+            f"{actual} tokens using {candidate_tokens} filler tokens"
         )
 
 
