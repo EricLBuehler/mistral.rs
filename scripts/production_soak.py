@@ -52,6 +52,7 @@ DEFAULT_CONTEXT_MIX = ((1_024, 45), (8_192, 30), (32_768, 20), (100_000, 5))
 DEFAULT_PRODUCTION_DURATION_SECONDS = 14_400.0
 DEFAULT_TELEMETRY_INTERVAL_SECONDS = 5.0
 DEFAULT_PROBE_INTERVAL_SECONDS = 30.0
+DEFAULT_PRODUCTION_DIAGNOSTIC_CONCURRENCY = len(DEFAULT_CONTEXT_LENGTHS)
 DEFAULT_COMPARISON_WINDOW_SECONDS = 3_600.0
 DEFAULT_MIN_COMPARISON_WINDOW_SAMPLES = 32
 DEFAULT_PRODUCTION_MIN_OUTPUT_TOK_S_BY_CONCURRENCY = {8: 450.0, 16: 500.0}
@@ -8705,6 +8706,34 @@ async def stream_request_with_slot(
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProductionPhaseSlots:
+    traffic: asyncio.Semaphore
+    diagnostics: asyncio.Semaphore
+
+    @classmethod
+    def create(
+        cls,
+        traffic_concurrency: int,
+        diagnostic_concurrency: int,
+    ) -> ProductionPhaseSlots:
+        return cls(
+            traffic=asyncio.Semaphore(traffic_concurrency),
+            diagnostics=asyncio.Semaphore(diagnostic_concurrency),
+        )
+
+
+async def wait_for_production_phase_tasks(
+    tasks: Sequence[asyncio.Task[Any]],
+) -> None:
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def choose_context(
     rng: random.Random,
     context_mix: Sequence[tuple[int, int]],
@@ -9025,7 +9054,10 @@ async def production_mode(
             (phase_start, phase_end),
         )
         phase_results: list[RequestResult] = []
-        phase_slots = asyncio.Semaphore(concurrency)
+        phase_slots = ProductionPhaseSlots.create(
+            concurrency,
+            args.diagnostic_concurrency,
+        )
 
         async def worker(worker_index: int) -> None:
             rng = random.Random(args.seed + phase_index * 100_000 + worker_index)
@@ -9045,7 +9077,7 @@ async def production_mode(
                 scheduled_at = time.perf_counter()
                 result = await stream_request_with_slot(
                     client,
-                    phase_slots,
+                    phase_slots.traffic,
                     spec,
                     scheduled_at=scheduled_at,
                     retain_output_event_windows=retained_output_event_windows,
@@ -9073,7 +9105,7 @@ async def production_mode(
                 )
                 result = await stream_request_with_slot(
                     client,
-                    phase_slots,
+                    phase_slots.diagnostics,
                     spec,
                     scheduled_at=scheduled_at,
                 )
@@ -9112,7 +9144,7 @@ async def production_mode(
                     *(
                         stream_request_with_slot(
                             client,
-                            phase_slots,
+                            phase_slots.diagnostics,
                             spec,
                             scheduled_at=scheduled_at,
                         )
@@ -9134,10 +9166,12 @@ async def production_mode(
             concurrency=concurrency,
             planned_seconds=phase_duration,
         )
-        workers = [asyncio.create_task(worker(index)) for index in range(concurrency)]
-        probe_task = asyncio.create_task(probes())
-        semantic_task = asyncio.create_task(semantic_sentinels())
-        await asyncio.gather(*workers, probe_task, semantic_task)
+        phase_tasks = [
+            *(asyncio.create_task(worker(index)) for index in range(concurrency)),
+            asyncio.create_task(probes()),
+            asyncio.create_task(semantic_sentinels()),
+        ]
+        await wait_for_production_phase_tasks(phase_tasks)
         phase_completed = time.perf_counter()
         phase_metrics_after = await safe_metrics(client, writer, f"{phase}-metrics-end")
         wall = phase_completed - phase_start
@@ -11341,6 +11375,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--probe-interval-seconds", type=float, default=DEFAULT_PROBE_INTERVAL_SECONDS
     )
     production.add_argument(
+        "--diagnostic-concurrency",
+        type=int,
+        default=DEFAULT_PRODUCTION_DIAGNOSTIC_CONCURRENCY,
+    )
+    production.add_argument(
         "--telemetry-interval-seconds",
         type=float,
         default=DEFAULT_TELEMETRY_INTERVAL_SECONDS,
@@ -11998,6 +12037,7 @@ def validate_args(args: argparse.Namespace) -> None:
         for name in (
             "duration_seconds",
             "probe_interval_seconds",
+            "diagnostic_concurrency",
             "telemetry_interval_seconds",
             "comparison_window_seconds",
             "min_comparison_window_samples",

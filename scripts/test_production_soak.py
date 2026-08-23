@@ -1378,37 +1378,116 @@ class ProductionRuntimeCoordinationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event, "production_prewarm_summary")
         self.assertFalse(fields["passed"])
 
-    async def test_shared_slots_bound_traffic_and_diagnostics(self) -> None:
+    async def test_diagnostics_do_not_consume_traffic_slots(self) -> None:
         class Client:
             def __init__(self) -> None:
-                self.active = 0
-                self.maximum_active = 0
+                self.active = {"traffic": 0, "diagnostic": 0}
+                self.maximum = {"traffic": 0, "diagnostic": 0}
+                self.maximum_total = 0
+                self.overlap = asyncio.Event()
+                self.release = asyncio.Event()
+                self.scheduled_at = []
 
-            async def stream_request(self, spec, **_kwargs):
-                self.active += 1
-                self.maximum_active = max(self.maximum_active, self.active)
-                await asyncio.sleep(0.01)
-                self.active -= 1
-                return request_result(
-                    case_id=spec.case_id,
-                    completion_tokens=spec.max_tokens,
-                    output_chunks=spec.max_tokens,
-                    finish_reason="length",
-                    tags=spec.tags,
-                )
+            async def stream_request(self, spec, *, scheduled_at=None, **_kwargs):
+                role = spec.tags["role"]
+                self.scheduled_at.append(scheduled_at)
+                self.active[role] += 1
+                self.maximum[role] = max(self.maximum[role], self.active[role])
+                self.maximum_total = max(self.maximum_total, sum(self.active.values()))
+                if self.active == {"traffic": 2, "diagnostic": 1}:
+                    self.overlap.set()
+                try:
+                    await self.release.wait()
+                    return request_result(
+                        case_id=spec.case_id,
+                        completion_tokens=spec.max_tokens,
+                        output_chunks=spec.max_tokens,
+                        finish_reason="length",
+                        tags=spec.tags,
+                    )
+                finally:
+                    self.active[role] -= 1
 
         client = Client()
-        slots = asyncio.Semaphore(2)
-        specs = [
-            soak.RequestSpec(f"slot-{index}", index, 8, prompt="prompt")
-            for index in range(6)
+        slots = soak.ProductionPhaseSlots.create(2, 1)
+        traffic = [
+            soak.RequestSpec(
+                f"traffic-{index}",
+                index,
+                8,
+                prompt="prompt",
+                tags={"role": "traffic"},
+            )
+            for index in range(2)
+        ]
+        diagnostics = [
+            soak.RequestSpec(
+                f"diagnostic-{index}",
+                index,
+                8,
+                prompt="prompt",
+                tags={"role": "diagnostic"},
+            )
+            for index in range(2)
+        ]
+        scheduled_at = 123.0
+        tasks = [
+            *(
+                asyncio.create_task(
+                    soak.stream_request_with_slot(
+                        client,
+                        slots.traffic,
+                        spec,
+                        scheduled_at=scheduled_at,
+                    )
+                )
+                for spec in traffic
+            ),
+            *(
+                asyncio.create_task(
+                    soak.stream_request_with_slot(
+                        client,
+                        slots.diagnostics,
+                        spec,
+                        scheduled_at=scheduled_at,
+                    )
+                )
+                for spec in diagnostics
+            ),
         ]
 
-        await asyncio.gather(
-            *(soak.stream_request_with_slot(client, slots, spec) for spec in specs)
-        )
+        await asyncio.wait_for(client.overlap.wait(), timeout=1.0)
+        self.assertEqual(client.active, {"traffic": 2, "diagnostic": 1})
+        client.release.set()
+        await soak.wait_for_production_phase_tasks(tasks)
 
-        self.assertEqual(client.maximum_active, 2)
+        self.assertEqual(client.maximum, {"traffic": 2, "diagnostic": 1})
+        self.assertEqual(client.maximum_total, 3)
+        self.assertEqual(client.scheduled_at, [scheduled_at] * 4)
+        self.assertTrue(all(task.done() for task in tasks))
+
+    async def test_production_phase_task_failure_cleans_up_siblings(self) -> None:
+        blocker_started = asyncio.Event()
+        blocker_cancelled = asyncio.Event()
+
+        async def blocker() -> None:
+            blocker_started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                blocker_cancelled.set()
+
+        async def fail() -> None:
+            await blocker_started.wait()
+            raise RuntimeError("phase failed")
+
+        tasks = [asyncio.create_task(blocker()), asyncio.create_task(fail())]
+
+        with self.assertRaisesRegex(RuntimeError, "phase failed"):
+            await soak.wait_for_production_phase_tasks(tasks)
+
+        self.assertTrue(blocker_cancelled.is_set())
+        self.assertTrue(all(task.done() for task in tasks))
 
     async def test_telemetry_continues_until_stop_and_collects_terminal_sample(self) -> None:
         class Writer:
@@ -2819,6 +2898,16 @@ class ArgumentValidationTests(unittest.TestCase):
             args.min_comparison_window_samples,
             soak.DEFAULT_MIN_COMPARISON_WINDOW_SAMPLES,
         )
+        self.assertEqual(
+            args.diagnostic_concurrency,
+            soak.DEFAULT_PRODUCTION_DIAGNOSTIC_CONCURRENCY,
+        )
+
+    def test_production_requires_positive_diagnostic_concurrency(self) -> None:
+        args = self.production_args("--diagnostic-concurrency", "0")
+
+        with self.assertRaisesRegex(ValueError, "diagnostic-concurrency"):
+            soak.validate_args(args)
 
     def test_production_throughput_floors_default_to_c8_and_c16_targets(self) -> None:
         args = soak.build_parser().parse_args(
