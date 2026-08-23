@@ -204,7 +204,8 @@ pub use scheduler::{
 pub use search::{SearchCallback, SearchFunctionParameters, SearchResult};
 use serde::Serialize;
 pub use speculative::{
-    reserve_external_mtp_memory, MtpConfig, MtpDraftSamplingMethod, SpeculativeConfig,
+    reserve_external_mtp_memory, reserve_external_mtp_memory_with_runtime, MtpConfig,
+    MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,
 };
 pub use speech_models::{utils as speech_utils, SpeechGenerationConfig, SpeechLoaderType};
 use tokio::runtime::Runtime;
@@ -2726,10 +2727,18 @@ impl MistralRs {
         let realized_cache_config = {
             let mut pipeline = pipeline.lock().await;
             if let Some(mtp_config) = loader_config.mtp_config.clone() {
+                let prefix_cache_capacity = if unloaded_state.engine_config.no_prefix_cache {
+                    0
+                } else {
+                    unloaded_state.engine_config.prefix_cache_n
+                };
                 pipeline
-                    .attach_speculative(SpeculativeConfig::Mtp(
-                        mtp_config.with_draft_lm_head_isq(loader_config.isq),
-                    ))
+                    .attach_speculative_with_runtime(
+                        SpeculativeConfig::Mtp(
+                            mtp_config.with_draft_lm_head_isq(loader_config.isq),
+                        ),
+                        MtpRuntimeConfig::new(prefix_cache_capacity),
+                    )
                     .map_err(|e| {
                         MistralRsError::ReloadFailed(format!(
                             "Failed to attach MTP speculative decoding: {e}"

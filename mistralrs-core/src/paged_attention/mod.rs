@@ -116,6 +116,23 @@ mod tests {
     }
 
     #[test]
+    fn recurrent_prefix_capacity_defaults_to_zero_and_can_be_configured() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(
+            Some(32),
+            MemoryGpuConfig::MbAmount(1),
+            PagedCacheType::Auto,
+        )?;
+        assert_eq!(config.recurrent_prefix_capacity, 0);
+        assert_eq!(
+            config
+                .with_recurrent_prefix_capacity(7)
+                .recurrent_prefix_capacity,
+            7
+        );
+        Ok(())
+    }
+
+    #[test]
     fn activation_reservation_is_idempotent_and_device_specific() -> anyhow::Result<()> {
         let mut config = PagedAttentionConfig::new(
             Some(32),
@@ -183,6 +200,7 @@ pub struct PagedAttentionConfig {
     pub(crate) primary_activation_memory_reservation_bytes: usize,
     pub(crate) mapped_activation_memory_reservation_bytes: usize,
     pub(crate) recurrent_checkpoint_lanes: usize,
+    pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) resolve_memory_utilization_after_load: bool,
 }
 
@@ -207,6 +225,7 @@ impl PagedAttentionConfig {
             primary_activation_memory_reservation_bytes: 0,
             mapped_activation_memory_reservation_bytes: 0,
             recurrent_checkpoint_lanes: 1,
+            recurrent_prefix_capacity: 0,
             resolve_memory_utilization_after_load: true,
         })
     }
@@ -234,6 +253,11 @@ impl PagedAttentionConfig {
         }
         self.recurrent_checkpoint_lanes = lanes;
         Ok(self)
+    }
+
+    pub fn with_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
+        self.recurrent_prefix_capacity = capacity;
+        self
     }
 
     pub(crate) fn reserve_activation_memory(
@@ -489,7 +513,7 @@ pub fn calculate_cache_config(
     }
     if secondary_device_memory_reservation_mb > 0 && !silent && num_devices > 1 {
         info!(
-            "Reserving {secondary_device_memory_reservation_mb} MB on each mapped device for activations."
+            "Reserving {secondary_device_memory_reservation_mb} MB on each mapped device for runtime components and activations."
         );
     }
 

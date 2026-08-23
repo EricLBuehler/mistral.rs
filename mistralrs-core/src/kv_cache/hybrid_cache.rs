@@ -7,8 +7,8 @@
 //! The key insight is that recurrent state is accessed via `state_indices` which map
 //! each sequence in the current batch to its slot in the pool.
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
-use std::collections::HashSet;
+use candle_core::{DType, Device, DeviceLocation, IndexOp, Result, Tensor};
+use std::collections::{HashMap, HashSet};
 
 use super::KvCache;
 use crate::layers_masker::PastKvLenCache;
@@ -423,6 +423,28 @@ impl RecurrentStatePool {
 
     pub fn recurrent_dtype(&self) -> DType {
         self.recurrent_dtype
+    }
+
+    fn snapshot_bytes(&self) -> Result<usize> {
+        let conv_elements = self.conv_dim.checked_mul(self.conv_width).ok_or_else(|| {
+            candle_core::Error::msg("recurrent convolution snapshot size overflow")
+        })?;
+        let recurrent_elements = self.state_dims.iter().try_fold(1usize, |elements, dim| {
+            elements
+                .checked_mul(*dim)
+                .ok_or_else(|| candle_core::Error::msg("recurrent state snapshot size overflow"))
+        })?;
+        let conv_bytes = conv_elements
+            .checked_mul(self.conv_dtype.size_in_bytes())
+            .ok_or_else(|| {
+                candle_core::Error::msg("recurrent convolution snapshot size overflow")
+            })?;
+        let recurrent_bytes = recurrent_elements
+            .checked_mul(self.recurrent_dtype.size_in_bytes())
+            .ok_or_else(|| candle_core::Error::msg("recurrent state snapshot size overflow"))?;
+        conv_bytes
+            .checked_add(recurrent_bytes)
+            .ok_or_else(|| candle_core::Error::msg("recurrent snapshot size overflow"))
     }
 
     pub fn state_layout(&self) -> RecurrentStateLayout {
@@ -840,6 +862,24 @@ impl HybridCache {
         } else {
             0
         }
+    }
+
+    pub(crate) fn recurrent_snapshot_bytes_by_device(
+        &self,
+    ) -> Result<HashMap<DeviceLocation, usize>> {
+        let mut bytes_by_device: HashMap<DeviceLocation, usize> = HashMap::new();
+        for pool in self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool)
+        {
+            let bytes = pool.snapshot_bytes()?;
+            let entry = bytes_by_device.entry(pool.device().location()).or_default();
+            *entry = (*entry).checked_add(bytes).ok_or_else(|| {
+                candle_core::Error::msg("recurrent snapshot device size overflow")
+            })?;
+        }
+        Ok(bytes_by_device)
     }
 
     pub fn recurrent_slots_used(&self) -> usize {
@@ -1497,6 +1537,24 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("1 layer devices"));
+    }
+
+    #[test]
+    fn recurrent_snapshot_bytes_use_one_physical_row_per_layer() -> Result<()> {
+        let cache = HybridCache::new(
+            config(vec![
+                HybridLayerType::Recurrent,
+                HybridLayerType::Attention,
+                HybridLayerType::Recurrent,
+            ]),
+            DType::F32,
+            &[Device::Cpu, Device::Cpu, Device::Cpu],
+        )?;
+
+        let bytes = cache.recurrent_snapshot_bytes_by_device()?;
+        assert_eq!(bytes.len(), 1);
+        assert_eq!(bytes[&DeviceLocation::Cpu], 80);
+        Ok(())
     }
 
     #[test]

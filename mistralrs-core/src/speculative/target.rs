@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use candle_core::{Result, Tensor};
+
+use crate::prefix_cacher::PagedAuxiliaryPrefixState;
 
 use super::{
     logging::log_attach, SpeculativeAttachInfo, SpeculativeBatchObservation, SpeculativeBatchPlan,
@@ -13,6 +17,47 @@ pub enum SpeculativePrefixReplay {
     NotRequired,
     Suffix(usize),
     Full,
+}
+
+impl SpeculativePrefixReplay {
+    pub fn replay_tokens(self, cached_tokens: usize) -> usize {
+        match self {
+            Self::NotRequired => 0,
+            Self::Suffix(tokens) => tokens.min(cached_tokens),
+            Self::Full => cached_tokens,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpeculativePrefixCheckpointPolicy {
+    fallback_replay: SpeculativePrefixReplay,
+    text_auxiliary_state: bool,
+}
+
+impl SpeculativePrefixCheckpointPolicy {
+    pub fn new(fallback_replay: SpeculativePrefixReplay, text_auxiliary_state: bool) -> Self {
+        Self {
+            fallback_replay,
+            text_auxiliary_state,
+        }
+    }
+
+    pub fn replay_for(self, modality_signature: u8) -> SpeculativePrefixReplay {
+        if self.uses_auxiliary_state(modality_signature) {
+            SpeculativePrefixReplay::NotRequired
+        } else {
+            self.fallback_replay
+        }
+    }
+
+    pub fn fallback_replay(self) -> SpeculativePrefixReplay {
+        self.fallback_replay
+    }
+
+    pub fn uses_auxiliary_state(self, modality_signature: u8) -> bool {
+        self.text_auxiliary_state && modality_signature == 0
+    }
 }
 
 pub(crate) fn clamp_speculative_prefix_cache_hit(
@@ -51,6 +96,15 @@ pub trait SpeculativeTargetMixin {
         }
     }
 
+    #[doc(hidden)]
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: SpeculativeConfig,
+        _runtime: super::MtpRuntimeConfig,
+    ) -> Result<Option<SpeculativeAttachInfo>> {
+        self.attach_speculative(config)
+    }
+
     fn log_speculative_attach(&self, info: &SpeculativeAttachInfo) {
         log_attach(info);
     }
@@ -69,6 +123,27 @@ pub trait SpeculativeTargetMixin {
 
     fn speculative_prefix_replay(&self) -> SpeculativePrefixReplay {
         SpeculativePrefixReplay::NotRequired
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        false
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+    ) -> Result<Option<Arc<dyn PagedAuxiliaryPrefixState>>> {
+        Ok(None)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+        _state: &dyn PagedAuxiliaryPrefixState,
+    ) -> Result<()> {
+        candle_core::bail!("This model does not support auxiliary paged prefix state.")
     }
 
     fn speculative_plan(&self, _batch_size: usize) -> Option<SpeculativeBatchPlan> {

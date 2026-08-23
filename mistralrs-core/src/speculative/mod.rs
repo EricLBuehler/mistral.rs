@@ -14,7 +14,8 @@ pub mod verifier;
 #[doc(hidden)]
 pub use crate::cuda::speculative_rejection::CudaSparseRejectionWorkspace;
 pub use config::{
-    reserve_external_mtp_memory, MtpConfig, MtpDraftSamplingMethod, SpeculativeConfig,
+    reserve_external_mtp_memory, reserve_external_mtp_memory_with_runtime, MtpConfig,
+    MtpDraftSamplingMethod, MtpRuntimeConfig, SpeculativeConfig,
 };
 pub use dflash::DFlashDraftModel;
 pub use logging::{SpeculativeAttachInfo, SpeculativeAttachKind};
@@ -25,4 +26,24 @@ pub use proposer::{
     SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
     SpeculativeProposer, SpeculativeTokens, TargetAttentionInputs, TargetTokenEmbedder,
 };
-pub use target::{SpeculativeGraphState, SpeculativePrefixReplay, SpeculativeTargetMixin};
+pub use target::{
+    SpeculativeGraphState, SpeculativePrefixCheckpointPolicy, SpeculativePrefixReplay,
+    SpeculativeTargetMixin,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::{MtpConfig, MtpDraftSamplingMethod};
+
+    #[test]
+    fn mtp_config_supports_public_struct_literals() {
+        let config = MtpConfig {
+            model: Some("assistant".to_string()),
+            n_predict: Some(3),
+            draft_sampling_method: MtpDraftSamplingMethod::Probabilistic,
+            draft_lm_head_isq: None,
+        };
+
+        assert_eq!(config.n_predict, Some(3));
+    }
+}

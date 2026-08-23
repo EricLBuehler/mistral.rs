@@ -5,7 +5,7 @@
 //! own paged KV for those positions and yields the first draft; further drafts are chained from the
 //! drafter's own hidden state at consecutive positions.
 
-use std::sync::atomic::Ordering;
+use std::sync::{atomic::Ordering, Arc};
 
 use candle_core::{IndexOp, Result, Tensor};
 use rand::Rng;
@@ -25,11 +25,11 @@ use crate::{
         },
         paged_rows::make_paged_rows_metadata,
         proposer::sample_draft_rows,
-        SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow, SpeculativeConfig,
-        SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache, SpeculativePrefillCtx,
-        SpeculativePrefixReplay, SpeculativeProposal, SpeculativeProposalBatch,
-        SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
-        SpeculativeTargetMixin, TargetAttentionInputs,
+        MtpRuntimeConfig, SpeculativeAttachInfo, SpeculativeBatchPlan, SpeculativeCommitRow,
+        SpeculativeConfig, SpeculativeGraphPlan, SpeculativeGraphState, SpeculativeKvCache,
+        SpeculativePrefillCtx, SpeculativePrefixReplay, SpeculativeProposal,
+        SpeculativeProposalBatch, SpeculativeProposeBatchCtx, SpeculativeProposePreparation,
+        SpeculativeProposePrepareCtx, SpeculativeTargetMixin, TargetAttentionInputs,
     },
 };
 
@@ -238,6 +238,7 @@ impl Qwen3_5Model {
     fn attach_dflash(
         &mut self,
         config: crate::speculative::MtpConfig,
+        runtime: MtpRuntimeConfig,
     ) -> Result<Option<SpeculativeAttachInfo>> {
         let mut drafter = DFlashDraftModel::load(
             &config,
@@ -269,7 +270,7 @@ impl Qwen3_5Model {
             self.text.device.synchronize()?;
         }
         let sequence_capacity = self.text.cache.hybrid().recurrent_capacity();
-        drafter.enable_windowed_kv(sequence_capacity)?;
+        drafter.enable_windowed_kv(sequence_capacity, runtime.prefix_cache_capacity())?;
         self.text
             .set_dflash_tap_layers(drafter.target_layer_ids.clone());
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
@@ -913,6 +914,14 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         &mut self,
         config: SpeculativeConfig,
     ) -> Result<Option<SpeculativeAttachInfo>> {
+        self.attach_speculative_with_runtime(config, MtpRuntimeConfig::default())
+    }
+
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: SpeculativeConfig,
+        runtime: MtpRuntimeConfig,
+    ) -> Result<Option<SpeculativeAttachInfo>> {
         let SpeculativeConfig::Mtp(config) = config else {
             self.mtp_n_predict.store(0, Ordering::Relaxed);
             self.text.set_store_spec_hidden(false);
@@ -921,7 +930,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             return Ok(None);
         };
         if !config.is_builtin() {
-            return self.attach_dflash(config);
+            return self.attach_dflash(config, runtime);
         }
         if self.text.mtp.is_none() {
             candle_core::bail!(
@@ -979,6 +988,47 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
             .map_or(SpeculativePrefixReplay::NotRequired, |drafter| {
                 drafter.prefix_replay()
             })
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        self.dflash
+            .lock()
+            .expect("dflash poisoned")
+            .as_ref()
+            .is_some_and(|drafter| drafter.supports_paged_auxiliary_prefix_state())
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> Result<Option<Arc<dyn crate::prefix_cacher::PagedAuxiliaryPrefixState>>> {
+        let Some(drafter) = self
+            .dflash
+            .lock()
+            .expect("dflash poisoned")
+            .as_ref()
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        drafter.capture_paged_auxiliary_prefix_state(sequence_id, cached_tokens)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn crate::prefix_cacher::PagedAuxiliaryPrefixState,
+    ) -> Result<()> {
+        let drafter = self
+            .dflash
+            .lock()
+            .expect("dflash poisoned")
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| candle_core::Error::msg("DFlash prefix restore without a drafter"))?;
+        drafter.restore_paged_auxiliary_prefix_state(sequence_id, cached_tokens, state)
     }
 
     fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan> {

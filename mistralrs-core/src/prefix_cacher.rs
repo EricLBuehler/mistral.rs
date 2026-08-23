@@ -1,7 +1,7 @@
 use candle_core::{Device, Result};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use std::collections::HashSet;
+use std::{any::Any, collections::HashSet, sync::Arc};
 use tracing::info;
 
 use crate::{
@@ -170,8 +170,20 @@ pub struct PrefixCacheManagerV2 {
     has_paged_attention: bool,
 }
 
+pub trait PagedAuxiliaryPrefixState: Any + Send + Sync {
+    fn as_any(&self) -> &dyn Any;
+    fn bytes(&self) -> usize;
+}
+
+#[derive(Clone)]
+pub struct PagedPrefixCheckpoint {
+    pub recurrent_snapshots: Vec<RecurrentStateSnapshot>,
+    pub auxiliary: Option<Arc<dyn PagedAuxiliaryPrefixState>>,
+}
+
 struct PagedRecurrentCacheEntry {
     snapshots: Vec<RecurrentStateSnapshot>,
+    auxiliary: Option<Arc<dyn PagedAuxiliaryPrefixState>>,
     owners: HashSet<BlockHash>,
 }
 
@@ -214,15 +226,19 @@ impl PrefixCacheManagerV2 {
         self.n_on_device
     }
 
-    fn snapshot_bytes(snapshots: &[RecurrentStateSnapshot]) -> usize {
-        snapshots
+    fn checkpoint_bytes(
+        snapshots: &[RecurrentStateSnapshot],
+        auxiliary: Option<&dyn PagedAuxiliaryPrefixState>,
+    ) -> usize {
+        let recurrent = snapshots
             .iter()
             .map(|snapshot| {
                 snapshot.conv_state.elem_count() * snapshot.conv_state.dtype().size_in_bytes()
                     + snapshot.recurrent_state.elem_count()
                         * snapshot.recurrent_state.dtype().size_in_bytes()
             })
-            .sum()
+            .sum::<usize>();
+        recurrent.saturating_add(auxiliary.map_or(0, |state| state.bytes()))
     }
 
     /// This always keeps the cache on the device.
@@ -353,6 +369,7 @@ impl PrefixCacheManagerV2 {
         owner: BlockHash,
         key: Vec<BlockHash>,
         snapshots: Vec<RecurrentStateSnapshot>,
+        auxiliary: Option<Arc<dyn PagedAuxiliaryPrefixState>>,
     ) {
         if self.no_prefix_cache
             || !self.has_paged_attention
@@ -369,20 +386,30 @@ impl PrefixCacheManagerV2 {
             }
         }
 
-        let mut owners = self
-            .paged_recurrent_caches
-            .shift_remove(&key)
-            .map(|entry| {
-                self.paged_recurrent_bytes = self
-                    .paged_recurrent_bytes
-                    .saturating_sub(Self::snapshot_bytes(&entry.snapshots));
-                entry.owners
-            })
+        let previous = self.paged_recurrent_caches.shift_remove(&key);
+        if let Some(entry) = previous.as_ref() {
+            self.paged_recurrent_bytes =
+                self.paged_recurrent_bytes
+                    .saturating_sub(Self::checkpoint_bytes(
+                        &entry.snapshots,
+                        entry.auxiliary.as_deref(),
+                    ));
+        }
+        let mut owners = previous
+            .as_ref()
+            .map(|entry| entry.owners.clone())
             .unwrap_or_default();
+        let auxiliary = auxiliary.or_else(|| previous.and_then(|entry| entry.auxiliary));
         owners.insert(owner);
-        self.paged_recurrent_bytes += Self::snapshot_bytes(&snapshots);
-        self.paged_recurrent_caches
-            .insert(key.clone(), PagedRecurrentCacheEntry { snapshots, owners });
+        self.paged_recurrent_bytes += Self::checkpoint_bytes(&snapshots, auxiliary.as_deref());
+        self.paged_recurrent_caches.insert(
+            key.clone(),
+            PagedRecurrentCacheEntry {
+                snapshots,
+                auxiliary,
+                owners,
+            },
+        );
         self.paged_recurrent_sequence_keys.insert(owner, key);
 
         while self.paged_recurrent_sequence_keys.len() > self.paged_recurrent_capacity() {
@@ -418,24 +445,42 @@ impl PrefixCacheManagerV2 {
         &mut self,
         key: &[BlockHash],
         current_owner: BlockHash,
-    ) -> Option<Vec<RecurrentStateSnapshot>> {
+    ) -> Option<PagedPrefixCheckpoint> {
+        let out = self.peek_paged_recurrent_prefix(key)?;
+        self.promote_paged_recurrent_prefix(key, current_owner);
+        Some(out)
+    }
+
+    pub fn peek_paged_recurrent_prefix(&self, key: &[BlockHash]) -> Option<PagedPrefixCheckpoint> {
         if self.no_prefix_cache || !self.has_paged_attention || key.is_empty() {
             return None;
         }
 
         let entry = self.paged_recurrent_caches.get(key)?;
-        let out = entry.snapshots.clone();
-        let promote_owner = entry.owners.contains(&current_owner);
-        if promote_owner {
+        Some(PagedPrefixCheckpoint {
+            recurrent_snapshots: entry.snapshots.clone(),
+            auxiliary: entry.auxiliary.clone(),
+        })
+    }
+
+    pub fn promote_paged_recurrent_prefix(&mut self, key: &[BlockHash], current_owner: BlockHash) {
+        let Some(entry) = self.paged_recurrent_caches.get(key) else {
+            return;
+        };
+        let promote_owner = entry
+            .owners
+            .contains(&current_owner)
+            .then_some(current_owner)
+            .or_else(|| entry.owners.iter().copied().next());
+        if let Some(promote_owner) = promote_owner {
             if let Some(key) = self
                 .paged_recurrent_sequence_keys
-                .shift_remove(&current_owner)
+                .shift_remove(&promote_owner)
             {
                 self.paged_recurrent_sequence_keys
-                    .insert(current_owner, key);
+                    .insert(promote_owner, key);
             }
         }
-        Some(out)
     }
 
     pub fn has_paged_recurrent_owner(&self, owner: BlockHash) -> bool {
@@ -457,16 +502,30 @@ impl PrefixCacheManagerV2 {
             .paged_recurrent_caches
             .shift_remove(key)
             .expect("empty recurrent checkpoint entry disappeared");
-        self.paged_recurrent_bytes = self
-            .paged_recurrent_bytes
-            .saturating_sub(Self::snapshot_bytes(&entry.snapshots));
+        self.paged_recurrent_bytes =
+            self.paged_recurrent_bytes
+                .saturating_sub(Self::checkpoint_bytes(
+                    &entry.snapshots,
+                    entry.auxiliary.as_deref(),
+                ));
     }
 
     pub fn get_longest_paged_recurrent_prefix(
         &mut self,
         block_hashes: &[BlockHash],
         max_blocks: usize,
-    ) -> Option<(usize, Vec<RecurrentStateSnapshot>)> {
+    ) -> Option<(usize, PagedPrefixCheckpoint)> {
+        let (n_blocks, checkpoint) =
+            self.peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)?;
+        self.promote_paged_recurrent_prefix(&block_hashes[..n_blocks], *block_hashes.last()?);
+        Some((n_blocks, checkpoint))
+    }
+
+    pub fn peek_longest_paged_recurrent_prefix(
+        &self,
+        block_hashes: &[BlockHash],
+        max_blocks: usize,
+    ) -> Option<(usize, PagedPrefixCheckpoint)> {
         if self.no_prefix_cache || !self.has_paged_attention {
             return None;
         }
@@ -479,9 +538,8 @@ impl PrefixCacheManagerV2 {
             .max_by_key(|key| key.len())?
             .clone();
         let n_blocks = key.len();
-        let current_owner = *block_hashes.last()?;
-        self.get_paged_recurrent_prefix(&key, current_owner)
-            .map(|snapshots| (n_blocks, snapshots))
+        self.peek_paged_recurrent_prefix(&key)
+            .map(|checkpoint| (n_blocks, checkpoint))
     }
 
     /// Search for a matching cache given some tokens. Image-containing sequences are now cached too.
@@ -673,10 +731,17 @@ impl PrefixCacheManagerV2 {
 #[cfg(test)]
 mod tests {
     use candle_core::{DType, Device, Tensor};
-    use std::collections::HashSet;
+    use std::{
+        collections::HashSet,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
 
     use super::{
-        CacheElement, CacheKey, CachedRecurrentState, MatchingCache, PrefixCacheManagerV2,
+        CacheElement, CacheKey, CachedRecurrentState, MatchingCache, PagedAuxiliaryPrefixState,
+        PrefixCacheManagerV2,
     };
     use crate::{
         kv_cache::{KvCache, RecurrentStateSnapshot, RotatingCache, SingleCache},
@@ -720,6 +785,27 @@ mod tests {
         })
     }
 
+    struct TestAuxiliaryPrefixState {
+        bytes: usize,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for TestAuxiliaryPrefixState {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    impl PagedAuxiliaryPrefixState for TestAuxiliaryPrefixState {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn bytes(&self) -> usize {
+            self.bytes
+        }
+    }
+
     fn generation(value: u8) -> AdapterGenerationId {
         AdapterGenerationId::from_bytes([value; 32])
     }
@@ -740,6 +826,7 @@ mod tests {
                 owner,
                 hashes[..n_blocks].to_vec(),
                 vec![make_recurrent_snapshot()?],
+                None,
             );
         }
 
@@ -766,21 +853,25 @@ mod tests {
             owner_a,
             hashes_a[..1].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         prefix_cacher.add_paged_recurrent_prefix(
             owner_b,
             hashes_b[..1].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         prefix_cacher.add_paged_recurrent_prefix(
             owner_a,
             hashes_a.clone(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         prefix_cacher.add_paged_recurrent_prefix(
             owner_b,
             hashes_b.clone(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
 
         assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 2);
@@ -814,12 +905,14 @@ mod tests {
             owner_a,
             hashes_a[..2].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         let bytes = prefix_cacher.paged_recurrent_bytes;
         prefix_cacher.add_paged_recurrent_prefix(
             owner_b,
             hashes_b[..2].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
 
         assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 1);
@@ -833,6 +926,7 @@ mod tests {
             owner_a,
             hashes_a[..4].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 2);
         assert_eq!(
@@ -848,6 +942,7 @@ mod tests {
             owner_a,
             hashes_a.clone(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 2);
         assert_eq!(
@@ -879,11 +974,13 @@ mod tests {
             owner_a,
             hashes_a[..2].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         prefix_cacher.add_paged_recurrent_prefix(
             owner_b,
             hashes_b[..2].to_vec(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
         assert!(prefix_cacher
             .get_longest_paged_recurrent_prefix(&hashes_a, 2)
@@ -892,6 +989,7 @@ mod tests {
             owner_c,
             hashes_c.clone(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
 
         assert!(!prefix_cacher
@@ -924,11 +1022,64 @@ mod tests {
             owner,
             hashes.clone(),
             vec![make_recurrent_snapshot()?],
+            None,
         );
 
         assert!(!prefix_cacher.accepts_paged_recurrent_prefix());
         assert!(prefix_cacher.paged_recurrent_caches.is_empty());
         assert!(prefix_cacher.paged_recurrent_sequence_keys.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn auxiliary_checkpoint_bytes_and_lifetime_follow_lru_entries() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, true);
+        let hashes_a = block_hashes(10, 2);
+        let hashes_b = block_hashes(20, 2);
+        let owner_a = *hashes_a.last().unwrap();
+        let owner_b = *hashes_b.last().unwrap();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let auxiliary = Arc::new(TestAuxiliaryPrefixState {
+            bytes: 64,
+            drops: Arc::clone(&drops),
+        });
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_a,
+            hashes_a.clone(),
+            vec![make_recurrent_snapshot()?],
+            Some(auxiliary.clone()),
+        );
+        drop(auxiliary);
+        assert_eq!(prefix_cacher.paged_recurrent_bytes, 72);
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_a,
+            hashes_a.clone(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(prefix_cacher.paged_recurrent_bytes, 72);
+        let checkpoint = prefix_cacher
+            .get_paged_recurrent_prefix(&hashes_a, owner_a)
+            .expect("auxiliary checkpoint missing");
+        assert!(checkpoint
+            .auxiliary
+            .as_deref()
+            .expect("auxiliary state missing")
+            .as_any()
+            .is::<TestAuxiliaryPrefixState>());
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_b,
+            hashes_b,
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(prefix_cacher.paged_recurrent_bytes, 8);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+        drop(checkpoint);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
         Ok(())
     }
 

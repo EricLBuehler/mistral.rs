@@ -32,8 +32,10 @@ pub use super::diffusion_models::DiffusionGenerationParams;
 use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTrainingResult};
 use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
-use crate::paged_attention::{AttentionBackendKind, CacheConfig, CacheEngine, ModelConfigLike};
-use crate::prefix_cacher::PrefixCacheManagerV2;
+use crate::paged_attention::{
+    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, ModelConfigLike,
+};
+use crate::prefix_cacher::{PagedAuxiliaryPrefixState, PrefixCacheManagerV2};
 use crate::IntervalLogger;
 use crate::PagedAttentionConfig;
 pub use amoe::{AnyMoeLoader, AnyMoePipeline};
@@ -348,6 +350,59 @@ fn reserve_recurrent_serving_capacity(
         .ok_or_else(|| candle_core::Error::msg("recurrent serving capacity overflow"))?;
     grew |= cache.reserve_recurrent_capacity(capacity)?;
     Ok(grew)
+}
+
+fn add_recurrent_prefix_memory_reservations(
+    mut reservations: CacheMemoryReservations,
+    bytes_by_device: HashMap<DeviceLocation, usize>,
+    primary_device: DeviceLocation,
+    prefix_capacity: usize,
+) -> Result<CacheMemoryReservations> {
+    if prefix_capacity == 0 {
+        return Ok(reservations);
+    }
+    let peak_snapshots = prefix_capacity
+        .checked_add(1)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix capacity overflow"))?;
+    let mut secondary_prefix_bytes = 0usize;
+    for (device, bytes_per_snapshot) in bytes_by_device {
+        let bytes = bytes_per_snapshot
+            .checked_mul(peak_snapshots)
+            .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+        if device == primary_device {
+            reservations.primary_device_bytes = reservations
+                .primary_device_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+        } else {
+            secondary_prefix_bytes = secondary_prefix_bytes.max(bytes);
+        }
+    }
+    reservations.secondary_device_bytes = reservations
+        .secondary_device_bytes
+        .checked_add(secondary_prefix_bytes)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+    Ok(reservations)
+}
+
+fn paged_attention_memory_reservations(
+    cache: &EitherCache,
+    paged_attn_config: PagedAttentionConfig,
+    primary_device: &Device,
+) -> Result<CacheMemoryReservations> {
+    let reservations = paged_attn_config
+        .memory_reservations()
+        .map_err(candle_core::Error::msg)?;
+    if paged_attn_config.recurrent_prefix_capacity == 0 || !cache.is_hybrid() {
+        return Ok(reservations);
+    }
+    let bytes_by_device = cache.hybrid().recurrent_snapshot_bytes_by_device()?;
+    add_recurrent_prefix_memory_reservations(
+        reservations,
+        bytes_by_device,
+        primary_device.location(),
+        paged_attn_config.recurrent_prefix_capacity,
+    )
 }
 
 pub(crate) type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
@@ -1457,6 +1512,15 @@ pub trait Pipeline:
         candle_core::bail!("This pipeline does not support speculative decoding attachment.")
     }
 
+    #[doc(hidden)]
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+        _runtime: crate::speculative::MtpRuntimeConfig,
+    ) -> Result<(), candle_core::Error> {
+        self.attach_speculative(config)
+    }
+
     fn release_speculative_sequences(&mut self, _seq_ids: &[usize]) {}
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
@@ -1465,6 +1529,36 @@ pub trait Pipeline:
 
     fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
         crate::speculative::SpeculativePrefixReplay::NotRequired
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        false
+    }
+
+    fn speculative_prefix_checkpoint_policy(
+        &self,
+    ) -> crate::speculative::SpeculativePrefixCheckpointPolicy {
+        crate::speculative::SpeculativePrefixCheckpointPolicy::new(
+            self.speculative_prefix_replay(),
+            self.supports_paged_auxiliary_prefix_state(),
+        )
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+    ) -> Result<Option<Arc<dyn PagedAuxiliaryPrefixState>>, candle_core::Error> {
+        Ok(None)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        _sequence_id: usize,
+        _cached_tokens: usize,
+        _state: &dyn PagedAuxiliaryPrefixState,
+    ) -> Result<(), candle_core::Error> {
+        candle_core::bail!("This pipeline does not support auxiliary paged prefix state.")
     }
 
     /// Called after a prompt chunk forward so a speculative proposer with its own KV cache can
@@ -1532,6 +1626,14 @@ pub trait Pipeline:
         if snapshots.is_empty() {
             return Ok(());
         }
+        let auxiliary = if self
+            .speculative_prefix_checkpoint_policy()
+            .uses_auxiliary_state(crate::scheduler::modality_signature(seq))
+        {
+            self.capture_paged_auxiliary_prefix_state(*seq.id(), cached_tokens)?
+        } else {
+            None
+        };
         let adapter_key = adapter_generation_key(seq.adapter_generation());
         let block_hashes = compute_block_hashes(
             seq.get_toks(),
@@ -1548,6 +1650,7 @@ pub trait Pipeline:
                 owner,
                 block_hashes[..n_blocks].to_vec(),
                 snapshots,
+                auxiliary,
             );
         }
         Ok(())
@@ -1915,7 +2018,7 @@ pub trait Pipeline:
                     .iter()
                     .any(|seq| seq.has_suffix_only_prefill_toks());
                 let hybrid_recurrent = self.cache().is_hybrid();
-                let prefix_replay = self.speculative_prefix_replay();
+                let prefix_policy = self.speculative_prefix_checkpoint_policy();
                 let keep_complete_packed_candidates = chunk_size.is_some_and(|chunk_size| {
                     input_seqs.len() > 1
                         && self.supports_packed_prefill()
@@ -1940,7 +2043,9 @@ pub trait Pipeline:
                                                 seq.prefix_cache_len(),
                                                 chunk_size,
                                                 block_align,
-                                                prefix_replay,
+                                                prefix_policy.replay_for(
+                                                    crate::scheduler::modality_signature(seq),
+                                                ),
                                                 seq.mm_features(),
                                             )
                                         })
@@ -1986,7 +2091,8 @@ pub trait Pipeline:
                                     tokens.len(),
                                     *prefix_len,
                                     hybrid_recurrent.then_some(block_size),
-                                    prefix_replay,
+                                    prefix_policy
+                                        .replay_for(crate::scheduler::modality_signature(seq)),
                                     seq.mm_features(),
                                 )
                             })
@@ -2562,12 +2668,16 @@ pub(crate) fn extract_logits(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use super::{
-        effective_recurrent_checkpoint_lanes, prompt_chunk_is_final,
-        recurrent_batch_kind_for_input, reserve_recurrent_serving_capacity, resolve_lora_execution,
-        should_sample_step, should_try_speculative_sampling, ForwardCache, LogitsSelection,
+        add_recurrent_prefix_memory_reservations, effective_recurrent_checkpoint_lanes,
+        paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
+        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
+        should_try_speculative_sampling, CacheMemoryReservations, ForwardCache, LogitsSelection,
         ModelForwardContext, RecurrentBatchKind,
     };
     use crate::{
@@ -2578,7 +2688,7 @@ mod tests {
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
-    use candle_core::{Device, Tensor};
+    use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
     use indexmap::IndexMap;
 
@@ -2679,6 +2789,63 @@ mod tests {
         let pool = cache.get(0).unwrap().as_recurrent_pool().unwrap();
         assert_eq!(pool.capacity(), 17);
         assert_eq!(pool.physical_capacity(), 17);
+    }
+
+    #[test]
+    fn recurrent_prefix_reservation_includes_staging_and_device_baselines() {
+        let reservations = add_recurrent_prefix_memory_reservations(
+            CacheMemoryReservations {
+                primary_device_bytes: 100,
+                secondary_device_bytes: 50,
+            },
+            HashMap::from([
+                (DeviceLocation::Cpu, 10),
+                (DeviceLocation::Cuda { gpu_id: 0 }, 20),
+                (DeviceLocation::Cuda { gpu_id: 1 }, 30),
+            ]),
+            DeviceLocation::Cpu,
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(reservations.primary_device_bytes, 130);
+        assert_eq!(reservations.secondary_device_bytes, 140);
+    }
+
+    #[test]
+    fn loaded_hybrid_cache_drives_recurrent_prefix_reservation() {
+        let hybrid = HybridCache::new(
+            HybridCacheConfig {
+                layer_types: vec![HybridLayerType::Recurrent],
+                max_seq_len: 32,
+                recurrent: RecurrentLayerConfig {
+                    conv_dim: 8,
+                    conv_width: 4,
+                    state: RecurrentStateSpec::Gdn {
+                        heads: 2,
+                        key_dim: 4,
+                        value_dim: 4,
+                    },
+                    recurrent_dtype: Some(candle_core::DType::F32),
+                },
+            },
+            candle_core::DType::BF16,
+            &[Device::Cpu],
+        )
+        .unwrap();
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
+        let config =
+            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+                .unwrap()
+                .with_base_device_memory_reservation(100)
+                .unwrap()
+                .with_recurrent_prefix_capacity(2);
+
+        let reservations =
+            paged_attention_memory_reservations(&cache, config, &Device::Cpu).unwrap();
+
+        assert_eq!(reservations.primary_device_bytes, 676);
+        assert_eq!(reservations.secondary_device_bytes, 0);
     }
     use serde_json::Value;
 

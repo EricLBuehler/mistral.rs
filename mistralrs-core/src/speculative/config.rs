@@ -40,6 +40,24 @@ pub struct MtpConfig {
     pub draft_lm_head_isq: Option<crate::IsqType>,
 }
 
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MtpRuntimeConfig {
+    prefix_cache_capacity: usize,
+}
+
+impl MtpRuntimeConfig {
+    pub fn new(prefix_cache_capacity: usize) -> Self {
+        Self {
+            prefix_cache_capacity,
+        }
+    }
+
+    pub fn prefix_cache_capacity(self) -> usize {
+        self.prefix_cache_capacity
+    }
+}
+
 impl MtpConfig {
     pub fn new(model: impl Into<String>, n_predict: Option<usize>) -> Self {
         Self {
@@ -117,6 +135,25 @@ pub fn reserve_external_mtp_memory(
     dtype: &dyn TryIntoDType,
     device: &Device,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    reserve_external_mtp_memory_with_runtime(
+        cache_config,
+        mtp_config,
+        MtpRuntimeConfig::default(),
+        dtype,
+        device,
+    )
+}
+
+#[doc(hidden)]
+pub fn reserve_external_mtp_memory_with_runtime(
+    cache_config: Option<PagedAttentionConfig>,
+    mtp_config: Option<&MtpConfig>,
+    runtime: MtpRuntimeConfig,
+    dtype: &dyn TryIntoDType,
+    device: &Device,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+    let _ = runtime;
     let Some(cache_config) = cache_config else {
         return Ok(None);
     };
@@ -150,6 +187,7 @@ pub fn reserve_external_mtp_memory(
             let cache_bytes = super::dflash::windowed_kv_cache_size_in_bytes(
                 mtp_config,
                 sequence_capacity,
+                runtime.prefix_cache_capacity(),
                 crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
             )?;
             bytes

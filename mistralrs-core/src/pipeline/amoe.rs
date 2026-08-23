@@ -308,6 +308,14 @@ impl Pipeline for AnyMoePipeline {
         get_mut_arcmutex!(self.target).attach_speculative(config)
     }
 
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::SpeculativeConfig,
+        runtime: crate::MtpRuntimeConfig,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).attach_speculative_with_runtime(config, runtime)
+    }
+
     fn release_speculative_sequences(&mut self, seq_ids: &[usize]) {
         get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids);
     }
@@ -318,6 +326,35 @@ impl Pipeline for AnyMoePipeline {
 
     fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
         get_mut_arcmutex!(self.target).speculative_prefix_replay()
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_paged_auxiliary_prefix_state()
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> Result<
+        Option<std::sync::Arc<dyn crate::prefix_cacher::PagedAuxiliaryPrefixState>>,
+        candle_core::Error,
+    > {
+        get_mut_arcmutex!(self.target)
+            .capture_paged_auxiliary_prefix_state(sequence_id, cached_tokens)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn crate::prefix_cacher::PagedAuxiliaryPrefixState,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).restore_paged_auxiliary_prefix_state(
+            sequence_id,
+            cached_tokens,
+            state,
+        )
     }
 
     fn speculative_prompt_chunk(

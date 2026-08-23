@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory, AutoDeviceMapParams,
+    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory_with_runtime, AutoDeviceMapParams,
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader,
     LoaderBuilder, McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig,
-    ModelSelected, MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest,
-    SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
+    ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig, PagedCacheType,
+    PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info, warn};
 
@@ -735,6 +735,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -754,7 +755,7 @@ impl MistralRsForServerBuilder {
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
         let paged_attn = configure_paged_attn(&device, self.paged_attn);
 
-        let cache_config = reserve_external_mtp_memory(
+        let cache_config = reserve_external_mtp_memory_with_runtime(
             init_cache_config(
                 self.paged_attn_block_size,
                 self.paged_attn_gpu_mem,
@@ -764,8 +765,10 @@ impl MistralRsForServerBuilder {
                 !paged_attn,
             )?
             .map(|config| config.with_serving_capacity(self.max_seqs))
-            .transpose()?,
+            .transpose()?
+            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n)),
             self.mtp_config.as_ref(),
+            mtp_runtime,
             &dtype,
             &device,
         )?;
@@ -806,12 +809,10 @@ impl MistralRsForServerBuilder {
         info!("Model loaded.");
 
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
-                    mtp_config.with_draft_lm_head_isq(isq),
-                ))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
 
         let scheduler_config = init_scheduler_config(
@@ -879,6 +880,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -941,7 +943,8 @@ impl MistralRsForServerBuilder {
             !paged_attn,
         )?
         .map(|config| config.with_serving_capacity(self.max_seqs))
-        .transpose()?;
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
         let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
@@ -954,8 +957,13 @@ impl MistralRsForServerBuilder {
             Default::default(),
         )?;
         if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
-            *first =
-                reserve_external_mtp_memory(*first, self.mtp_config.as_ref(), &dtype, &device)?;
+            *first = reserve_external_mtp_memory_with_runtime(
+                *first,
+                self.mtp_config.as_ref(),
+                mtp_runtime,
+                &dtype,
+                &device,
+            )?;
         }
         let first_cache_config = paged_kv_plan.paged_attn[0];
 
@@ -980,12 +988,10 @@ impl MistralRsForServerBuilder {
             first_cache_config,
         )?;
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(
-                    mtp_config.with_draft_lm_head_isq(isq),
-                ))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model

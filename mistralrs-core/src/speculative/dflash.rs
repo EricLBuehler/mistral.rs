@@ -20,12 +20,14 @@ use mistralrs_quant::{
 use serde::Deserialize;
 
 use crate::layers::RmsNorm;
+use crate::prefix_cacher::PagedAuxiliaryPrefixState;
 use crate::speculative::{MtpConfig, MtpDraftSamplingMethod, SpeculativePrefixReplay};
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 use crate::paged_attention::windowed_pool::{
-    WindowedKvBatch, WindowedKvBatchTensors, WindowedKvPool, WindowedKvPoolConfig, WindowedKvQuery,
+    WindowedKvBatch, WindowedKvBatchTensors, WindowedKvCheckpoint, WindowedKvPool,
+    WindowedKvPoolConfig, WindowedKvQuery,
 };
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 use crate::pipeline::cuda_graph::{
@@ -1174,6 +1176,22 @@ pub struct DFlashDraftModel {
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+struct DFlashPagedPrefixState {
+    checkpoint: WindowedKvCheckpoint,
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl PagedAuxiliaryPrefixState for DFlashPagedPrefixState {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn bytes(&self) -> usize {
+        self.checkpoint.bytes()
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphBuffers {
     fn new(
         key: DFlashCudaGraphKey,
@@ -1831,9 +1849,20 @@ pub fn peek_config(config: &MtpConfig) -> Result<Option<DFlashConfig>> {
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+pub(crate) fn windowed_kv_checkpoint_capacity(retained_prefixes: usize) -> Result<usize> {
+    if retained_prefixes == 0 {
+        return Ok(0);
+    }
+    retained_prefixes
+        .checked_add(1)
+        .ok_or_else(|| candle_core::Error::msg("DFlash prefix checkpoint capacity overflow"))
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 pub(crate) fn windowed_kv_cache_size_in_bytes(
     config: &MtpConfig,
-    sequence_capacity: usize,
+    live_sequence_capacity: usize,
+    retained_prefixes: usize,
     page_size: usize,
 ) -> Result<usize> {
     let path = config.resolve_path()?;
@@ -1871,9 +1900,13 @@ pub(crate) fn windowed_kv_cache_size_in_bytes(
         .and_then(|value| value.checked_add(page_size - 1))
         .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV capacity overflow"))?;
     let pages_per_sequence = retained_tokens.div_ceil(page_size);
+    let checkpoint_capacity = windowed_kv_checkpoint_capacity(retained_prefixes)?;
+    let slot_capacity = live_sequence_capacity
+        .checked_add(checkpoint_capacity)
+        .ok_or_else(|| candle_core::Error::msg("DFlash windowed KV slot capacity overflow"))?;
     let elements = cfg
         .num_hidden_layers
-        .checked_mul(sequence_capacity)
+        .checked_mul(slot_capacity)
         .and_then(|value| value.checked_mul(pages_per_sequence))
         .and_then(|value| value.checked_mul(cfg.num_key_value_heads))
         .and_then(|value| value.checked_mul(page_size))
@@ -2090,7 +2123,11 @@ impl DFlashDraftModel {
         })
     }
 
-    pub fn enable_windowed_kv(&mut self, sequence_capacity: usize) -> Result<bool> {
+    pub fn enable_windowed_kv(
+        &mut self,
+        live_sequence_capacity: usize,
+        retained_prefixes: usize,
+    ) -> Result<bool> {
         #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
         {
             if self.dtype != DType::BF16 || !self.device.is_cuda() {
@@ -2104,8 +2141,10 @@ impl DFlashDraftModel {
             if layer_windows.iter().any(Option::is_none) {
                 return Ok(false);
             }
-            let config = WindowedKvPoolConfig::new(
-                sequence_capacity,
+            let checkpoint_capacity = windowed_kv_checkpoint_capacity(retained_prefixes)?;
+            let config = WindowedKvPoolConfig::new_with_capacities(
+                live_sequence_capacity,
+                checkpoint_capacity,
                 layer_windows,
                 self.block_size,
                 crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
@@ -2115,7 +2154,9 @@ impl DFlashDraftModel {
             let pages = config.pages_per_sequence();
             self.windowed_pool = Some(Mutex::new(WindowedKvPool::new(config, &self.device)?));
             tracing::info!(
-                sequence_capacity,
+                live_sequence_capacity,
+                retained_prefixes,
+                checkpoint_capacity,
                 pages_per_sequence = pages,
                 "Using bounded paged FlashAttention KV for DFlash"
             );
@@ -2123,7 +2164,7 @@ impl DFlashDraftModel {
         }
         #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
         {
-            let _ = sequence_capacity;
+            let _ = (live_sequence_capacity, retained_prefixes);
             Ok(false)
         }
     }
@@ -2394,6 +2435,100 @@ impl DFlashDraftModel {
 
     pub fn prefix_replay(&self) -> SpeculativePrefixReplay {
         dflash_prefix_replay(self.layers.iter().map(|layer| layer.sliding_window))
+    }
+
+    pub fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            return self.windowed_pool.as_ref().is_some_and(|pool| {
+                pool.lock()
+                    .expect("dflash windowed pool poisoned")
+                    .config()
+                    .checkpoint_capacity()
+                    > 0
+            });
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            false
+        }
+    }
+
+    pub fn capture_paged_auxiliary_prefix_state(
+        &self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> Result<Option<Arc<dyn PagedAuxiliaryPrefixState>>> {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            let Some(pool) = &self.windowed_pool else {
+                return Ok(None);
+            };
+            let mut pool = pool.lock().expect("dflash windowed pool poisoned");
+            let state = pool.sequence(sequence_id).ok_or_else(|| {
+                candle_core::Error::msg(format!(
+                    "DFlash sequence {sequence_id} has no context to checkpoint"
+                ))
+            })?;
+            if state.next_committed_pos != cached_tokens {
+                candle_core::bail!(
+                    "DFlash sequence {sequence_id} is at position {}, expected checkpoint boundary {cached_tokens}",
+                    state.next_committed_pos
+                );
+            }
+            if !pool.sequence_query_ready(sequence_id) {
+                candle_core::bail!(
+                    "DFlash sequence {sequence_id} is not ready at checkpoint boundary {cached_tokens}"
+                );
+            }
+            let checkpoint = pool.snapshot_sequence(sequence_id)?;
+            metrics::counter!("mistralrs_speculative_prefix_cache_captures_total").increment(1);
+            return Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })));
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            let _ = (sequence_id, cached_tokens);
+            Ok(None)
+        }
+    }
+
+    pub fn restore_paged_auxiliary_prefix_state(
+        &self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn PagedAuxiliaryPrefixState,
+    ) -> Result<()> {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            let state = state
+                .as_any()
+                .downcast_ref::<DFlashPagedPrefixState>()
+                .ok_or_else(|| candle_core::Error::msg("invalid DFlash prefix checkpoint type"))?;
+            if state.checkpoint.next_committed_pos() != cached_tokens {
+                candle_core::bail!(
+                    "DFlash prefix checkpoint is at position {}, expected {cached_tokens}",
+                    state.checkpoint.next_committed_pos()
+                );
+            }
+            let pool = self.windowed_pool.as_ref().ok_or_else(|| {
+                candle_core::Error::msg("DFlash windowed KV is unavailable during prefix restore")
+            })?;
+            let started = std::time::Instant::now();
+            pool.lock()
+                .expect("dflash windowed pool poisoned")
+                .restore_sequence(sequence_id, &state.checkpoint)?;
+            self.activate_seqs(&[sequence_id]);
+            metrics::counter!("mistralrs_speculative_prefix_cache_restore_copies_total")
+                .increment(1);
+            metrics::histogram!("mistralrs_speculative_prefix_cache_restore_seconds")
+                .record(started.elapsed().as_secs_f64());
+            return Ok(());
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            let _ = (sequence_id, cached_tokens, state);
+            candle_core::bail!("DFlash auxiliary prefix restore requires CUDA FlashAttention")
+        }
     }
 
     pub fn has_selector(&self) -> bool {
@@ -3375,6 +3510,8 @@ mod tests {
     use candle_core::{Device, Result, Tensor, D};
     use mistralrs_quant::QuantMethod;
 
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    use super::windowed_kv_checkpoint_capacity;
     use super::{
         contiguous_row_range, dflash_adaptive_env_value, dflash_graph_host_rows,
         dflash_graph_plans, dflash_graph_positions_fit, dflash_graph_precapture_shapes,
@@ -3387,6 +3524,15 @@ mod tests {
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
     use crate::speculative::MtpDraftSamplingMethod;
     use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
+
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[test]
+    fn prefix_checkpoint_capacity_includes_transactional_staging() -> Result<()> {
+        assert_eq!(windowed_kv_checkpoint_capacity(0)?, 0);
+        assert_eq!(windowed_kv_checkpoint_capacity(16)?, 17);
+        assert!(windowed_kv_checkpoint_capacity(usize::MAX).is_err());
+        Ok(())
+    }
 
     #[cfg(feature = "cuda")]
     fn selector_cuda_spec(vocab_size: usize, top_k: usize) -> CandidateSelectorCudaSpec {

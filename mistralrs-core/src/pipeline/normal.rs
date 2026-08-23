@@ -1,8 +1,8 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, reserve_recurrent_serving_capacity, text_models_inputs_processor::ModelInputs,
-    AdapterKind, CacheManager, DecodeGraphPrecaptureCtx, GeneralMetadata, Loader, ModelKind,
-    ModelPaths, NormalModel, NormalModelLoader, TokenSource,
+    get_model_paths, paged_attention_memory_reservations, reserve_recurrent_serving_capacity,
+    text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager, DecodeGraphPrecaptureCtx,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, NormalModel, NormalModelLoader, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, ForwardStepResult,
@@ -187,7 +187,7 @@ pub(crate) fn build_normal_pipeline(
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
         let cache_config = calculate_cache_config(
             paged_attn_config.mem_gpu,
-            paged_attn_config.memory_reservations()?,
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
             paged_attn_config.block_size,
             dtype,
             paged_attn_config.cache_type,
@@ -2183,6 +2183,29 @@ impl Pipeline for NormalPipeline {
         self.model.speculative_prefix_replay()
     }
 
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        self.model.supports_paged_auxiliary_prefix_state()
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> candle_core::Result<Option<Arc<dyn crate::prefix_cacher::PagedAuxiliaryPrefixState>>> {
+        self.model
+            .capture_paged_auxiliary_prefix_state(sequence_id, cached_tokens)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn crate::prefix_cacher::PagedAuxiliaryPrefixState,
+    ) -> candle_core::Result<()> {
+        self.model
+            .restore_paged_auxiliary_prefix_state(sequence_id, cached_tokens, state)
+    }
+
     fn supports_packed_prefill(&self) -> bool {
         self.model.supports_packed_prefill()
             && self.metadata.cache_engine.is_some()
@@ -2375,6 +2398,17 @@ impl Pipeline for NormalPipeline {
         &mut self,
         config: crate::speculative::SpeculativeConfig,
     ) -> candle_core::Result<()> {
+        self.attach_speculative_with_runtime(
+            config,
+            crate::speculative::MtpRuntimeConfig::default(),
+        )
+    }
+
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::speculative::SpeculativeConfig,
+        runtime: crate::speculative::MtpRuntimeConfig,
+    ) -> candle_core::Result<()> {
         if self.dynamic_lora.is_some() {
             candle_core::bail!("dynamic LoRA does not support speculative decoding");
         }
@@ -2385,7 +2419,10 @@ impl Pipeline for NormalPipeline {
                 "MTP speculative decoding currently requires PagedAttention for this pipeline."
             );
         }
-        if let Some(info) = self.model.attach_speculative(config)? {
+        if let Some(info) = self
+            .model
+            .attach_speculative_with_runtime(config, runtime)?
+        {
             self.model.log_speculative_attach(&info);
         }
         Ok(())

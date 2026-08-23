@@ -13,7 +13,7 @@ use crate::{
         PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
-    speculative::SpeculativePrefixReplay,
+    speculative::SpeculativePrefixCheckpointPolicy,
 };
 
 pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
@@ -117,14 +117,53 @@ pub enum SchedulerOutput<'a> {
     },
 }
 
+type PrefixAdmissionCommit =
+    Box<dyn FnOnce(&mut Sequence) -> candle_core::Result<()> + Send + 'static>;
+
+#[must_use = "prefix validation must be committed after KV admission"]
+pub struct PagedPrefixCacheValidation {
+    valid_tokens: usize,
+    commit: Option<PrefixAdmissionCommit>,
+}
+
+impl PagedPrefixCacheValidation {
+    pub fn ready(valid_tokens: usize) -> Self {
+        Self {
+            valid_tokens,
+            commit: None,
+        }
+    }
+
+    pub fn staged<F>(valid_tokens: usize, commit: F) -> Self
+    where
+        F: FnOnce(&mut Sequence) -> candle_core::Result<()> + Send + 'static,
+    {
+        Self {
+            valid_tokens,
+            commit: Some(Box::new(commit)),
+        }
+    }
+
+    pub fn valid_tokens(&self) -> usize {
+        self.valid_tokens
+    }
+
+    pub fn commit(mut self, seq: &mut Sequence) -> candle_core::Result<()> {
+        if let Some(commit) = self.commit.take() {
+            commit(seq)?;
+        }
+        Ok(())
+    }
+}
+
 pub trait PagedPrefixCacheValidator {
     fn validate_prefix_cache_hit(
         &mut self,
-        seq: &mut Sequence,
+        seq: &Sequence,
         block_hashes: &[BlockHash],
         cached_tokens: usize,
         block_size: usize,
-    ) -> candle_core::Result<usize>;
+    ) -> candle_core::Result<PagedPrefixCacheValidation>;
 
     fn release_recurrent_state(
         &mut self,
@@ -173,7 +212,7 @@ pub trait Scheduler: Send + Sync {
         &mut self,
         _enabled: bool,
         _require_block_alignment: bool,
-        _prefix_replay: SpeculativePrefixReplay,
+        _prefix_policy: SpeculativePrefixCheckpointPolicy,
     ) {
     }
 
