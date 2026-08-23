@@ -54,13 +54,14 @@ use crate::pipeline::chat_template::{
 };
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
-    cuda_graph_batch_bucket, cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed,
-    hybrid_graph_slots, install_hybrid_graph_state_indices, record_cuda_graph_dispatch,
-    CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay,
-    CudaDecodeGraphReplayInput, CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep,
-    CudaGraphDecodeStepInputs, CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent,
-    CudaGraphEventGuard, CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
+    cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
+    cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed, hybrid_graph_slots,
+    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
+    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
+    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
+    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1675,7 +1676,7 @@ impl MultimodalPipeline {
         paged_attn_meta: Option<&PagedAttentionInputMetadata>,
         recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<RecurrentBatchKind> {
-        if recurrent_batch_kind == RecurrentBatchKind::SpeculativeDecode {
+        if recurrent_batch_kind != RecurrentBatchKind::Decode {
             return Ok(recurrent_batch_kind);
         }
         let seq_len = input_ids.dim(1)?;
@@ -1768,6 +1769,14 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
+        if !cuda_decode_graph_batch_kind_supported(recurrent_batch_kind) {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::Prefill,
+            );
+            return Ok(None);
+        }
         if !self
             .model
             .supports_cuda_decode_graphs_for_args(model_specific_args)
@@ -1780,17 +1789,7 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
-        // With a proposer attached every step is a fixed-width verify; the model must expose the
-        // outputs the proposer reads so a replay can refresh them
         let speculative = self.model.has_speculative_proposer();
-        if speculative && self.model.take_speculative_graph_state().is_none() {
-            record_cuda_graph_dispatch(
-                CudaGraphComponent::Target,
-                CudaGraphDispatchMode::Skipped,
-                CudaGraphDispatchReason::SpeculativeConflict,
-            );
-            return Ok(None);
-        }
         let Some((kv_cache, metadata)) = paged_attn_meta else {
             record_cuda_graph_dispatch(
                 CudaGraphComponent::Target,
@@ -1807,6 +1806,14 @@ impl MultimodalPipeline {
             );
             return Ok(None);
         }
+        if metadata.decode_rows.is_none() {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::IncompatibleShape,
+            );
+            return Ok(None);
+        }
         let (batch, q_len) = input_ids.dims2()?;
         if (q_len != 1 && !speculative)
             || seqlen_offsets.len() != batch
@@ -1818,6 +1825,16 @@ impl MultimodalPipeline {
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Skipped,
                 CudaGraphDispatchReason::IncompatibleShape,
+            );
+            return Ok(None);
+        }
+        // With a proposer attached every step is a fixed-width verify; the model must expose the
+        // outputs the proposer reads so a replay can refresh them.
+        if speculative && self.model.take_speculative_graph_state().is_none() {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::SpeculativeConflict,
             );
             return Ok(None);
         }
@@ -2151,6 +2168,7 @@ impl MultimodalPipeline {
                     key,
                     input_ids: &step.input_ids,
                     seqlen_offsets: &step.seqlen_offsets,
+                    position_ids: &step.position_ids,
                     block_size,
                     kv_cache,
                     metadata: &metadata,

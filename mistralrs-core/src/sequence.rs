@@ -364,6 +364,8 @@ pub struct MultimodalData {
     pub rope_img_grid_thw: Option<Tensor>,
     /// Complete video grid metadata, including prefix-cached videos.
     pub rope_vid_grid_thw: Option<Tensor>,
+    /// Fixed offset between token indices and post-media MRoPE positions.
+    pub mrope_position_delta: Option<i64>,
     pub has_changed_prompt: bool,
     pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
     pub diffusion_params: Option<DiffusionGenerationParams>,
@@ -396,6 +398,7 @@ impl MultimodalData {
             cached_vid_thw: None,
             rope_img_grid_thw: None,
             rope_vid_grid_thw: None,
+            mrope_position_delta: None,
             has_changed_prompt: false,
             image_gen_response_format,
             diffusion_params,

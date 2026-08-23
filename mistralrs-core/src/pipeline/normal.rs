@@ -34,13 +34,14 @@ use crate::paged_attention::{calculate_cache_config, AttentionImplementation, Ca
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
-    capture_cuda_decode_graph, cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled,
-    cuda_graph_batch_bucket, cuda_graph_precapture_batches, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
-    CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
-    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
+    cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
+    cuda_graph_precapture_batches, hybrid_graph_slots, install_hybrid_graph_state_indices,
+    record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
+    CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs, CudaGraphDispatchMode,
+    CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphPrecaptureInputs,
+    CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
@@ -1730,6 +1731,14 @@ impl NormalPipeline {
             );
             return Ok(None);
         }
+        if !cuda_decode_graph_batch_kind_supported(recurrent_batch_kind) {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::Prefill,
+            );
+            return Ok(None);
+        }
         if !self.model.supports_cuda_decode_graphs()
             || !cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref())
         {
@@ -1761,6 +1770,14 @@ impl NormalPipeline {
                 CudaGraphComponent::Target,
                 CudaGraphDispatchMode::Skipped,
                 CudaGraphDispatchReason::Prefill,
+            );
+            return Ok(None);
+        }
+        if metadata.decode_rows.is_none() {
+            record_cuda_graph_dispatch(
+                CudaGraphComponent::Target,
+                CudaGraphDispatchMode::Skipped,
+                CudaGraphDispatchReason::IncompatibleShape,
             );
             return Ok(None);
         }
@@ -2013,6 +2030,7 @@ impl NormalPipeline {
                     key,
                     input_ids: &step.input_ids,
                     seqlen_offsets: &step.seqlen_offsets,
+                    position_ids: &step.position_ids,
                     block_size,
                     kv_cache,
                     metadata: &metadata,

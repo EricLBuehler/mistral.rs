@@ -804,6 +804,25 @@ pub(crate) fn text_positions_tensor(
     Tensor::from_vec(positions, (seqlen_offsets.len() * seq_len,), device)
 }
 
+pub(crate) fn decode_positions_tensor(
+    position_ids: &[usize],
+    seq_len: usize,
+    device: &Device,
+) -> candle_core::Result<Tensor> {
+    let mut positions = Vec::with_capacity(position_ids.len() * seq_len);
+    for end in position_ids {
+        let start = end.checked_sub(seq_len).ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "decode position end {end} is smaller than query length {seq_len}"
+            ))
+        })?;
+        for position in start..*end {
+            positions.push(u32::try_from(position).map_err(candle_core::Error::wrap)?);
+        }
+    }
+    Tensor::from_vec(positions, (position_ids.len() * seq_len,), device)
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum LogitsSelection {
     Decode {
@@ -2689,11 +2708,12 @@ mod tests {
     };
 
     use super::{
-        add_recurrent_prefix_memory_reservations, effective_recurrent_checkpoint_lanes,
-        paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
-        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
-        should_try_speculative_sampling, CacheMemoryReservations, ForwardCache, LogitsSelection,
-        ModelForwardContext, RecurrentBatchKind,
+        add_recurrent_prefix_memory_reservations, decode_positions_tensor,
+        effective_recurrent_checkpoint_lanes, paged_attention_memory_reservations,
+        prompt_chunk_is_final, recurrent_batch_kind_for_input, reserve_recurrent_serving_capacity,
+        resolve_lora_execution, should_sample_step, should_try_speculative_sampling,
+        CacheMemoryReservations, ForwardCache, LogitsSelection, ModelForwardContext,
+        RecurrentBatchKind,
     };
     use crate::{
         kv_cache::{
@@ -2987,6 +3007,14 @@ mod tests {
         assert!(error
             .to_string()
             .contains("packed prefill is missing RoPE positions"));
+    }
+
+    #[test]
+    fn decode_positions_expand_exclusive_row_ends() {
+        let positions = decode_positions_tensor(&[4, 10], 3, &Device::Cpu).unwrap();
+
+        assert_eq!(positions.to_vec1::<u32>().unwrap(), vec![1, 2, 3, 7, 8, 9]);
+        assert!(decode_positions_tensor(&[2], 3, &Device::Cpu).is_err());
     }
 
     macro_rules! hashmap {

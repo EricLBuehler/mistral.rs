@@ -27,11 +27,12 @@ use crate::device_map::DeviceMapper;
 use crate::kv_cache::HybridCache;
 use crate::paged_attention::_PAD_SLOT_ID;
 use crate::pipeline::{
+    decode_positions_tensor,
     text_models_inputs_processor::{
         make_flash_params, DecodePagedRows, DecodePagedRowsGraphKey, FlashParams,
         PagedAttentionInputMetadata, PagedDecodeMetadataRequirements,
     },
-    text_positions_tensor, DecodeGraphPrecaptureCtx, RecurrentBatchKind,
+    DecodeGraphPrecaptureCtx, RecurrentBatchKind,
 };
 use crate::speculative::SpeculativeGraphState;
 
@@ -905,6 +906,7 @@ pub(crate) struct CudaDecodeGraphCaptureCtx<'a> {
     pub(crate) key: CudaDecodeGraphKey,
     pub(crate) input_ids: &'a Tensor,
     pub(crate) seqlen_offsets: &'a [usize],
+    pub(crate) position_ids: &'a [usize],
     pub(crate) block_size: usize,
     pub(crate) kv_cache: &'a [(Tensor, Tensor)],
     pub(crate) metadata: &'a PagedAttentionInputMetadata,
@@ -1012,6 +1014,7 @@ impl CudaDecodeGraphMetadataBuffers {
     pub(crate) fn new(
         metadata: &PagedAttentionInputMetadata,
         seqlen_offsets: &[usize],
+        position_ids: &[usize],
         seq_len: usize,
         block_size: usize,
         kv_cache: &[(Tensor, Tensor)],
@@ -1019,8 +1022,15 @@ impl CudaDecodeGraphMetadataBuffers {
         activation_dtype: DType,
     ) -> candle_core::Result<(Self, PagedAttentionInputMetadata)> {
         let slot_mappings = var_map_from_tensor_map(&metadata.slot_mappings)?;
+        if seqlen_offsets.len() != position_ids.len() {
+            candle_core::bail!(
+                "CUDA graph decode has {} KV offsets but {} position ends",
+                seqlen_offsets.len(),
+                position_ids.len()
+            );
+        }
         let rope_positions =
-            rope_positions_var_map(&metadata.slot_mappings, seqlen_offsets, seq_len)?;
+            rope_positions_var_map(&metadata.slot_mappings, position_ids, seq_len)?;
         let (flashinfer_decode_tmp_v, flashinfer_decode_tmp_s) = flashinfer_decode_scratch_maps(
             metadata,
             seqlen_offsets.len(),
@@ -1157,7 +1167,7 @@ impl CudaDecodeGraphMetadataBuffers {
     fn copy_from(
         &mut self,
         metadata: &PagedAttentionInputMetadata,
-        seqlen_offsets: &[usize],
+        position_ids: &[usize],
         seq_len: usize,
         host_staging: &mut CudaGraphHostStaging,
     ) -> candle_core::Result<()> {
@@ -1280,7 +1290,7 @@ impl CudaDecodeGraphMetadataBuffers {
                 )?;
             }
         }
-        copy_rope_positions(&self.rope_positions, seqlen_offsets, seq_len, host_staging)?;
+        copy_rope_positions(&self.rope_positions, position_ids, seq_len, host_staging)?;
         Ok(())
     }
 
@@ -1864,7 +1874,7 @@ impl CudaDecodeGraphState {
                 .update(|host_staging| {
                     metadata_buffers.copy_from(
                         &step.metadata,
-                        &step.seqlen_offsets,
+                        &step.position_ids,
                         seq_len,
                         host_staging,
                     )?;
@@ -2082,6 +2092,7 @@ where
         key,
         input_ids,
         seqlen_offsets,
+        position_ids,
         block_size,
         kv_cache,
         metadata,
@@ -2100,6 +2111,7 @@ where
     let (mut metadata_buffers, metadata) = CudaDecodeGraphMetadataBuffers::new(
         metadata,
         seqlen_offsets,
+        position_ids,
         seq_len,
         block_size,
         kv_cache,
@@ -2190,6 +2202,13 @@ where
 
 pub(crate) fn cuda_decode_graphs_enabled() -> bool {
     crate::perf_flags::cuda_graphs_enabled()
+}
+
+pub(crate) fn cuda_decode_graph_batch_kind_supported(kind: RecurrentBatchKind) -> bool {
+    matches!(
+        kind,
+        RecurrentBatchKind::Decode | RecurrentBatchKind::SpeculativeDecode
+    )
 }
 
 pub(crate) fn cuda_decode_graph_supported_for_model(
@@ -3341,13 +3360,13 @@ fn copy_flashinfer_tile_plan(
 
 fn rope_positions_var_map(
     slot_mappings: &HashMap<DeviceLocation, Tensor>,
-    seqlen_offsets: &[usize],
+    position_ids: &[usize],
     seq_len: usize,
 ) -> candle_core::Result<CudaGraphVarMap> {
     slot_mappings
         .iter()
         .map(|(location, tensor)| {
-            let positions = text_positions_tensor(seqlen_offsets, seq_len, tensor.device())?;
+            let positions = decode_positions_tensor(position_ids, seq_len, tensor.device())?;
             Ok((*location, Var::from_tensor(&positions)?))
         })
         .collect()
@@ -3355,11 +3374,11 @@ fn rope_positions_var_map(
 
 fn copy_rope_positions(
     dst: &CudaGraphVarMap,
-    seqlen_offsets: &[usize],
+    position_ids: &[usize],
     seq_len: usize,
     host_staging: &mut CudaGraphHostStaging,
 ) -> candle_core::Result<()> {
-    let positions = text_positions_tensor(seqlen_offsets, seq_len, &Device::Cpu)?;
+    let positions = decode_positions_tensor(position_ids, seq_len, &Device::Cpu)?;
     for (location, dst) in dst {
         if dst.device().is_cuda() {
             host_staging.copy_from("rope_positions", *location, &positions, dst)?;
@@ -3600,6 +3619,19 @@ mod tests {
     }
 
     #[test]
+    fn decode_graph_batch_kind_rejects_every_prefill_chunk() {
+        assert!(!cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::Prefill
+        ));
+        assert!(cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::Decode
+        ));
+        assert!(cuda_decode_graph_batch_kind_supported(
+            RecurrentBatchKind::SpeculativeDecode
+        ));
+    }
+
+    #[test]
     fn graph_context_len_tracks_paged_attention_partitions() {
         assert_eq!(graph_context_len(Some(1), Some(2048)), Some(512));
         assert_eq!(graph_context_len(Some(512), Some(2048)), Some(512));
@@ -3692,9 +3724,17 @@ mod tests {
             .iter()
             .all(|tensor| !tensor.name.starts_with("full_")));
 
-        let (buffers, _) =
-            CudaDecodeGraphMetadataBuffers::new(&metadata, &[127], 1, 32, &[], None, DType::F32)
-                .unwrap();
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &metadata,
+            &[127],
+            &[128],
+            1,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )
+        .unwrap();
         assert!(buffers.flashinfer_views_alias);
         let location = Device::Cpu.location();
         assert_eq!(
@@ -3705,6 +3745,46 @@ mod tests {
             buffers.paged_kv_request_indices.as_ref().unwrap()[&location].id(),
             buffers.full_paged_kv_request_indices.as_ref().unwrap()[&location].id()
         );
+    }
+
+    #[test]
+    fn graph_rope_positions_expand_adjusted_ends_for_verification() {
+        let table = vec![1, 2];
+        let metadata = Arc::new(DecodePagedRows {
+            slot_mappings: vec![vec![37, 38, 39], vec![37, 38, 39]],
+            block_tables: vec![table.clone(); 6],
+            context_lens: vec![38, 39, 40, 38, 39, 40],
+            full_block_tables: vec![table; 6],
+            full_context_lens: vec![38, 39, 40, 38, 39, 40],
+            query_len: 3,
+            block_size: 32,
+            use_standard_metadata: false,
+            max_paged_context_len: 128,
+            sliding_window: None,
+            decode_window: 1,
+            devices: vec![Device::Cpu],
+            num_kv_heads: 4,
+        })
+        .build_materialized()
+        .unwrap();
+
+        let (buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &metadata,
+            &[97, 97],
+            &[100, 52],
+            3,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )
+        .unwrap();
+        let positions = buffers.rope_positions[&Device::Cpu.location()]
+            .as_detached_tensor()
+            .to_vec1::<u32>()
+            .unwrap();
+
+        assert_eq!(positions, vec![97, 98, 99, 49, 50, 51]);
     }
 
     #[test]
@@ -3732,18 +3812,26 @@ mod tests {
         let updated = rows(vec![5, 6, 7, 8, 9, 10, 11, 12], 256)?.build()?;
         assert!(updated.has_host_staged_decode_tensors());
 
-        let (mut buffers, _) =
-            CudaDecodeGraphMetadataBuffers::new(&initial, &[127], 1, 32, &[], None, DType::F32)?;
+        let (mut buffers, _) = CudaDecodeGraphMetadataBuffers::new(
+            &initial,
+            &[127],
+            &[128],
+            1,
+            32,
+            &[],
+            None,
+            DType::F32,
+        )?;
         let location = device.location();
         let state_indices = Var::from_tensor(&Tensor::zeros((3,), DType::U32, &device)?)?;
         let mut state_indices_map = HashMap::from([(location, state_indices)]);
         let mut host_staging = CudaGraphHostStaging::new(device.as_cuda_device()?.cuda_stream())?;
         host_staging.update(|host_staging| {
-            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[3, 5, 7], host_staging)
         })?;
         host_staging.update(|host_staging| {
-            buffers.copy_from(&updated, &[255], 1, host_staging)?;
+            buffers.copy_from(&updated, &[256], 1, host_staging)?;
             copy_state_indices(&state_indices_map, &[11, 13, 17], host_staging)
         })?;
         device.synchronize()?;
@@ -4135,9 +4223,9 @@ mod tests {
         );
         let step = CudaGraphDecodeStep {
             input_ids: Tensor::zeros((2, 1), DType::U32, &Device::Cpu)?,
-            seqlen_offsets: vec![3, 3],
+            seqlen_offsets: vec![100, 100],
             context_lens: vec![(0, 1), (0, 1)],
-            position_ids: vec![4, 4],
+            position_ids: vec![43, 43],
             metadata: rows.build_graph_staged()?,
             state_indices: Some(vec![2, 5]),
             real_batch: 1,
@@ -4150,9 +4238,9 @@ mod tests {
         assert_eq!(rows.block_tables, vec![vec![9, 17], vec![9, 17]]);
         assert_eq!(rows.context_lens, vec![5, 5]);
         assert_eq!(rows.full_context_lens, vec![5, 5]);
-        assert_eq!(continuation.seqlen_offsets, vec![4, 4]);
+        assert_eq!(continuation.seqlen_offsets, vec![101, 101]);
         assert_eq!(continuation.context_lens, vec![(0, 1), (0, 1)]);
-        assert_eq!(continuation.position_ids, vec![5, 5]);
+        assert_eq!(continuation.position_ids, vec![44, 44]);
         assert_eq!(continuation.state_indices, Some(vec![2, 5]));
         Ok(())
     }
@@ -4217,6 +4305,7 @@ mod tests {
                 key: key.clone(),
                 input_ids: &initial_ids,
                 seqlen_offsets: &[0],
+                position_ids: &[1],
                 block_size: 32,
                 kv_cache: &[],
                 metadata: &metadata,
