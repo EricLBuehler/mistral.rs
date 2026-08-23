@@ -70,7 +70,7 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_tokens_processed_total` | counter | - | Tokens processed (prefill plus decode). |
 | `mistralrs_prefix_cache_lookups_total` | counter | - | New sequences that requested a prefix cache lookup. |
 | `mistralrs_prefix_cache_hits_total` | counter | - | New sequences that found a cached KV prefix. |
-| `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries evicted to free memory: cache entries in non-paged mode, KV prefix blocks (plus recurrent prefix entries on a full cache reset) with paged attention. |
+| `mistralrs_prefix_cache_evictions_total` | counter | - | Prefix cache entries, logical recurrent owners, or paged KV hash keys evicted from cache. |
 | `mistralrs_encoder_cache_hits_total` | counter | - | Multimodal encoder cache hits (multimodal models only). |
 | `mistralrs_encoder_cache_misses_total` | counter | - | Multimodal encoder cache misses (multimodal models only). |
 | `mistralrs_sequences_running` | gauge | - | Sequences currently running. |
@@ -79,6 +79,15 @@ Timing is measured at the engine's token steps, not at SSE frames, so keep-alive
 | `mistralrs_sequences_completed_total` | counter | `reason` | Sequences that reached a terminal state. `reason` is one of `stop`, `length`, `canceled`, `generated_image`, `generated_speech`, `tool_calls`, `error`. |
 | `mistralrs_kv_cache_blocks_used` | gauge | - | KV cache blocks currently in use (paged attention). |
 | `mistralrs_kv_cache_blocks_total` | gauge | - | Total KV cache blocks (paged attention). |
+| `mistralrs_kv_cache_blocks_prefix_cached` | gauge | - | Physical KV blocks that retain at least one prefix-cache key. |
+| `mistralrs_kv_cache_blocks_prefix_retained` | gauge | - | Physical KV blocks protected by a paired recurrent prefix checkpoint. |
+| `mistralrs_paged_prefix_retention_free_blocks` | gauge | - | Protected physical KV blocks not referenced by a running sequence. |
+| `mistralrs_paged_prefix_retention_entries` | gauge | - | Active paired recurrent checkpoint leases. This drops immediately when allocator pressure revokes a lease. |
+| `mistralrs_paged_prefix_retention_hashes` | gauge | - | Distinct block hashes protected by active paired checkpoint leases. |
+| `mistralrs_paged_prefix_retention_pressure_evictions_total` | counter | `reason` | Paired checkpoint leases revoked to preserve allocation progress. `reason` is `allocation_pressure` or `reset`. |
+| `mistralrs_paged_recurrent_prefix_owners_used` | gauge | - | Logical recurrent prefix owners currently retained. |
+| `mistralrs_paged_recurrent_prefix_owners_capacity` | gauge | - | Configured logical recurrent prefix owner capacity. |
+| `mistralrs_paged_recurrent_prefix_owner_evictions_total` | counter | `reason` | Logical recurrent owners evicted by `capacity` or after `block_pressure` revokes their paired blocks. |
 
 ### Speculative decoding (MTP)
 

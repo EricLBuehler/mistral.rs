@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use super::block_hash::BlockHash;
-use super::block_pool::BlockPool;
+use super::block_pool::{BlockPool, PrefixBlockRetention};
 
 /// Result of `get_computed_blocks`: cached block IDs and how many tokens they cover.
 #[derive(Debug)]
@@ -65,8 +65,10 @@ impl KVCacheManager {
         enable_caching: bool,
         kv_cache_group_ids: Vec<u32>,
     ) -> Self {
+        let mut block_pool = BlockPool::new(num_gpu_blocks, enable_caching, block_size);
+        block_pool.set_retention_group_ids(kv_cache_group_ids.clone());
         Self {
-            block_pool: BlockPool::new(num_gpu_blocks, enable_caching, block_size),
+            block_pool,
             block_size,
             enable_caching,
             kv_cache_group_ids,
@@ -82,6 +84,10 @@ impl KVCacheManager {
     /// Get a mutable reference to the block pool.
     pub fn block_pool_mut(&mut self) -> &mut BlockPool {
         &mut self.block_pool
+    }
+
+    pub(crate) fn prefix_block_retention(&self) -> PrefixBlockRetention {
+        self.block_pool.prefix_block_retention()
     }
 
     /// Get the null block ID (placeholder for skipped/unused slots).
@@ -122,6 +128,10 @@ impl KVCacheManager {
     /// Number of distinct physical blocks retaining prefix-cache keys.
     pub fn num_prefix_cached_blocks(&self) -> usize {
         self.block_pool.num_prefix_cached_physical_blocks()
+    }
+
+    pub fn num_retained_prefix_blocks(&self) -> usize {
+        self.block_pool.num_retained_physical_blocks()
     }
 
     /// Whether prefix caching is enabled.

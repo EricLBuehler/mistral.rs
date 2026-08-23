@@ -1,6 +1,9 @@
 use crate::{
     distributed,
-    paged_attention::block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+    paged_attention::{
+        block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+        block_pool::PrefixBlockRetentionRevocationMonitor,
+    },
     pipeline::{
         execution::StepSubmissionKind,
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
@@ -194,6 +197,7 @@ pub struct Engine {
     id: Arc<Mutex<usize>>,
     no_kv_cache: bool,
     prefix_cacher: Arc<Mutex<PrefixCacheManagerV2>>,
+    paged_block_retention_monitor: Option<PrefixBlockRetentionRevocationMonitor>,
     is_debug: bool,
     disable_eos_stop: bool,
     throughput_logging_enabled: bool,
@@ -565,6 +569,22 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_prefix_caching_enabled(!no_prefix_cache);
 
         let has_paged_attention = get_mut_arcmutex!(scheduler).kv_cache_manager().is_some();
+        let paged_block_retention = if has_paged_attention
+            && prompt_chunks_require_block_alignment
+            && !no_prefix_cache
+            && prefix_cache_n > 0
+        {
+            get_mut_arcmutex!(scheduler)
+                .kv_cache_manager()
+                .map(|kv_cache_manager| {
+                    get_mut_arcmutex!(kv_cache_manager).prefix_block_retention()
+                })
+        } else {
+            None
+        };
+        let paged_block_retention_monitor = paged_block_retention
+            .as_ref()
+            .map(|retention| retention.revocation_monitor());
         #[cfg(feature = "cuda")]
         let cuda_decode_enabled =
             has_paged_attention && get_mut_arcmutex!(pipeline).device().is_cuda();
@@ -607,6 +627,12 @@ impl Engine {
             ctx
         };
 
+        let mut prefix_cacher =
+            PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
+        if let Some(retention) = paged_block_retention {
+            prefix_cacher.attach_paged_block_retention(retention);
+        }
+
         Ok(Self {
             tx,
             rx: Arc::new(Mutex::new(rx)),
@@ -618,11 +644,8 @@ impl Engine {
             max_active_sequences,
             id: Arc::new(Mutex::new(0)),
             no_kv_cache,
-            prefix_cacher: Arc::new(Mutex::new(PrefixCacheManagerV2::new(
-                prefix_cache_n,
-                no_prefix_cache,
-                has_paged_attention,
-            ))),
+            prefix_cacher: Arc::new(Mutex::new(prefix_cacher)),
+            paged_block_retention_monitor,
             is_debug: DEBUG.load(Ordering::Relaxed),
             disable_eos_stop,
             throughput_logging_enabled,
@@ -677,6 +700,16 @@ impl Engine {
         scheduler.free_finished_sequence_groups();
         self.logger.set_num_running(scheduler.running_len());
         self.logger.set_num_waiting(scheduler.waiting_len());
+    }
+
+    fn prune_revoked_paged_recurrent_prefixes(&self) {
+        if self
+            .paged_block_retention_monitor
+            .as_ref()
+            .is_some_and(PrefixBlockRetentionRevocationMonitor::take_pending)
+        {
+            get_mut_arcmutex!(self.prefix_cacher).prune_revoked_paged_recurrent_entries();
+        }
     }
 
     fn resolve_adapter_generation(&self, request: &mut Request) -> Result<(), String> {
@@ -1228,6 +1261,7 @@ impl Engine {
             let mut scheduler = get_mut_arcmutex!(self.scheduler);
             self.free_finished_scheduler_sequences(&mut *scheduler);
             let scheduled = scheduler.schedule(&self.logger, prefix_validator);
+            self.prune_revoked_paged_recurrent_prefixes();
 
             match scheduled {
                 SchedulerOutput::DefaultScheduler {

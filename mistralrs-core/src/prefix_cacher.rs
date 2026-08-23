@@ -6,7 +6,10 @@ use tracing::info;
 
 use crate::{
     kv_cache::RecurrentStateSnapshot,
-    paged_attention::block_hash::{BlockHash, MultiModalFeature, MultimodalKind},
+    paged_attention::{
+        block_hash::{BlockHash, MultiModalFeature, MultimodalKind},
+        block_pool::{PrefixBlockRetention, PrefixBlockRetentionLease},
+    },
     pipeline::KvCache,
     sequence::Sequence,
     AdapterGenerationId,
@@ -19,6 +22,7 @@ const PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC: &str =
 const PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC: &str =
     "mistralrs_paged_recurrent_prefix_owner_evictions_total";
 const CAPACITY_EVICTION_REASON: &str = "capacity";
+const BLOCK_PRESSURE_EVICTION_REASON: &str = "block_pressure";
 
 #[derive(PartialEq, Eq, Debug, Hash)]
 struct Tokens(Vec<u32>);
@@ -173,6 +177,7 @@ pub struct PrefixCacheManagerV2 {
     paged_recurrent_sequence_keys: IndexMap<BlockHash, Vec<BlockHash>>,
     paged_recurrent_bytes: usize,
     paged_recurrent_reported: bool,
+    paged_block_retention: Option<PrefixBlockRetention>,
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
@@ -193,6 +198,7 @@ struct PagedRecurrentCacheEntry {
     snapshots: Vec<RecurrentStateSnapshot>,
     auxiliary: Option<Arc<dyn PagedAuxiliaryPrefixState>>,
     owners: HashSet<BlockHash>,
+    retention: Option<PrefixBlockRetentionLease>,
 }
 
 #[derive(Clone)]
@@ -219,6 +225,7 @@ impl PrefixCacheManagerV2 {
             paged_recurrent_sequence_keys: IndexMap::new(),
             paged_recurrent_bytes: 0,
             paged_recurrent_reported: false,
+            paged_block_retention: None,
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
@@ -229,12 +236,28 @@ impl PrefixCacheManagerV2 {
             "reason" => CAPACITY_EVICTION_REASON
         )
         .increment(0);
+        metrics::counter!(
+            PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
+            "reason" => BLOCK_PRESSURE_EVICTION_REASON
+        )
+        .increment(0);
         manager
     }
 
     /// Whether recurrent prefix snapshots would be kept; callers skip the device copy otherwise.
     pub fn accepts_paged_recurrent_prefix(&self) -> bool {
         !self.no_prefix_cache && self.has_paged_attention && self.paged_recurrent_capacity() > 0
+    }
+
+    pub(crate) fn attach_paged_block_retention(&mut self, retention: PrefixBlockRetention) {
+        assert!(
+            self.paged_recurrent_caches.is_empty(),
+            "paged block retention must be attached before caching prefixes"
+        );
+        if self.accepts_paged_recurrent_prefix() {
+            retention.enable();
+            self.paged_block_retention = Some(retention);
+        }
     }
 
     fn paged_recurrent_capacity(&self) -> usize {
@@ -257,6 +280,53 @@ impl PrefixCacheManagerV2 {
         let (used, capacity) = self.paged_recurrent_owner_metric_values();
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC).set(f64::from(used));
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC).set(f64::from(capacity));
+    }
+
+    pub(crate) fn prune_revoked_paged_recurrent_entries(&mut self) -> usize {
+        let revoked_keys = self
+            .paged_recurrent_caches
+            .iter()
+            .filter_map(|(key, entry)| {
+                entry
+                    .retention
+                    .as_ref()
+                    .is_some_and(|retention| !retention.is_active())
+                    .then_some(key.clone())
+            })
+            .collect::<Vec<_>>();
+        let mut removed_owners = 0;
+        for key in revoked_keys {
+            let Some(entry) = self.paged_recurrent_caches.shift_remove(&key) else {
+                continue;
+            };
+            self.paged_recurrent_bytes =
+                self.paged_recurrent_bytes
+                    .saturating_sub(Self::checkpoint_bytes(
+                        &entry.snapshots,
+                        entry.auxiliary.as_deref(),
+                    ));
+            for owner in entry.owners {
+                if self
+                    .paged_recurrent_sequence_keys
+                    .get(&owner)
+                    .is_some_and(|owner_key| owner_key == &key)
+                {
+                    self.paged_recurrent_sequence_keys.shift_remove(&owner);
+                    removed_owners += 1;
+                }
+            }
+        }
+        if removed_owners > 0 {
+            metrics::counter!("mistralrs_prefix_cache_evictions_total")
+                .increment(removed_owners as u64);
+            metrics::counter!(
+                PAGED_RECURRENT_PREFIX_OWNER_EVICTIONS_METRIC,
+                "reason" => BLOCK_PRESSURE_EVICTION_REASON
+            )
+            .increment(removed_owners as u64);
+            self.publish_paged_recurrent_owner_metrics();
+        }
+        removed_owners
     }
 
     fn checkpoint_bytes(
@@ -413,6 +483,7 @@ impl PrefixCacheManagerV2 {
         {
             return;
         }
+        self.prune_revoked_paged_recurrent_entries();
 
         if let Some(stale_key) = self.paged_recurrent_sequence_keys.shift_remove(&owner) {
             if stale_key != key {
@@ -429,11 +500,19 @@ impl PrefixCacheManagerV2 {
                         entry.auxiliary.as_deref(),
                     ));
         }
-        let mut owners = previous
-            .as_ref()
-            .map(|entry| entry.owners.clone())
-            .unwrap_or_default();
-        let auxiliary = auxiliary.or_else(|| previous.and_then(|entry| entry.auxiliary));
+        let (mut owners, previous_auxiliary, retention) = previous.map_or_else(
+            || (HashSet::new(), None, None),
+            |entry| (entry.owners, entry.auxiliary, entry.retention),
+        );
+        let auxiliary = auxiliary.or(previous_auxiliary);
+        let retention = retention.or_else(|| {
+            self.paged_block_retention
+                .as_ref()
+                .map(|retention| retention.retain(&key))
+        });
+        if let Some(retention) = retention.as_ref() {
+            retention.touch();
+        }
         owners.insert(owner);
         self.paged_recurrent_bytes += Self::checkpoint_bytes(&snapshots, auxiliary.as_deref());
         self.paged_recurrent_caches.insert(
@@ -442,6 +521,7 @@ impl PrefixCacheManagerV2 {
                 snapshots,
                 auxiliary,
                 owners,
+                retention,
             },
         );
         self.paged_recurrent_sequence_keys.insert(owner, key);
@@ -492,6 +572,7 @@ impl PrefixCacheManagerV2 {
         key: &[BlockHash],
         current_owner: BlockHash,
     ) -> Option<PagedPrefixCheckpoint> {
+        self.prune_revoked_paged_recurrent_entries();
         let out = self.peek_paged_recurrent_prefix(key)?;
         self.promote_paged_recurrent_prefix(key, current_owner);
         Some(out)
@@ -503,6 +584,13 @@ impl PrefixCacheManagerV2 {
         }
 
         let entry = self.paged_recurrent_caches.get(key)?;
+        if entry
+            .retention
+            .as_ref()
+            .is_some_and(|retention| !retention.is_active())
+        {
+            return None;
+        }
         Some(PagedPrefixCheckpoint {
             recurrent_snapshots: entry.snapshots.clone(),
             auxiliary: entry.auxiliary.clone(),
@@ -510,9 +598,13 @@ impl PrefixCacheManagerV2 {
     }
 
     pub fn promote_paged_recurrent_prefix(&mut self, key: &[BlockHash], current_owner: BlockHash) {
+        self.prune_revoked_paged_recurrent_entries();
         let Some(entry) = self.paged_recurrent_caches.get(key) else {
             return;
         };
+        if let Some(retention) = entry.retention.as_ref() {
+            retention.touch();
+        }
         let promote_owner = entry
             .owners
             .contains(&current_owner)
@@ -529,7 +621,8 @@ impl PrefixCacheManagerV2 {
         }
     }
 
-    pub fn has_paged_recurrent_owner(&self, owner: BlockHash) -> bool {
+    pub fn has_paged_recurrent_owner(&mut self, owner: BlockHash) -> bool {
+        self.prune_revoked_paged_recurrent_entries();
         self.paged_recurrent_sequence_keys.contains_key(&owner)
     }
 
@@ -561,6 +654,7 @@ impl PrefixCacheManagerV2 {
         block_hashes: &[BlockHash],
         max_blocks: usize,
     ) -> Option<(usize, PagedPrefixCheckpoint)> {
+        self.prune_revoked_paged_recurrent_entries();
         let (n_blocks, checkpoint) =
             self.peek_longest_paged_recurrent_prefix(block_hashes, max_blocks)?;
         self.promote_paged_recurrent_prefix(&block_hashes[..n_blocks], *block_hashes.last()?);
@@ -579,8 +673,16 @@ impl PrefixCacheManagerV2 {
         let max_blocks = max_blocks.min(block_hashes.len());
         let key = self
             .paged_recurrent_caches
-            .keys()
-            .filter(|key| key.len() <= max_blocks && block_hashes.starts_with(key))
+            .iter()
+            .filter(|(key, entry)| {
+                key.len() <= max_blocks
+                    && block_hashes.starts_with(key)
+                    && entry
+                        .retention
+                        .as_ref()
+                        .is_none_or(PrefixBlockRetentionLease::is_active)
+            })
+            .map(|(key, _)| key)
             .max_by_key(|key| key.len())?
             .clone();
         let n_blocks = key.len();
@@ -795,6 +897,7 @@ mod tests {
             compute_block_hashes, BlockHash, MultiModalFeature, MultimodalAttentionPolicy,
             MultimodalKind,
         },
+        paged_attention::block_pool::BlockPool,
         AdapterGenerationId,
     };
 
@@ -936,6 +1039,98 @@ mod tests {
             .get_paged_recurrent_prefix(&hashes_b, owner_b)
             .is_some());
 
+        Ok(())
+    }
+
+    #[test]
+    fn retained_blocks_follow_shared_owner_replacement_and_clear() -> candle_core::Result<()> {
+        let pool = BlockPool::new(8, true, 1);
+        let retention = pool.prefix_block_retention();
+        let mut prefix_cacher = PrefixCacheManagerV2::new(2, false, true);
+        prefix_cacher.attach_paged_block_retention(retention.clone());
+        let hashes_a = compute_block_hashes(&[10, 11, 12, 13], 1, &[], &[]);
+        let hashes_b = compute_block_hashes(&[10, 11, 20, 21], 1, &[], &[]);
+        let hashes_c = block_hashes(30, 2);
+        let owner_a = *hashes_a.last().unwrap();
+        let owner_b = *hashes_b.last().unwrap();
+        let owner_c = *hashes_c.last().unwrap();
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_a,
+            hashes_a[..2].to_vec(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_b,
+            hashes_b[..2].to_vec(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(retention.num_entries(), 1);
+        assert_eq!(retention.num_hashes(), 2);
+
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_a,
+            hashes_a.clone(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert_eq!(retention.num_entries(), 2);
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner_c,
+            hashes_c.clone(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+
+        assert!(!prefix_cacher.has_paged_recurrent_owner(owner_b));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_a));
+        assert!(prefix_cacher.has_paged_recurrent_owner(owner_c));
+        assert_eq!(retention.num_entries(), 2);
+        assert_eq!(retention.num_hashes(), hashes_a.len() + hashes_c.len());
+
+        prefix_cacher.evict_all_caches()?;
+        assert_eq!(retention.num_entries(), 0);
+        assert_eq!(retention.num_hashes(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn allocation_pressure_invalidates_paired_recurrent_checkpoint() -> candle_core::Result<()> {
+        let mut pool = BlockPool::new(4, true, 1);
+        let retention = pool.prefix_block_retention();
+        let hashes = block_hashes(10, 2);
+        let block_ids = pool.get_new_blocks(hashes.len()).unwrap();
+        pool.cache_full_blocks(&block_ids, &hashes, 0, hashes.len(), 0);
+
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, true);
+        prefix_cacher.attach_paged_block_retention(retention.clone());
+        let revocations = retention.revocation_monitor();
+        let owner = *hashes.last().unwrap();
+        prefix_cacher.add_paged_recurrent_prefix(
+            owner,
+            hashes.clone(),
+            vec![make_recurrent_snapshot()?],
+            None,
+        );
+        assert!(!revocations.take_pending());
+        pool.free_blocks(&block_ids.iter().rev().copied().collect::<Vec<_>>());
+        assert_eq!(pool.num_retained_physical_blocks(), 2);
+        assert_eq!(retention.num_entries(), 1);
+
+        assert_eq!(pool.get_new_blocks(2).unwrap().len(), 2);
+        assert_eq!(retention.num_entries(), 0);
+        assert_eq!(pool.num_retained_physical_blocks(), 0);
+        assert!(prefix_cacher.peek_paged_recurrent_prefix(&hashes).is_none());
+        assert_eq!(prefix_cacher.paged_recurrent_caches.len(), 1);
+        assert!(revocations.take_pending());
+        assert!(!revocations.take_pending());
+        assert_eq!(prefix_cacher.prune_revoked_paged_recurrent_entries(), 1);
+        assert!(prefix_cacher.paged_recurrent_caches.is_empty());
+        assert!(prefix_cacher.paged_recurrent_sequence_keys.is_empty());
+        assert_eq!(prefix_cacher.paged_recurrent_bytes, 0);
+        assert!(!prefix_cacher.has_paged_recurrent_owner(owner));
         Ok(())
     }
 

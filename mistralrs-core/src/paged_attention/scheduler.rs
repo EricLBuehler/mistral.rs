@@ -1120,6 +1120,8 @@ impl PagedAttentionScheduler {
         metrics::gauge!("mistralrs_kv_cache_blocks_active").set(active as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_prefix_cached")
             .set(kv_mgr.num_prefix_cached_blocks() as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_prefix_retained")
+            .set(kv_mgr.num_retained_prefix_blocks() as f64);
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
