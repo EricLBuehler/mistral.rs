@@ -1051,6 +1051,7 @@ pub async fn parse_request(
     Ok((
         Request::Normal(Box::new(NormalRequest {
             id: state.next_request_id(),
+            queued_at: None,
             messages,
             sampling_params: SamplingParams {
                 temperature: oairequest.temperature,

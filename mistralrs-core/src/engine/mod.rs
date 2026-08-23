@@ -558,6 +558,9 @@ impl Engine {
         if Self::request_is_abandoned(&request) {
             return None;
         }
+        if let Request::Normal(request) = &mut request {
+            request.mark_enqueued();
+        }
         if let Err(error) = self.resolve_adapter_generation(&mut request) {
             if let Request::Normal(request) = request {
                 request
@@ -625,7 +628,13 @@ impl Engine {
         disconnected
     }
 
-    async fn dispatch_prepared_request(self: &Arc<Self>, request: Request) -> bool {
+    async fn dispatch_prepared_request(self: &Arc<Self>, mut request: Request) -> bool {
+        if let Request::Normal(request) = &mut request {
+            if let Some(duration) = request.take_queue_duration() {
+                metrics::histogram!(crate::REQUEST_QUEUE_DURATION_METRIC)
+                    .record(duration.as_secs_f64());
+            }
+        }
         self.replicate_request_to_daemons(&request);
         if matches!(request, Request::Terminate) {
             return false;

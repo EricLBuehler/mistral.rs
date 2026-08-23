@@ -15,6 +15,7 @@ use axum::{
 };
 use http_body::{Body as HttpBody, Frame};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use mistralrs_core::REQUEST_QUEUE_DURATION_METRIC;
 use std::pin::Pin;
 use std::sync::OnceLock;
 use std::task::{Context, Poll};
@@ -70,6 +71,10 @@ const TTFT_BUCKETS: [f64; 22] = [
 const ITL_BUCKETS: [f64; 19] = [
     0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0, 20.0,
     40.0, 80.0,
+];
+const QUEUE_DURATION_BUCKETS: [f64; 22] = [
+    0.001, 0.005, 0.01, 0.02, 0.04, 0.06, 0.08, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
+    20.0, 40.0, 80.0, 160.0, 640.0, 2_560.0,
 ];
 pub(crate) const TTFT_METRIC: &str = "mistralrs_time_to_first_token_seconds";
 pub(crate) const ITL_METRIC: &str = "mistralrs_inter_token_latency_seconds";
@@ -157,6 +162,11 @@ pub fn install_prometheus_recorder() {
         .expect("valid TTFT buckets")
         .set_buckets_for_metric(Matcher::Full(ITL_METRIC.to_string()), &ITL_BUCKETS)
         .expect("valid ITL buckets")
+        .set_buckets_for_metric(
+            Matcher::Full(REQUEST_QUEUE_DURATION_METRIC.to_string()),
+            &QUEUE_DURATION_BUCKETS,
+        )
+        .expect("valid request queue duration buckets")
         .install_recorder()
         .expect("failed to install Prometheus recorder");
     let _ = PROMETHEUS_HANDLE.set(handle);

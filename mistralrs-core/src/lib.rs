@@ -45,6 +45,7 @@ pub const MISTRALRS_GIT_REVISION: &str = match option_env!("MISTRALRS_GIT_REVISI
 };
 pub const MISTRALRS_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const DEFAULT_ENGINE_REQUEST_QUEUE_CAPACITY: usize = 10_000;
+pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duration_seconds";
 
 mod adapter;
 mod agent_approval;
@@ -1102,6 +1103,9 @@ impl MistralRs {
         &self,
         request: &mut Request,
     ) -> Result<Sender<Request>, MistralRsError> {
+        if let Request::Normal(request) = &mut *request {
+            request.mark_enqueued();
+        }
         let requested_model = match &*request {
             Request::Normal(request) => request.model_id.clone(),
             _ => None,
@@ -1624,6 +1628,7 @@ impl MistralRs {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
                     id: 0,
+                    queued_at: None,
                     messages: RequestMessage::Completion {
                         text: "hello".to_string(),
                         echo_prompt: false,

@@ -66,6 +66,7 @@ pub fn parse_request(
 
     let request = Request::Normal(Box::new(NormalRequest {
         id: state.next_request_id(),
+        queued_at: None,
         messages: RequestMessage::SpeechGeneration {
             prompt: oairequest.input,
         },

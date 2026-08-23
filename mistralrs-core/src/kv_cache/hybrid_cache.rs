@@ -585,7 +585,7 @@ impl HybridCache {
             caches.push(cache);
         }
 
-        Ok(Self {
+        let cache = Self {
             caches,
             config,
             state_indices: None,
@@ -596,7 +596,9 @@ impl HybridCache {
             committed_lanes: vec![0; INITIAL_POOL_CAPACITY],
             recurrent_storage_locked: false,
             graph_pad_slot: None,
-        })
+        };
+        cache.publish_recurrent_slot_metrics();
+        Ok(cache)
     }
 
     /// Slot reserved for CUDA graph pad rows; never handed to a sequence while it lives.
@@ -782,6 +784,31 @@ impl HybridCache {
             .unwrap_or(0)
     }
 
+    pub fn recurrent_slots_used(&self) -> usize {
+        let mut pools = self
+            .caches
+            .iter()
+            .filter_map(HybridLayerCache::as_recurrent_pool);
+        let Some(first) = pools.next() else {
+            return 0;
+        };
+        let used = first.capacity().saturating_sub(first.num_free_slots());
+        debug_assert!(
+            pools.all(|pool| { pool.capacity().saturating_sub(pool.num_free_slots()) == used })
+        );
+        used
+    }
+
+    fn publish_recurrent_slot_metrics(&self) {
+        if self.recurrent_capacity() == 0 {
+            return;
+        }
+        metrics::gauge!("mistralrs_recurrent_state_slots_used")
+            .set(self.recurrent_slots_used() as f64);
+        metrics::gauge!("mistralrs_recurrent_state_slots_total")
+            .set(self.recurrent_capacity() as f64);
+    }
+
     pub(crate) fn reserve_recurrent_capacity(&mut self, min_capacity: usize) -> Result<bool> {
         let mut grew = false;
         for cache in &mut self.caches {
@@ -791,12 +818,19 @@ impl HybridCache {
         }
         self.committed_lanes.resize(self.recurrent_capacity(), 0);
         self.recurrent_storage_locked = true;
+        self.publish_recurrent_slot_metrics();
         Ok(grew)
     }
 
     /// Allocate state slots for a new sequence across all recurrent layers.
     /// Returns the slot index (same for all layers).
     pub fn allocate_seq(&mut self) -> Option<usize> {
+        let slot = self.allocate_seq_inner();
+        self.publish_recurrent_slot_metrics();
+        slot
+    }
+
+    fn allocate_seq_inner(&mut self) -> Option<usize> {
         self.recurrent_storage_locked = true;
         // Collect recurrent layer indices once so rollback can target only recurrent pools.
         let recurrent_layers: Vec<usize> = self
@@ -888,6 +922,7 @@ impl HybridCache {
         {
             self.clear_state_indices();
         }
+        self.publish_recurrent_slot_metrics();
     }
 
     /// Reset a specific sequence's state in all recurrent layers.
@@ -913,6 +948,7 @@ impl HybridCache {
         self.committed_lanes.fill(0);
         self.clear_state_indices();
         self.graph_pad_slot = None;
+        self.publish_recurrent_slot_metrics();
     }
 
     /// Reset the attention caches and only the given recurrent slots; other sequences keep their state.
@@ -1270,6 +1306,39 @@ mod tests {
             .collect::<HashSet<_>>();
         assert_eq!(slots.len(), 17);
         assert_eq!(cache.recurrent_capacity(), 17);
+        Ok(())
+    }
+
+    #[test]
+    fn recurrent_slot_accounting_tracks_all_lifecycle_transitions() -> Result<()> {
+        let devices = vec![Device::Cpu, Device::Cpu];
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent, HybridLayerType::Recurrent]),
+            DType::F32,
+            &devices,
+        )?;
+
+        assert_eq!(cache.recurrent_capacity(), INITIAL_POOL_CAPACITY);
+        assert_eq!(cache.recurrent_slots_used(), 0);
+
+        let first = cache.allocate_seq().unwrap();
+        let second = cache.allocate_seq().unwrap();
+        assert_eq!(cache.recurrent_slots_used(), 2);
+
+        cache.free_seq(first);
+        assert_eq!(cache.recurrent_slots_used(), 1);
+        assert!(cache.reserve_recurrent_capacity(17)?);
+        assert_eq!(cache.recurrent_capacity(), 17);
+        assert_eq!(cache.recurrent_slots_used(), 1);
+
+        assert!(cache.graph_pad_slot().is_some());
+        assert_eq!(cache.recurrent_slots_used(), 2);
+        cache.free_seq(second);
+        assert_eq!(cache.recurrent_slots_used(), 1);
+
+        cache.reset();
+        assert_eq!(cache.recurrent_capacity(), 17);
+        assert_eq!(cache.recurrent_slots_used(), 0);
         Ok(())
     }
 

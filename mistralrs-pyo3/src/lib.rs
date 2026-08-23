@@ -1661,6 +1661,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -1774,6 +1775,7 @@ impl Runner {
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
                         id: request_id,
+                        queued_at: None,
                         messages: message,
                         sampling_params: SamplingParams::deterministic(),
                         seed: None,
@@ -1886,6 +1888,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,
@@ -1973,6 +1976,7 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
@@ -2043,6 +2047,7 @@ impl Runner {
 
         let request = _Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
             sampling_params: SamplingParams::deterministic(),
             seed: None,
@@ -2617,6 +2622,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages,
                 sampling_params: SamplingParams {
                     temperature: request.temperature,
@@ -2736,6 +2742,7 @@ impl Runner {
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
                 id: next_request_id(),
+                queued_at: None,
                 messages: RequestMessage::Completion {
                     text: request.prompt.clone(),
                     echo_prompt: request.echo_prompt,

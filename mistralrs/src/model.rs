@@ -297,6 +297,7 @@ impl Model {
             return_logprobs: request.return_logprobs(),
             is_streaming: true,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -365,6 +366,7 @@ impl Model {
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -451,6 +453,7 @@ impl Model {
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -616,6 +619,7 @@ impl Model {
 
         let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
@@ -695,6 +699,7 @@ impl Model {
 
         let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration {
                 prompt: prompt.to_string(),
             },
@@ -786,6 +791,7 @@ impl Model {
 
                 let request = Request::Normal(Box::new(NormalRequest {
                     id: 0,
+                    queued_at: None,
                     messages: message,
                     sampling_params: SamplingParams::deterministic(),
                     seed: None,
