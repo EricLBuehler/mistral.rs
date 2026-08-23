@@ -47,6 +47,7 @@ pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
 const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
+const CUDA_GRAPH_DISPATCH_METRIC: &str = "mistralrs_cuda_graph_dispatch_total";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -71,6 +72,94 @@ pub(crate) enum CudaGraphEvent {
     Capture,
     Replay,
     EagerFallback,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphDispatchMode {
+    Replay,
+    Eager,
+    Skipped,
+}
+
+impl CudaGraphDispatchMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Replay => "replay",
+            Self::Eager => "eager",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphDispatchReason {
+    CacheHit,
+    Disabled,
+    ModelUnsupported,
+    SpeculativeConflict,
+    PagedAttentionUnavailable,
+    Prefill,
+    IncompatibleShape,
+    BatchUnsupported,
+    CacheConfigUnavailable,
+    RuntimeDisabled,
+    PaddingUnavailable,
+    CachePopulation,
+    Fallback,
+}
+
+impl CudaGraphDispatchReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::CacheHit => "cache_hit",
+            Self::Disabled => "disabled",
+            Self::ModelUnsupported => "model_unsupported",
+            Self::SpeculativeConflict => "speculative_conflict",
+            Self::PagedAttentionUnavailable => "paged_attention_unavailable",
+            Self::Prefill => "prefill",
+            Self::IncompatibleShape => "incompatible_shape",
+            Self::BatchUnsupported => "batch_unsupported",
+            Self::CacheConfigUnavailable => "cache_config_unavailable",
+            Self::RuntimeDisabled => "runtime_disabled",
+            Self::PaddingUnavailable => "padding_unavailable",
+            Self::CachePopulation => "cache_population",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CudaGraphDispatchLabels {
+    component: &'static str,
+    mode: &'static str,
+    reason: &'static str,
+}
+
+const fn cuda_graph_dispatch_labels(
+    component: CudaGraphComponent,
+    mode: CudaGraphDispatchMode,
+    reason: CudaGraphDispatchReason,
+) -> CudaGraphDispatchLabels {
+    CudaGraphDispatchLabels {
+        component: component.label(),
+        mode: mode.label(),
+        reason: reason.label(),
+    }
+}
+
+pub(crate) fn record_cuda_graph_dispatch(
+    component: CudaGraphComponent,
+    mode: CudaGraphDispatchMode,
+    reason: CudaGraphDispatchReason,
+) {
+    let labels = cuda_graph_dispatch_labels(component, mode, reason);
+    metrics::counter!(
+        CUDA_GRAPH_DISPATCH_METRIC,
+        "component" => labels.component,
+        "mode" => labels.mode,
+        "reason" => labels.reason,
+    )
+    .increment(1);
 }
 
 impl CudaGraphEvent {
@@ -156,6 +245,14 @@ impl CudaGraphEventGuard {
 impl Drop for CudaGraphEventGuard {
     fn drop(&mut self) {
         record_cuda_graph_event(self.component, self.event, self.outcome);
+        if self.outcome == CudaGraphOutcome::Success && self.event == CudaGraphEvent::EagerFallback
+        {
+            record_cuda_graph_dispatch(
+                self.component,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchReason::Fallback,
+            );
+        }
     }
 }
 
@@ -528,14 +625,18 @@ pub(crate) struct HybridGraphSlots {
 }
 
 /// The batch's live recurrent slots after reserving graph capacity.
-pub(crate) fn hybrid_graph_slots(cache: &mut HybridCache) -> Option<HybridGraphSlots> {
-    let real = cache.state_indices_host()?.to_vec();
+pub(crate) fn hybrid_graph_slots(
+    cache: &mut HybridCache,
+) -> candle_core::Result<Option<HybridGraphSlots>> {
+    let Some(real) = cache.state_indices_host().map(<[u32]>::to_vec) else {
+        return Ok(None);
+    };
     let capacity = cache.recurrent_capacity();
     cache.graph_pad_slot()?;
-    Some(HybridGraphSlots {
+    Ok(Some(HybridGraphSlots {
         real,
         grew: cache.recurrent_capacity() != capacity,
-    })
+    }))
 }
 
 /// Points the hybrid cache's state indices at fresh `Var` buffers holding `host`, one per recurrent
@@ -1722,6 +1823,11 @@ impl CudaDecodeGraphState {
                     tracing::warn!(
                         "CUDA decode graphs retired after completion recording error: {record_err:?}"
                     );
+                    record_cuda_graph_dispatch(
+                        CudaGraphComponent::Target,
+                        CudaGraphDispatchMode::Replay,
+                        CudaGraphDispatchReason::CacheHit,
+                    );
                     Ok(Some(replay))
                 }
                 Err(synchronize_err) => {
@@ -1737,6 +1843,11 @@ impl CudaDecodeGraphState {
         entry.replay_epoch = replay_epoch;
         self.entries.push(entry);
         graph_event.success();
+        record_cuda_graph_dispatch(
+            CudaGraphComponent::Target,
+            CudaGraphDispatchMode::Replay,
+            CudaGraphDispatchReason::CacheHit,
+        );
         Ok(Some(replay))
     }
 
@@ -3167,6 +3278,60 @@ mod tests {
                 .map(|labels| labels.outcome)
                 .collect::<HashSet<_>>(),
             HashSet::from(["success", "failure"])
+        );
+    }
+
+    #[test]
+    fn graph_dispatch_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let reasons = [
+            CudaGraphDispatchReason::CacheHit,
+            CudaGraphDispatchReason::Disabled,
+            CudaGraphDispatchReason::ModelUnsupported,
+            CudaGraphDispatchReason::SpeculativeConflict,
+            CudaGraphDispatchReason::PagedAttentionUnavailable,
+            CudaGraphDispatchReason::Prefill,
+            CudaGraphDispatchReason::IncompatibleShape,
+            CudaGraphDispatchReason::BatchUnsupported,
+            CudaGraphDispatchReason::CacheConfigUnavailable,
+            CudaGraphDispatchReason::RuntimeDisabled,
+            CudaGraphDispatchReason::PaddingUnavailable,
+            CudaGraphDispatchReason::CachePopulation,
+            CudaGraphDispatchReason::Fallback,
+        ];
+        let mut labels = HashSet::new();
+        for component in [CudaGraphComponent::Target, CudaGraphComponent::DFlash] {
+            for mode in [
+                CudaGraphDispatchMode::Replay,
+                CudaGraphDispatchMode::Eager,
+                CudaGraphDispatchMode::Skipped,
+            ] {
+                for reason in reasons {
+                    assert!(labels.insert(cuda_graph_dispatch_labels(component, mode, reason)));
+                }
+            }
+        }
+
+        assert_eq!(
+            CUDA_GRAPH_DISPATCH_METRIC,
+            "mistralrs_cuda_graph_dispatch_total"
+        );
+        assert_eq!(labels.len(), 78);
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.mode)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["replay", "eager", "skipped"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.reason)
+                .collect::<HashSet<_>>()
+                .len(),
+            reasons.len()
         );
     }
 

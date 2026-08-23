@@ -28,7 +28,10 @@ use crate::paged_attention::windowed_pool::{
     WindowedKvBatch, WindowedKvBatchTensors, WindowedKvPool, WindowedKvPoolConfig, WindowedKvQuery,
 };
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-use crate::pipeline::cuda_graph::{CudaGraphComponent, CudaGraphEvent, CudaGraphEventGuard};
+use crate::pipeline::cuda_graph::{
+    record_cuda_graph_dispatch, CudaGraphComponent, CudaGraphDispatchMode, CudaGraphDispatchReason,
+    CudaGraphEvent, CudaGraphEventGuard,
+};
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
 pub const DEFAULT_MAX_DRAFTS: usize = 7;
@@ -1389,6 +1392,11 @@ impl DFlashCudaGraphEntry {
         }
         .finish(real_batch)?;
         graph_event.success();
+        record_cuda_graph_dispatch(
+            CudaGraphComponent::DFlash,
+            CudaGraphDispatchMode::Replay,
+            CudaGraphDispatchReason::CacheHit,
+        );
         Ok(output)
     }
 
