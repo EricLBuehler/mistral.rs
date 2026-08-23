@@ -2,6 +2,10 @@
 #include "cuda_fp16.h"
 #include <stdint.h>
 
+constexpr float AP_INV_TWO_PI = 0.15915494309189533577f;
+constexpr float AP_TWO_PI_HI = 6.28125f;
+constexpr float AP_TWO_PI_LO = 0.00193530717958647693f;
+
 template <typename T> __device__ __forceinline__ float ap_to_float(T value) {
   return static_cast<float>(value);
 }
@@ -29,6 +33,30 @@ template <>
 __device__ __forceinline__ __nv_bfloat16
 ap_from_float<__nv_bfloat16>(float value) {
   return __float2bfloat16(value);
+}
+
+template <typename T>
+__global__ void rope_sincos_positions_kernel(
+    const uint32_t *__restrict__ positions,
+    const float *__restrict__ inv_freq, T *__restrict__ cos_out,
+    T *__restrict__ sin_out, const int width, const int64_t elements) {
+  const int64_t index =
+      static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= elements) {
+    return;
+  }
+
+  const int row = static_cast<int>(index / width);
+  const int column = static_cast<int>(index % width);
+  const float angle = static_cast<float>(positions[row]) * inv_freq[column];
+  const float periods = nearbyintf(angle * AP_INV_TWO_PI);
+  float reduced = fmaf(-periods, AP_TWO_PI_HI, angle);
+  reduced = fmaf(-periods, AP_TWO_PI_LO, reduced);
+  float sin_value;
+  float cos_value;
+  sincosf(reduced, &sin_value, &cos_value);
+  cos_out[index] = ap_from_float<T>(cos_value);
+  sin_out[index] = ap_from_float<T>(sin_value);
 }
 
 template <typename T, bool IS_NEOX>
@@ -371,6 +399,24 @@ void launch_qk_rms_norm_rope_positions(
           head_dim, rot_dim, q_eps, k_eps);
 }
 
+template <typename T>
+void launch_rope_sincos_positions(const void *positions, const void *inv_freq,
+                                  void *cos_out, void *sin_out, const int rows,
+                                  const int width, int64_t stream) {
+  if (rows <= 0 || width <= 0) {
+    return;
+  }
+
+  constexpr int block = 256;
+  const int64_t elements = static_cast<int64_t>(rows) * width;
+  const int grid = static_cast<int>((elements + block - 1) / block);
+  const cudaStream_t custream = (cudaStream_t)stream;
+  rope_sincos_positions_kernel<T><<<grid, block, 0, custream>>>(
+      reinterpret_cast<const uint32_t *>(positions),
+      reinterpret_cast<const float *>(inv_freq), reinterpret_cast<T *>(cos_out),
+      reinterpret_cast<T *>(sin_out), width, elements);
+}
+
 template <typename T, bool IS_NEOX>
 void launch_qkv_rms_norm_rope_positions(
     const void *q, const void *k, const void *v, const void *q_weight,
@@ -526,6 +572,23 @@ extern "C" void qk_rms_norm_rope_positions(
           k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
           head_dim, rot_dim, q_eps, k_eps, stream);
     }
+  }
+}
+
+extern "C" void rope_sincos_positions(const void *positions,
+                                       const void *inv_freq, void *cos_out,
+                                       void *sin_out, const int rows,
+                                       const int width, const int dtype,
+                                       int64_t stream) {
+  if (dtype == 0) {
+    launch_rope_sincos_positions<__half>(positions, inv_freq, cos_out, sin_out,
+                                         rows, width, stream);
+  } else if (dtype == 1) {
+    launch_rope_sincos_positions<__nv_bfloat16>(
+        positions, inv_freq, cos_out, sin_out, rows, width, stream);
+  } else if (dtype == 2) {
+    launch_rope_sincos_positions<float>(positions, inv_freq, cos_out, sin_out,
+                                        rows, width, stream);
   }
 }
 

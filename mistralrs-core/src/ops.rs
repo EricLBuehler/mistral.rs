@@ -4765,6 +4765,118 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
 }
 
 #[cfg(feature = "cuda")]
+pub(crate) fn try_cuda_rope_sincos_positions(
+    positions: &Tensor,
+    inv_freq: &Tensor,
+    dtype: DType,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use candle_core::backend::BackendStorage;
+    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
+    use candle_core::cuda_backend::{CudaStorage, CudaStorageSlice};
+    use std::ffi::c_void;
+
+    if !positions.device().is_cuda()
+        || positions.dtype() != DType::U32
+        || inv_freq.dtype() != DType::F32
+        || !inv_freq.device().same_device(positions.device())
+        || !matches!(dtype, DType::BF16 | DType::F16 | DType::F32)
+    {
+        return Ok(None);
+    }
+
+    let rows = positions.dims1()?;
+    let width = inv_freq.dims1()?;
+    if rows == 0 || width == 0 {
+        return Ok(None);
+    }
+    let rows_i32 = i32::try_from(rows).map_err(candle_core::Error::wrap)?;
+    let width_i32 = i32::try_from(width).map_err(candle_core::Error::wrap)?;
+    let elements = rows
+        .checked_mul(width)
+        .ok_or_else(|| candle_core::Error::msg("RoPE sincos output size overflow"))?;
+
+    let positions = positions.contiguous()?;
+    let inv_freq = inv_freq.contiguous()?;
+    let (positions_storage, positions_layout) = positions.storage_and_layout();
+    let positions_storage = match &*positions_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => return Ok(None),
+    };
+    let (inv_freq_storage, inv_freq_layout) = inv_freq.storage_and_layout();
+    let inv_freq_storage = match &*inv_freq_storage {
+        candle_core::Storage::Cuda(storage) => storage,
+        _ => return Ok(None),
+    };
+    let CudaStorageSlice::U32(positions_src) = &positions_storage.slice else {
+        candle_core::bail!("RoPE sincos positions dtype mismatch");
+    };
+    let CudaStorageSlice::F32(inv_freq_src) = &inv_freq_storage.slice else {
+        candle_core::bail!("RoPE sincos inverse frequency dtype mismatch");
+    };
+
+    let dev = positions_storage.device();
+    let stream = dev.cuda_stream();
+    let stream_ptr = stream.cu_stream() as i64;
+    let (positions_ptr, positions_guard) = positions_src.device_ptr(&stream);
+    let positions_ptr =
+        unsafe { (positions_ptr as *const u32).add(positions_layout.start_offset()) };
+    let (inv_freq_ptr, inv_freq_guard) = inv_freq_src.device_ptr(&stream);
+    let inv_freq_ptr = unsafe { (inv_freq_ptr as *const f32).add(inv_freq_layout.start_offset()) };
+    let output_shape = Shape::from_dims(&[rows, width]);
+
+    macro_rules! launch {
+        ($variant:ident, $ty:ty, $dtype_id:expr) => {{
+            let mut cos_buf = unsafe { dev.alloc::<$ty>(elements) }?;
+            let mut sin_buf = unsafe { dev.alloc::<$ty>(elements) }?;
+            let (cos_ptr, cos_guard) = cos_buf.device_ptr_mut(&stream);
+            let (sin_ptr, sin_guard) = sin_buf.device_ptr_mut(&stream);
+            unsafe {
+                ffi::rope_sincos_positions(
+                    positions_ptr as *const c_void,
+                    inv_freq_ptr as *const c_void,
+                    cos_ptr as *mut c_void,
+                    sin_ptr as *mut c_void,
+                    rows_i32,
+                    width_i32,
+                    $dtype_id,
+                    stream_ptr,
+                );
+            }
+            drop(cos_guard);
+            drop(sin_guard);
+
+            let cos_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(cos_buf),
+                device: dev.clone(),
+            };
+            let sin_storage = CudaStorage {
+                slice: CudaStorageSlice::$variant(sin_buf),
+                device: dev.clone(),
+            };
+            let cos = Tensor::from((
+                candle_core::Storage::Cuda(cos_storage),
+                output_shape.clone(),
+            ));
+            let sin = Tensor::from((
+                candle_core::Storage::Cuda(sin_storage),
+                output_shape.clone(),
+            ));
+            Ok(Some((cos, sin)))
+        }};
+    }
+
+    let result = match dtype {
+        DType::BF16 => launch!(BF16, half::bf16, 1),
+        DType::F16 => launch!(F16, half::f16, 0),
+        DType::F32 => launch!(F32, f32, 2),
+        _ => unreachable!(),
+    };
+    drop(positions_guard);
+    drop(inv_freq_guard);
+    result
+}
+
+#[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
     q: &Tensor,

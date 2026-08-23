@@ -351,6 +351,17 @@ extern "C" {
         stream: i64,
     );
 
+    pub(crate) fn rope_sincos_positions(
+        positions: *const c_void,
+        inv_freq: *const c_void,
+        cos_out: *mut c_void,
+        sin_out: *mut c_void,
+        rows: i32,
+        width: i32,
+        dtype: i32,
+        stream: i64,
+    );
+
     pub(crate) fn qkv_rms_norm_rope_positions(
         q: *const c_void,
         k: *const c_void,

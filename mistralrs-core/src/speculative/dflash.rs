@@ -30,8 +30,8 @@ use crate::paged_attention::windowed_pool::{
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
 pub const DEFAULT_MAX_DRAFTS: usize = 7;
-// Rotary table length precomputed at load; positions past it fall back to on-the-fly computation.
-const ROPE_TABLE_LEN: usize = 65536;
+// Eager forwards use this cache; CUDA graphs derive RoPE from their replayed position inputs.
+const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 const DFLASH_CUDA_GRAPH_CACHE_CAPACITY: usize = 32;
@@ -49,6 +49,39 @@ fn select_dflash_depth(adaptive: bool, max_n: usize, batch: usize) -> usize {
 
 fn dflash_adaptive_env_value(value: &str) -> bool {
     value == "1" || value.eq_ignore_ascii_case("true")
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn dflash_graph_positions_fit(start_positions: &[usize], block: usize) -> bool {
+    block > 0
+        && start_positions.iter().all(|start| {
+            start
+                .checked_add(block - 1)
+                .is_some_and(|last| u32::try_from(last).is_ok())
+        })
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn dflash_rope_from_positions(
+    positions: &Tensor,
+    inv_freq: &Tensor,
+    dtype: DType,
+) -> Result<(Tensor, Tensor)> {
+    let positions = positions.flatten_all()?;
+    #[cfg(feature = "cuda")]
+    if let Some(rope) = crate::ops::try_cuda_rope_sincos_positions(&positions, inv_freq, dtype)? {
+        return Ok(rope);
+    }
+    let positions = positions.to_dtype(DType::F32)?.unsqueeze(1)?;
+    let inv_freq = inv_freq.to_dtype(DType::F32)?.unsqueeze(0)?;
+    let freqs = positions.broadcast_mul(&inv_freq)?;
+    Ok((freqs.cos()?.to_dtype(dtype)?, freqs.sin()?.to_dtype(dtype)?))
 }
 
 pub(crate) fn dflash_adaptive_requested() -> bool {
@@ -1129,7 +1162,7 @@ pub struct DFlashDraftModel {
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
     windowed_pool: Option<Mutex<WindowedKvPool>>,
     dormant_seqs: Mutex<HashSet<usize>>,
-    // cos/sin for positions 0..ROPE_TABLE_LEN, [len, head_dim/2]
+    // cos/sin for positions 0..ROPE_CACHE_LEN, [len, head_dim/2]
     rope_table: (Tensor, Tensor),
     mask_cache: Mutex<HashMap<MaskKey, Tensor>>,
     adaptive: Mutex<Option<AdaptiveState>>,
@@ -1979,8 +2012,8 @@ impl DFlashDraftModel {
         let inv_freq = Tensor::from_vec(inv_freq, (head_dim / 2,), device)?;
         let rope_table = {
             #[allow(clippy::cast_precision_loss)]
-            let pos: Vec<f32> = (0..ROPE_TABLE_LEN).map(|p| p as f32).collect();
-            let pos = Tensor::from_vec(pos, (ROPE_TABLE_LEN, 1), device)?;
+            let pos: Vec<f32> = (0..ROPE_CACHE_LEN).map(|p| p as f32).collect();
+            let pos = Tensor::from_vec(pos, (ROPE_CACHE_LEN, 1), device)?;
             let freqs = pos.broadcast_matmul(&inv_freq.reshape((1, ()))?)?;
             (freqs.cos()?.to_dtype(dtype)?, freqs.sin()?.to_dtype(dtype)?)
         };
@@ -2201,11 +2234,7 @@ impl DFlashDraftModel {
                 return Ok(None);
             }
             let block = n_predict + 1;
-            if block > self.block_size
-                || start_positions
-                    .iter()
-                    .any(|start| start.saturating_add(block) > ROPE_TABLE_LEN)
-            {
+            if block > self.block_size || !dflash_graph_positions_fit(start_positions, block) {
                 return Ok(None);
             }
             let Some(batch_bucket) =
@@ -2436,7 +2465,7 @@ impl DFlashDraftModel {
 
     /// cos/sin for the contiguous positions `start..start + len`, from the precomputed table.
     fn cos_sin(&self, start: usize, len: usize) -> Result<(Tensor, Tensor)> {
-        if start + len <= ROPE_TABLE_LEN {
+        if start + len <= ROPE_CACHE_LEN {
             return Ok((
                 self.rope_table.0.narrow(0, start, len)?,
                 self.rope_table.1.narrow(0, start, len)?,
@@ -3094,16 +3123,9 @@ impl DFlashDraftModel {
             noise = (noise * self.input_embedding_scale)?;
         }
         let rope_indices = buffers.rope_indices.as_detached_tensor();
-        let q_cos = self.rope_table.0.index_select(&rope_indices, 0)?.reshape((
-            key.batch_bucket,
-            key.block,
-            self.head_dim / 2,
-        ))?;
-        let q_sin = self.rope_table.1.index_select(&rope_indices, 0)?.reshape((
-            key.batch_bucket,
-            key.block,
-            self.head_dim / 2,
-        ))?;
+        let (q_cos, q_sin) = dflash_rope_from_positions(&rope_indices, &self.inv_freq, self.dtype)?;
+        let q_cos = q_cos.reshape((key.batch_bucket, key.block, self.head_dim / 2))?;
+        let q_sin = q_sin.reshape((key.batch_bucket, key.block, self.head_dim / 2))?;
         let metadata = buffers.metadata();
         let hidden = self.draft_hidden_windowed_tensors(DFlashWindowedForward {
             noise_embedding: &noise,
@@ -3315,9 +3337,10 @@ mod tests {
 
     use super::{
         contiguous_row_range, dflash_adaptive_env_value, dflash_graph_host_rows,
-        dflash_graph_plans, dflash_graph_precapture_shapes, dflash_prefix_replay, gather_ctx_taps,
-        linear_from_weight, resolve_dflash_sampling_policy, select_ctx_kv_rows,
-        select_dflash_depth, update_dormant_sequences, DFlashGraphHostInput, DFlashSamplingInputs,
+        dflash_graph_plans, dflash_graph_positions_fit, dflash_graph_precapture_shapes,
+        dflash_prefix_replay, dflash_rope_from_positions, gather_ctx_taps, linear_from_weight,
+        resolve_dflash_sampling_policy, select_ctx_kv_rows, select_dflash_depth,
+        update_dormant_sequences, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
     };
     #[cfg(feature = "cuda")]
@@ -3620,6 +3643,158 @@ mod tests {
                 (8, 2),
             ]
         );
+    }
+
+    #[test]
+    fn graph_positions_support_long_contexts_and_preserve_fallback_bounds() {
+        assert!(dflash_graph_positions_fit(&[65_529, 100_000, 250_000], 8));
+        assert!(dflash_graph_positions_fit(&[u32::MAX as usize - 7], 8));
+        assert!(!dflash_graph_positions_fit(&[u32::MAX as usize - 6], 8));
+        assert!(!dflash_graph_positions_fit(&[100_000], 0));
+    }
+
+    #[test]
+    fn graph_rope_uses_each_replayed_long_position() -> Result<()> {
+        let device = Device::Cpu;
+        let positions = [65_535u32, 65_536, 100_000, 131_071];
+        let frequencies = [1.0f32, 0.5, 0.01];
+        let positions_tensor = Tensor::from_vec(positions.to_vec(), (positions.len(),), &device)?;
+        let inv_freq = Tensor::from_vec(frequencies.to_vec(), (frequencies.len(),), &device)?;
+        let (cos, sin) =
+            dflash_rope_from_positions(&positions_tensor, &inv_freq, candle_core::DType::F32)?;
+        let cos = cos.to_vec2::<f32>()?;
+        let sin = sin.to_vec2::<f32>()?;
+
+        for (row, position) in positions.into_iter().enumerate() {
+            for (column, frequency) in frequencies.into_iter().enumerate() {
+                let angle = position as f32 * frequency;
+                assert!((cos[row][column] - angle.cos()).abs() < 1e-5);
+                assert!((sin[row][column] - angle.sin()).abs() < 1e-5);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_rope_replays_mixed_long_positions_on_cuda() -> anyhow::Result<()> {
+        use candle_core::{cuda_backend::cudarc::driver::sys, Var};
+
+        use crate::pipeline::cuda_graph::{
+            disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
+            restore_event_tracking_after_capture, CudaGraphHandle,
+        };
+
+        const BATCH: usize = 16;
+        const BLOCK: usize = 8;
+        const HEAD_DIM: usize = 128;
+        const ROPE_THETA: f32 = 10_000_000.0;
+        const BENCH_WARMUP: usize = 100;
+        const BENCH_ITERATIONS: usize = 10_000;
+
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let inv_freq_values = (0..HEAD_DIM)
+            .step_by(2)
+            .map(|index| 1.0 / ROPE_THETA.powf(index as f32 / HEAD_DIM as f32))
+            .collect::<Vec<_>>();
+        let replay_positions = |bases: [u32; BATCH]| {
+            bases
+                .into_iter()
+                .flat_map(|base| (0..BLOCK).map(move |offset| base + offset as u32))
+                .collect::<Vec<_>>()
+        };
+        let first_positions = replay_positions([
+            65_532, 65_536, 70_000, 80_000, 90_000, 100_000, 110_000, 120_000, 130_000, 140_000,
+            150_000, 160_000, 180_000, 200_000, 225_000, 250_000,
+        ]);
+        let positions = Var::from_tensor(&Tensor::from_vec(
+            first_positions.clone(),
+            BATCH * BLOCK,
+            &device,
+        )?)?;
+        let inv_freq = Tensor::from_vec(inv_freq_values.clone(), HEAD_DIM / 2, &device)?;
+        let warmup = dflash_rope_from_positions(
+            &positions.as_detached_tensor(),
+            &inv_freq,
+            candle_core::DType::BF16,
+        )?;
+        device.synchronize()?;
+        drop(warmup);
+
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let (cos, sin) = dflash_rope_from_positions(
+            &positions.as_detached_tensor(),
+            &inv_freq,
+            candle_core::DType::BF16,
+        )?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("CUDA graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        for replayed in [
+            first_positions,
+            replay_positions([
+                100_003, 110_000, 120_000, 130_000, 131_072, 140_000, 150_000, 160_000, 175_000,
+                190_000, 200_000, 210_000, 220_000, 230_000, 240_000, 250_000,
+            ]),
+        ] {
+            positions.set(&Tensor::from_vec(replayed.clone(), BATCH * BLOCK, &device)?)?;
+            graph.launch()?;
+            stream.synchronize()?;
+            let cos = cos.to_dtype(candle_core::DType::F32)?.to_vec2::<f32>()?;
+            let sin = sin.to_dtype(candle_core::DType::F32)?.to_vec2::<f32>()?;
+            for (row, position) in replayed.into_iter().enumerate() {
+                for (column, frequency) in inv_freq_values.iter().copied().enumerate() {
+                    let angle = position as f32 * frequency;
+                    assert!((cos[row][column] - angle.cos()).abs() < 0.005);
+                    assert!((sin[row][column] - angle.sin()).abs() < 0.005);
+                }
+            }
+        }
+
+        for _ in 0..BENCH_WARMUP {
+            graph.launch()?;
+        }
+        stream.synchronize()?;
+        let start = stream.record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))?;
+        for _ in 0..BENCH_ITERATIONS {
+            graph.launch()?;
+        }
+        let end = stream.record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))?;
+        end.synchronize()?;
+        let latency_us = f64::from(start.elapsed_ms(&end)?) * 1_000.0 / BENCH_ITERATIONS as f64;
+        eprintln!("DFlash C16/block8 RoPE graph latency: {latency_us:.3} us");
+
+        drop(graph);
+        drop(cos);
+        drop(sin);
+        device.synchronize()?;
+        Ok(())
+    }
+
+    #[test]
+    fn graph_rows_keep_mixed_positions_across_the_old_table_boundary() -> Result<()> {
+        let rows = dflash_graph_host_rows(DFlashGraphHostInput {
+            anchors: &[5, 7],
+            start_positions: &[65_532, 100_000],
+            mask_token_id: 9,
+            block: 8,
+            batch_bucket: 2,
+            sampling: None,
+        })?;
+        assert_eq!(
+            rows.rope_indices,
+            [
+                65_532, 65_533, 65_534, 65_535, 65_536, 65_537, 65_538, 65_539, 100_000, 100_001,
+                100_002, 100_003, 100_004, 100_005, 100_006, 100_007,
+            ]
+        );
+        Ok(())
     }
 
     #[test]
