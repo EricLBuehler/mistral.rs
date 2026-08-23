@@ -22,8 +22,13 @@ def request_result(
     context_tokens: int = 8,
     output_transcript: str = "output",
     output_event_times: list[float] | None = None,
+    output_event_token_counts: list[int] | None = None,
+    streamed_output_tokens: int | None = None,
+    output_event_window_counts: list[int] | None = None,
+    output_token_window_counts: list[int] | None = None,
     tags: dict | None = None,
 ) -> soak.RequestResult:
+    event_times = output_event_times or []
     return soak.RequestResult(
         case_id=case_id,
         seed=1,
@@ -49,11 +54,56 @@ def request_result(
         error_kind=None,
         context_tokens=context_tokens,
         tags=tags or {},
-        output_event_times=output_event_times or [],
+        streamed_output_tokens=(
+            output_chunks
+            if streamed_output_tokens is None
+            else streamed_output_tokens
+        ),
+        output_event_times=event_times,
+        output_event_token_counts=(
+            [1] * len(event_times)
+            if output_event_token_counts is None
+            else output_event_token_counts
+        ),
+        output_event_window_counts=output_event_window_counts or [],
+        output_token_window_counts=output_token_window_counts or [],
     )
 
 
 class OutputEventCoverageTests(unittest.TestCase):
+    def test_empty_stream_delta_does_not_invent_a_token(self) -> None:
+        self.assertEqual(
+            soak.stream_delta_token_count("", None, None, None),
+            0,
+        )
+        self.assertEqual(
+            soak.stream_delta_token_count(
+                None,
+                None,
+                [{"function": {"arguments": "{}"}}],
+                None,
+            ),
+            1,
+        )
+
+    def test_coalesced_chunks_use_streamed_token_weight(self) -> None:
+        evidence = soak.output_event_coverage_evidence(
+            [
+                request_result(
+                    completion_tokens=41,
+                    output_chunks=2,
+                    streamed_output_tokens=40,
+                    finish_reason="stop",
+                )
+            ],
+            0.98,
+        )
+
+        self.assertEqual(evidence["observed_output_events"], 2)
+        self.assertEqual(evidence["observed_output_tokens"], 40)
+        self.assertEqual(evidence["output_token_coverage"], 1.0)
+        self.assertTrue(evidence["output_event_coverage_ok"])
+
     def test_stop_excludes_one_unstreamed_terminal_token(self) -> None:
         evidence = soak.output_event_coverage_evidence(
             [
@@ -107,6 +157,33 @@ class OutputEventCoverageTests(unittest.TestCase):
         self.assertEqual(evidence["reported_completion_tokens"], 41)
         self.assertEqual(evidence["expected_streamable_tokens"], 40)
         self.assertTrue(evidence["output_event_coverage_ok"])
+
+    def test_timeline_rates_weight_coalesced_chunks_by_tokens(self) -> None:
+        evidence = soak.compare_time_windows(
+            [
+                request_result(
+                    completion_tokens=31,
+                    output_chunks=2,
+                    streamed_output_tokens=30,
+                    finish_reason="stop",
+                    started=0.0,
+                    ended=2.0,
+                    output_event_times=[0.5, 1.5],
+                    output_event_token_counts=[10, 20],
+                )
+            ],
+            started=0.0,
+            ended=2.0,
+            window_seconds=1.0,
+            min_output_event_coverage=0.98,
+        )
+
+        self.assertEqual(evidence["first_timed_output_events"], 1)
+        self.assertEqual(evidence["last_timed_output_events"], 1)
+        self.assertEqual(evidence["first_timed_output_tokens"], 10)
+        self.assertEqual(evidence["last_timed_output_tokens"], 20)
+        self.assertEqual(evidence["first_output_tok_s_stream_timeline"], 10.0)
+        self.assertEqual(evidence["last_output_tok_s_stream_timeline"], 20.0)
 
     def test_aggregate_coverage_cannot_hide_a_bad_request(self) -> None:
         evidence = soak.output_event_coverage_evidence(
@@ -169,6 +246,46 @@ class OutputEventCoverageTests(unittest.TestCase):
 
 
 class OverlapIntervalTests(unittest.TestCase):
+    def test_complete_window_includes_inflight_request_tokens(self) -> None:
+        results = [
+            request_result(
+                case_id="completed-before-prefill",
+                completion_tokens=2,
+                output_chunks=1,
+                streamed_output_tokens=4,
+                finish_reason="stop",
+                started=0.0,
+                ended=1.8,
+                output_event_times=[1.5],
+                output_event_token_counts=[4],
+            ),
+            request_result(
+                case_id="completed-after-prefill",
+                completion_tokens=3,
+                output_chunks=2,
+                streamed_output_tokens=7,
+                finish_reason="stop",
+                started=1.0,
+                ended=2.8,
+                output_event_times=[1.7, 2.4],
+                output_event_token_counts=[3, 4],
+            ),
+        ]
+
+        baseline, overlapped = soak.overlap_window_evidence(
+            results,
+            baseline_started=1.0,
+            prefill_started=2.0,
+            prefill_first_token=2.6,
+        )
+
+        self.assertEqual(baseline["completed_requests"], 1)
+        self.assertEqual(baseline["output_events"], 2)
+        self.assertEqual(baseline["output_tokens"], 7)
+        self.assertIsNotNone(overlapped)
+        self.assertEqual(overlapped["output_events"], 1)
+        self.assertEqual(overlapped["output_tokens"], 4)
+
     def test_baseline_interval_excludes_worker_ramp(self) -> None:
         results = [
             request_result(
@@ -195,6 +312,7 @@ class OverlapIntervalTests(unittest.TestCase):
 
         self.assertEqual(evidence["completed_requests"], 1)
         self.assertEqual(evidence["output_events"], 3)
+        self.assertEqual(evidence["output_tokens"], 3)
         self.assertAlmostEqual(evidence["seconds"], 1.1)
 
 
@@ -284,6 +402,80 @@ class PrefixReuseTests(unittest.TestCase):
 
         self.assertTrue(evidence["reuse_contract_non_vacuous"])
         self.assertFalse(evidence["passed"])
+
+
+class PrefixPressurePlanTests(unittest.TestCase):
+    @staticmethod
+    def metrics(
+        total_blocks: float,
+        active_blocks: float = 0.0,
+        prefix_cached_blocks: float = 0.0,
+    ) -> dict[str, float]:
+        return {
+            "mistralrs_kv_cache_blocks_total": total_blocks,
+            soak.KV_CACHE_ACTIVE_GAUGE: active_blocks,
+            soak.KV_CACHE_PREFIX_CACHED_GAUGE: prefix_cached_blocks,
+        }
+
+    @staticmethod
+    def config(**overrides: int | float) -> soak.PrefixPressureConfig:
+        values = {
+            "entries": 24,
+            "max_sequences": 16,
+            "context_tokens": 100_000,
+            "max_completion_tokens": 8,
+            "block_size_tokens": 32,
+            "kv_headroom_fraction": 0.10,
+            **overrides,
+        }
+        return soak.PrefixPressureConfig(**values)
+
+    def test_active_concurrency_fits_observed_kv_capacity_with_headroom(self) -> None:
+        plan = soak.prefix_pressure_plan(
+            self.metrics(27_831, prefix_cached_blocks=256),
+            self.config(),
+        )
+
+        self.assertEqual(plan["blocks_per_request"], 3_126)
+        self.assertEqual(plan["headroom_blocks"], 2_784)
+        self.assertEqual(plan["capacity_concurrency"], 8)
+        self.assertEqual(plan["concurrency"], 8)
+        self.assertLessEqual(
+            plan["active_working_set_blocks"],
+            plan["active_budget_blocks"],
+        )
+
+    def test_observed_active_blocks_reduce_pressure_concurrency(self) -> None:
+        plan = soak.prefix_pressure_plan(
+            self.metrics(31_045, active_blocks=4_000),
+            self.config(),
+        )
+
+        self.assertEqual(plan["capacity_concurrency"], 7)
+        self.assertEqual(plan["concurrency"], 7)
+
+    def test_cached_prefixes_remain_reclaimable_for_eviction_pressure(self) -> None:
+        plan = soak.prefix_pressure_plan(
+            self.metrics(31_045, prefix_cached_blocks=27_000),
+            self.config(),
+        )
+
+        self.assertEqual(plan["concurrency"], 8)
+        self.assertEqual(plan["entries"], 24)
+        self.assertEqual(plan["prefix_cached_blocks_observed_reclaimable"], 27_000)
+
+    def test_configured_limits_cap_capacity_concurrency(self) -> None:
+        plan = soak.prefix_pressure_plan(
+            self.metrics(100_000),
+            self.config(entries=5, max_sequences=8),
+        )
+
+        self.assertGreater(plan["capacity_concurrency"], 8)
+        self.assertEqual(plan["concurrency"], 5)
+
+    def test_rejects_capacity_that_cannot_fit_one_request(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "cannot fit one active request"):
+            soak.prefix_pressure_plan(self.metrics(3_000), self.config())
 
 
 class CudaGraphEvidenceTests(unittest.TestCase):
@@ -712,6 +904,22 @@ class ArgumentValidationTests(unittest.TestCase):
         soak.validate_args(self.adversarial_args(16))
         with self.assertRaisesRegex(ValueError, "cannot exceed --max-seqs"):
             soak.validate_args(self.adversarial_args(17))
+
+    def test_prefix_pressure_headroom_default_validates(self) -> None:
+        args = self.adversarial_args(16)
+
+        soak.validate_args(args)
+        self.assertEqual(
+            args.prefix_pressure_kv_headroom_fraction,
+            soak.DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
+        )
+
+    def test_invalid_prefix_pressure_headroom_is_rejected(self) -> None:
+        args = self.adversarial_args(16)
+        args.prefix_pressure_kv_headroom_fraction = 1.0
+
+        with self.assertRaisesRegex(ValueError, "kv-headroom-fraction"):
+            soak.validate_args(args)
 
     def test_speculative_gate_defaults_are_non_vacuous(self) -> None:
         args = soak.build_parser().parse_args(["canary"])

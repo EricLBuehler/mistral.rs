@@ -63,6 +63,7 @@ DEFAULT_MIN_MTP_PROPOSAL_DEPTH = 2.0
 DEFAULT_MAX_SPARSE_VERIFIER_FALLBACK_RATIO = 0.01
 DEFAULT_MIN_SPARSE_VERIFIER_ACCOUNTING_COVERAGE = 0.98
 DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION = 1.10
+DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION = 0.10
 DEFAULT_KV_BLOCK_SIZE_TOKENS = 32
 DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES = 128
 DEFAULT_MIN_OUTPUT_EVENT_COVERAGE = 0.98
@@ -323,6 +324,34 @@ def merge_tool_call_delta(
                 call["function"][key] += value
 
 
+def stream_delta_token_count(
+    content: Any,
+    reasoning: Any,
+    tool_calls: Any,
+    tokenizer: TokenizerAdapter | None,
+) -> int:
+    def strings(value: Any) -> Iterable[str]:
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for nested in value.values():
+                yield from strings(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                yield from strings(nested)
+
+    text = "".join(
+        part
+        for value in (content, reasoning, tool_calls)
+        for part in strings(value)
+    )
+    if not text:
+        return 0
+    if tokenizer is None:
+        return 1
+    return max(1, tokenizer.count(text))
+
+
 def channel_transcript(
     reasoning_text: str, content_text: str, tool_calls: Sequence[dict[str, Any]]
 ) -> str:
@@ -563,6 +592,16 @@ class ProductionMemoryLimits:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class PrefixPressureConfig:
+    entries: int
+    max_sequences: int
+    context_tokens: int
+    max_completion_tokens: int
+    block_size_tokens: int
+    kv_headroom_fraction: float
+
+
 @dataclass(slots=True)
 class RequestSpec:
     case_id: str
@@ -601,8 +640,11 @@ class RequestResult:
     error_kind: str | None
     context_tokens: int | None
     tags: dict[str, Any]
+    streamed_output_tokens: int = 0
     output_event_times: list[float] = field(default_factory=list)
+    output_event_token_counts: list[int] = field(default_factory=list)
     output_event_window_counts: list[int] = field(default_factory=list)
+    output_token_window_counts: list[int] = field(default_factory=list)
 
     @property
     def elapsed_seconds(self) -> float:
@@ -611,7 +653,11 @@ class RequestResult:
     def record(self, keep_output: bool) -> dict[str, Any]:
         value = asdict(self)
         output_event_times = value.pop("output_event_times")
+        output_event_token_counts = value.pop("output_event_token_counts")
         value["retained_output_event_timestamps"] = len(output_event_times)
+        value["retained_output_event_token_counts"] = len(
+            output_event_token_counts
+        )
         value["elapsed_seconds"] = self.elapsed_seconds
         return sanitize_record(value, keep_output)
 
@@ -678,11 +724,18 @@ class SoakClient:
         queued = max(0.0, started - scheduled_at) if scheduled_at is not None else 0.0
         first_token: float | None = None
         token_times: list[float] = []
+        token_counts: list[int] = []
         output_event_window_counts = (
             [0] * len(retain_output_event_windows)
             if retain_output_event_windows is not None
             else []
         )
+        output_token_window_counts = (
+            [0] * len(retain_output_event_windows)
+            if retain_output_event_windows is not None
+            else []
+        )
+        streamed_output_tokens = 0
         content: list[str] = []
         reasoning: list[str] = []
         tool_call_parts: dict[int, dict[str, Any]] = {}
@@ -734,18 +787,28 @@ class SoakClient:
                     tool_piece = delta.get("tool_calls")
                     reasoning_piece = delta.get("reasoning_content")
                     if piece is not None or tool_piece or reasoning_piece:
-                        now = time.perf_counter()
-                        if first_token is None:
-                            first_token = now
-                        if retain_output_event_windows is None:
-                            token_times.append(now)
-                        else:
-                            for index, (start, end) in enumerate(
-                                retain_output_event_windows
-                            ):
-                                if start <= now < end:
-                                    output_event_window_counts[index] += 1
-                        chunks += 1
+                        event_tokens = stream_delta_token_count(
+                            piece,
+                            reasoning_piece,
+                            tool_piece,
+                            self.tokenizer,
+                        )
+                        if event_tokens > 0:
+                            now = time.perf_counter()
+                            streamed_output_tokens += event_tokens
+                            if first_token is None:
+                                first_token = now
+                            if retain_output_event_windows is None:
+                                token_times.append(now)
+                                token_counts.append(event_tokens)
+                            else:
+                                for index, (start, end) in enumerate(
+                                    retain_output_event_windows
+                                ):
+                                    if start <= now < end:
+                                        output_event_window_counts[index] += 1
+                                        output_token_window_counts[index] += event_tokens
+                            chunks += 1
                     if piece:
                         content.append(piece)
                     if isinstance(reasoning_piece, str):
@@ -821,8 +884,11 @@ class SoakClient:
             error_kind=error_kind,
             context_tokens=spec.context_tokens,
             tags=dict(spec.tags),
+            streamed_output_tokens=streamed_output_tokens,
             output_event_times=token_times,
+            output_event_token_counts=token_counts,
             output_event_window_counts=output_event_window_counts,
+            output_token_window_counts=output_token_window_counts,
         )
 
     async def request_json(
@@ -966,6 +1032,53 @@ def metric_delta(before: dict[str, float], after: dict[str, float], metric: str)
     return end - (start or 0.0)
 
 
+def prefix_pressure_plan(
+    snapshot: dict[str, float], config: PrefixPressureConfig
+) -> dict[str, int | float]:
+    total = metric_total(snapshot, "mistralrs_kv_cache_blocks_total")
+    active = metric_total(snapshot, KV_CACHE_ACTIVE_GAUGE)
+    prefix_cached = metric_total(snapshot, KV_CACHE_PREFIX_CACHED_GAUGE)
+    if total is None or total <= 0:
+        raise RuntimeError("prefix pressure requires mistralrs_kv_cache_blocks_total")
+    if active is None or active < 0:
+        raise RuntimeError(f"prefix pressure requires {KV_CACHE_ACTIVE_GAUGE}")
+    if prefix_cached is None or prefix_cached < 0:
+        raise RuntimeError(f"prefix pressure requires {KV_CACHE_PREFIX_CACHED_GAUGE}")
+
+    total_blocks = math.floor(total)
+    active_blocks = math.ceil(active)
+    prefix_cached_blocks = math.ceil(prefix_cached)
+    headroom_blocks = math.ceil(total_blocks * config.kv_headroom_fraction)
+    blocks_per_request = math.ceil(
+        (config.context_tokens + config.max_completion_tokens)
+        / config.block_size_tokens
+    )
+    active_budget_blocks = max(0, total_blocks - active_blocks - headroom_blocks)
+    capacity_concurrency = active_budget_blocks // blocks_per_request
+    concurrency = min(config.entries, config.max_sequences, capacity_concurrency)
+    if concurrency < 1:
+        raise RuntimeError(
+            "prefix pressure cannot fit one active request with the configured KV "
+            "headroom; reduce --prefix-pressure-context-tokens or "
+            "--prefix-pressure-kv-headroom-fraction"
+        )
+
+    return {
+        "concurrency": concurrency,
+        "capacity_concurrency": capacity_concurrency,
+        "entries": config.entries,
+        "max_sequences": config.max_sequences,
+        "total_blocks": total_blocks,
+        "active_blocks_observed": active_blocks,
+        "prefix_cached_blocks_observed_reclaimable": prefix_cached_blocks,
+        "headroom_fraction": config.kv_headroom_fraction,
+        "headroom_blocks": headroom_blocks,
+        "active_budget_blocks": active_budget_blocks,
+        "blocks_per_request": blocks_per_request,
+        "active_working_set_blocks": concurrency * blocks_per_request,
+    }
+
+
 def interval_union_seconds(intervals: Iterable[tuple[float, float]]) -> float:
     ordered = sorted(
         (start, end)
@@ -989,7 +1102,24 @@ def output_interval_evidence(
     results: Sequence[RequestResult],
     start: float,
     end: float,
-) -> dict[str, int | float]:
+) -> dict[str, int | float | bool | None]:
+    token_weights_complete = all(
+        len(result.output_event_times) == len(result.output_event_token_counts)
+        for result in results
+    )
+    output_tokens = (
+        sum(
+            token_count
+            for result in results
+            for timestamp, token_count in zip(
+                result.output_event_times,
+                result.output_event_token_counts,
+            )
+            if start <= timestamp < end
+        )
+        if token_weights_complete
+        else None
+    )
     return {
         "start": start,
         "end": end,
@@ -1002,7 +1132,35 @@ def output_interval_evidence(
             for result in results
             for timestamp in result.output_event_times
         ),
+        "output_tokens": output_tokens,
+        "token_weights_complete": token_weights_complete,
     }
+
+
+def overlap_window_evidence(
+    results: Sequence[RequestResult],
+    baseline_started: float,
+    prefill_started: float,
+    prefill_first_token: float | None,
+) -> tuple[
+    dict[str, int | float | bool | None],
+    dict[str, int | float | bool | None] | None,
+]:
+    baseline = output_interval_evidence(
+        results,
+        baseline_started,
+        prefill_started,
+    )
+    overlapped = (
+        output_interval_evidence(
+            results,
+            prefill_started,
+            prefill_first_token,
+        )
+        if prefill_first_token is not None
+        else None
+    )
+    return baseline, overlapped
 
 
 def summarize_batch(
@@ -3124,27 +3282,22 @@ async def adversarial_mode(
     baseline_started = time.perf_counter()
     baseline_deadline = baseline_started + args.cleanup_timeout_seconds
     while time.perf_counter() < baseline_deadline:
-        baseline_observation = output_interval_evidence(
+        baseline_readiness = output_interval_evidence(
             overlap_decode_results,
             baseline_started,
             time.perf_counter(),
         )
         if (
-            baseline_observation["seconds"] >= args.overlap_baseline_seconds
-            and baseline_observation["completed_requests"]
+            baseline_readiness["seconds"] >= args.overlap_baseline_seconds
+            and baseline_readiness["completed_requests"]
             >= args.min_overlap_baseline_completions
-            and baseline_observation["output_events"]
+            and baseline_readiness["output_tokens"] is not None
+            and baseline_readiness["output_tokens"]
             >= args.min_overlap_baseline_events
         ):
             break
         await asyncio.sleep(args.overlap_queue_poll_seconds)
     prefill_started = time.perf_counter()
-    baseline_observation = output_interval_evidence(
-        overlap_decode_results,
-        baseline_started,
-        prefill_started,
-    )
-    baseline_completions = int(baseline_observation["completed_requests"])
     overlap_prefill_spec = retrieval_spec(
         client,
         longest,
@@ -3169,20 +3322,35 @@ async def adversarial_mode(
     overlap_stop.set()
     await asyncio.gather(*overlap_workers)
     overlap_finished = time.perf_counter()
-    baseline_seconds = prefill_started - baseline_started
+    baseline_observation, overlapped_observation = overlap_window_evidence(
+        overlap_decode_results,
+        baseline_started,
+        prefill_started,
+        prefill_first_token,
+    )
+    baseline_completions = int(baseline_observation["completed_requests"])
+    baseline_seconds = float(baseline_observation["seconds"])
     overlapped_seconds = (
-        prefill_first_token - prefill_started
-        if prefill_first_token is not None
+        float(overlapped_observation["seconds"])
+        if overlapped_observation is not None
         else None
     )
     baseline_decode_events = int(baseline_observation["output_events"])
-    overlapped_decode_events = sum(
-        prefill_started <= timestamp < prefill_first_token
-        for result in overlap_decode_results
-        for timestamp in result.output_event_times
-    ) if prefill_first_token is not None else 0
-    baseline_decode_tok_s = ratio(baseline_decode_events, baseline_seconds)
-    overlapped_decode_tok_s = ratio(overlapped_decode_events, overlapped_seconds)
+    overlapped_decode_events = (
+        int(overlapped_observation["output_events"])
+        if overlapped_observation is not None
+        else 0
+    )
+    baseline_decode_tokens = baseline_observation["output_tokens"]
+    overlapped_decode_tokens = (
+        overlapped_observation["output_tokens"]
+        if overlapped_observation is not None
+        else None
+    )
+    baseline_decode_event_s = ratio(baseline_decode_events, baseline_seconds)
+    overlapped_decode_event_s = ratio(overlapped_decode_events, overlapped_seconds)
+    baseline_decode_tok_s = ratio(baseline_decode_tokens, baseline_seconds)
+    overlapped_decode_tok_s = ratio(overlapped_decode_tokens, overlapped_seconds)
     overlap_decode_ratio = ratio(overlapped_decode_tok_s, baseline_decode_tok_s)
     overlap_results = [overlap_prefill, *overlap_decode_results]
     overlap_summary = summarize_batch(
@@ -3211,10 +3379,12 @@ async def adversarial_mode(
     overlap_evidence = {
         "passed": (
             baseline_completions >= args.min_overlap_baseline_completions
-            and baseline_decode_events >= args.min_overlap_baseline_events
+            and baseline_decode_tokens is not None
+            and baseline_decode_tokens >= args.min_overlap_baseline_events
             and overlap_prefill.ttft_seconds is not None
-            and baseline_decode_events > 0
-            and overlapped_decode_events > 0
+            and baseline_decode_tokens > 0
+            and overlapped_decode_tokens is not None
+            and overlapped_decode_tokens > 0
             and overlapped_decode_tok_s is not None
             and overlapped_decode_tok_s
             >= args.min_overlap_decode_events_per_second
@@ -3234,11 +3404,19 @@ async def adversarial_mode(
         "baseline_completions_before_prefill": baseline_completions,
         "minimum_baseline_completions": args.min_overlap_baseline_completions,
         "minimum_baseline_output_events": args.min_overlap_baseline_events,
+        "minimum_baseline_output_tokens": args.min_overlap_baseline_events,
         "baseline_decode_output_events": baseline_decode_events,
         "overlapped_decode_output_events": overlapped_decode_events,
-        "baseline_decode_output_events_per_second": baseline_decode_tok_s,
-        "overlapped_decode_output_events_per_second": overlapped_decode_tok_s,
+        "baseline_decode_output_tokens": baseline_decode_tokens,
+        "overlapped_decode_output_tokens": overlapped_decode_tokens,
+        "baseline_decode_output_events_per_second": baseline_decode_event_s,
+        "overlapped_decode_output_events_per_second": overlapped_decode_event_s,
+        "baseline_decode_output_tokens_per_second": baseline_decode_tok_s,
+        "overlapped_decode_output_tokens_per_second": overlapped_decode_tok_s,
         "minimum_overlapped_decode_events_per_second": (
+            args.min_overlap_decode_events_per_second
+        ),
+        "minimum_overlapped_decode_tokens_per_second": (
             args.min_overlap_decode_events_per_second
         ),
         "overlap_to_baseline_throughput_ratio": overlap_decode_ratio,
@@ -3587,6 +3765,18 @@ async def adversarial_mode(
             f"{pressure_entries} entries, above --prefix-pressure-max-entries "
             f"{args.prefix_pressure_max_entries}; increase the pressure context length or cap"
         )
+    pressure_plan = prefix_pressure_plan(
+        post_hit_metrics,
+        PrefixPressureConfig(
+            entries=pressure_entries,
+            max_sequences=args.max_seqs,
+            context_tokens=args.prefix_pressure_context_tokens,
+            max_completion_tokens=args.prefix_pressure_max_tokens,
+            block_size_tokens=args.kv_block_size_tokens,
+            kv_headroom_fraction=args.prefix_pressure_kv_headroom_fraction,
+        ),
+    )
+    await writer.emit("prefix_pressure_plan", **pressure_plan)
     eviction_specs = [
         RequestSpec(
             case_id=f"prefix-pressure-{index:04d}",
@@ -3605,7 +3795,7 @@ async def adversarial_mode(
     pressure_results, pressure_summary = await run_batch(
         client,
         eviction_specs,
-        min(args.max_seqs, len(eviction_specs)),
+        int(pressure_plan["concurrency"]),
         writer,
         "prefix-pressure",
         keep_output=False,
@@ -3668,6 +3858,7 @@ async def adversarial_mode(
         "pressure_entries_configured_minimum": args.prefix_pressure_entries,
         "pressure_entries_capacity_derived": capacity_pressure_entries,
         "pressure_entries_executed": pressure_entries,
+        "pressure_plan": pressure_plan,
         "pressure_evictions": pressure_evictions,
         "pressure_reached_eviction": pressure_reached_eviction,
         "target_retry_reused_tokens": after_reused_tokens,
@@ -4165,10 +4356,10 @@ def output_event_coverage_evidence(
             result.completion_tokens > 0 and result.finish_reason == "stop"
         )
         expected_tokens = result.completion_tokens - terminal_tokens
-        if expected_tokens == 0 and result.output_chunks == 0:
+        if expected_tokens == 0 and result.streamed_output_tokens == 0:
             request_coverage = 1.0
         else:
-            request_coverage = ratio(result.output_chunks, expected_tokens)
+            request_coverage = ratio(result.streamed_output_tokens, expected_tokens)
         request_ok = (
             request_coverage is not None
             and min_output_event_coverage
@@ -4179,23 +4370,26 @@ def output_event_coverage_evidence(
             {
                 "case_id": result.case_id,
                 "observed_output_events": result.output_chunks,
+                "observed_output_tokens": result.streamed_output_tokens,
                 "reported_completion_tokens": result.completion_tokens,
                 "unstreamed_terminal_tokens": terminal_tokens,
                 "expected_streamable_tokens": expected_tokens,
                 "output_event_coverage": request_coverage,
+                "output_token_coverage": request_coverage,
                 "passed": request_ok,
             }
         )
     observed_output_events = sum(item["observed_output_events"] for item in per_request)
+    observed_output_tokens = sum(item["observed_output_tokens"] for item in per_request)
     reported_completion_tokens = sum(item["reported_completion_tokens"] for item in per_request)
     unstreamed_terminal_tokens = sum(item["unstreamed_terminal_tokens"] for item in per_request)
     expected_streamable_tokens = (
         reported_completion_tokens - unstreamed_terminal_tokens
     )
-    if successful and expected_streamable_tokens == 0 and observed_output_events == 0:
+    if successful and expected_streamable_tokens == 0 and observed_output_tokens == 0:
         coverage = 1.0
     else:
-        coverage = ratio(observed_output_events, expected_streamable_tokens)
+        coverage = ratio(observed_output_tokens, expected_streamable_tokens)
     aggregate_coverage_ok = (
         coverage is not None
         and min_output_event_coverage
@@ -4207,14 +4401,17 @@ def output_event_coverage_evidence(
     )
     return {
         "observed_output_events": observed_output_events,
+        "observed_output_tokens": observed_output_tokens,
         "reported_completion_tokens": reported_completion_tokens,
         "unstreamed_terminal_tokens": unstreamed_terminal_tokens,
         "expected_streamable_tokens": expected_streamable_tokens,
         "output_event_coverage": coverage,
+        "output_token_coverage": coverage,
         "min_output_event_coverage": min_output_event_coverage,
         "aggregate_output_event_coverage_ok": aggregate_coverage_ok,
         "per_request_output_event_coverage": per_request,
         "output_event_coverage_ok": coverage_ok,
+        "output_token_coverage_ok": coverage_ok,
     }
 
 
@@ -6652,10 +6849,10 @@ def compare_time_windows(
 
     first_summary = window_summary(first, started, min(ended, started + window_seconds))
     last_summary = window_summary(last, max(started, ended - window_seconds), ended)
-    window_counts_available = all(
+    window_event_counts_available = all(
         len(result.output_event_window_counts) >= 3 for result in successful
     )
-    if window_counts_available:
+    if window_event_counts_available:
         first_event_count = sum(
             result.output_event_window_counts[0] for result in successful
         )
@@ -6681,14 +6878,63 @@ def compare_time_windows(
             for result in successful
             for timestamp in result.output_event_times
         )
+    window_token_counts_available = all(
+        len(result.output_token_window_counts) >= 3 for result in successful
+    )
+    timed_token_weights_complete = all(
+        len(result.output_event_times) == len(result.output_event_token_counts)
+        for result in successful
+    )
+    if window_token_counts_available:
+        first_token_count = sum(
+            result.output_token_window_counts[0] for result in successful
+        )
+        last_token_count = sum(
+            result.output_token_window_counts[1] for result in successful
+        )
+        full_phase_token_count = sum(
+            result.output_token_window_counts[2] for result in successful
+        )
+    elif timed_token_weights_complete:
+        first_token_count = sum(
+            token_count
+            for result in successful
+            for timestamp, token_count in zip(
+                result.output_event_times,
+                result.output_event_token_counts,
+            )
+            if started <= timestamp < started + window_seconds
+        )
+        last_token_count = sum(
+            token_count
+            for result in successful
+            for timestamp, token_count in zip(
+                result.output_event_times,
+                result.output_event_token_counts,
+            )
+            if ended - window_seconds <= timestamp <= ended
+        )
+        full_phase_token_count = sum(
+            token_count
+            for result in successful
+            for timestamp, token_count in zip(
+                result.output_event_times,
+                result.output_event_token_counts,
+            )
+            if started <= timestamp < ended
+        )
+    else:
+        first_token_count = None
+        last_token_count = None
+        full_phase_token_count = None
     event_coverage = output_event_coverage_evidence(
         successful,
         min_output_event_coverage,
     )
-    first_tps = first_event_count / window_seconds
-    last_tps = last_event_count / window_seconds
+    first_tps = ratio(first_token_count, window_seconds)
+    last_tps = ratio(last_token_count, window_seconds)
     full_phase_seconds = ended - started
-    full_phase_tps = full_phase_event_count / full_phase_seconds
+    full_phase_tps = ratio(full_phase_token_count, full_phase_seconds)
     latency_degradation_fractions = {}
     for name in ("ttft_seconds", "tpot_seconds"):
         first_p95 = first_summary[name]["p95"]
@@ -6709,15 +6955,24 @@ def compare_time_windows(
         "first_timed_output_events": first_event_count,
         "last_timed_output_events": last_event_count,
         "full_phase_timed_output_events": full_phase_event_count,
-        "window_counts_available": window_counts_available,
+        "first_timed_output_tokens": first_token_count,
+        "last_timed_output_tokens": last_token_count,
+        "full_phase_timed_output_tokens": full_phase_token_count,
+        "window_counts_available": window_token_counts_available,
+        "window_event_counts_available": window_event_counts_available,
+        "window_token_counts_available": window_token_counts_available,
+        "timed_token_weights_complete": timed_token_weights_complete,
         "first_output_tok_s_stream_timeline": first_tps,
         "last_output_tok_s_stream_timeline": last_tps,
         "full_phase_output_tok_s_stream_timeline": full_phase_tps,
         "timed_output_events": event_coverage["observed_output_events"],
+        "timed_output_tokens": event_coverage["observed_output_tokens"],
         **event_coverage,
         "throughput_ratio_last_over_first": ratio(last_tps, first_tps),
         "throughput_degradation_fraction": (
-            1.0 - last_tps / first_tps if first_tps else None
+            1.0 - last_tps / first_tps
+            if first_tps is not None and first_tps > 0 and last_tps is not None
+            else None
         ),
         "latency_degradation_fractions": latency_degradation_fractions,
     }
@@ -7379,6 +7634,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION,
     )
     adversarial.add_argument(
+        "--prefix-pressure-kv-headroom-fraction",
+        type=float,
+        default=DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
+    )
+    adversarial.add_argument(
         "--prefix-pressure-max-entries",
         type=int,
         default=DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES,
@@ -7790,6 +8050,11 @@ def validate_args(args: argparse.Namespace) -> None:
             )
         if args.prefix_pressure_capacity_fraction <= 1:
             raise ValueError("--prefix-pressure-capacity-fraction must be greater than 1")
+        if not 0 < args.prefix_pressure_kv_headroom_fraction < 1:
+            raise ValueError(
+                "--prefix-pressure-kv-headroom-fraction must be greater than 0 "
+                "and less than 1"
+            )
         if not 0 < args.min_prefix_reuse_fraction <= 1:
             raise ValueError(
                 "--min-prefix-reuse-fraction must be greater than 0 and at most 1"
