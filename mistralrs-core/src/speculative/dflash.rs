@@ -2152,7 +2152,11 @@ impl DFlashDraftModel {
                 self.head_dim,
             )?;
             let pages = config.pages_per_sequence();
-            self.windowed_pool = Some(Mutex::new(WindowedKvPool::new(config, &self.device)?));
+            self.windowed_pool = Some(Mutex::new(WindowedKvPool::new(
+                config,
+                &self.device,
+                "dflash",
+            )?));
             tracing::info!(
                 live_sequence_capacity,
                 retained_prefixes,

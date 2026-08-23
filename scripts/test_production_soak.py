@@ -634,6 +634,39 @@ class SpeculativeEvidenceTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
 
 
+class MetricSelectorTests(unittest.TestCase):
+    def test_metric_total_filters_labels_independent_of_series_order(self) -> None:
+        snapshot = {
+            'mistralrs_windowed_kv_slots_used{pool="live",component="dflash"}': 2.0,
+            'mistralrs_windowed_kv_slots_used{component="other",pool="live"}': 5.0,
+            'mistralrs_windowed_kv_slots_used{component="dflash",pool="checkpoint"}': 3.0,
+        }
+
+        self.assertEqual(
+            soak.metric_total(
+                snapshot,
+                soak.DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+            ),
+            2.0,
+        )
+        self.assertEqual(
+            soak.metric_total(snapshot, soak.WINDOWED_KV_SLOTS_USED_GAUGE),
+            10.0,
+        )
+
+    def test_dflash_production_requires_both_windowed_pools(self) -> None:
+        gauges = soak.production_required_gauges(("target", "dflash"))
+
+        self.assertIn(soak.DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE, gauges)
+        self.assertIn(soak.DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE, gauges)
+        self.assertIn(soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE, gauges)
+        self.assertIn(soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE, gauges)
+        self.assertEqual(
+            soak.production_required_gauges(("target",)),
+            soak.REQUIRED_PRODUCTION_GAUGES,
+        )
+
+
 class ProductionMemoryEvidenceTests(unittest.TestCase):
     @staticmethod
     def metrics(
@@ -677,6 +710,25 @@ class ProductionMemoryEvidenceTests(unittest.TestCase):
             (2.0, self.metrics(), self.process(10_100.0, 90_100.0, 91_100.0)),
         ]
 
+    def dflash_snapshots(self) -> list[tuple[float, dict, dict]]:
+        snapshots = self.healthy_snapshots()
+        for index, (_, metrics, _) in enumerate(snapshots):
+            live_used = 8.0 if index == 1 else 0.0
+            checkpoint_used = 4.0 if index == 1 else 0.0
+            metrics[
+                'mistralrs_windowed_kv_slots_used{pool="live",component="dflash"}'
+            ] = live_used
+            metrics[
+                'mistralrs_windowed_kv_slots_total{pool="live",component="dflash"}'
+            ] = 16.0
+            metrics[
+                'mistralrs_windowed_kv_slots_used{pool="checkpoint",component="dflash"}'
+            ] = checkpoint_used
+            metrics[
+                'mistralrs_windowed_kv_slots_total{pool="checkpoint",component="dflash"}'
+            ] = 8.0
+        return snapshots
+
     @staticmethod
     def evidence(snapshots: list[tuple[float, dict, dict]]) -> dict:
         return soak.production_memory_evidence(
@@ -703,6 +755,50 @@ class ProductionMemoryEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(evidence["kv_blocks"]["maximum_observed_utilization"], 0.5)
         self.assertTrue(evidence["final_cleanup"]["passed"])
+
+    def test_dflash_windowed_pool_occupancy_and_cleanup_pass(self) -> None:
+        evidence = soak.production_memory_evidence(
+            self.dflash_snapshots(),
+            soak.ProductionMemoryLimits(require_dflash_windowed_kv=True),
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["windowed_kv_slots"]["required"])
+        self.assertEqual(
+            evidence["windowed_kv_slots"]["live"][
+                "maximum_observed_utilization"
+            ],
+            0.5,
+        )
+        self.assertEqual(
+            evidence["windowed_kv_slots"]["checkpoint"][
+                "maximum_observed_utilization"
+            ],
+            0.5,
+        )
+
+    def test_required_dflash_windowed_pool_instrumentation_is_gated(self) -> None:
+        evidence = soak.production_memory_evidence(
+            self.healthy_snapshots(),
+            soak.ProductionMemoryLimits(require_dflash_windowed_kv=True),
+        )
+
+        self.assertFalse(evidence["windowed_kv_slots"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_dflash_checkpoint_slot_leak_is_gated(self) -> None:
+        snapshots = self.dflash_snapshots()
+        snapshots[-1][1][
+            'mistralrs_windowed_kv_slots_used{pool="checkpoint",component="dflash"}'
+        ] = 1.0
+
+        evidence = soak.production_memory_evidence(
+            snapshots,
+            soak.ProductionMemoryLimits(require_dflash_windowed_kv=True),
+        )
+
+        self.assertFalse(evidence["final_cleanup"]["passed"])
+        self.assertFalse(evidence["passed"])
 
     def test_transient_gpu_high_water_is_gated_even_after_recovery(self) -> None:
         snapshots = self.healthy_snapshots()

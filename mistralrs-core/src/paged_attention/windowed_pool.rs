@@ -9,6 +9,27 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use super::SUPPORTED_BLOCK_SIZE;
 
 const KV_CACHE_TENSOR_COUNT: usize = 2;
+const WINDOWED_KV_SLOTS_USED_METRIC: &str = "mistralrs_windowed_kv_slots_used";
+const WINDOWED_KV_SLOTS_TOTAL_METRIC: &str = "mistralrs_windowed_kv_slots_total";
+const WINDOWED_KV_LIVE_POOL_LABEL: &str = "live";
+const WINDOWED_KV_CHECKPOINT_POOL_LABEL: &str = "checkpoint";
+
+fn publish_slot_metrics(component: &'static str, pool: &'static str, used: usize, total: usize) {
+    let used = u32::try_from(used).expect("windowed KV slot usage exceeds u32");
+    let total = u32::try_from(total).expect("windowed KV slot capacity exceeds u32");
+    metrics::gauge!(
+        WINDOWED_KV_SLOTS_USED_METRIC,
+        "component" => component,
+        "pool" => pool
+    )
+    .set(f64::from(used));
+    metrics::gauge!(
+        WINDOWED_KV_SLOTS_TOTAL_METRIC,
+        "component" => component,
+        "pool" => pool
+    )
+    .set(f64::from(total));
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowedKvPoolConfig {
@@ -228,18 +249,22 @@ struct WindowedKvCheckpointSlots {
     active_generations: Vec<Option<u64>>,
     free_slots: Vec<usize>,
     next_generation: u64,
+    metric_component: &'static str,
 }
 
 impl WindowedKvCheckpointSlots {
-    fn new(first_pool_slot: usize, capacity: usize) -> Self {
-        Self {
+    fn new(first_pool_slot: usize, capacity: usize, metric_component: &'static str) -> Self {
+        let slots = Self {
             first_pool_slot,
             active_generations: vec![None; capacity],
             free_slots: (first_pool_slot..first_pool_slot + capacity)
                 .rev()
                 .collect(),
             next_generation: 0,
-        }
+            metric_component,
+        };
+        slots.publish_metrics();
+        slots
     }
 
     fn reserve(&mut self) -> Result<(usize, u64)> {
@@ -255,6 +280,7 @@ impl WindowedKvCheckpointSlots {
         })?;
         self.next_generation = next_generation;
         self.active_generations[pool_slot - self.first_pool_slot] = Some(generation);
+        self.publish_metrics();
         Ok((pool_slot, generation))
     }
 
@@ -277,12 +303,37 @@ impl WindowedKvCheckpointSlots {
         }
         *active = None;
         self.free_slots.push(pool_slot);
+        self.publish_metrics();
         true
+    }
+
+    fn used_capacity(&self) -> usize {
+        self.active_generations.len() - self.free_slots.len()
+    }
+
+    fn publish_metrics(&self) {
+        publish_slot_metrics(
+            self.metric_component,
+            WINDOWED_KV_CHECKPOINT_POOL_LABEL,
+            self.used_capacity(),
+            self.active_generations.len(),
+        );
     }
 
     #[cfg(test)]
     fn free_capacity(&self) -> usize {
         self.free_slots.len()
+    }
+}
+
+impl Drop for WindowedKvCheckpointSlots {
+    fn drop(&mut self) {
+        publish_slot_metrics(
+            self.metric_component,
+            WINDOWED_KV_CHECKPOINT_POOL_LABEL,
+            0,
+            0,
+        );
     }
 }
 
@@ -527,20 +578,26 @@ pub struct WindowedKvPool {
     checkpoint_slots: Arc<Mutex<WindowedKvCheckpointSlots>>,
     sequences: HashMap<usize, WindowedKvSequenceState>,
     next_generation: u64,
+    metric_component: &'static str,
 }
 
 impl WindowedKvPool {
-    pub fn new(config: WindowedKvPoolConfig, device: &Device) -> Result<Self> {
+    pub fn new(
+        config: WindowedKvPoolConfig,
+        device: &Device,
+        metric_component: &'static str,
+    ) -> Result<Self> {
         let shape = config.cache_shape();
         let key_cache = Tensor::zeros(&shape, DType::BF16, device)?;
         let value_cache = Tensor::zeros(&shape, DType::BF16, device)?;
-        Self::from_tensors(config, key_cache, value_cache)
+        Self::from_tensors(config, key_cache, value_cache, metric_component)
     }
 
     pub fn from_tensors(
         config: WindowedKvPoolConfig,
         key_cache: Tensor,
         value_cache: Tensor,
+        metric_component: &'static str,
     ) -> Result<Self> {
         let expected_shape = config.cache_shape();
         if key_cache.dims() != expected_shape || value_cache.dims() != expected_shape {
@@ -568,8 +625,9 @@ impl WindowedKvPool {
         let checkpoint_slots = Arc::new(Mutex::new(WindowedKvCheckpointSlots::new(
             config.live_sequence_capacity(),
             config.checkpoint_capacity(),
+            metric_component,
         )));
-        Ok(Self {
+        let pool = Self {
             config,
             key_cache,
             value_cache,
@@ -577,7 +635,10 @@ impl WindowedKvPool {
             checkpoint_slots,
             sequences: HashMap::new(),
             next_generation: 0,
-        })
+            metric_component,
+        };
+        pool.publish_live_slot_metrics();
+        Ok(pool)
     }
 
     pub fn config(&self) -> &WindowedKvPoolConfig {
@@ -651,12 +712,14 @@ impl WindowedKvPool {
             return false;
         };
         self.free_slots.push(state.pool_slot);
+        self.publish_live_slot_metrics();
         true
     }
 
     pub fn clear(&mut self) {
         self.sequences.clear();
         self.free_slots = (0..self.config.live_sequence_capacity()).rev().collect();
+        self.publish_live_slot_metrics();
     }
 
     pub fn snapshot_sequence(&mut self, seq_id: usize) -> Result<WindowedKvCheckpoint> {
@@ -718,6 +781,7 @@ impl WindowedKvPool {
         let (pool_slot, generation) = self.reserve_live_slot()?;
         if let Err(error) = self.copy_pool_slot(checkpoint.inner.pool_slot, pool_slot) {
             self.free_slots.push(pool_slot);
+            self.publish_live_slot_metrics();
             return Err(error);
         }
         let state = WindowedKvSequenceState {
@@ -744,7 +808,29 @@ impl WindowedKvPool {
             ))
         })?;
         self.next_generation = next_generation;
+        self.publish_live_slot_metrics();
         Ok((pool_slot, generation))
+    }
+
+    fn live_slots_used(&self) -> usize {
+        self.config.live_sequence_capacity() - self.free_slots.len()
+    }
+
+    #[cfg(test)]
+    fn checkpoint_slots_used(&self) -> usize {
+        self.checkpoint_slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .used_capacity()
+    }
+
+    fn publish_live_slot_metrics(&self) {
+        publish_slot_metrics(
+            self.metric_component,
+            WINDOWED_KV_LIVE_POOL_LABEL,
+            self.live_slots_used(),
+            self.config.live_sequence_capacity(),
+        );
     }
 
     fn copy_pool_slot(&mut self, source_slot: usize, destination_slot: usize) -> Result<()> {
@@ -1042,6 +1128,12 @@ impl WindowedKvPool {
     }
 }
 
+impl Drop for WindowedKvPool {
+    fn drop(&mut self) {
+        publish_slot_metrics(self.metric_component, WINDOWED_KV_LIVE_POOL_LABEL, 0, 0);
+    }
+}
+
 fn push_cumulative_len(values: &mut Vec<u32>, len: usize, name: &str) -> Result<()> {
     let previous = values.last().copied().unwrap_or(0);
     let len = u32::try_from(len)
@@ -1065,7 +1157,7 @@ mod tests {
     }
 
     fn metadata_pool(sequence_capacity: usize) -> Result<WindowedKvPool> {
-        WindowedKvPool::new(config(sequence_capacity)?, &Device::Cpu)
+        WindowedKvPool::new(config(sequence_capacity)?, &Device::Cpu, "test")
     }
 
     fn checkpoint_pool(
@@ -1083,6 +1175,7 @@ mod tests {
                 4,
             )?,
             &Device::Cpu,
+            "test",
         )
     }
 
@@ -1227,8 +1320,12 @@ mod tests {
     #[test]
     fn checkpoint_handle_clone_holds_capacity_until_last_drop() -> Result<()> {
         let mut pool = checkpoint_pool(1, 1)?;
+        assert_eq!(pool.live_slots_used(), 0);
+        assert_eq!(pool.checkpoint_slots_used(), 0);
         pool.acquire(1)?;
+        assert_eq!(pool.live_slots_used(), 1);
         let first = pool.snapshot_sequence(1)?;
+        assert_eq!(pool.checkpoint_slots_used(), 1);
         let first_generation = first.generation();
         let retained = first.clone();
         assert!(pool.snapshot_sequence(1).is_err());
@@ -1237,18 +1334,23 @@ mod tests {
         assert!(pool.snapshot_sequence(1).is_err());
         drop(retained);
         assert_eq!(pool.free_checkpoint_capacity(), 1);
+        assert_eq!(pool.checkpoint_slots_used(), 0);
 
         let second = pool.snapshot_sequence(1)?;
         assert_ne!(second.generation(), first_generation);
         assert_eq!(pool.free_checkpoint_capacity(), 0);
+        assert_eq!(pool.checkpoint_slots_used(), 1);
         drop(second);
         assert_eq!(pool.free_checkpoint_capacity(), 1);
+        assert_eq!(pool.checkpoint_slots_used(), 0);
+        assert!(pool.release(1));
+        assert_eq!(pool.live_slots_used(), 0);
         Ok(())
     }
 
     #[test]
     fn stale_checkpoint_generation_cannot_release_reused_slot() -> Result<()> {
-        let mut slots = WindowedKvCheckpointSlots::new(4, 1);
+        let mut slots = WindowedKvCheckpointSlots::new(4, 1, "test");
         let (pool_slot, first_generation) = slots.reserve()?;
         assert!(slots.release(pool_slot, first_generation));
 
@@ -1287,6 +1389,7 @@ mod tests {
         let mut pool = WindowedKvPool::new(
             WindowedKvPoolConfig::new_with_capacities(2, 1, vec![Some(8), Some(6)], 3, 8, 2, 4)?,
             &device,
+            "test",
         )?;
         let source = pool.acquire(7)?;
         fill_slot(&mut pool, source.pool_slot, 10.0, 20.0)?;

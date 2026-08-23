@@ -77,6 +77,7 @@ DEFAULT_MAX_GPU_MEMORY_DRIFT_MIB = 512.0
 DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB = 2_048.0
 DEFAULT_MAX_KV_BLOCK_UTILIZATION = 0.95
 DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION = 1.0
+MAX_WINDOWED_KV_SLOT_UTILIZATION = 1.0
 MIN_PRODUCTION_PROBES_PER_PHASE = 2
 MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES = 2
 DEFAULT_OVERLAP_BASELINE_SECONDS = 2.0
@@ -124,6 +125,20 @@ SPARSE_VERIFIER_GPU_COUNTER = "mistralrs_speculative_sparse_gpu_verify_total"
 SPARSE_VERIFIER_FALLBACK_COUNTER = "mistralrs_speculative_sparse_gpu_fallback_total"
 CUDA_GRAPH_DISPATCH_COUNTER = "mistralrs_cuda_graph_dispatch_total"
 CUDA_GRAPH_EVENTS_COUNTER = "mistralrs_cuda_graph_events_total"
+WINDOWED_KV_SLOTS_USED_GAUGE = "mistralrs_windowed_kv_slots_used"
+WINDOWED_KV_SLOTS_TOTAL_GAUGE = "mistralrs_windowed_kv_slots_total"
+DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE = (
+    f'{WINDOWED_KV_SLOTS_USED_GAUGE}{{component="dflash",pool="live"}}'
+)
+DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE = (
+    f'{WINDOWED_KV_SLOTS_TOTAL_GAUGE}{{component="dflash",pool="live"}}'
+)
+DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE = (
+    f'{WINDOWED_KV_SLOTS_USED_GAUGE}{{component="dflash",pool="checkpoint"}}'
+)
+DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE = (
+    f'{WINDOWED_KV_SLOTS_TOTAL_GAUGE}{{component="dflash",pool="checkpoint"}}'
+)
 REQUIRED_PRODUCTION_GAUGES = (
     "mistralrs_sequences_running",
     "mistralrs_sequences_waiting",
@@ -134,6 +149,12 @@ REQUIRED_PRODUCTION_GAUGES = (
     "mistralrs_kv_cache_blocks_total",
     "mistralrs_recurrent_state_slots_used",
     "mistralrs_recurrent_state_slots_total",
+)
+DFLASH_REQUIRED_PRODUCTION_GAUGES = (
+    DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+    DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE,
+    DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+    DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE,
 )
 EOS_TOKEN_CANDIDATES = (
     "<|im_end|>",
@@ -577,6 +598,7 @@ class ProductionMemoryLimits:
     max_gpu_memory_high_water_mib: float = DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB
     max_kv_block_utilization: float = DEFAULT_MAX_KV_BLOCK_UTILIZATION
     max_recurrent_slot_utilization: float = DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION
+    require_dflash_windowed_kv: bool = False
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> ProductionMemoryLimits:
@@ -589,6 +611,7 @@ class ProductionMemoryLimits:
             max_gpu_memory_high_water_mib=args.max_gpu_memory_high_water_mib,
             max_kv_block_utilization=args.max_kv_block_utilization,
             max_recurrent_slot_utilization=args.max_recurrent_slot_utilization,
+            require_dflash_windowed_kv="dflash" in args.expected_graph_components,
         )
 
 
@@ -1020,8 +1043,24 @@ def parse_prometheus(text: str) -> dict[str, float]:
 
 
 def metric_total(snapshot: dict[str, float], metric: str) -> float | None:
-    matches = [value for key, value in snapshot.items() if key.split("{", 1)[0] == metric]
+    base_name = metric.split("{", 1)[0]
+    required_labels = dict(re.findall(r'(\w+)="([^"]*)"', metric))
+    matches = []
+    for key, value in snapshot.items():
+        if key.split("{", 1)[0] != base_name:
+            continue
+        labels = dict(re.findall(r'(\w+)="([^"]*)"', key))
+        if all(labels.get(name) == expected for name, expected in required_labels.items()):
+            matches.append(value)
     return sum(matches) if matches else None
+
+
+def production_required_gauges(
+    expected_graph_components: Sequence[str],
+) -> tuple[str, ...]:
+    if "dflash" in expected_graph_components:
+        return (*REQUIRED_PRODUCTION_GAUGES, *DFLASH_REQUIRED_PRODUCTION_GAUGES)
+    return REQUIRED_PRODUCTION_GAUGES
 
 
 def metric_delta(before: dict[str, float], after: dict[str, float], metric: str) -> float | None:
@@ -2876,6 +2915,11 @@ RESIDENT_TRANSIENT_CLEANUP_GAUGES = (
     KV_CACHE_ACTIVE_GAUGE,
     "http_requests_in_flight",
 )
+OPTIONAL_CLEANUP_GAUGES = (DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,)
+DFLASH_TRANSIENT_CLEANUP_GAUGES = (
+    DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+    DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+)
 
 
 def cleanup_evidence(
@@ -2899,6 +2943,20 @@ def cleanup_evidence(
                 "gated": False,
             },
         },
+        "windowed_kv_slots": {
+            pool: {
+                "baseline": metric_total(baseline, gauge),
+                "observed": metric_total(observed, gauge),
+                "gated": gauge in baseline_values,
+            }
+            for pool, gauge in (
+                ("live", DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE),
+                (
+                    "checkpoint",
+                    DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+                ),
+            )
+        },
     }
 
 
@@ -2910,7 +2968,20 @@ async def poll_for_cleanup(
     poll_seconds: float,
     phase: str,
     gauges: Sequence[str] = CLEANUP_GAUGES,
+    optional_gauges: Sequence[str] = OPTIONAL_CLEANUP_GAUGES,
 ) -> tuple[bool, dict[str, float], dict[str, Any]]:
+    gauges = tuple(
+        dict.fromkeys(
+            (
+                *gauges,
+                *(
+                    gauge
+                    for gauge in optional_gauges
+                    if metric_total(baseline, gauge) is not None
+                ),
+            )
+        )
+    )
     baseline_values = {name: metric_total(baseline, name) for name in gauges}
     missing_baseline = [name for name, value in baseline_values.items() if value is None]
     if missing_baseline:
@@ -3494,6 +3565,7 @@ async def adversarial_mode(
         args.cleanup_timeout_seconds,
         args.cleanup_poll_seconds,
         "adversarial-cancel-cleanup-poll",
+        optional_gauges=DFLASH_TRANSIENT_CLEANUP_GAUGES,
     )
     counter_deadline = time.perf_counter() + args.cleanup_timeout_seconds
     while True:
@@ -3617,6 +3689,7 @@ async def adversarial_mode(
         args.cleanup_timeout_seconds,
         args.cleanup_poll_seconds,
         "adversarial-timeout-cleanup-poll",
+        optional_gauges=DFLASH_TRANSIENT_CLEANUP_GAUGES,
     )
     timeout_observed = timeout_result["error_kind"] == "ReadTimeout"
     timeout_admitted = timeout_admissions >= 1
@@ -4586,6 +4659,8 @@ def selected_metric_deltas(
         "mistralrs_sequences_completed_total",
         KV_CACHE_ACTIVE_GAUGE,
         KV_CACHE_PREFIX_CACHED_GAUGE,
+        DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+        DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
     )
     return {name: metric_delta(before, after, name) for name in names}
 
@@ -5634,6 +5709,10 @@ def summarize_telemetry(
         "mistralrs_kv_cache_blocks_total",
         "mistralrs_recurrent_state_slots_used",
         "mistralrs_recurrent_state_slots_total",
+        DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+        DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE,
+        DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+        DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE,
     )
     gauges = {
         name: distribution(
@@ -5680,6 +5759,7 @@ def telemetry_evidence(
     server_pid: int | None,
     min_samples: int,
     min_coverage: float,
+    required_gauges: Sequence[str],
 ) -> dict[str, Any]:
     sample_count = len(snapshots)
 
@@ -5701,7 +5781,7 @@ def telemetry_evidence(
         for _, _, process in snapshots
     )
     gauge_coverage = {}
-    for gauge in REQUIRED_PRODUCTION_GAUGES:
+    for gauge in required_gauges:
         present = sum(
             metric_total(metrics, gauge) is not None for _, metrics, _ in snapshots
         )
@@ -5841,6 +5921,7 @@ def gauge_utilization_evidence(
 
 def final_resource_cleanup_evidence(
     snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+    require_dflash_windowed_kv: bool,
 ) -> dict[str, Any]:
     if not snapshots:
         return {
@@ -5851,7 +5932,23 @@ def final_resource_cleanup_evidence(
     initial_metrics = snapshots[0][1]
     final_metrics = snapshots[-1][1]
     gauges = {}
-    for name in CLEANUP_GAUGES:
+    cleanup_gauges = CLEANUP_GAUGES
+    stable_capacity_gauges = (
+        "mistralrs_kv_cache_blocks_total",
+        "mistralrs_recurrent_state_slots_total",
+    )
+    if require_dflash_windowed_kv:
+        cleanup_gauges = (
+            *cleanup_gauges,
+            DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+            DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+        )
+        stable_capacity_gauges = (
+            *stable_capacity_gauges,
+            DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE,
+            DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE,
+        )
+    for name in cleanup_gauges:
         initial = metric_total(initial_metrics, name)
         final = metric_total(final_metrics, name)
         gauges[name] = {
@@ -5860,10 +5957,7 @@ def final_resource_cleanup_evidence(
             "final": final,
         }
     stable_capacities = {}
-    for name in (
-        "mistralrs_kv_cache_blocks_total",
-        "mistralrs_recurrent_state_slots_total",
-    ):
+    for name in stable_capacity_gauges:
         initial = metric_total(initial_metrics, name)
         final = metric_total(final_metrics, name)
         stable_capacities[name] = {
@@ -5942,19 +6036,47 @@ def production_memory_evidence(
         limits.min_coverage,
         limits.max_recurrent_slot_utilization,
     )
-    final_cleanup = final_resource_cleanup_evidence(snapshots)
+    windowed_live_slots = gauge_utilization_evidence(
+        snapshots,
+        DFLASH_WINDOWED_KV_LIVE_SLOTS_USED_GAUGE,
+        DFLASH_WINDOWED_KV_LIVE_SLOTS_TOTAL_GAUGE,
+        limits.min_coverage,
+        MAX_WINDOWED_KV_SLOT_UTILIZATION,
+    )
+    windowed_checkpoint_slots = gauge_utilization_evidence(
+        snapshots,
+        DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+        DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE,
+        limits.min_coverage,
+        MAX_WINDOWED_KV_SLOT_UTILIZATION,
+    )
+    windowed_kv_slots = {
+        "passed": (
+            not limits.require_dflash_windowed_kv
+            or (windowed_live_slots["passed"] and windowed_checkpoint_slots["passed"])
+        ),
+        "required": limits.require_dflash_windowed_kv,
+        "live": windowed_live_slots,
+        "checkpoint": windowed_checkpoint_slots,
+    }
+    final_cleanup = final_resource_cleanup_evidence(
+        snapshots,
+        limits.require_dflash_windowed_kv,
+    )
     return {
         "passed": (
             process_rss["passed"]
             and gpu_memory["passed"]
             and kv_blocks["passed"]
             and recurrent_slots["passed"]
+            and windowed_kv_slots["passed"]
             and final_cleanup["passed"]
         ),
         "process_rss": process_rss,
         "gpu_memory": gpu_memory,
         "kv_blocks": kv_blocks,
         "recurrent_slots": recurrent_slots,
+        "windowed_kv_slots": windowed_kv_slots,
         "final_cleanup": final_cleanup,
     }
 
@@ -6119,9 +6241,10 @@ async def production_mode(
     capacity_metrics = await safe_metrics(client, writer, "production-capacity")
     sequence_capacity = metric_total(capacity_metrics, "mistralrs_sequences_capacity")
     preflight_process = await process_telemetry(args.server_pid)
+    required_gauges = production_required_gauges(args.expected_graph_components)
     missing_gauges = [
         gauge
-        for gauge in REQUIRED_PRODUCTION_GAUGES
+        for gauge in required_gauges
         if metric_total(capacity_metrics, gauge) is None
     ]
     preflight = {
@@ -6753,6 +6876,7 @@ async def production_mode(
         args.server_pid,
         args.min_telemetry_samples,
         args.min_telemetry_coverage,
+        required_gauges,
     )
     memory_gate = production_memory_evidence(
         snapshots,
