@@ -846,9 +846,14 @@ impl Engine {
             let recurrent_slot_allocation = {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
+                    let defer_initialization = pipeline.get_metadata().cache_config.is_some();
                     let mut hybrid_cache = pipeline.cache().hybrid();
                     let generation_before = hybrid_cache.recurrent_storage_generation();
-                    let slot = hybrid_cache.allocate_seq(*seq.id());
+                    let slot = if defer_initialization {
+                        hybrid_cache.reserve_seq_uninitialized(*seq.id())
+                    } else {
+                        hybrid_cache.allocate_seq(*seq.id())
+                    };
                     let storage_changed =
                         hybrid_cache.recurrent_storage_generation() != generation_before;
                     drop(hybrid_cache);

@@ -104,6 +104,12 @@ enum RecurrentSlotOwner {
     GraphPad,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RecurrentSlotInitialization {
+    Deferred,
+    Zeroed,
+}
+
 fn logical_slot_from_physical_slot(physical_slot: u32, checkpoint_lanes: usize) -> u32 {
     if physical_slot == u32::MAX {
         return u32::MAX;
@@ -222,6 +228,18 @@ impl RecurrentStatePool {
     }
 
     fn allocate_at(&mut self, slot_idx: usize) -> Result<()> {
+        self.reserve_at(slot_idx)?;
+        if let Err(err) = self.reset_slot(slot_idx) {
+            let released = self.free(slot_idx);
+            debug_assert!(released);
+            return Err(candle_core::Error::msg(format!(
+                "failed to reset recurrent state slot {slot_idx}: {err}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn reserve_at(&mut self, slot_idx: usize) -> Result<()> {
         let allocated = self.allocated_slots.get(slot_idx).copied().ok_or_else(|| {
             candle_core::Error::msg(format!(
                 "recurrent state slot {slot_idx} exceeds capacity {}",
@@ -231,11 +249,6 @@ impl RecurrentStatePool {
         if allocated {
             candle_core::bail!("recurrent state slot {slot_idx} is already allocated");
         }
-        self.reset_slot(slot_idx).map_err(|err| {
-            candle_core::Error::msg(format!(
-                "failed to reset recurrent state slot {slot_idx}: {err}"
-            ))
-        })?;
         self.allocated_slots[slot_idx] = true;
         self.allocated_count += 1;
         Ok(())
@@ -525,6 +538,7 @@ pub struct HybridCache {
     checkpoint_lanes: usize,
     committed_lanes: Vec<usize>,
     slot_owners: Vec<Option<RecurrentSlotOwner>>,
+    initialized_slots: Vec<bool>,
     last_released_sequence_owners: Vec<Option<usize>>,
     recurrent_storage_generation: u64,
     recurrent_storage_locked: bool,
@@ -585,6 +599,7 @@ impl HybridCache {
             checkpoint_lanes: 1,
             committed_lanes: vec![0; INITIAL_POOL_CAPACITY],
             slot_owners: vec![None; INITIAL_POOL_CAPACITY],
+            initialized_slots: vec![false; INITIAL_POOL_CAPACITY],
             last_released_sequence_owners: vec![None; INITIAL_POOL_CAPACITY],
             recurrent_storage_generation: 0,
             recurrent_storage_locked: false,
@@ -597,7 +612,10 @@ impl HybridCache {
     /// Slot reserved for CUDA graph pad rows; never handed to a sequence while it lives.
     pub fn graph_pad_slot(&mut self) -> Result<Option<usize>> {
         if self.graph_pad_slot.is_none() {
-            self.graph_pad_slot = Some(self.allocate_slot(RecurrentSlotOwner::GraphPad)?);
+            self.graph_pad_slot = Some(self.allocate_slot(
+                RecurrentSlotOwner::GraphPad,
+                RecurrentSlotInitialization::Zeroed,
+            )?);
         }
         if let Some(slot_idx) = self.graph_pad_slot {
             self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::GraphPad)?;
@@ -617,6 +635,7 @@ impl HybridCache {
             }
         }
         self.slot_owners[slot_idx] = None;
+        self.initialized_slots[slot_idx] = false;
         self.last_released_sequence_owners[slot_idx] = None;
         self.committed_lanes[slot_idx] = 0;
         self.graph_pad_slot = None;
@@ -670,6 +689,7 @@ impl HybridCache {
         }
         self.checkpoint_lanes = checkpoint_lanes;
         self.committed_lanes.fill(0);
+        self.initialized_slots.fill(false);
         self.clear_state_indices();
         self.advance_recurrent_storage_generation();
         Ok(true)
@@ -871,6 +891,14 @@ impl HybridCache {
         Ok(())
     }
 
+    fn ensure_recurrent_slot_initialized(&self, slot_idx: usize) -> Result<()> {
+        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        if !self.initialized_slots[slot_idx] {
+            candle_core::bail!("recurrent state slot {slot_idx} is not initialized");
+        }
+        Ok(())
+    }
+
     pub fn validate_sequence_slots(&self, sequence_slots: &[(usize, usize)]) -> Result<()> {
         let mut unique_slots = HashSet::with_capacity(sequence_slots.len());
         for &(sequence_id, slot_idx) in sequence_slots {
@@ -880,6 +908,7 @@ impl HybridCache {
                 );
             }
             self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
+            self.ensure_recurrent_slot_initialized(slot_idx)?;
         }
         Ok(())
     }
@@ -929,6 +958,7 @@ impl HybridCache {
             }
         }
         self.slot_owners.resize(min_capacity, None);
+        self.initialized_slots.resize(min_capacity, false);
         self.last_released_sequence_owners
             .resize(min_capacity, None);
         self.committed_lanes.resize(min_capacity, 0);
@@ -945,12 +975,28 @@ impl HybridCache {
     }
 
     pub fn allocate_seq(&mut self, sequence_id: usize) -> Result<usize> {
-        let slot = self.allocate_slot(RecurrentSlotOwner::Sequence(sequence_id));
+        let slot = self.allocate_slot(
+            RecurrentSlotOwner::Sequence(sequence_id),
+            RecurrentSlotInitialization::Zeroed,
+        );
         self.publish_recurrent_slot_metrics();
         slot
     }
 
-    fn allocate_slot(&mut self, owner: RecurrentSlotOwner) -> Result<usize> {
+    pub(crate) fn reserve_seq_uninitialized(&mut self, sequence_id: usize) -> Result<usize> {
+        let slot = self.allocate_slot(
+            RecurrentSlotOwner::Sequence(sequence_id),
+            RecurrentSlotInitialization::Deferred,
+        );
+        self.publish_recurrent_slot_metrics();
+        slot
+    }
+
+    fn allocate_slot(
+        &mut self,
+        owner: RecurrentSlotOwner,
+        initialization: RecurrentSlotInitialization,
+    ) -> Result<usize> {
         self.recurrent_storage_locked = true;
         if self
             .slot_owners
@@ -988,7 +1034,11 @@ impl HybridCache {
             let HybridLayerCache::Recurrent(pool) = &mut self.caches[layer_idx] else {
                 unreachable!("recurrent_layers only contains recurrent entries");
             };
-            if let Err(err) = pool.allocate_at(slot_idx) {
+            let allocation = match initialization {
+                RecurrentSlotInitialization::Deferred => pool.reserve_at(slot_idx),
+                RecurrentSlotInitialization::Zeroed => pool.allocate_at(slot_idx),
+            };
+            if let Err(err) = allocation {
                 for rollback_layer_idx in allocated_layers {
                     let HybridLayerCache::Recurrent(pool) = &mut self.caches[rollback_layer_idx]
                     else {
@@ -1002,6 +1052,7 @@ impl HybridCache {
             allocated_layers.push(layer_idx);
         }
         self.slot_owners[slot_idx] = Some(owner);
+        self.initialized_slots[slot_idx] = initialization == RecurrentSlotInitialization::Zeroed;
         self.last_released_sequence_owners[slot_idx] = None;
         self.committed_lanes[slot_idx] = 0;
         Ok(slot_idx)
@@ -1037,6 +1088,7 @@ impl HybridCache {
             }
         }
         self.slot_owners[slot_idx] = None;
+        self.initialized_slots[slot_idx] = false;
         self.last_released_sequence_owners[slot_idx] = Some(sequence_id);
         self.committed_lanes[slot_idx] = 0;
         if self
@@ -1057,6 +1109,7 @@ impl HybridCache {
     /// Reset a specific sequence's state in all recurrent layers.
     pub fn reset_seq(&mut self, sequence_id: usize, slot_idx: usize) -> Result<()> {
         self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
+        self.initialized_slots[slot_idx] = false;
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
                 pool.reset_slot(slot_idx)?;
@@ -1068,6 +1121,7 @@ impl HybridCache {
                 "recurrent logical slot {slot_idx} exceeds capacity {capacity}"
             ))
         })? = 0;
+        self.initialized_slots[slot_idx] = true;
         self.refresh_current_batch_mapping()
     }
 
@@ -1110,6 +1164,7 @@ impl HybridCache {
         }
         self.committed_lanes.fill(0);
         self.slot_owners.fill(None);
+        self.initialized_slots.fill(false);
         self.last_released_sequence_owners.fill(None);
         self.clear_state_indices();
         self.graph_pad_slot = None;
@@ -1124,6 +1179,9 @@ impl HybridCache {
     pub fn reset_attention_and_slots(&mut self, slots: &[usize]) -> Result<()> {
         for &slot in slots {
             self.ensure_recurrent_slot_allocated(slot)?;
+        }
+        for &slot in slots {
+            self.initialized_slots[slot] = false;
         }
         let capacity = self.committed_lanes.len();
         for cache in &mut self.caches {
@@ -1140,6 +1198,9 @@ impl HybridCache {
                     }
                 }
             }
+        }
+        for &slot in slots {
+            self.initialized_slots[slot] = true;
         }
         self.clear_state_indices();
         Ok(())
@@ -1716,7 +1777,10 @@ mod tests {
             recurrent.to_vec3::<f32>()?
         );
 
-        cache.restore_recurrent_state(20, destination, &snapshots)?;
+        assert!(cache.release_seq(20, destination)?);
+        assert_eq!(cache.reserve_seq_uninitialized(30)?, destination);
+        cache.restore_recurrent_state(30, destination, &snapshots)?;
+        cache.validate_sequence_slots(&[(30, destination)])?;
         assert_eq!(cache.committed_lane(destination)?, 0);
         let HybridLayerCache::Recurrent(pool) = cache.get(0).unwrap() else {
             unreachable!()
@@ -1748,6 +1812,70 @@ mod tests {
         assert_eq!(
             restored_recurrent
                 .narrow(0, 1, 2)?
+                .sum_all()?
+                .to_scalar::<f32>()?,
+            0.0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deferred_recurrent_reservation_requires_initialization_without_resetting() -> Result<()> {
+        let mut cache = HybridCache::new(
+            config(vec![HybridLayerType::Recurrent]),
+            DType::F32,
+            &[Device::Cpu],
+        )?;
+        let slot = cache.allocate_seq(1)?;
+        let physical_slot = cache.active_physical_slot(slot)?;
+        let indices = Tensor::from_vec(vec![physical_slot as u32], (1,), &Device::Cpu)?;
+        {
+            let HybridLayerCache::Recurrent(pool) = cache.get_mut(0).unwrap() else {
+                unreachable!()
+            };
+            pool.scatter_conv_state(
+                &indices,
+                &Tensor::ones((1, 2, 3), DType::F32, &Device::Cpu)?,
+            )?;
+            pool.scatter_recurrent_state(
+                &indices,
+                &Tensor::ones((1, 2, 2), DType::F32, &Device::Cpu)?,
+            )?;
+        }
+        assert!(cache.release_seq(1, slot)?);
+        assert_eq!(cache.reserve_seq_uninitialized(10)?, slot);
+
+        let error = cache.validate_sequence_slots(&[(10, slot)]).unwrap_err();
+        assert!(error.to_string().contains("is not initialized"));
+        let HybridLayerCache::Recurrent(pool) = cache.get(0).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(
+            pool.gather_conv_state(&indices)?
+                .sum_all()?
+                .to_scalar::<f32>()?,
+            6.0
+        );
+        assert_eq!(
+            pool.gather_recurrent_state(&indices)?
+                .sum_all()?
+                .to_scalar::<f32>()?,
+            4.0
+        );
+
+        cache.reset_seq(10, slot)?;
+        cache.validate_sequence_slots(&[(10, slot)])?;
+        let HybridLayerCache::Recurrent(pool) = cache.get(0).unwrap() else {
+            unreachable!()
+        };
+        assert_eq!(
+            pool.gather_conv_state(&indices)?
+                .sum_all()?
+                .to_scalar::<f32>()?,
+            0.0
+        );
+        assert_eq!(
+            pool.gather_recurrent_state(&indices)?
                 .sum_all()?
                 .to_scalar::<f32>()?,
             0.0
@@ -2060,6 +2188,7 @@ impl HybridCache {
         slot_idx: usize,
     ) -> Result<Vec<RecurrentStateSnapshot>> {
         self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
+        self.ensure_recurrent_slot_initialized(slot_idx)?;
         let physical_slot = self.active_physical_slot(slot_idx)?;
         let physical_slot = u32::try_from(physical_slot).map_err(|_| {
             candle_core::Error::msg(format!(
@@ -2090,6 +2219,7 @@ impl HybridCache {
         slot_idx: usize,
         snapshots: &[RecurrentStateSnapshot],
     ) -> Result<()> {
+        self.ensure_recurrent_slot_owned(slot_idx, RecurrentSlotOwner::Sequence(sequence_id))?;
         let expected = self
             .caches
             .iter()
@@ -2115,7 +2245,13 @@ impl HybridCache {
                 );
             }
         }
-        self.reset_seq(sequence_id, slot_idx)?;
+        self.initialized_slots[slot_idx] = false;
+        for cache in &mut self.caches {
+            if let HybridLayerCache::Recurrent(pool) = cache {
+                pool.reset_slot(slot_idx)?;
+            }
+        }
+        self.committed_lanes[slot_idx] = 0;
         let physical_slot = self.physical_slot(slot_idx, 0)?;
         let physical_slot = u32::try_from(physical_slot).map_err(|_| {
             candle_core::Error::msg(format!(
@@ -2133,7 +2269,8 @@ impl HybridCache {
                 pool.scatter_recurrent_state(&idx_tensor, &recurrent)?;
             }
         }
-        Ok(())
+        self.initialized_slots[slot_idx] = true;
+        self.refresh_current_batch_mapping()
     }
 
     #[cfg(any(feature = "cuda", test))]
@@ -2141,7 +2278,7 @@ impl HybridCache {
         &self,
         slot_idx: usize,
     ) -> Result<RecurrentCheckpointStateSnapshot> {
-        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        self.ensure_recurrent_slot_initialized(slot_idx)?;
         let committed_lane = self.committed_lane(slot_idx)?;
         let physical_slot = self.physical_slot(slot_idx, committed_lane)?;
         let physical_slot = u32::try_from(physical_slot).map_err(|_| {
@@ -2177,7 +2314,7 @@ impl HybridCache {
         slot_idx: usize,
         snapshot: &RecurrentCheckpointStateSnapshot,
     ) -> Result<()> {
-        self.ensure_recurrent_slot_allocated(slot_idx)?;
+        self.ensure_recurrent_slot_initialized(slot_idx)?;
         if snapshot.checkpoint_lanes != self.checkpoint_lanes {
             candle_core::bail!(
                 "recurrent checkpoint lane mismatch: snapshot {}, pool {}",
@@ -2226,6 +2363,7 @@ impl HybridCache {
         let logical_slot = u32::try_from(slot_idx).map_err(|_| {
             candle_core::Error::msg(format!("recurrent logical slot {slot_idx} exceeds u32"))
         })?;
+        self.initialized_slots[slot_idx] = false;
         let mut states = snapshot.states.iter();
         for cache in &mut self.caches {
             if let HybridLayerCache::Recurrent(pool) = cache {
@@ -2240,6 +2378,7 @@ impl HybridCache {
 
         let previous_lane = self.committed_lane(slot_idx)?;
         self.committed_lanes[slot_idx] = snapshot.committed_lane;
+        self.initialized_slots[slot_idx] = true;
         if previous_lane != snapshot.committed_lane
             && self
                 .logical_state_indices_host
