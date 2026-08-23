@@ -111,7 +111,10 @@ RETRIEVAL_LENGTH_REFINEMENT_STEPS = 16
 PROMPT_CALIBRATION_RAW_LENGTHS = (1_024, 2_048)
 CONTEXT_PROMPT_PROFILE = "context"
 RETRIEVAL_PROMPT_PROFILE = "retrieval_no_thinking"
-EXACT_CONTEXT_SUFFIX = "\nEnd of deterministic production-soak context.\n"
+EXACT_CONTEXT_SUFFIX = (
+    "\nEnd of deterministic production-soak context.\n"
+    "Respond with varied original prose without quoting or repeating the context.\n"
+)
 PROMETHEUS_METRIC_PREFIXES = ("mistralrs_", "http_requests_in_flight")
 KV_CACHE_ACTIVE_GAUGE = "mistralrs_kv_cache_blocks_active"
 KV_CACHE_PREFIX_CACHED_GAUGE = "mistralrs_kv_cache_blocks_prefix_cached"
