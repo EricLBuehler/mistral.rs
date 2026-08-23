@@ -27,6 +27,8 @@ use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTenso
 use crate::paged_attention::windowed_pool::{
     WindowedKvBatch, WindowedKvBatchTensors, WindowedKvPool, WindowedKvPoolConfig, WindowedKvQuery,
 };
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+use crate::pipeline::cuda_graph::{CudaGraphComponent, CudaGraphEvent, CudaGraphEventGuard};
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
 pub const DEFAULT_MAX_DRAFTS: usize = 7;
@@ -1368,9 +1370,11 @@ impl DFlashCudaGraphEntry {
     }
 
     fn launch(&mut self, real_batch: usize) -> Result<DFlashProposalBatch> {
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::Replay);
         self.graph.launch()?;
         self.staging.record_graph_complete()?;
-        DFlashCudaGraphOutput {
+        let output = DFlashCudaGraphOutput {
             tokens: self.buffers.output_tokens.as_detached_tensor(),
             candidate_ids: self
                 .buffers
@@ -1383,7 +1387,9 @@ impl DFlashCudaGraphEntry {
                 .as_ref()
                 .map(Var::as_detached_tensor),
         }
-        .finish(real_batch)
+        .finish(real_batch)?;
+        graph_event.success();
+        Ok(output)
     }
 
     fn replay(
@@ -1495,6 +1501,8 @@ impl DFlashCudaGraphState {
         token_embedding: &Arc<dyn QuantMethod>,
         lm_head: &Arc<dyn QuantMethod>,
     ) -> Result<DFlashCudaGraphEntry> {
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::Capture);
         let buffers = DFlashCudaGraphBuffers::new(key, &host_rows, attention_batch, model)?;
         model.device.synchronize()?;
         let Device::Cuda(cuda_device) = &model.device else {
@@ -1584,7 +1592,7 @@ impl DFlashCudaGraphState {
         );
         graph.upload()?;
         let staging = crate::pipeline::cuda_graph::CudaGraphHostStaging::new(stream)?;
-        Ok(DFlashCudaGraphEntry {
+        let entry = DFlashCudaGraphEntry {
             key,
             staging,
             buffers,
@@ -1593,7 +1601,9 @@ impl DFlashCudaGraphState {
             mask_token_id: model.mask_token_id,
             host_rows,
             graph,
-        })
+        };
+        graph_event.success();
+        Ok(entry)
     }
 
     fn run(&mut self, run: DFlashCudaGraphRun<'_>) -> Result<Option<DFlashProposalBatch>> {
@@ -1625,7 +1635,11 @@ impl DFlashCudaGraphState {
                 }
                 Err(err) => {
                     self.retire_failed_entry(entry, "replay", err)?;
-                    return Self::eager(
+                    let graph_event = CudaGraphEventGuard::new(
+                        CudaGraphComponent::DFlash,
+                        CudaGraphEvent::EagerFallback,
+                    );
+                    let result = Self::eager(
                         model,
                         key,
                         &dflash_graph_host_rows(DFlashGraphHostInput {
@@ -1643,6 +1657,10 @@ impl DFlashCudaGraphState {
                     )
                     .map(Some)
                     .map_err(|err| err.context("DFlash eager fallback after graph replay failed"));
+                    if result.is_ok() {
+                        graph_event.success();
+                    }
+                    return result;
                 }
             }
         }
@@ -1658,6 +1676,8 @@ impl DFlashCudaGraphState {
             return Ok(None);
         }
         if self.warmed.insert(key) {
+            let graph_event =
+                CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::EagerFallback);
             let rows = dflash_graph_host_rows(DFlashGraphHostInput {
                 anchors,
                 start_positions,
@@ -1666,7 +1686,7 @@ impl DFlashCudaGraphState {
                 batch_bucket: key.batch_bucket,
                 sampling,
             })?;
-            return Self::eager(
+            let result = Self::eager(
                 model,
                 key,
                 &rows,
@@ -1676,6 +1696,10 @@ impl DFlashCudaGraphState {
                 real_batch,
             )
             .map(Some);
+            if result.is_ok() {
+                graph_event.success();
+            }
+            return result;
         }
 
         let rows = dflash_graph_host_rows(DFlashGraphHostInput {
@@ -1703,7 +1727,11 @@ impl DFlashCudaGraphState {
             Ok(tokens) => tokens,
             Err(err) => {
                 self.retire_failed_entry(entry, "first launch", err)?;
-                return Self::eager(
+                let graph_event = CudaGraphEventGuard::new(
+                    CudaGraphComponent::DFlash,
+                    CudaGraphEvent::EagerFallback,
+                );
+                let result = Self::eager(
                     model,
                     key,
                     &dflash_graph_host_rows(DFlashGraphHostInput {
@@ -1723,6 +1751,10 @@ impl DFlashCudaGraphState {
                 .map_err(|err| {
                     err.context("DFlash eager fallback after first graph launch failed")
                 });
+                if result.is_ok() {
+                    graph_event.success();
+                }
+                return result;
             }
         };
         tracing::debug!(

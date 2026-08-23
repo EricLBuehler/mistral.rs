@@ -46,9 +46,118 @@ pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
 pub(crate) const CUDA_GRAPH_PRECAPTURE_MAX_BATCH: usize = 16;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
+const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphComponent {
+    Target,
+    DFlash,
+}
+
+impl CudaGraphComponent {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Target => "target",
+            Self::DFlash => "dflash",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphEvent {
+    Capture,
+    Replay,
+    EagerFallback,
+}
+
+impl CudaGraphEvent {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Capture => "capture",
+            Self::Replay => "replay",
+            Self::EagerFallback => "eager_fallback",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum CudaGraphOutcome {
+    Success,
+    Failure,
+}
+
+impl CudaGraphOutcome {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct CudaGraphEventLabels {
+    component: &'static str,
+    event: &'static str,
+    outcome: &'static str,
+}
+
+const fn cuda_graph_event_labels(
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+) -> CudaGraphEventLabels {
+    CudaGraphEventLabels {
+        component: component.label(),
+        event: event.label(),
+        outcome: outcome.label(),
+    }
+}
+
+fn record_cuda_graph_event(
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+) {
+    let labels = cuda_graph_event_labels(component, event, outcome);
+    metrics::counter!(
+        CUDA_GRAPH_EVENTS_METRIC,
+        "component" => labels.component,
+        "event" => labels.event,
+        "outcome" => labels.outcome,
+    )
+    .increment(1);
+}
+
+#[must_use]
+pub(crate) struct CudaGraphEventGuard {
+    component: CudaGraphComponent,
+    event: CudaGraphEvent,
+    outcome: CudaGraphOutcome,
+}
+
+impl CudaGraphEventGuard {
+    pub(crate) const fn new(component: CudaGraphComponent, event: CudaGraphEvent) -> Self {
+        Self {
+            component,
+            event,
+            outcome: CudaGraphOutcome::Failure,
+        }
+    }
+
+    pub(crate) fn success(mut self) {
+        self.outcome = CudaGraphOutcome::Success;
+    }
+}
+
+impl Drop for CudaGraphEventGuard {
+    fn drop(&mut self) {
+        record_cuda_graph_event(self.component, self.event, self.outcome);
+    }
+}
 
 struct MemoryPoolScopeState {
     guards: usize,
@@ -1500,6 +1609,14 @@ impl CudaDecodeGraphState {
             return Ok(None);
         };
         let mut entry = self.entries.remove(pos);
+        if let CudaDecodeGraphReplayInput::Resident(launch) = input {
+            if !launch.matches(&entry) || launch.real_batch != step.real_batch {
+                self.entries.push(entry);
+                return Ok(None);
+            }
+        }
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Replay);
         let prelaunch = (|| -> candle_core::Result<_> {
             match input {
                 CudaDecodeGraphReplayInput::Host => {
@@ -1510,11 +1627,7 @@ impl CudaDecodeGraphState {
                         ))
                     })?
                 }
-                CudaDecodeGraphReplayInput::Resident(launch) => {
-                    if !launch.matches(&entry) || launch.real_batch != step.real_batch {
-                        return Ok(None);
-                    }
-                }
+                CudaDecodeGraphReplayInput::Resident(_) => {}
             }
             let replay_epoch = entry
                 .replay_epoch
@@ -1623,6 +1736,7 @@ impl CudaDecodeGraphState {
         }
         entry.replay_epoch = replay_epoch;
         self.entries.push(entry);
+        graph_event.success();
         Ok(Some(replay))
     }
 
@@ -3009,6 +3123,51 @@ mod tests {
                 .collect(),
             device_totals: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn graph_event_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let mut labels = HashSet::new();
+        for component in [CudaGraphComponent::Target, CudaGraphComponent::DFlash] {
+            for event in [
+                CudaGraphEvent::Capture,
+                CudaGraphEvent::Replay,
+                CudaGraphEvent::EagerFallback,
+            ] {
+                for outcome in [CudaGraphOutcome::Success, CudaGraphOutcome::Failure] {
+                    assert!(labels.insert(cuda_graph_event_labels(component, event, outcome)));
+                }
+            }
+        }
+
+        assert_eq!(
+            CUDA_GRAPH_EVENTS_METRIC,
+            "mistralrs_cuda_graph_events_total"
+        );
+        assert_eq!(labels.len(), 12);
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.component)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["target", "dflash"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.event)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["capture", "replay", "eager_fallback"])
+        );
+        assert_eq!(
+            labels
+                .iter()
+                .map(|labels| labels.outcome)
+                .collect::<HashSet<_>>(),
+            HashSet::from(["success", "failure"])
+        );
     }
 
     #[test]

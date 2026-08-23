@@ -38,8 +38,8 @@ use crate::pipeline::cuda_graph::{
     cuda_graph_batch_bucket, cuda_graph_precapture_batches, hybrid_graph_slots,
     install_hybrid_graph_state_indices, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
     CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
-    CudaGraphDecodeStep, CudaGraphDecodeStepInputs, CudaGraphPrecaptureInputs,
-    CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs, CudaGraphEvent,
+    CudaGraphEventGuard, CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
@@ -1877,6 +1877,8 @@ impl NormalPipeline {
         block_size: usize,
         recurrent_batch_kind: RecurrentBatchKind,
     ) -> candle_core::Result<Tensor> {
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
@@ -1946,6 +1948,7 @@ impl NormalPipeline {
             live_state_indices.as_ref(),
         )?;
         state.insert(entry);
+        graph_event.success();
         Ok(logits)
     }
 
@@ -2148,6 +2151,8 @@ impl Pipeline for NormalPipeline {
         };
         let logits = match self.model.is_xlora() {
             false => {
+                #[cfg(feature = "cuda")]
+                let mut cuda_graph_eager_fallback = None;
                 let paged_attn_meta = paged_attn_meta
                     .as_ref()
                     .map(|meta| (meta.0.get_kv_cache().clone(), meta.1.clone()));
@@ -2176,6 +2181,10 @@ impl Pipeline for NormalPipeline {
                             if !self.disable_cuda_decode_graph(&err) {
                                 return Err(err);
                             }
+                            cuda_graph_eager_fallback = Some(CudaGraphEventGuard::new(
+                                CudaGraphComponent::Target,
+                                CudaGraphEvent::EagerFallback,
+                            ));
                         }
                     }
                 }
@@ -2200,9 +2209,16 @@ impl Pipeline for NormalPipeline {
                 )
                 .with_recurrent_batch_kind(recurrent_batch_kind)
                 .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-                mistralrs_quant::with_lora_execution(lora_execution, || {
+                let eager_result = mistralrs_quant::with_lora_execution(lora_execution, || {
                     self.model.forward(&input_ids, &mut ctx)
-                })?
+                });
+                #[cfg(feature = "cuda")]
+                if eager_result.is_ok() {
+                    if let Some(graph_event) = cuda_graph_eager_fallback.take() {
+                        graph_event.success();
+                    }
+                }
+                eager_result?
             }
             true => self.model.xlora_forward(
                 &input_ids,

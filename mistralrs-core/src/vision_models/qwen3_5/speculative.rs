@@ -10,6 +10,8 @@ use std::sync::atomic::Ordering;
 use candle_core::{IndexOp, Result, Tensor};
 use rand::Rng;
 
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+use crate::pipeline::cuda_graph::{CudaGraphComponent, CudaGraphEvent, CudaGraphEventGuard};
 use crate::{
     attention::AttentionMask,
     get_mut_arcmutex,
@@ -557,7 +559,7 @@ impl Qwen3_5Model {
             });
         let draft_head = self.draft_lm_head.lock().expect("draft lm_head poisoned");
         let lm_head = draft_head.as_ref().unwrap_or_else(|| self.text.lm_head());
-        if let Some(proposals) = drafter.proposals_cuda_graph(
+        let graph_proposals = drafter.proposals_cuda_graph(
             ctx.seq_ids,
             ctx.sampled_tokens,
             ctx.base_lens,
@@ -565,18 +567,29 @@ impl Qwen3_5Model {
             sampling,
             self.text.token_embedding(),
             lm_head,
-        )? {
+        )?;
+        if let Some(proposals) = graph_proposals {
             return dflash_speculative_batch(proposals).map(Some);
         }
-        let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
-        let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
-        dflash_speculative_batch(drafter.finish_proposals(
-            &hidden,
-            ctx.sampled_tokens,
-            sampling,
-            lm_head,
-        )?)
-        .map(Some)
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::EagerFallback);
+        let fallback_result = (|| {
+            let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
+            let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
+            dflash_speculative_batch(drafter.finish_proposals(
+                &hidden,
+                ctx.sampled_tokens,
+                sampling,
+                lm_head,
+            )?)
+            .map(Some)
+        })();
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        if fallback_result.is_ok() {
+            graph_event.success();
+        }
+        fallback_result
     }
 
     fn dflash_prefill(&self, ctx: SpeculativePrefillCtx<'_>) -> Result<()> {

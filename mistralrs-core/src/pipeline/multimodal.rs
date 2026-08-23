@@ -58,8 +58,9 @@ use crate::pipeline::cuda_graph::{
     cuda_graph_batch_bucket, cuda_graph_precapture_batches, cuda_graph_startup_capture_allowed,
     hybrid_graph_slots, install_hybrid_graph_state_indices, CudaDecodeGraphCaptureCtx,
     CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
-    CudaGraphPrecaptureInputs, CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
+    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    CudaGraphEvent, CudaGraphEventGuard, CudaGraphPrecaptureInputs,
+    CUDA_GRAPH_PRECAPTURE_MAX_BATCH,
 };
 use crate::pipeline::llg::build_llg_factory;
 use crate::pipeline::loaders::auto_device_map;
@@ -1967,6 +1968,8 @@ impl MultimodalPipeline {
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
     ) -> candle_core::Result<Tensor> {
+        let graph_event =
+            CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
         let CudaDecodeGraphCaptureInputs {
             kv_cache,
             flash_meta,
@@ -2125,6 +2128,7 @@ impl MultimodalPipeline {
             live_state_indices.as_ref(),
         )?;
         state.insert(entry);
+        graph_event.success();
         Ok(logits)
     }
 
@@ -2286,6 +2290,8 @@ impl Pipeline for MultimodalPipeline {
                 .map(|(_, meta)| ((*meta).clone(), flash_meta.clone()));
         }
         #[cfg(feature = "cuda")]
+        let mut cuda_graph_eager_fallback = None;
+        #[cfg(feature = "cuda")]
         if lora_execution.is_none() && !return_raw_logits && pixel_values.is_none() {
             match self.try_cuda_decode_graph_forward(CudaDecodeGraphForwardInput {
                 input_ids: &input_ids,
@@ -2310,6 +2316,10 @@ impl Pipeline for MultimodalPipeline {
                     if !self.disable_cuda_decode_graph(&err) {
                         return Err(err);
                     }
+                    cuda_graph_eager_fallback = Some(CudaGraphEventGuard::new(
+                        CudaGraphComponent::Target,
+                        CudaGraphEvent::EagerFallback,
+                    ));
                 }
             }
         }
@@ -2332,10 +2342,17 @@ impl Pipeline for MultimodalPipeline {
         )
         .with_recurrent_batch_kind(recurrent_batch_kind)
         .with_recurrent_metadata(self.recurrent_metadata(recurrent_batch_kind));
-        let logits = mistralrs_quant::with_lora_execution(lora_execution, || {
+        let eager_result = mistralrs_quant::with_lora_execution(lora_execution, || {
             self.model
                 .forward(&input_ids, pixel_values, model_specific_args, &mut ctx)
-        })?;
+        });
+        #[cfg(feature = "cuda")]
+        if eager_result.is_ok() {
+            if let Some(graph_event) = cuda_graph_eager_fallback.take() {
+                graph_event.success();
+            }
+        }
+        let logits = eager_result?;
         if self.model.is_block_diffusion() && !return_raw_logits {
             return Ok(ForwardStepResult::eager(
                 ForwardInputsResult::BlockGeneration {
