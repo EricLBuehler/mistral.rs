@@ -286,6 +286,322 @@ class PrefixReuseTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
 
 
+class CudaGraphEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def key(metric: str, **labels: str) -> str:
+        rendered = ",".join(f'{name}="{value}"' for name, value in labels.items())
+        return f"{metric}{{{rendered}}}"
+
+    def healthy_metrics(self) -> dict[str, float]:
+        return {
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="replay",
+                reason="cache_hit",
+            ): 100.0,
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="skipped",
+                reason="prefill",
+            ): 20.0,
+            self.key(
+                soak.CUDA_GRAPH_EVENTS_COUNTER,
+                component="target",
+                event="replay",
+                outcome="success",
+            ): 100.0,
+        }
+
+    def test_documented_prefill_skips_are_allowed(self) -> None:
+        after = self.healthy_metrics()
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 0.98)
+
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["instrumentation_complete"])
+        self.assertEqual(
+            evidence["components"]["target"]["allowed_skipped_dispatches"],
+            20.0,
+        )
+
+    def test_unexpected_skipped_dispatch_is_gated(self) -> None:
+        after = self.healthy_metrics()
+        after[
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="skipped",
+                reason="incompatible_shape",
+            )
+        ] = 1.0
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 0.98)
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(
+            evidence["components"]["target"]["unexpected_skipped_dispatches"],
+            1.0,
+        )
+
+    def test_dispatch_without_event_instrumentation_is_rejected(self) -> None:
+        after = self.healthy_metrics()
+        after = {
+            key: value
+            for key, value in after.items()
+            if not key.startswith(soak.CUDA_GRAPH_EVENTS_COUNTER)
+        }
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 0.98)
+
+        self.assertFalse(evidence["instrumentation_complete"])
+        self.assertFalse(evidence["passed"])
+
+
+class SpeculativeEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def metrics(
+        *,
+        drafts: float = 10.0,
+        proposed: float = 70.0,
+        accepted: float = 35.0,
+        gpu_verified: float | None = 10.0,
+        cpu_fallbacks: float | None = None,
+    ) -> dict[str, float]:
+        metrics = {
+            "mistralrs_speculative_drafts_total": drafts,
+            "mistralrs_speculative_draft_tokens_proposed_total": proposed,
+            "mistralrs_speculative_draft_tokens_accepted_total": accepted,
+        }
+        if gpu_verified is not None:
+            metrics[soak.SPARSE_VERIFIER_GPU_COUNTER] = gpu_verified
+        if cpu_fallbacks is not None:
+            metrics[soak.SPARSE_VERIFIER_FALLBACK_COUNTER] = cpu_fallbacks
+        return metrics
+
+    def evidence(self, after: dict[str, float]) -> dict:
+        return soak.speculative_evidence(
+            {},
+            after,
+            True,
+            min_acceptance_rate=0.05,
+            min_mean_advance=1.10,
+            min_proposal_depth=2.0,
+            max_sparse_fallback_ratio=0.01,
+        )
+
+    def test_healthy_mtp_and_sparse_verifier_pass(self) -> None:
+        evidence = self.evidence(self.metrics())
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["acceptance_rate"], 0.5)
+        self.assertEqual(evidence["mean_proposed_draft_tokens_per_draft"], 7.0)
+        self.assertEqual(evidence["mean_advance_tokens_per_target_step"], 4.5)
+        self.assertEqual(evidence["sparse_verifier"]["fallback_ratio"], 0.0)
+
+    def test_mtp_quality_floors_are_non_vacuous(self) -> None:
+        zero_acceptance = self.evidence(self.metrics(accepted=0.0))
+        shallow_proposals = self.evidence(
+            self.metrics(proposed=10.0, accepted=5.0)
+        )
+
+        self.assertFalse(zero_acceptance["performance_floors_passed"])
+        self.assertFalse(zero_acceptance["passed"])
+        self.assertFalse(shallow_proposals["performance_floors_passed"])
+        self.assertFalse(shallow_proposals["passed"])
+
+    def test_sparse_fallback_ratio_and_instrumentation_are_gated(self) -> None:
+        excessive_fallback = self.evidence(
+            self.metrics(gpu_verified=98.0, cpu_fallbacks=2.0)
+        )
+        missing_instrumentation = self.evidence(
+            self.metrics(gpu_verified=None, cpu_fallbacks=None)
+        )
+
+        self.assertEqual(
+            excessive_fallback["sparse_verifier"]["fallback_ratio"],
+            0.02,
+        )
+        self.assertFalse(excessive_fallback["passed"])
+        self.assertFalse(
+            missing_instrumentation["sparse_verifier"]["instrumentation_present"]
+        )
+        self.assertFalse(missing_instrumentation["passed"])
+
+    def test_unaccounted_cpu_verification_is_gated(self) -> None:
+        evidence = self.evidence(
+            self.metrics(drafts=100.0, proposed=700.0, accepted=350.0, gpu_verified=1.0)
+        )
+
+        self.assertEqual(evidence["sparse_verifier"]["fallback_ratio"], 0.0)
+        self.assertEqual(evidence["sparse_verifier"]["accounting_coverage"], 0.01)
+        self.assertEqual(evidence["sparse_verifier"]["unaccounted_sequences"], 99.0)
+        self.assertFalse(evidence["sparse_verifier"]["accounting_coverage_passed"])
+        self.assertFalse(evidence["sparse_verifier"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+
+class ProductionMemoryEvidenceTests(unittest.TestCase):
+    @staticmethod
+    def metrics(
+        *,
+        active_blocks: float = 0.0,
+        recurrent_used: float = 0.0,
+        kv_total: float = 100.0,
+        recurrent_total: float = 32.0,
+    ) -> dict[str, float]:
+        return {
+            "mistralrs_sequences_running": 0.0,
+            "mistralrs_sequences_waiting": 0.0,
+            "mistralrs_requests_pending_admission": 0.0,
+            "mistralrs_recurrent_state_slots_used": recurrent_used,
+            "mistralrs_recurrent_state_slots_total": recurrent_total,
+            soak.KV_CACHE_ACTIVE_GAUGE: active_blocks,
+            "mistralrs_kv_cache_blocks_total": kv_total,
+            "http_requests_in_flight": 0.0,
+        }
+
+    @staticmethod
+    def process(
+        rss_mib: float,
+        process_gpu_mib: float | None,
+        device_gpu_mib: float,
+    ) -> dict:
+        return {
+            "process_vmrss_kib": rss_mib * 1024.0,
+            "process_gpu_memory_used_mib": process_gpu_mib,
+            "gpus": [{"memory_used_mib": device_gpu_mib}],
+        }
+
+    def healthy_snapshots(self) -> list[tuple[float, dict, dict]]:
+        return [
+            (0.0, self.metrics(), self.process(10_000.0, 90_000.0, 91_000.0)),
+            (
+                1.0,
+                self.metrics(active_blocks=50.0, recurrent_used=16.0),
+                self.process(10_300.0, 90_500.0, 93_500.0),
+            ),
+            (2.0, self.metrics(), self.process(10_100.0, 90_100.0, 91_100.0)),
+        ]
+
+    @staticmethod
+    def evidence(snapshots: list[tuple[float, dict, dict]]) -> dict:
+        return soak.production_memory_evidence(
+            snapshots,
+            soak.ProductionMemoryLimits(
+                min_coverage=0.95,
+                max_process_rss_drift_mib=512.0,
+                max_process_rss_drift_fraction=0.10,
+                max_process_rss_high_water_mib=2_048.0,
+                max_gpu_memory_drift_mib=512.0,
+                max_gpu_memory_high_water_mib=2_048.0,
+                max_kv_block_utilization=0.95,
+                max_recurrent_slot_utilization=0.95,
+            ),
+        )
+
+    def test_stable_memory_and_final_cleanup_pass(self) -> None:
+        evidence = self.evidence(self.healthy_snapshots())
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(
+            evidence["gpu_memory"]["source"],
+            "server_pid_compute_process",
+        )
+        self.assertEqual(evidence["kv_blocks"]["maximum_observed_utilization"], 0.5)
+        self.assertTrue(evidence["final_cleanup"]["passed"])
+
+    def test_transient_gpu_high_water_is_gated_even_after_recovery(self) -> None:
+        snapshots = self.healthy_snapshots()
+        snapshots[1][2]["process_gpu_memory_used_mib"] = 93_000.0
+
+        evidence = self.evidence(snapshots)
+
+        self.assertFalse(evidence["gpu_memory"]["passed"])
+        self.assertEqual(evidence["gpu_memory"]["final_growth_mib"], 100.0)
+        self.assertEqual(evidence["gpu_memory"]["high_water_growth_mib"], 3_000.0)
+        self.assertFalse(evidence["passed"])
+
+    def test_final_rss_drift_is_gated(self) -> None:
+        snapshots = self.healthy_snapshots()
+        snapshots[-1][2]["process_vmrss_kib"] = 11_500.0 * 1024.0
+
+        evidence = self.evidence(snapshots)
+
+        self.assertEqual(evidence["process_rss"]["final_growth_mib"], 1_500.0)
+        self.assertFalse(evidence["process_rss"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_resource_pool_high_water_is_gated(self) -> None:
+        snapshots = self.healthy_snapshots()
+        snapshots[1] = (
+            snapshots[1][0],
+            self.metrics(active_blocks=96.0, recurrent_used=31.0),
+            snapshots[1][2],
+        )
+
+        evidence = self.evidence(snapshots)
+
+        self.assertFalse(evidence["kv_blocks"]["passed"])
+        self.assertFalse(evidence["recurrent_slots"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_full_recurrent_capacity_is_healthy_by_default(self) -> None:
+        snapshots = self.healthy_snapshots()
+        for index, (timestamp, metrics, process) in enumerate(snapshots):
+            metrics["mistralrs_recurrent_state_slots_total"] = 17.0
+            metrics["mistralrs_recurrent_state_slots_used"] = (
+                17.0 if index == 1 else 1.0
+            )
+            snapshots[index] = (timestamp, metrics, process)
+
+        evidence = soak.production_memory_evidence(
+            snapshots,
+            soak.ProductionMemoryLimits(),
+        )
+
+        self.assertEqual(
+            evidence["recurrent_slots"]["maximum_observed_utilization"],
+            1.0,
+        )
+        self.assertTrue(evidence["recurrent_slots"]["passed"])
+        self.assertTrue(evidence["passed"])
+
+    def test_pid_gpu_memory_is_preferred_over_whole_device_noise(self) -> None:
+        evidence = self.evidence(self.healthy_snapshots())
+
+        self.assertTrue(evidence["gpu_memory"]["passed"])
+        self.assertEqual(
+            evidence["gpu_memory"]["source"],
+            "server_pid_compute_process",
+        )
+
+    def test_whole_device_memory_is_used_when_pid_metric_is_unavailable(self) -> None:
+        snapshots = self.healthy_snapshots()
+        for _, _, process in snapshots:
+            process["process_gpu_memory_used_mib"] = None
+        snapshots[1][2]["gpus"][0]["memory_used_mib"] = 91_500.0
+
+        evidence = self.evidence(snapshots)
+
+        self.assertTrue(evidence["gpu_memory"]["passed"])
+        self.assertEqual(evidence["gpu_memory"]["source"], "whole_device")
+
+    def test_final_resource_leak_is_gated(self) -> None:
+        snapshots = self.healthy_snapshots()
+        snapshots[-1] = (
+            snapshots[-1][0],
+            self.metrics(active_blocks=1.0, recurrent_used=1.0),
+            snapshots[-1][2],
+        )
+
+        evidence = self.evidence(snapshots)
+
+        self.assertFalse(evidence["final_cleanup"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+
 class BatchMeasurementTests(unittest.TestCase):
     def test_c3_measurement_excludes_partial_drain_batch(self) -> None:
         specs = [
@@ -371,10 +687,83 @@ class ArgumentValidationTests(unittest.TestCase):
             ]
         )
 
+    @staticmethod
+    def production_args(*extra: str):
+        return soak.build_parser().parse_args(
+            [
+                "production",
+                "--tokenizer",
+                "tokenizer.json",
+                "--min-output-tok-s-by-concurrency",
+                "8:1,16:1",
+                "--min-scaling-efficiency",
+                "0.1",
+                "--max-probe-ttft-seconds",
+                "1",
+                "--max-probe-tpot-seconds",
+                "1",
+                "--server-pid",
+                "1",
+                *extra,
+            ]
+        )
+
     def test_post_admission_cancellations_fit_sequence_capacity(self) -> None:
         soak.validate_args(self.adversarial_args(16))
         with self.assertRaisesRegex(ValueError, "cannot exceed --max-seqs"):
             soak.validate_args(self.adversarial_args(17))
+
+    def test_speculative_gate_defaults_are_non_vacuous(self) -> None:
+        args = soak.build_parser().parse_args(["canary"])
+
+        self.assertEqual(
+            args.min_mtp_acceptance_rate,
+            soak.DEFAULT_MIN_MTP_ACCEPTANCE_RATE,
+        )
+        self.assertGreater(args.min_mtp_mean_advance, 1.0)
+        self.assertGreater(args.min_mtp_proposal_depth, 0.0)
+        self.assertLess(args.max_sparse_verifier_fallback_ratio, 1.0)
+        self.assertEqual(
+            args.min_sparse_verifier_accounting_coverage,
+            soak.DEFAULT_MIN_SPARSE_VERIFIER_ACCOUNTING_COVERAGE,
+        )
+        soak.validate_args(args)
+
+    def test_invalid_sparse_fallback_ratio_is_rejected(self) -> None:
+        args = soak.build_parser().parse_args(
+            ["canary", "--max-sparse-verifier-fallback-ratio", "1.1"]
+        )
+
+        with self.assertRaisesRegex(ValueError, "fallback-ratio"):
+            soak.validate_args(args)
+
+    def test_invalid_sparse_accounting_coverage_is_rejected(self) -> None:
+        args = soak.build_parser().parse_args(
+            ["canary", "--min-sparse-verifier-accounting-coverage", "1.1"]
+        )
+
+        with self.assertRaisesRegex(ValueError, "accounting-coverage"):
+            soak.validate_args(args)
+
+    def test_production_memory_gate_defaults_validate(self) -> None:
+        args = self.production_args()
+
+        soak.validate_args(args)
+        self.assertEqual(
+            args.max_process_rss_drift_mib,
+            soak.DEFAULT_MAX_PROCESS_RSS_DRIFT_MIB,
+        )
+        self.assertEqual(
+            args.max_gpu_memory_high_water_mib,
+            soak.DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB,
+        )
+        self.assertEqual(args.max_recurrent_slot_utilization, 1.0)
+
+    def test_invalid_resource_utilization_is_rejected(self) -> None:
+        args = self.production_args("--max-kv-block-utilization", "1.1")
+
+        with self.assertRaisesRegex(ValueError, "max-kv-block-utilization"):
+            soak.validate_args(args)
 
 
 class ProductionGateTests(unittest.TestCase):

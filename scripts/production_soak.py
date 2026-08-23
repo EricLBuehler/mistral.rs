@@ -56,6 +56,12 @@ DEFAULT_CLEANUP_POLL_SECONDS = 0.25
 DEFAULT_MAX_THROUGHPUT_DEGRADATION_FRACTION = 0.05
 DEFAULT_MIN_PREFIX_REUSE_FRACTION = 0.98
 DEFAULT_MIN_CUDA_GRAPH_REPLAY_RATIO = 0.98
+DEFAULT_ALLOWED_CUDA_GRAPH_SKIP_REASONS = ("prefill",)
+DEFAULT_MIN_MTP_ACCEPTANCE_RATE = 0.05
+DEFAULT_MIN_MTP_MEAN_ADVANCE = 1.10
+DEFAULT_MIN_MTP_PROPOSAL_DEPTH = 2.0
+DEFAULT_MAX_SPARSE_VERIFIER_FALLBACK_RATIO = 0.01
+DEFAULT_MIN_SPARSE_VERIFIER_ACCOUNTING_COVERAGE = 0.98
 DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION = 1.10
 DEFAULT_KV_BLOCK_SIZE_TOKENS = 32
 DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES = 128
@@ -63,6 +69,13 @@ DEFAULT_MIN_OUTPUT_EVENT_COVERAGE = 0.98
 DEFAULT_MAX_LATENCY_DEGRADATION_FRACTION = 0.20
 DEFAULT_MIN_TELEMETRY_COVERAGE = 0.95
 DEFAULT_MIN_TELEMETRY_SAMPLES = 2
+DEFAULT_MAX_PROCESS_RSS_DRIFT_MIB = 512.0
+DEFAULT_MAX_PROCESS_RSS_DRIFT_FRACTION = 0.10
+DEFAULT_MAX_PROCESS_RSS_HIGH_WATER_MIB = 2_048.0
+DEFAULT_MAX_GPU_MEMORY_DRIFT_MIB = 512.0
+DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB = 2_048.0
+DEFAULT_MAX_KV_BLOCK_UTILIZATION = 0.95
+DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION = 1.0
 MIN_PRODUCTION_PROBES_PER_PHASE = 2
 MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES = 2
 DEFAULT_OVERLAP_BASELINE_SECONDS = 2.0
@@ -103,6 +116,10 @@ PROMETHEUS_METRIC_PREFIXES = ("mistralrs_", "http_requests_in_flight")
 KV_CACHE_ACTIVE_GAUGE = "mistralrs_kv_cache_blocks_active"
 KV_CACHE_PREFIX_CACHED_GAUGE = "mistralrs_kv_cache_blocks_prefix_cached"
 REQUEST_OUTCOMES_COUNTER = "mistralrs_request_outcomes_total"
+SPARSE_VERIFIER_GPU_COUNTER = "mistralrs_speculative_sparse_gpu_verify_total"
+SPARSE_VERIFIER_FALLBACK_COUNTER = "mistralrs_speculative_sparse_gpu_fallback_total"
+CUDA_GRAPH_DISPATCH_COUNTER = "mistralrs_cuda_graph_dispatch_total"
+CUDA_GRAPH_EVENTS_COUNTER = "mistralrs_cuda_graph_events_total"
 REQUIRED_PRODUCTION_GAUGES = (
     "mistralrs_sequences_running",
     "mistralrs_sequences_waiting",
@@ -516,6 +533,31 @@ class SamplingPolicy:
             "min_p": self.min_p,
             "repetition_penalty": self.repetition_penalty,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionMemoryLimits:
+    min_coverage: float = DEFAULT_MIN_TELEMETRY_COVERAGE
+    max_process_rss_drift_mib: float = DEFAULT_MAX_PROCESS_RSS_DRIFT_MIB
+    max_process_rss_drift_fraction: float = DEFAULT_MAX_PROCESS_RSS_DRIFT_FRACTION
+    max_process_rss_high_water_mib: float = DEFAULT_MAX_PROCESS_RSS_HIGH_WATER_MIB
+    max_gpu_memory_drift_mib: float = DEFAULT_MAX_GPU_MEMORY_DRIFT_MIB
+    max_gpu_memory_high_water_mib: float = DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB
+    max_kv_block_utilization: float = DEFAULT_MAX_KV_BLOCK_UTILIZATION
+    max_recurrent_slot_utilization: float = DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION
+
+    @classmethod
+    def from_args(cls, args: argparse.Namespace) -> ProductionMemoryLimits:
+        return cls(
+            min_coverage=args.min_telemetry_coverage,
+            max_process_rss_drift_mib=args.max_process_rss_drift_mib,
+            max_process_rss_drift_fraction=args.max_process_rss_drift_fraction,
+            max_process_rss_high_water_mib=args.max_process_rss_high_water_mib,
+            max_gpu_memory_drift_mib=args.max_gpu_memory_drift_mib,
+            max_gpu_memory_high_water_mib=args.max_gpu_memory_high_water_mib,
+            max_kv_block_utilization=args.max_kv_block_utilization,
+            max_recurrent_slot_utilization=args.max_recurrent_slot_utilization,
+        )
 
 
 @dataclass(slots=True)
@@ -2059,9 +2101,10 @@ async def canary_mode(
         )
         await writer.emit("statistical_comparison", **statistical)
     candidate_metrics_after = await safe_metrics(client, writer, "canary-candidate-end")
-    candidate_mtp = speculative_evidence(
+    candidate_mtp = configured_speculative_evidence(
         candidate_metrics_before,
         candidate_metrics_after,
+        args,
         args.require_mtp,
     )
     candidate_graph = cuda_graph_evidence(
@@ -2791,9 +2834,10 @@ async def adversarial_mode(
         evidence = {
             "phase": phase,
             "gated": gated,
-            "mtp": speculative_evidence(
+            "mtp": configured_speculative_evidence(
                 runtime_cursor,
                 after,
+                args,
                 gated and args.require_mtp,
             ),
             "cuda_graph": cuda_graph_evidence(
@@ -3778,9 +3822,10 @@ async def adversarial_mode(
     running_after_cancel = metric_total(post_cancel_metrics, "mistralrs_sequences_running")
     waiting_after_cancel = metric_total(post_cancel_metrics, "mistralrs_sequences_waiting")
     metrics_delta = selected_metric_deltas(initial_metrics, final_metrics)
-    adversarial_mtp = speculative_evidence(
+    adversarial_mtp = configured_speculative_evidence(
         initial_metrics,
         final_metrics,
+        args,
         args.require_mtp,
     )
     adversarial_graph = cuda_graph_evidence(
@@ -4324,6 +4369,8 @@ def selected_metric_deltas(
         "mistralrs_speculative_drafts_total",
         "mistralrs_speculative_draft_tokens_proposed_total",
         "mistralrs_speculative_draft_tokens_accepted_total",
+        SPARSE_VERIFIER_GPU_COUNTER,
+        SPARSE_VERIFIER_FALLBACK_COUNTER,
         "mistralrs_prefix_cache_lookups_total",
         "mistralrs_prefix_cache_hits_total",
         "mistralrs_prefix_cache_tokens_matched_total",
@@ -4333,8 +4380,8 @@ def selected_metric_deltas(
         "mistralrs_speculative_staged_drops_total",
         "mistralrs_encoder_cache_hits_total",
         "mistralrs_encoder_cache_misses_total",
-        "mistralrs_cuda_graph_events_total",
-        "mistralrs_cuda_graph_dispatch_total",
+        CUDA_GRAPH_EVENTS_COUNTER,
+        CUDA_GRAPH_DISPATCH_COUNTER,
         REQUEST_OUTCOMES_COUNTER,
         "mistralrs_sequences_completed_total",
         KV_CACHE_ACTIVE_GAUGE,
@@ -4376,10 +4423,82 @@ def labeled_metric_values(
     ]
 
 
+def sparse_verifier_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    required: bool,
+    max_fallback_ratio: float,
+    min_accounting_coverage: float,
+) -> dict[str, Any]:
+    drafts = metric_delta(before, after, "mistralrs_speculative_drafts_total")
+    gpu_verified_raw = metric_delta(before, after, SPARSE_VERIFIER_GPU_COUNTER)
+    cpu_fallbacks_raw = metric_delta(before, after, SPARSE_VERIFIER_FALLBACK_COUNTER)
+    instrumentation_present = gpu_verified_raw is not None or cpu_fallbacks_raw is not None
+    gpu_verified = gpu_verified_raw or 0.0
+    cpu_fallbacks = cpu_fallbacks_raw or 0.0
+    total = gpu_verified + cpu_fallbacks
+    fallback_ratio = ratio(cpu_fallbacks, total)
+    accounting_coverage = ratio(total, drafts)
+    unaccounted = drafts - total if drafts is not None else None
+    sane = (
+        gpu_verified >= 0
+        and cpu_fallbacks >= 0
+        and (drafts is None or (drafts >= 0 and total <= drafts))
+    )
+    observed = total > 0
+    fallback_ratio_passed = bool(
+        not required
+        or (fallback_ratio is not None and fallback_ratio <= max_fallback_ratio)
+    )
+    accounting_coverage_passed = bool(
+        not required
+        or (
+            accounting_coverage is not None
+            and accounting_coverage >= min_accounting_coverage
+        )
+    )
+    return {
+        "passed": (
+            sane
+            and (
+                not required
+                or (
+                    instrumentation_present
+                    and observed
+                    and fallback_ratio_passed
+                    and accounting_coverage_passed
+                )
+            )
+        ),
+        "required": required,
+        "instrumentation_present": instrumentation_present,
+        "observed": observed,
+        "gpu_verified_sequences": gpu_verified,
+        "cpu_fallback_sequences": cpu_fallbacks,
+        "accounted_sequences": total,
+        "total_sequences": total,
+        "speculative_drafts": drafts,
+        "unaccounted_sequences": unaccounted,
+        "accounting_coverage": accounting_coverage,
+        "minimum_accounting_coverage": min_accounting_coverage,
+        "accounting_coverage_passed": accounting_coverage_passed,
+        "fallback_ratio": fallback_ratio,
+        "maximum_fallback_ratio": max_fallback_ratio,
+        "fallback_ratio_passed": fallback_ratio_passed,
+    }
+
+
 def speculative_evidence(
     before: dict[str, float],
     after: dict[str, float],
     required: bool,
+    min_acceptance_rate: float = DEFAULT_MIN_MTP_ACCEPTANCE_RATE,
+    min_mean_advance: float = DEFAULT_MIN_MTP_MEAN_ADVANCE,
+    min_proposal_depth: float = DEFAULT_MIN_MTP_PROPOSAL_DEPTH,
+    max_sparse_fallback_ratio: float = DEFAULT_MAX_SPARSE_VERIFIER_FALLBACK_RATIO,
+    min_sparse_accounting_coverage: float = (
+        DEFAULT_MIN_SPARSE_VERIFIER_ACCOUNTING_COVERAGE
+    ),
 ) -> dict[str, Any]:
     drafts = metric_delta(before, after, "mistralrs_speculative_drafts_total")
     proposed = metric_delta(
@@ -4424,20 +4543,66 @@ def speculative_evidence(
         )
     )
     active = bool(drafts and proposed)
+    acceptance_rate = ratio(accepted, proposed)
+    proposal_depth = ratio(proposed, drafts)
+    mean_accepted = ratio(accepted, drafts)
+    mean_advance = 1.0 + mean_accepted if mean_accepted is not None else None
+    performance_floors_passed = bool(
+        not required
+        or (
+            acceptance_rate is not None
+            and acceptance_rate >= min_acceptance_rate
+            and mean_advance is not None
+            and mean_advance >= min_mean_advance
+            and proposal_depth is not None
+            and proposal_depth >= min_proposal_depth
+        )
+    )
+    sparse_verifier = sparse_verifier_evidence(
+        before,
+        after,
+        required,
+        max_sparse_fallback_ratio,
+        min_sparse_accounting_coverage,
+    )
+    base_passed = bool((sane and (active or not required)) or (absent and not required))
     return {
-        "passed": bool((sane and (active or not required)) or (absent and not required)),
+        "passed": base_passed and performance_floors_passed and sparse_verifier["passed"],
         "required": required,
         "active": active,
+        "base_passed": base_passed,
         "drafts": drafts,
         "proposed_draft_tokens": proposed,
         "accepted_draft_tokens": accepted,
-        "acceptance_rate": ratio(accepted, proposed),
-        "mean_accepted_draft_tokens_per_draft": ratio(accepted, drafts),
-        "mean_advance_tokens_per_target_step": (
-            1.0 + accepted / drafts if accepted is not None and drafts else None
-        ),
+        "acceptance_rate": acceptance_rate,
+        "mean_proposed_draft_tokens_per_draft": proposal_depth,
+        "mean_accepted_draft_tokens_per_draft": mean_accepted,
+        "mean_advance_tokens_per_target_step": mean_advance,
+        "minimum_acceptance_rate": min_acceptance_rate,
+        "minimum_mean_advance_tokens_per_target_step": min_mean_advance,
+        "minimum_mean_proposed_draft_tokens_per_draft": min_proposal_depth,
+        "performance_floors_passed": performance_floors_passed,
+        "sparse_verifier": sparse_verifier,
         "accepted_per_position": per_position,
     }
+
+
+def configured_speculative_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    args: argparse.Namespace,
+    required: bool,
+) -> dict[str, Any]:
+    return speculative_evidence(
+        before,
+        after,
+        required,
+        args.min_mtp_acceptance_rate,
+        args.min_mtp_mean_advance,
+        args.min_mtp_proposal_depth,
+        args.max_sparse_verifier_fallback_ratio,
+        args.min_sparse_verifier_accounting_coverage,
+    )
 
 
 def target_only_speculative_evidence(
@@ -4474,19 +4639,21 @@ def cuda_graph_evidence(
     startup: dict[str, float],
     expected_components: Sequence[str],
     min_replay_ratio: float,
+    allowed_skip_reasons: Sequence[str] = DEFAULT_ALLOWED_CUDA_GRAPH_SKIP_REASONS,
 ) -> dict[str, Any]:
     dispatch_deltas = labeled_metric_deltas(
         before,
         after,
-        "mistralrs_cuda_graph_dispatch_total",
+        CUDA_GRAPH_DISPATCH_COUNTER,
+    )
+    event_deltas = labeled_metric_deltas(
+        before,
+        after,
+        CUDA_GRAPH_EVENTS_COUNTER,
     )
     failure_events = [
         item
-        for item in labeled_metric_deltas(
-            before,
-            after,
-            "mistralrs_cuda_graph_events_total",
-        )
+        for item in event_deltas
         if item["labels"].get("outcome") == "failure"
         and item["delta"] > 0
     ]
@@ -4494,11 +4661,12 @@ def cuda_graph_evidence(
         item
         for item in labeled_metric_values(
             startup,
-            "mistralrs_cuda_graph_events_total",
+            CUDA_GRAPH_EVENTS_COUNTER,
         )
         if item["labels"].get("outcome") == "failure"
         and item["value"] > 0
     ]
+    allowed_skip_reasons = set(allowed_skip_reasons)
     components = {}
     for component in expected_components:
         replay = sum(
@@ -4519,6 +4687,22 @@ def cuda_graph_evidence(
             if item["labels"].get("component") == component
             and item["labels"].get("mode") == "skipped"
         )
+        allowed_skips = [
+            item
+            for item in dispatch_deltas
+            if item["labels"].get("component") == component
+            and item["labels"].get("mode") == "skipped"
+            and item["labels"].get("reason") in allowed_skip_reasons
+            and item["delta"] > 0
+        ]
+        unexpected_skips = [
+            item
+            for item in dispatch_deltas
+            if item["labels"].get("component") == component
+            and item["labels"].get("mode") == "skipped"
+            and item["labels"].get("reason") not in allowed_skip_reasons
+            and item["delta"] > 0
+        ]
         failures = sum(
             item["delta"]
             for item in failure_events
@@ -4531,18 +4715,43 @@ def cuda_graph_evidence(
         )
         eligible = replay + eager
         replay_ratio = ratio(replay, eligible)
+        dispatch_instrumentation_present = any(
+            item["labels"].get("component") == component
+            for item in dispatch_deltas
+        )
+        event_instrumentation_present = any(
+            item["labels"].get("component") == component
+            for item in event_deltas
+        ) or any(
+            item["labels"].get("component") == component
+            for item in startup_failure_events
+        )
+        instrumentation_complete = (
+            dispatch_instrumentation_present and event_instrumentation_present
+        )
         components[component] = {
             "passed": (
-                eligible > 0
+                instrumentation_complete
+                and eligible > 0
                 and replay_ratio is not None
                 and replay_ratio >= min_replay_ratio
+                and not unexpected_skips
                 and failures == 0
                 and startup_failures == 0
             ),
+            "instrumentation_complete": instrumentation_complete,
+            "dispatch_instrumentation_present": dispatch_instrumentation_present,
+            "event_instrumentation_present": event_instrumentation_present,
             "eligible_dispatches": eligible,
             "replay_dispatches": replay,
             "eager_dispatches": eager,
             "skipped_dispatches": skipped,
+            "allowed_skipped_dispatches": sum(item["delta"] for item in allowed_skips),
+            "unexpected_skipped_dispatches": sum(
+                item["delta"] for item in unexpected_skips
+            ),
+            "allowed_skips": allowed_skips,
+            "unexpected_skips": unexpected_skips,
             "eligible_replay_ratio": replay_ratio,
             "phase_failures": failures,
             "startup_cumulative_failures": startup_failures,
@@ -4553,9 +4762,12 @@ def cuda_graph_evidence(
         "min_replay_ratio": min_replay_ratio,
         "components": components,
         "dispatch": dispatch_deltas,
+        "event_deltas": event_deltas,
         "events": failure_events,
         "startup_failure_events": startup_failure_events,
-        "instrumentation_complete": True,
+        "allowed_skip_reasons": sorted(allowed_skip_reasons),
+        "instrumentation_complete": bool(components)
+        and all(item["instrumentation_complete"] for item in components.values()),
     }
 
 
@@ -4852,9 +5064,10 @@ async def resident_decode_mode(
             args.kv_block_size_tokens,
             args.speculative_prefix_replay_tokens,
         )
-        mtp = speculative_evidence(
+        mtp = configured_speculative_evidence(
             before,
             after,
+            args,
             args.require_mtp,
         )
         graph = cuda_graph_evidence(
@@ -5234,6 +5447,9 @@ def summarize_telemetry(
     gpu_memory = []
     gpu_power = []
     process_rss = []
+    process_vmsize = []
+    process_vmswap = []
+    process_gpu_memory = []
     for _, _, process in snapshots:
         for gpu in process.get("gpus") or []:
             gpu_utilization.append(gpu["utilization_percent"])
@@ -5241,12 +5457,21 @@ def summarize_telemetry(
             gpu_power.append(gpu["power_watts"])
         if process.get("process_vmrss_kib") is not None:
             process_rss.append(process["process_vmrss_kib"])
+        if process.get("process_vmsize_kib") is not None:
+            process_vmsize.append(process["process_vmsize_kib"])
+        if process.get("process_vmswap_kib") is not None:
+            process_vmswap.append(process["process_vmswap_kib"])
+        if process.get("process_gpu_memory_used_mib") is not None:
+            process_gpu_memory.append(process["process_gpu_memory_used_mib"])
     return {
         "gauges": gauges,
         "gpu_utilization_percent": distribution(gpu_utilization),
         "gpu_memory_used_mib": distribution(gpu_memory),
         "gpu_power_watts": distribution(gpu_power),
         "process_rss_kib": distribution(process_rss),
+        "process_vmsize_kib": distribution(process_vmsize),
+        "process_vmswap_kib": distribution(process_vmswap),
+        "process_gpu_memory_used_mib": distribution(process_gpu_memory),
     }
 
 
@@ -5267,6 +5492,10 @@ def telemetry_evidence(
         process.get("process_vmrss_kib") is not None
         for _, _, process in snapshots
     )
+    process_gpu_samples = sum(
+        process.get("process_gpu_memory_used_mib") is not None
+        for _, _, process in snapshots
+    )
     server_process_samples = sum(
         process.get("process_is_mistralrs") is True
         for _, _, process in snapshots
@@ -5285,6 +5514,7 @@ def telemetry_evidence(
     metrics_coverage = coverage(metric_samples)
     gpu_coverage = coverage(gpu_samples)
     rss_coverage = coverage(rss_samples)
+    process_gpu_coverage = coverage(process_gpu_samples)
     server_process_coverage = coverage(server_process_samples)
     return {
         "passed": (
@@ -5310,9 +5540,222 @@ def telemetry_evidence(
         "nvidia_smi_coverage": gpu_coverage,
         "process_rss_samples": rss_samples,
         "process_rss_coverage": rss_coverage,
+        "process_gpu_memory_samples": process_gpu_samples,
+        "process_gpu_memory_coverage": process_gpu_coverage,
         "mistralrs_process_samples": server_process_samples,
         "mistralrs_process_coverage": server_process_coverage,
         "gauge_coverage": gauge_coverage,
+    }
+
+
+def memory_series_evidence(
+    values: Sequence[float | None],
+    min_coverage: float,
+    max_final_growth: float,
+    max_high_water_growth: float,
+    max_final_growth_fraction: float | None = None,
+) -> dict[str, Any]:
+    observed = [value for value in values if value is not None]
+    sample_count = len(values)
+    observed_count = len(observed)
+    observed_coverage = ratio(observed_count, sample_count)
+    initial = values[0] if values else None
+    final = values[-1] if values else None
+    high_water = max(observed) if observed else None
+    final_growth = final - initial if initial is not None and final is not None else None
+    high_water_growth = (
+        high_water - initial
+        if initial is not None and high_water is not None
+        else None
+    )
+    allowed_final_growth = max_final_growth
+    if initial is not None and max_final_growth_fraction is not None:
+        allowed_final_growth = max(
+            allowed_final_growth,
+            initial * max_final_growth_fraction,
+        )
+    return {
+        "passed": (
+            sample_count > 0
+            and observed_coverage is not None
+            and observed_coverage >= min_coverage
+            and initial is not None
+            and final is not None
+            and final_growth is not None
+            and final_growth <= allowed_final_growth
+            and high_water_growth is not None
+            and high_water_growth <= max_high_water_growth
+        ),
+        "samples": observed_count,
+        "coverage": observed_coverage,
+        "minimum_coverage": min_coverage,
+        "initial_mib": initial,
+        "final_mib": final,
+        "high_water_mib": high_water,
+        "final_growth_mib": final_growth,
+        "maximum_final_growth_mib": allowed_final_growth,
+        "maximum_final_growth_fraction": max_final_growth_fraction,
+        "high_water_growth_mib": high_water_growth,
+        "maximum_high_water_growth_mib": max_high_water_growth,
+    }
+
+
+def gauge_utilization_evidence(
+    snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+    used_gauge: str,
+    total_gauge: str,
+    min_coverage: float,
+    max_utilization: float,
+) -> dict[str, Any]:
+    samples = []
+    for _, metrics, _ in snapshots:
+        used = metric_total(metrics, used_gauge)
+        total = metric_total(metrics, total_gauge)
+        samples.append(
+            used / total
+            if used is not None and total is not None and total > 0
+            else None
+        )
+    observed = [value for value in samples if value is not None]
+    observed_coverage = ratio(len(observed), len(samples))
+    high_water = max(observed) if observed else None
+    return {
+        "passed": (
+            bool(samples)
+            and observed_coverage is not None
+            and observed_coverage >= min_coverage
+            and high_water is not None
+            and high_water <= max_utilization
+        ),
+        "used_gauge": used_gauge,
+        "total_gauge": total_gauge,
+        "samples": len(observed),
+        "coverage": observed_coverage,
+        "minimum_coverage": min_coverage,
+        "initial_utilization": samples[0] if samples else None,
+        "final_utilization": samples[-1] if samples else None,
+        "maximum_observed_utilization": high_water,
+        "maximum_allowed_utilization": max_utilization,
+    }
+
+
+def final_resource_cleanup_evidence(
+    snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+) -> dict[str, Any]:
+    if not snapshots:
+        return {
+            "passed": False,
+            "gauges": {},
+            "stable_capacities": {},
+        }
+    initial_metrics = snapshots[0][1]
+    final_metrics = snapshots[-1][1]
+    gauges = {}
+    for name in CLEANUP_GAUGES:
+        initial = metric_total(initial_metrics, name)
+        final = metric_total(final_metrics, name)
+        gauges[name] = {
+            "passed": initial is not None and final is not None and final <= initial,
+            "initial": initial,
+            "final": final,
+        }
+    stable_capacities = {}
+    for name in (
+        "mistralrs_kv_cache_blocks_total",
+        "mistralrs_recurrent_state_slots_total",
+    ):
+        initial = metric_total(initial_metrics, name)
+        final = metric_total(final_metrics, name)
+        stable_capacities[name] = {
+            "passed": initial is not None and final is not None and final == initial,
+            "initial": initial,
+            "final": final,
+        }
+    return {
+        "passed": all(item["passed"] for item in gauges.values())
+        and all(item["passed"] for item in stable_capacities.values()),
+        "gauges": gauges,
+        "stable_capacities": stable_capacities,
+    }
+
+
+def production_memory_evidence(
+    snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+    limits: ProductionMemoryLimits,
+) -> dict[str, Any]:
+    rss_values = [
+        process.get("process_vmrss_kib") / 1024.0
+        if process.get("process_vmrss_kib") is not None
+        else None
+        for _, _, process in snapshots
+    ]
+    process_gpu_values = [
+        process.get("process_gpu_memory_used_mib")
+        for _, _, process in snapshots
+    ]
+    process_gpu_coverage = ratio(
+        sum(value is not None for value in process_gpu_values),
+        len(process_gpu_values),
+    )
+    use_process_gpu_memory = bool(
+        process_gpu_values
+        and process_gpu_values[0] is not None
+        and process_gpu_values[-1] is not None
+        and process_gpu_coverage is not None
+        and process_gpu_coverage >= limits.min_coverage
+    )
+    device_gpu_values = [
+        sum(gpu["memory_used_mib"] for gpu in process.get("gpus") or [])
+        if process.get("gpus")
+        else None
+        for _, _, process in snapshots
+    ]
+    gpu_values = process_gpu_values if use_process_gpu_memory else device_gpu_values
+    process_rss = memory_series_evidence(
+        rss_values,
+        limits.min_coverage,
+        limits.max_process_rss_drift_mib,
+        limits.max_process_rss_high_water_mib,
+        limits.max_process_rss_drift_fraction,
+    )
+    gpu_memory = memory_series_evidence(
+        gpu_values,
+        limits.min_coverage,
+        limits.max_gpu_memory_drift_mib,
+        limits.max_gpu_memory_high_water_mib,
+    )
+    gpu_memory["source"] = (
+        "server_pid_compute_process" if use_process_gpu_memory else "whole_device"
+    )
+    gpu_memory["process_memory_coverage"] = process_gpu_coverage
+    kv_blocks = gauge_utilization_evidence(
+        snapshots,
+        KV_CACHE_ACTIVE_GAUGE,
+        "mistralrs_kv_cache_blocks_total",
+        limits.min_coverage,
+        limits.max_kv_block_utilization,
+    )
+    recurrent_slots = gauge_utilization_evidence(
+        snapshots,
+        "mistralrs_recurrent_state_slots_used",
+        "mistralrs_recurrent_state_slots_total",
+        limits.min_coverage,
+        limits.max_recurrent_slot_utilization,
+    )
+    final_cleanup = final_resource_cleanup_evidence(snapshots)
+    return {
+        "passed": (
+            process_rss["passed"]
+            and gpu_memory["passed"]
+            and kv_blocks["passed"]
+            and recurrent_slots["passed"]
+            and final_cleanup["passed"]
+        ),
+        "process_rss": process_rss,
+        "gpu_memory": gpu_memory,
+        "kv_blocks": kv_blocks,
+        "recurrent_slots": recurrent_slots,
+        "final_cleanup": final_cleanup,
     }
 
 
@@ -5348,6 +5791,45 @@ async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
         telemetry["gpus"] = []
         telemetry["nvidia_smi_error"] = f"{type(exc).__name__}: {exc}"
     if server_pid is not None:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "nvidia-smi",
+                "--query-compute-apps=pid,gpu_uuid,used_gpu_memory",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await process.communicate()
+            if process.returncode != 0:
+                raise RuntimeError(f"nvidia-smi exited with status {process.returncode}")
+            process_gpus = []
+            for line in stdout.decode().splitlines():
+                fields = [part.strip() for part in line.split(",")]
+                if len(fields) != 3:
+                    continue
+                try:
+                    pid = int(fields[0])
+                    memory_used_mib = float(fields[2])
+                except ValueError:
+                    continue
+                if pid == server_pid:
+                    process_gpus.append(
+                        {
+                            "pid": pid,
+                            "gpu_uuid": fields[1],
+                            "memory_used_mib": memory_used_mib,
+                        }
+                    )
+            telemetry["process_gpus"] = process_gpus
+            telemetry["process_gpu_memory_used_mib"] = (
+                sum(gpu["memory_used_mib"] for gpu in process_gpus)
+                if process_gpus
+                else None
+            )
+        except (FileNotFoundError, RuntimeError) as exc:
+            telemetry["process_gpus"] = []
+            telemetry["process_gpu_memory_used_mib"] = None
+            telemetry["nvidia_smi_process_error"] = f"{type(exc).__name__}: {exc}"
         status_path = Path(f"/proc/{server_pid}/status")
         cmdline_path = Path(f"/proc/{server_pid}/cmdline")
         try:
@@ -5908,9 +6390,10 @@ async def production_mode(
             args.kv_block_size_tokens,
             args.speculative_prefix_replay_tokens,
         )
-        summary["mtp"] = speculative_evidence(
+        summary["mtp"] = configured_speculative_evidence(
             phase_metrics_before,
             phase_metrics_after,
+            args,
             args.require_mtp,
         )
         summary["cuda_graph"] = cuda_graph_evidence(
@@ -6019,9 +6502,10 @@ async def production_mode(
     snapshots.append((run_ended, final_metrics, final_process))
     metrics_delta = selected_metric_deltas(initial_metrics, final_metrics)
     queue_latency = queue_histogram_summaries(initial_metrics, final_metrics)
-    mtp = speculative_evidence(
+    mtp = configured_speculative_evidence(
         initial_metrics,
         final_metrics,
+        args,
         args.require_mtp,
     )
     graph = cuda_graph_evidence(
@@ -6070,10 +6554,15 @@ async def production_mode(
         args.min_telemetry_samples,
         args.min_telemetry_coverage,
     )
+    memory_gate = production_memory_evidence(
+        snapshots,
+        ProductionMemoryLimits.from_args(args),
+    )
     passed = (
         prewarm_passed
         and throughput["passed"]
         and telemetry_gate["passed"]
+        and memory_gate["passed"]
         and all(
             summary["errors"] == 0
             and summary["degradation_ok"]
@@ -6113,6 +6602,7 @@ async def production_mode(
         "telemetry_samples": len(snapshots),
         "telemetry": summarize_telemetry(snapshots),
         "telemetry_evidence": telemetry_gate,
+        "memory_evidence": memory_gate,
         "cuda_graph": graph,
         "cuda_graph_events": graph["events"],
         "cuda_graph_ok": graph["passed"],
@@ -6623,6 +7113,42 @@ def common_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def add_speculative_evidence_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--min-mtp-acceptance-rate",
+        type=float,
+        default=DEFAULT_MIN_MTP_ACCEPTANCE_RATE,
+        help="minimum accepted/proposed draft-token ratio when MTP is required",
+    )
+    parser.add_argument(
+        "--min-mtp-mean-advance",
+        type=float,
+        default=DEFAULT_MIN_MTP_MEAN_ADVANCE,
+        help="minimum mean output tokens advanced per target verification step",
+    )
+    parser.add_argument(
+        "--min-mtp-proposal-depth",
+        type=float,
+        default=DEFAULT_MIN_MTP_PROPOSAL_DEPTH,
+        help="minimum mean proposed draft tokens per speculative sequence",
+    )
+    parser.add_argument(
+        "--max-sparse-verifier-fallback-ratio",
+        type=float,
+        default=DEFAULT_MAX_SPARSE_VERIFIER_FALLBACK_RATIO,
+        help="maximum CPU fallback fraction for sparse speculative verification",
+    )
+    parser.add_argument(
+        "--min-sparse-verifier-accounting-coverage",
+        type=float,
+        default=DEFAULT_MIN_SPARSE_VERIFIER_ACCOUNTING_COVERAGE,
+        help=(
+            "minimum fraction of speculative rows accounted for by CUDA sparse "
+            "verification or its explicit CPU fallback"
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Production soak testing for mistral.rs and other OpenAI-compatible servers"
@@ -6631,6 +7157,7 @@ def build_parser() -> argparse.ArgumentParser:
     common = common_parser()
 
     canary = subparsers.add_parser("canary", parents=[common])
+    add_speculative_evidence_args(canary)
     canary.add_argument("--concurrencies", type=parse_int_list, default=DEFAULT_CONCURRENCIES)
     canary.add_argument("--requests", type=int, default=16)
     canary.add_argument("--max-tokens", type=int, default=128)
@@ -6665,6 +7192,7 @@ def build_parser() -> argparse.ArgumentParser:
     sweep.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
 
     resident_decode = subparsers.add_parser("resident-decode", parents=[common])
+    add_speculative_evidence_args(resident_decode)
     resident_decode.add_argument(
         "--context-lengths",
         type=parse_int_list,
@@ -6743,6 +7271,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     adversarial = subparsers.add_parser("adversarial", parents=[common])
+    add_speculative_evidence_args(adversarial)
     adversarial.add_argument(
         "--context-lengths", type=parse_int_list, default=DEFAULT_CONTEXT_LENGTHS
     )
@@ -6880,6 +7409,7 @@ def build_parser() -> argparse.ArgumentParser:
     adversarial.add_argument("--require-mtp", action="store_true")
 
     production = subparsers.add_parser("production", parents=[common])
+    add_speculative_evidence_args(production)
     production.add_argument("--duration-seconds", type=float, default=3_600.0)
     production.add_argument("--concurrencies", type=parse_int_list, default=(8, 16))
     production.add_argument(
@@ -7002,6 +7532,48 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_MIN_TELEMETRY_COVERAGE,
     )
+    production.add_argument(
+        "--max-process-rss-drift-mib",
+        type=float,
+        default=DEFAULT_MAX_PROCESS_RSS_DRIFT_MIB,
+        help="maximum final server RSS growth, before the relative allowance",
+    )
+    production.add_argument(
+        "--max-process-rss-drift-fraction",
+        type=float,
+        default=DEFAULT_MAX_PROCESS_RSS_DRIFT_FRACTION,
+        help="maximum final server RSS growth as a fraction of initial RSS",
+    )
+    production.add_argument(
+        "--max-process-rss-high-water-mib",
+        type=float,
+        default=DEFAULT_MAX_PROCESS_RSS_HIGH_WATER_MIB,
+        help="maximum sampled server RSS growth above the initial reading",
+    )
+    production.add_argument(
+        "--max-gpu-memory-drift-mib",
+        type=float,
+        default=DEFAULT_MAX_GPU_MEMORY_DRIFT_MIB,
+        help="maximum final server GPU-memory growth",
+    )
+    production.add_argument(
+        "--max-gpu-memory-high-water-mib",
+        type=float,
+        default=DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB,
+        help="maximum sampled server GPU-memory growth above the initial reading",
+    )
+    production.add_argument(
+        "--max-kv-block-utilization",
+        type=float,
+        default=DEFAULT_MAX_KV_BLOCK_UTILIZATION,
+        help="maximum sampled active/total PagedAttention block ratio",
+    )
+    production.add_argument(
+        "--max-recurrent-slot-utilization",
+        type=float,
+        default=DEFAULT_MAX_RECURRENT_SLOT_UTILIZATION,
+        help="maximum sampled used/total recurrent-state slot ratio",
+    )
     production.add_argument("--require-mtp", action="store_true")
 
     multimodal = subparsers.add_parser("multimodal", parents=[common])
@@ -7076,6 +7648,22 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--min-p must be between 0 and 1")
     if not 0 < args.top_p <= 1:
         raise ValueError("--top-p must be greater than 0 and at most 1")
+    if hasattr(args, "min_mtp_acceptance_rate"):
+        if not 0 < args.min_mtp_acceptance_rate <= 1:
+            raise ValueError("--min-mtp-acceptance-rate must be greater than 0 and at most 1")
+        if args.min_mtp_mean_advance <= 1:
+            raise ValueError("--min-mtp-mean-advance must be greater than 1")
+        if args.min_mtp_proposal_depth <= 0:
+            raise ValueError("--min-mtp-proposal-depth must be positive")
+        if not 0 <= args.max_sparse_verifier_fallback_ratio <= 1:
+            raise ValueError(
+                "--max-sparse-verifier-fallback-ratio must be between 0 and 1"
+            )
+        if not 0 < args.min_sparse_verifier_accounting_coverage <= 1:
+            raise ValueError(
+                "--min-sparse-verifier-accounting-coverage must be greater than 0 "
+                "and at most 1"
+            )
     if hasattr(args, "requests") and args.requests <= 0:
         raise ValueError("--requests must be positive")
     if hasattr(args, "max_tokens") and args.max_tokens <= 0:
@@ -7268,6 +7856,10 @@ def validate_args(args: argparse.Namespace) -> None:
             "cleanup_poll_seconds",
             "min_telemetry_samples",
             "kv_block_size_tokens",
+            "max_process_rss_drift_mib",
+            "max_process_rss_high_water_mib",
+            "max_gpu_memory_drift_mib",
+            "max_gpu_memory_high_water_mib",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
@@ -7302,6 +7894,18 @@ def validate_args(args: argparse.Namespace) -> None:
         if not 0 < args.min_telemetry_coverage <= 1:
             raise ValueError(
                 "--min-telemetry-coverage must be greater than 0 and at most 1"
+            )
+        if not 0 < args.max_process_rss_drift_fraction <= 1:
+            raise ValueError(
+                "--max-process-rss-drift-fraction must be greater than 0 and at most 1"
+            )
+        if not 0 < args.max_kv_block_utilization <= 1:
+            raise ValueError(
+                "--max-kv-block-utilization must be greater than 0 and at most 1"
+            )
+        if not 0 < args.max_recurrent_slot_utilization <= 1:
+            raise ValueError(
+                "--max-recurrent-slot-utilization must be greater than 0 and at most 1"
             )
         if not {8, 16}.issubset(args.concurrencies):
             raise ValueError("--concurrencies must include 8 and 16")
