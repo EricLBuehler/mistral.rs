@@ -880,9 +880,9 @@ def metric_total(snapshot: dict[str, float], metric: str) -> float | None:
 def metric_delta(before: dict[str, float], after: dict[str, float], metric: str) -> float | None:
     start = metric_total(before, metric)
     end = metric_total(after, metric)
-    if start is None or end is None:
+    if end is None:
         return None
-    return end - start
+    return end - (start or 0.0)
 
 
 def summarize_batch(
