@@ -130,6 +130,24 @@ DEFAULT_MULTIMODAL_EXPECTED_ATTRIBUTES = (
     ("white lettering", "white text", "white letters"),
     ("orange lettering", "orange text", "orange letters"),
 )
+DEFAULT_QUALITY_REPLAY_CONCURRENCY = 16
+DEFAULT_QUALITY_REPLAY_PRESSURE_WAVES = 8
+DEFAULT_QUALITY_REPLAY_PRESSURE_ENTRIES = 16
+DEFAULT_QUALITY_REPLAY_PRESSURE_CONTEXT_TOKENS = 8_192
+DEFAULT_QUALITY_REPLAY_PRESSURE_MAX_TOKENS = 8
+DEFAULT_QUALITY_REPLAY_MAX_STABILITY_PASSES = 4
+QUALITY_REPLAY_CONTROL_SEED_OFFSET = 80_000_000
+QUALITY_REPLAY_PRESSURE_SEED_OFFSET = 81_000_000
+PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_GAUGE = (
+    "mistralrs_paged_recurrent_prefix_owners_capacity"
+)
+PAGED_RECURRENT_PREFIX_OWNERS_USED_GAUGE = (
+    "mistralrs_paged_recurrent_prefix_owners_used"
+)
+PAGED_PREFIX_RETENTION_PRESSURE_EVICTIONS_COUNTER = (
+    "mistralrs_paged_prefix_retention_pressure_evictions_total"
+)
+PAGED_PREFIX_RETAINED_BLOCKS_GAUGE = "mistralrs_kv_cache_blocks_prefix_retained"
 EXACT_TEXT_SOURCE_MARGIN_TOKENS = 8_192
 EXACT_TEXT_LENGTH_REFINEMENT_STEPS = 16
 EXACT_TEXT_LOCAL_SEARCH_RADIUS = 16
@@ -869,6 +887,30 @@ class RequestSpec:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class QualityReplayCase:
+    case_id: str
+    seed: int
+    concurrency: int
+    worker_index: int
+    request_index: int
+    context_tokens: int
+    prompt_index: int
+    prompt_label: str
+    source_output_transcript_sha256: str
+    source_quality_failure: bool
+
+
+@dataclass(frozen=True, slots=True)
+class QualityReplayPressureConfig:
+    waves: int
+    entries: int
+    context_tokens: int
+    max_tokens: int
+    block_size_tokens: int
+    headroom_fraction: float
+
+
 @dataclass(slots=True)
 class RequestResult:
     case_id: str
@@ -1565,7 +1607,8 @@ async def collect_server_provenance(
 def server_provenance_required(args: argparse.Namespace) -> bool:
     return (
         args.require_server_provenance
-        or args.mode in ("prefix-pressure", "production", "multimodal")
+        or args.mode
+        in ("prefix-pressure", "production", "quality-replay", "multimodal")
         or (args.mode == "adversarial" and args.acceptance_grade)
     )
 
@@ -6218,6 +6261,52 @@ def fixed_length_completion_evidence(
     }
 
 
+def production_output_quality_evidence(
+    results: Sequence[RequestResult],
+    tokenizer: TokenizerAdapter | None,
+    max_repeated_ngram_ratio: float,
+    fixed_output_length: bool,
+) -> dict[str, Any]:
+    fixed_length_traffic = [
+        result
+        for result in results
+        if fixed_output_length and result.tags.get("role") == "traffic"
+    ]
+    quality_results = [
+        result
+        for result in results
+        if not (fixed_output_length and result.tags.get("role") == "traffic")
+    ]
+    checks = [
+        {"valid": valid, **detail}
+        for result in quality_results
+        for valid, detail in [
+            validate_sampled_output(
+                result,
+                tokenizer,
+                max_repeated_ngram_ratio,
+            )
+        ]
+    ]
+    return {
+        "passed": all(check["valid"] for check in checks),
+        "quality_output_contract": "normal_eos",
+        "fixed_output_length_traffic": fixed_output_length,
+        "checked_requests": len(checks),
+        "checked_roles": dict(
+            sorted(
+                Counter(
+                    str(result.tags.get("role")) for result in quality_results
+                ).items()
+            )
+        ),
+        "excluded_fixed_length_traffic_requests": len(fixed_length_traffic),
+        "fixed_length_traffic_is_quality_evidence": False,
+        "checks": checks,
+        "failures": [check for check in checks if not check["valid"]],
+    }
+
+
 def fixed_seed_result_signature(result: RequestResult) -> tuple[str, int, str | None]:
     return (
         result.output_transcript,
@@ -8768,6 +8857,1218 @@ def allocate_prompt_pool_counts(
     return counts
 
 
+def load_quality_replay_cases(
+    path: Path,
+    case_ids: Sequence[str],
+) -> tuple[list[QualityReplayCase], dict[str, Any]]:
+    requested = list(case_ids)
+    if not requested or len(set(requested)) != len(requested):
+        raise ValueError("quality replay case IDs must be non-empty and unique")
+    records: dict[str, dict[str, Any]] = {}
+    run_start: dict[str, Any] | None = None
+    prewarm: dict[str, Any] | None = None
+    context_prompt_overhead_tokens: int | None = None
+    quality_failures: set[str] = set()
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"invalid JSON at {path}:{line_number}: {exc}"
+                ) from exc
+            event = record.get("event")
+            if event == "run_start":
+                run_start = record
+            elif event == "production_prewarm_summary":
+                prewarm = record
+            elif (
+                event == "prompt_calibration"
+                and record.get("profile") == CONTEXT_PROMPT_PROFILE
+            ):
+                context_prompt_overhead_tokens = int(record["overhead_tokens"])
+            elif event == "production_phase_summary":
+                quality_failures.update(
+                    item["case_id"] for item in record.get("quality_failures") or ()
+                )
+            elif event == "request" and record.get("case_id") in requested:
+                case_id = str(record["case_id"])
+                if case_id in records:
+                    raise RuntimeError(f"duplicate source request record for {case_id}")
+                records[case_id] = record
+    missing = [case_id for case_id in requested if case_id not in records]
+    if missing:
+        raise RuntimeError("missing source request records: " + ", ".join(missing))
+    if run_start is None or run_start.get("mode") != "production":
+        raise RuntimeError("quality replay source must be a production artifact")
+    if prewarm is None:
+        raise RuntimeError(
+            "quality replay source is missing production prewarm evidence"
+    )
+    if context_prompt_overhead_tokens is None:
+        raise RuntimeError(
+            "quality replay source is missing context prompt calibration"
+        )
+    arguments = run_start.get("arguments") or {}
+    source_seed = int(arguments["seed"])
+    source_fixed_output_length = bool(arguments.get("fixed_output_length", False))
+    context_mix = [tuple(map(int, item)) for item in arguments["context_mix"]]
+    concurrencies = [int(value) for value in arguments["concurrencies"]]
+    if len(set(concurrencies)) != len(concurrencies):
+        raise RuntimeError(
+            "quality replay source production concurrencies must be unique"
+        )
+    pool_counts = {
+        int(length): int(count)
+        for length, count in (prewarm.get("pool_counts") or {}).items()
+    }
+    if set(pool_counts) != {length for length, _ in context_mix}:
+        raise RuntimeError("quality replay source has incomplete prompt pool counts")
+    cases = []
+    seed_provenance = []
+    pattern = re.compile(
+        r"^prod-c(?P<concurrency>\d+)-w(?P<worker>\d+)-r(?P<request>\d+)$"
+    )
+    for case_id in requested:
+        match = pattern.fullmatch(case_id)
+        if match is None:
+            raise ValueError(f"unsupported production case ID: {case_id}")
+        concurrency = int(match.group("concurrency"))
+        worker_index = int(match.group("worker"))
+        request_index = int(match.group("request"))
+        if concurrency not in concurrencies:
+            raise RuntimeError(
+                f"source concurrency {concurrency} is not in run arguments"
+            )
+        phase_index = concurrencies.index(concurrency)
+        rng = random.Random(source_seed + phase_index * 100_000 + worker_index)
+        context_tokens = 0
+        prompt_index = 0
+        for _ in range(request_index + 1):
+            context_tokens = choose_context(rng, context_mix)
+            prompt_index = rng.randrange(pool_counts[context_tokens])
+        source = records[case_id]
+        reconstructed_seed = (
+            source_seed
+            + phase_index * 1_000_000
+            + worker_index * 10_000
+            + request_index
+        )
+        logged_seed = int(source.get("seed", -1))
+        if source.get("tags", {}).get("role") != "traffic":
+            raise RuntimeError(f"source request {case_id} is not production traffic")
+        if logged_seed != reconstructed_seed:
+            raise RuntimeError(
+                f"source request {case_id} seed {logged_seed} does not match "
+                f"reconstructed seed {reconstructed_seed}"
+            )
+        if int(source.get("context_tokens", -1)) != context_tokens:
+            raise RuntimeError(f"source request {case_id} has an unexpected context")
+        cases.append(
+            QualityReplayCase(
+                case_id=case_id,
+                seed=logged_seed,
+                concurrency=concurrency,
+                worker_index=worker_index,
+                request_index=request_index,
+                context_tokens=context_tokens,
+                prompt_index=prompt_index,
+                prompt_label=f"production-{context_tokens}-{prompt_index}",
+                source_output_transcript_sha256=str(
+                    source.get("output_transcript_sha256") or ""
+                ),
+                source_quality_failure=(
+                    not source_fixed_output_length and case_id in quality_failures
+                ),
+            )
+        )
+        seed_provenance.append(
+            {
+                "case_id": case_id,
+                "logged_source_seed": logged_seed,
+                "reconstructed_source_seed": reconstructed_seed,
+                "matched": True,
+            }
+        )
+    evidence = {
+        "source_artifact": str(path),
+        "source_seed": source_seed,
+        "source_fixed_output_length": source_fixed_output_length,
+        "source_traffic_quality_eligible": not source_fixed_output_length,
+        "source_reported_quality_failures": [
+            case_id for case_id in requested if case_id in quality_failures
+        ],
+        "source_concurrencies": concurrencies,
+        "pool_counts": pool_counts,
+        "context_prompt_overhead_tokens": context_prompt_overhead_tokens,
+        "requested_case_ids": requested,
+        "cases": [asdict(case) for case in cases],
+        "seed_provenance": seed_provenance,
+        "seed_provenance_complete": len(seed_provenance) == len(requested),
+        "complete": len(cases) == len(requested),
+    }
+    return cases, evidence
+
+
+def quality_replay_prompt_identity_evidence(
+    specs: Sequence[RequestSpec],
+) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    total_prompt_tokens = 0
+    for spec in specs:
+        if spec.context_tokens is None:
+            raise ValueError("quality replay requests require context token counts")
+        context_tokens = int(spec.context_tokens)
+        total_prompt_tokens += context_tokens
+        group = groups.setdefault(
+            spec.prompt,
+            {
+                "context_tokens": context_tokens,
+                "case_ids": [],
+                "prompt_labels": set(),
+            },
+        )
+        if group["context_tokens"] != context_tokens:
+            raise ValueError(
+                "identical quality replay prompts have inconsistent token counts"
+            )
+        group["case_ids"].append(spec.case_id)
+        prompt_label = spec.tags.get("prompt_label")
+        if prompt_label:
+            group["prompt_labels"].add(str(prompt_label))
+
+    identities = []
+    for prompt, group in groups.items():
+        identities.append(
+            {
+                "prompt_sha256": stable_hash(prompt),
+                "prompt_labels": sorted(group["prompt_labels"]),
+                "context_tokens": group["context_tokens"],
+                "request_count": len(group["case_ids"]),
+                "case_ids": list(group["case_ids"]),
+            }
+        )
+    identities.sort(key=lambda item: item["prompt_sha256"])
+    compulsory_miss_prompt_tokens = sum(
+        identity["context_tokens"] for identity in identities
+    )
+    return {
+        "request_count": len(specs),
+        "prompt_identity_count": len(identities),
+        "duplicate_prompt_requests": len(specs) - len(identities),
+        "total_prompt_tokens": total_prompt_tokens,
+        "compulsory_miss_prompt_tokens": compulsory_miss_prompt_tokens,
+        "duplicate_prompt_tokens": (
+            total_prompt_tokens - compulsory_miss_prompt_tokens
+        ),
+        "identities": identities,
+    }
+
+
+def make_quality_replay_specs(
+    client: SoakClient,
+    cases: Sequence[QualityReplayCase],
+    concurrency: int,
+    max_tokens: int,
+    seed: int,
+) -> tuple[list[RequestSpec], dict[str, Any]]:
+    if not cases or len(cases) > concurrency:
+        raise ValueError("quality replay cases must fit in one concurrent batch")
+    unique_cases = list({case.prompt_label: case for case in cases}.values())
+    prompts = {
+        case.prompt_label: exact_context(
+            client,
+            case.context_tokens,
+            case.prompt_label,
+        )
+        for case in unique_cases
+    }
+    specs = [
+        RequestSpec(
+            case_id=case.case_id,
+            seed=case.seed,
+            max_tokens=max_tokens,
+            prompt=prompts[case.prompt_label],
+            context_tokens=case.context_tokens,
+            tags={
+                "scenario": "quality_replay",
+                "role": "selected",
+                "prompt_label": case.prompt_label,
+                "source_quality_failure": case.source_quality_failure,
+            },
+            extra={"ignore_eos": False},
+        )
+        for case in cases
+    ]
+    for index in range(concurrency - len(specs)):
+        case = unique_cases[index % len(unique_cases)]
+        specs.append(
+            RequestSpec(
+                case_id=f"quality-replay-control-{index:02d}",
+                seed=seed + QUALITY_REPLAY_CONTROL_SEED_OFFSET + index,
+                max_tokens=max_tokens,
+                prompt=prompts[case.prompt_label],
+                context_tokens=case.context_tokens,
+                tags={
+                    "scenario": "quality_replay",
+                    "role": "control",
+                    "prompt_label": case.prompt_label,
+                },
+                extra={"ignore_eos": False},
+            )
+        )
+    selected_identity_counts = Counter(case.prompt_label for case in cases)
+    measurement_identities = quality_replay_prompt_identity_evidence(specs)
+    evidence = {
+        "concurrency": concurrency,
+        "quality_output_contract": "normal_eos",
+        "ignore_eos": False,
+        "selected_cases": [case.case_id for case in cases],
+        "selected_prompt_labels": [case.prompt_label for case in cases],
+        "logical_prompt_identities": sorted(prompts),
+        "logical_prompt_identity_count": len(prompts),
+        "selected_duplicate_prompt_identities": [
+            {
+                "prompt_label": prompt_label,
+                "request_count": count,
+                "case_ids": [
+                    case.case_id
+                    for case in cases
+                    if case.prompt_label == prompt_label
+                ],
+            }
+            for prompt_label, count in sorted(selected_identity_counts.items())
+            if count > 1
+        ],
+        "control_cases": len(specs) - len(cases),
+        "measurement_cases": len(specs),
+        "cold_compulsory_miss_requests": measurement_identities[
+            "prompt_identity_count"
+        ],
+        "cold_duplicate_request_upper_bound": measurement_identities[
+            "duplicate_prompt_requests"
+        ],
+        "measurement_prompt_identities": measurement_identities["identities"],
+        "single_full_batch": len(specs) == concurrency,
+    }
+    return specs, evidence
+
+
+def make_quality_replay_pressure_specs(
+    client: SoakClient,
+    wave: int,
+    entries: int,
+    context_tokens: int,
+    max_tokens: int,
+    seed: int,
+) -> list[RequestSpec]:
+    return [
+        RequestSpec(
+            case_id=f"quality-replay-pressure-w{wave:02d}-{index:02d}",
+            seed=(seed + QUALITY_REPLAY_PRESSURE_SEED_OFFSET + wave * entries + index),
+            max_tokens=max_tokens,
+            prompt=exact_context(
+                client,
+                context_tokens,
+                f"quality-replay-pressure-w{wave}-{index}",
+            ),
+            context_tokens=context_tokens,
+            tags={
+                "scenario": "quality_replay",
+                "role": "pressure",
+                "wave": wave,
+            },
+            extra={"ignore_eos": True},
+        )
+        for index in range(entries)
+    ]
+
+
+def quality_replay_prefix_state_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    specs: Sequence[RequestSpec],
+    expectation: str,
+    min_reuse_fraction: float,
+) -> dict[str, Any]:
+    identities = quality_replay_prompt_identity_evidence(specs)
+    lookups = metric_delta(before, after, "mistralrs_prefix_cache_lookups_total")
+    raw_hits = metric_delta(before, after, "mistralrs_prefix_cache_hits_total")
+    raw_reused = metric_delta(
+        before,
+        after,
+        "mistralrs_prefix_cache_tokens_reused_total",
+    )
+    hits = 0.0 if raw_hits is None and lookups is not None else raw_hits
+    reused = 0.0 if raw_reused is None and lookups is not None else raw_reused
+    request_count = identities["request_count"]
+    identity_count = identities["prompt_identity_count"]
+    duplicate_requests = identities["duplicate_prompt_requests"]
+    expected_tokens = identities["total_prompt_tokens"]
+    compulsory_miss_tokens = identities["compulsory_miss_prompt_tokens"]
+    duplicate_tokens = identities["duplicate_prompt_tokens"]
+    hit_rate = ratio(hits, lookups)
+    reuse_fraction = ratio(reused, expected_tokens)
+    misses = lookups - hits if lookups is not None and hits is not None else None
+    observed = (
+        lookups is not None
+        and lookups >= request_count
+        and hits is not None
+        and hits >= 0
+        and reused is not None
+        and reused >= 0
+        and hit_rate is not None
+        and reuse_fraction is not None
+    )
+    if expectation == "hit":
+        expected_hits = {
+            "minimum": request_count * min_reuse_fraction,
+            "maximum": request_count,
+        }
+        expected_misses = {
+            "minimum": 0.0,
+            "maximum": request_count * (1.0 - min_reuse_fraction),
+        }
+        expected_reused = {
+            "minimum": expected_tokens * min_reuse_fraction,
+            "maximum": expected_tokens,
+        }
+        state_matches = (
+            observed
+            and hit_rate >= min_reuse_fraction
+            and reuse_fraction >= min_reuse_fraction
+        )
+    elif expectation == "miss":
+        expected_hits = {
+            "minimum": 0.0,
+            "maximum": duplicate_requests
+            + identity_count * (1.0 - min_reuse_fraction),
+        }
+        expected_misses = {
+            "minimum": identity_count * min_reuse_fraction,
+            "maximum": request_count,
+        }
+        expected_reused = {
+            "minimum": 0.0,
+            "maximum": duplicate_tokens
+            + compulsory_miss_tokens * (1.0 - min_reuse_fraction),
+        }
+        state_matches = (
+            observed
+            and hits <= expected_hits["maximum"]
+            and misses is not None
+            and misses >= expected_misses["minimum"]
+            and reused <= expected_reused["maximum"]
+        )
+    elif expectation == "either":
+        expected_hits = {"minimum": 0.0, "maximum": request_count}
+        expected_misses = {"minimum": 0.0, "maximum": request_count}
+        expected_reused = {"minimum": 0.0, "maximum": expected_tokens}
+        state_matches = observed
+    else:
+        raise ValueError(f"unsupported prefix state expectation: {expectation}")
+    return {
+        "passed": bool(state_matches),
+        "expectation": expectation,
+        "minimum_reuse_fraction": min_reuse_fraction,
+        "lookups": lookups,
+        "hits": hits,
+        "misses": misses,
+        "hits_counter_present": raw_hits is not None,
+        "hit_rate": hit_rate,
+        "expected_prompt_tokens": expected_tokens,
+        "reused_tokens": reused,
+        "reused_tokens_counter_present": raw_reused is not None,
+        "reuse_fraction": reuse_fraction,
+        "prompt_identity_count": identity_count,
+        "duplicate_prompt_requests": duplicate_requests,
+        "compulsory_miss_prompt_tokens": compulsory_miss_tokens,
+        "duplicate_prompt_tokens": duplicate_tokens,
+        "expected_hit_requests": expected_hits,
+        "expected_miss_requests": expected_misses,
+        "expected_reused_tokens": expected_reused,
+        "prompt_identities": identities["identities"],
+        "speculative_hits": metric_delta(
+            before,
+            after,
+            "mistralrs_speculative_prefix_cache_hits_total",
+        ),
+        "speculative_misses": metric_delta(
+            before,
+            after,
+            "mistralrs_speculative_prefix_cache_misses_total",
+        ),
+        "speculative_captures": metric_delta(
+            before,
+            after,
+            "mistralrs_speculative_prefix_cache_captures_total",
+        ),
+    }
+
+
+def quality_replay_source_output_evidence(
+    results: Sequence[RequestResult],
+    cases: Sequence[QualityReplayCase],
+) -> dict[str, Any]:
+    by_case = {result.case_id: result for result in results}
+    checks = []
+    for case in cases:
+        result = by_case.get(case.case_id)
+        observed = stable_hash(result.output_transcript) if result is not None else None
+        checks.append(
+            {
+                "case_id": case.case_id,
+                "source_sha256": case.source_output_transcript_sha256,
+                "observed_sha256": observed,
+                "source_quality_failure": case.source_quality_failure,
+                "matched": bool(
+                    result is not None
+                    and result.ok
+                    and case.source_output_transcript_sha256
+                    and observed == case.source_output_transcript_sha256
+                ),
+            }
+        )
+    return {
+        "complete": len(checks) == len(cases),
+        "exact_matches": sum(check["matched"] for check in checks),
+        "cases": checks,
+    }
+
+
+def quality_replay_exactness_evidence(
+    cold_resident: dict[str, Any],
+    resident_stable_reference: dict[str, Any],
+    reversed_order: dict[str, Any],
+    pressure_touches: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    required = [resident_stable_reference, reversed_order, *pressure_touches]
+    return {
+        "passed": all(comparison["passed"] for comparison in required),
+        "cold_resident_diagnostic_only": True,
+        "cold_resident": {**cold_resident, "gated": False},
+        "resident_stable_reference": {
+            **resident_stable_reference,
+            "gated": True,
+        },
+        "reversed_order": {**reversed_order, "gated": True},
+        "pressure_touches": [
+            {**comparison, "gated": True} for comparison in pressure_touches
+        ],
+        "required_comparisons": len(required),
+        "failed_required_comparisons": sum(
+            not comparison["passed"] for comparison in required
+        ),
+    }
+
+
+def cuda_graph_capture_quiescence_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    required_components: Sequence[str],
+) -> dict[str, Any]:
+    capture_deltas = [
+        item
+        for item in labeled_metric_deltas(
+            before,
+            after,
+            CUDA_GRAPH_EVENTS_COUNTER,
+        )
+        if item["labels"].get("event") == "capture"
+    ]
+    capture_values = [
+        item
+        for snapshot in (before, after)
+        for item in labeled_metric_values(snapshot, CUDA_GRAPH_EVENTS_COUNTER)
+        if item["labels"].get("event") == "capture"
+    ]
+    components = {}
+    for component in required_components:
+        matching_deltas = [
+            item
+            for item in capture_deltas
+            if item["labels"].get("component") == component
+        ]
+        instrumentation_present = any(
+            item["labels"].get("component") == component
+            for item in capture_values
+        )
+        components[component] = {
+            "passed": instrumentation_present
+            and all(item["delta"] == 0 for item in matching_deltas),
+            "instrumentation_present": instrumentation_present,
+            "capture_delta": sum(item["delta"] for item in matching_deltas),
+            "series": matching_deltas,
+        }
+    return {
+        "passed": bool(components)
+        and all(component["passed"] for component in components.values()),
+        "metric": CUDA_GRAPH_EVENTS_COUNTER,
+        "required_components": list(required_components),
+        "components": components,
+        "capture_deltas": capture_deltas,
+    }
+
+
+def quality_replay_stability_evidence(
+    attempts: Sequence[dict[str, Any]],
+    maximum_attempts: int,
+) -> dict[str, Any]:
+    checks = [
+        {
+            **attempt,
+            "passed": (
+                attempt["stage_passed"]
+                and attempt["exact_to_previous"]["passed"]
+                and attempt["cuda_graph_captures"]["passed"]
+            ),
+        }
+        for attempt in attempts
+    ]
+    converged = next((check for check in checks if check["passed"]), None)
+    return {
+        "passed": converged is not None,
+        "maximum_attempts": maximum_attempts,
+        "attempts_run": len(checks),
+        "exhausted": len(checks) >= maximum_attempts and converged is None,
+        "stable_reference_phase": (
+            converged["phase"] if converged is not None else None
+        ),
+        "required_consecutive_exact_sets": 2,
+        "required_zero_capture_components": (
+            checks[-1]["cuda_graph_captures"]["required_components"]
+            if checks
+            else []
+        ),
+        "failure": (
+            None
+            if converged is not None
+            else "resident outputs and CUDA graph captures did not converge"
+        ),
+        "attempts": checks,
+    }
+
+
+def quality_replay_pressure_plan_evidence(
+    snapshot: dict[str, float],
+    cases: Sequence[QualityReplayCase],
+    selected_specs: Sequence[RequestSpec],
+    config: QualityReplayPressureConfig,
+) -> dict[str, Any]:
+    logical_contexts = {case.prompt_label: case.context_tokens for case in cases}
+    total_blocks = metric_total(snapshot, "mistralrs_kv_cache_blocks_total")
+    owner_capacity = metric_total(
+        snapshot,
+        PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_GAUGE,
+    )
+    baseline_owner_entries = metric_total(
+        snapshot,
+        PAGED_RECURRENT_PREFIX_OWNERS_USED_GAUGE,
+    )
+    baseline_retained_blocks = metric_total(
+        snapshot,
+        PAGED_PREFIX_RETAINED_BLOCKS_GAUGE,
+    )
+    baseline_active_blocks = metric_total(snapshot, KV_CACHE_ACTIVE_GAUGE)
+    selected_blocks = sum(
+        math.ceil(tokens / config.block_size_tokens)
+        for tokens in logical_contexts.values()
+    )
+    selected_active_context_blocks = sum(
+        math.ceil(int(spec.context_tokens or 0) / config.block_size_tokens)
+        for spec in selected_specs
+    )
+    selected_active_suffix_blocks = sum(
+        math.ceil(spec.max_tokens / config.block_size_tokens)
+        for spec in selected_specs
+    )
+    pressure_blocks_per_wave = config.entries * math.ceil(
+        config.context_tokens / config.block_size_tokens
+    )
+    pressure_active_suffix_blocks = config.entries * math.ceil(
+        config.max_tokens / config.block_size_tokens
+    )
+    pressure_blocks_per_entry = math.ceil(
+        config.context_tokens / config.block_size_tokens
+    )
+    available_pressure_owner_entries = (
+        max(
+            0,
+            math.floor(
+                owner_capacity
+                - len(logical_contexts)
+            ),
+        )
+        if owner_capacity is not None and baseline_owner_entries is not None
+        else None
+    )
+    elapsed_pressure_entries = max(0, config.waves - 1) * config.entries
+    previous_pressure_entries = (
+        min(elapsed_pressure_entries, available_pressure_owner_entries)
+        if available_pressure_owner_entries is not None
+        else None
+    )
+    retained_pressure_entries = (
+        min(config.waves * config.entries, available_pressure_owner_entries)
+        if available_pressure_owner_entries is not None
+        else None
+    )
+    previous_pressure_blocks = (
+        previous_pressure_entries * pressure_blocks_per_entry
+        if previous_pressure_entries is not None
+        else None
+    )
+    retained_pressure_blocks = (
+        retained_pressure_entries * pressure_blocks_per_entry
+        if retained_pressure_entries is not None
+        else None
+    )
+    baseline_blocks = (baseline_retained_blocks or 0.0) + (
+        baseline_active_blocks or 0.0
+    )
+    selected_cold_peak_blocks = (
+        baseline_blocks
+        + selected_active_context_blocks
+        + selected_active_suffix_blocks
+    )
+    pressure_peak_blocks = (
+        baseline_blocks
+        + selected_blocks
+        + (previous_pressure_blocks or 0)
+        + pressure_blocks_per_wave
+        + pressure_active_suffix_blocks
+    )
+    touch_peak_blocks = (
+        baseline_blocks
+        + selected_blocks
+        + (retained_pressure_blocks or 0)
+        + selected_active_suffix_blocks
+    )
+    peak_required_blocks = max(
+        selected_cold_peak_blocks,
+        pressure_peak_blocks,
+        touch_peak_blocks,
+    )
+    cumulative_pressure_blocks = config.waves * pressure_blocks_per_wave
+    logical_peak_entries = (
+        (baseline_owner_entries or 0.0) + len(logical_contexts) + config.entries
+    )
+    headroom_blocks = (
+        math.ceil(total_blocks * config.headroom_fraction)
+        if total_blocks is not None
+        else None
+    )
+    physical_budget = (
+        total_blocks - headroom_blocks
+        if total_blocks is not None and headroom_blocks is not None
+        else None
+    )
+    baseline_instrumented = (
+        baseline_owner_entries is not None
+        and baseline_retained_blocks is not None
+        and baseline_active_blocks is not None
+    )
+    owner_fit = (
+        baseline_instrumented
+        and owner_capacity is not None
+        and logical_peak_entries <= owner_capacity
+    )
+    physical_fit = (
+        baseline_instrumented
+        and previous_pressure_blocks is not None
+        and retained_pressure_blocks is not None
+        and physical_budget is not None
+        and peak_required_blocks <= physical_budget
+    )
+    cumulative_churn = (
+        total_blocks is not None and cumulative_pressure_blocks > total_blocks
+    )
+    return {
+        "passed": bool(owner_fit and physical_fit and cumulative_churn),
+        "selected_logical_entries": len(logical_contexts),
+        "baseline_owner_entries": baseline_owner_entries,
+        "baseline_retained_blocks": baseline_retained_blocks,
+        "baseline_active_blocks": baseline_active_blocks,
+        "baseline_instrumented": baseline_instrumented,
+        "pressure_entries_per_wave": config.entries,
+        "pressure_waves": config.waves,
+        "logical_peak_entries": logical_peak_entries,
+        "owner_capacity": owner_capacity,
+        "owner_capacity_available": owner_capacity is not None,
+        "owner_fit": owner_fit,
+        "selected_blocks": selected_blocks,
+        "selected_active_context_blocks": selected_active_context_blocks,
+        "selected_active_suffix_blocks": selected_active_suffix_blocks,
+        "pressure_blocks_per_wave": pressure_blocks_per_wave,
+        "pressure_blocks_per_entry": pressure_blocks_per_entry,
+        "pressure_active_suffix_blocks": pressure_active_suffix_blocks,
+        "available_pressure_owner_entries": available_pressure_owner_entries,
+        "elapsed_pressure_entries": elapsed_pressure_entries,
+        "previous_pressure_entries": previous_pressure_entries,
+        "previous_pressure_blocks": previous_pressure_blocks,
+        "retained_pressure_entries": retained_pressure_entries,
+        "retained_pressure_blocks": retained_pressure_blocks,
+        "selected_cold_peak_blocks": selected_cold_peak_blocks,
+        "pressure_peak_blocks": pressure_peak_blocks,
+        "touch_peak_blocks": touch_peak_blocks,
+        "peak_retained_blocks": peak_required_blocks,
+        "peak_required_blocks": peak_required_blocks,
+        "total_blocks": total_blocks,
+        "physical_headroom_fraction": config.headroom_fraction,
+        "physical_headroom_blocks": headroom_blocks,
+        "physical_budget_blocks": physical_budget,
+        "physical_fit": physical_fit,
+        "cumulative_pressure_blocks": cumulative_pressure_blocks,
+        "cumulative_exceeds_physical_pool": cumulative_churn,
+    }
+
+
+async def quality_replay_mode(
+    args: argparse.Namespace,
+    client: SoakClient,
+    writer: JsonlWriter,
+) -> dict[str, Any]:
+    cases, source = load_quality_replay_cases(
+        args.source_production_artifact,
+        args.case_ids,
+    )
+    client.prompt_overhead_tokens[CONTEXT_PROMPT_PROFILE] = int(
+        source["context_prompt_overhead_tokens"]
+    )
+    specs, cohort = make_quality_replay_specs(
+        client,
+        cases,
+        args.concurrency,
+        args.max_tokens,
+        args.seed,
+    )
+    initial = await safe_metrics(client, writer, "quality-replay-start")
+    sequence_capacity = metric_total(initial, "mistralrs_sequences_capacity")
+    prefix_cached = metric_total(initial, KV_CACHE_PREFIX_CACHED_GAUGE)
+    retained_owners = metric_total(
+        initial,
+        PAGED_RECURRENT_PREFIX_OWNERS_USED_GAUGE,
+    )
+    empty_cache = prefix_cached == 0 and (
+        retained_owners is None or retained_owners == 0
+    )
+    pressure_plan = quality_replay_pressure_plan_evidence(
+        initial,
+        cases,
+        specs,
+        QualityReplayPressureConfig(
+            waves=args.pressure_waves,
+            entries=args.pressure_entries,
+            context_tokens=args.pressure_context_tokens,
+            max_tokens=args.pressure_max_tokens,
+            block_size_tokens=args.kv_block_size_tokens,
+            headroom_fraction=args.prefix_pressure_kv_headroom_fraction,
+        ),
+    )
+    sampling = production_sampling_policy_evidence(
+        PART1_PRODUCTION_SAMPLING_POLICY,
+        SamplingPolicy(
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            min_p=args.min_p,
+            repetition_penalty=args.repetition_penalty,
+        ),
+    )
+    await writer.emit(
+        "quality_replay_cohort",
+        source=source,
+        cohort=cohort,
+        pressure_plan=pressure_plan,
+        production_sampling=sampling,
+        server_sequence_capacity=sequence_capacity,
+        initial_prefix_cached_blocks=prefix_cached,
+        initial_retained_owners=retained_owners,
+        empty_cache=empty_cache,
+    )
+    if not pressure_plan["passed"]:
+        raise RuntimeError(
+            "quality replay pressure must fit selected prefixes, retained prior pressure "
+            "owners, and the active wave below logical and physical capacity while "
+            "cumulative churn exceeds the physical pool"
+        )
+
+    quality_checks: list[dict[str, Any]] = []
+
+    async def record_quality(
+        phase: str,
+        results: Sequence[RequestResult],
+    ) -> list[dict[str, Any]]:
+        checks = []
+        for result in results:
+            valid, detail = validate_sampled_output(
+                result,
+                client.tokenizer,
+                args.max_repeated_ngram_ratio,
+            )
+            check = {"phase": phase, "valid": valid, **detail}
+            checks.append(check)
+            quality_checks.append(check)
+            await writer.emit("quality_replay_quality", **check)
+        return checks
+
+    async def run_selected(
+        phase: str,
+        before: dict[str, float],
+        expectation: str,
+        request_specs: Sequence[RequestSpec],
+    ) -> tuple[list[RequestResult], dict[str, Any], dict[str, float]]:
+        results, summary = await run_batch(
+            client,
+            request_specs,
+            args.concurrency,
+            writer,
+            phase,
+            keep_output=True,
+        )
+        after = await safe_metrics(client, writer, f"{phase}-metrics")
+        prefix = quality_replay_prefix_state_evidence(
+            before,
+            after,
+            request_specs,
+            expectation,
+            args.min_prefix_reuse_fraction,
+        )
+        speculative_state_ok = (
+            not args.require_mtp
+            or expectation != "hit"
+            or (
+                prefix["speculative_hits"] is not None
+                and prefix["speculative_hits"] >= len(request_specs)
+                and prefix["speculative_misses"] == 0
+            )
+        )
+        quality = await record_quality(phase, results)
+        stage = {
+            "passed": (
+                summary["errors"] == 0
+                and prefix["passed"]
+                and speculative_state_ok
+                and all(check["valid"] for check in quality)
+            ),
+            "phase": phase,
+            "summary": summary,
+            "prefix_cache": prefix,
+            "speculative_state_ok": speculative_state_ok,
+            "quality": quality,
+            "source_outputs": quality_replay_source_output_evidence(results, cases),
+        }
+        await writer.emit("quality_replay_stage", **stage)
+        return results, stage, after
+
+    cold, cold_stage, after_cold = await run_selected(
+        "quality-replay-cold",
+        initial,
+        "miss",
+        specs,
+    )
+    resident, resident_stage, after_resident = await run_selected(
+        "quality-replay-resident",
+        after_cold,
+        "hit",
+        specs,
+    )
+    cold_resident_exact = exact_output_diagnostics(
+        cold,
+        resident,
+        "quality-replay-cold",
+        "quality-replay-resident",
+        specs,
+    )
+    await writer.emit(
+        "quality_replay_exact",
+        gated=False,
+        **cold_resident_exact,
+    )
+
+    stability_attempts = []
+    stability_stages = []
+    previous_results = resident
+    previous_phase = "quality-replay-resident"
+    stability_cursor = after_resident
+    stable_reference = resident
+    stable_reference_stage = resident_stage
+    resident_stable_exact = cold_resident_exact
+    for attempt_index in range(args.max_stability_passes):
+        phase = f"quality-replay-stable-reference-{attempt_index + 1:02d}"
+        current, stage, after_current = await run_selected(
+            phase,
+            stability_cursor,
+            "hit",
+            specs,
+        )
+        exact = exact_output_diagnostics(
+            previous_results,
+            current,
+            previous_phase,
+            phase,
+            specs,
+        )
+        captures = cuda_graph_capture_quiescence_evidence(
+            stability_cursor,
+            after_current,
+            args.expected_graph_components,
+        )
+        attempt = {
+            "phase": phase,
+            "stage_passed": stage["passed"],
+            "exact_to_previous": exact,
+            "cuda_graph_captures": captures,
+        }
+        stability_attempts.append(attempt)
+        stability_stages.append(stage)
+        await writer.emit(
+            "quality_replay_stability_attempt",
+            attempt=attempt_index + 1,
+            maximum_attempts=args.max_stability_passes,
+            **attempt,
+        )
+        await writer.emit(
+            "quality_replay_exact",
+            gated=True,
+            **exact,
+        )
+        stability = quality_replay_stability_evidence(
+            stability_attempts,
+            args.max_stability_passes,
+        )
+        stable_reference = current
+        stable_reference_stage = stage
+        resident_stable_exact = exact
+        stability_cursor = after_current
+        previous_results = current
+        previous_phase = phase
+        if stability["passed"]:
+            break
+    stability = quality_replay_stability_evidence(
+        stability_attempts,
+        args.max_stability_passes,
+    )
+    await writer.emit("quality_replay_stability", **stability)
+    if not stability["passed"]:
+        components = ", ".join(args.expected_graph_components)
+        raise RuntimeError(
+            f"quality replay resident outputs and {components} CUDA graph captures "
+            f"did not converge within {args.max_stability_passes} passes"
+        )
+    stable_reference_phase = str(stability["stable_reference_phase"])
+    after_stable_reference = stability_cursor
+
+    reversed_specs = list(reversed(specs))
+    reversed_results, reversed_stage, after_reversed = await run_selected(
+        "quality-replay-reversed-order",
+        after_stable_reference,
+        "hit",
+        reversed_specs,
+    )
+    reversed_exact = exact_output_diagnostics(
+        stable_reference,
+        reversed_results,
+        stable_reference_phase,
+        "quality-replay-reversed-order",
+        specs,
+    )
+    await writer.emit(
+        "quality_replay_exact",
+        gated=True,
+        **reversed_exact,
+    )
+
+    cursor = after_reversed
+    pressure_summaries = []
+    touch_stages = []
+    touch_exact = []
+    pressure_results_ok = True
+    last_pressure_metrics = after_reversed
+    last_touch_results = stable_reference
+    for wave in range(args.pressure_waves):
+        pressure_phase = f"quality-replay-pressure-w{wave:02d}"
+        pressure_specs = make_quality_replay_pressure_specs(
+            client,
+            wave,
+            args.pressure_entries,
+            args.pressure_context_tokens,
+            args.pressure_max_tokens,
+            args.seed,
+        )
+        pressure_results, pressure_summary = await run_batch(
+            client,
+            pressure_specs,
+            min(args.concurrency, args.pressure_entries),
+            writer,
+            pressure_phase,
+            keep_output=False,
+        )
+        pressure_completion = fixed_length_completion_evidence(
+            pressure_results,
+            args.pressure_max_tokens,
+        )
+        pressure_summary = {
+            **pressure_summary,
+            "fixed_length_completion": pressure_completion,
+        }
+        pressure_summaries.append(pressure_summary)
+        pressure_results_ok = (
+            pressure_results_ok and pressure_completion["passed"]
+        )
+        await writer.emit(
+            "quality_replay_pressure_completion",
+            phase=pressure_phase,
+            **pressure_completion,
+        )
+        last_pressure_metrics = await safe_metrics(
+            client,
+            writer,
+            f"{pressure_phase}-metrics",
+        )
+        touch_phase = (
+            "quality-replay-after-pressure"
+            if wave + 1 == args.pressure_waves
+            else f"quality-replay-touch-w{wave:02d}"
+        )
+        last_touch_results, touch_stage, cursor = await run_selected(
+            touch_phase,
+            last_pressure_metrics,
+            "hit",
+            specs,
+        )
+        exact = exact_output_diagnostics(
+            stable_reference,
+            last_touch_results,
+            stable_reference_phase,
+            touch_phase,
+            specs,
+        )
+        touch_stages.append(touch_stage)
+        touch_exact.append(exact)
+        await writer.emit("quality_replay_exact", gated=True, **exact)
+
+    exactness = quality_replay_exactness_evidence(
+        cold_resident_exact,
+        resident_stable_exact,
+        reversed_exact,
+        touch_exact,
+    )
+
+    cleanup_ok, cleanup_metrics, cleanup = await poll_for_cleanup(
+        client,
+        writer,
+        initial,
+        args.cleanup_timeout_seconds,
+        args.cleanup_poll_seconds,
+        "quality-replay-cleanup",
+        RESIDENT_TRANSIENT_CLEANUP_GAUGES,
+    )
+    allocation_pressure_revocations = sum(
+        item["delta"]
+        for item in labeled_metric_deltas(
+            initial,
+            cleanup_metrics,
+            PAGED_PREFIX_RETENTION_PRESSURE_EVICTIONS_COUNTER,
+        )
+        if item["labels"].get("reason") == "allocation_pressure"
+    )
+    paired_residency = {
+        "passed": (not args.require_mtp or allocation_pressure_revocations == 0),
+        "allocation_pressure_revocations": allocation_pressure_revocations,
+        "required": args.require_mtp,
+    }
+    checkpoint_retention = dflash_checkpoint_retention_evidence(
+        {
+            "before_cold": initial,
+            "after_cold": after_cold,
+            "after_hit": after_reversed,
+            "after_pressure": last_pressure_metrics,
+            "after_retry": cursor,
+            "quiescent": cleanup_metrics,
+        },
+        cohort["logical_prompt_identity_count"]
+        + args.pressure_waves * args.pressure_entries,
+    )
+    mtp = configured_speculative_evidence(
+        initial,
+        cleanup_metrics,
+        args,
+        args.require_mtp,
+    )
+    graph = cuda_graph_evidence(
+        initial,
+        cleanup_metrics,
+        initial,
+        args.expected_graph_components,
+        args.min_cuda_graph_replay_ratio,
+    )
+    memory = cuda_memory_pressure_evidence(
+        initial,
+        cleanup_metrics,
+        require_instrumentation=True,
+    )
+    result = {
+        "mode": "quality-replay",
+        "passed": (
+            sampling["passed"]
+            and cohort["single_full_batch"]
+            and sequence_capacity == args.concurrency
+            and (empty_cache or not args.require_empty_prefix_cache)
+            and pressure_plan["passed"]
+            and cold_stage["passed"]
+            and resident_stage["passed"]
+            and all(stage["passed"] for stage in stability_stages)
+            and stability["passed"]
+            and reversed_stage["passed"]
+            and exactness["passed"]
+            and pressure_results_ok
+            and all(stage["passed"] for stage in touch_stages)
+            and paired_residency["passed"]
+            and checkpoint_retention["passed"]
+            and cleanup_ok
+            and mtp["passed"]
+            and graph["passed"]
+            and memory["passed"]
+        ),
+        "source": source,
+        "cohort": cohort,
+        "production_sampling": sampling,
+        "server_sequence_capacity": sequence_capacity,
+        "empty_cache": empty_cache,
+        "pressure_plan": pressure_plan,
+        "cold": cold_stage,
+        "resident": resident_stage,
+        "stable_reference": stable_reference_stage,
+        "stability": stability,
+        "stability_stages": stability_stages,
+        "reversed_order": reversed_stage,
+        "cold_resident_exact": exactness["cold_resident"],
+        "resident_stable_exact": exactness["resident_stable_reference"],
+        "reversed_order_exact": exactness["reversed_order"],
+        "exactness": exactness,
+        "pressure_summaries": pressure_summaries,
+        "touch_stages": touch_stages,
+        "touch_exact": exactness["pressure_touches"],
+        "after_pressure_source_outputs": quality_replay_source_output_evidence(
+            last_touch_results,
+            cases,
+        ),
+        "paired_residency": paired_residency,
+        "checkpoint_retention": checkpoint_retention,
+        "quality_checks": quality_checks,
+        "quality_ok": all(check["valid"] for check in quality_checks),
+        "cleanup_ok": cleanup_ok,
+        "cleanup": cleanup,
+        "mtp": mtp,
+        "cuda_graph": graph,
+        "cuda_memory": memory,
+        "metric_deltas": selected_metric_deltas(initial, cleanup_metrics),
+    }
+    await writer.emit("quality_replay_summary", **result)
+    return result
+
+
 async def production_mode(
     args: argparse.Namespace,
     client: SoakClient,
@@ -8838,6 +10139,7 @@ async def production_mode(
         args.probe_max_tokens,
         {"scenario": "production", "role": "c1_probe"},
     )
+    probe_template.extra["ignore_eos"] = False
     semantic_templates = {
         length: (
             probe_template
@@ -8857,6 +10159,8 @@ async def production_mode(
         )
         for index, length in enumerate(lengths)
     }
+    for template in semantic_templates.values():
+        template.extra["ignore_eos"] = False
     prewarm_metrics = await safe_metrics(client, writer, "production-prewarm-start")
     traffic_prewarm_specs = [
         RequestSpec(
@@ -9183,20 +10487,13 @@ async def production_mode(
             for result in phase_results
             if result.tags.get("role") == "semantic_sentinel"
         ]
-        quality = [
-            {
-                "valid": valid,
-                **detail,
-            }
-            for result in phase_results
-            for valid, detail in [
-                validate_sampled_output(
-                    result,
-                    client.tokenizer,
-                    args.max_repeated_ngram_ratio,
-                )
-            ]
-        ]
+        quality_evidence = production_output_quality_evidence(
+            phase_results,
+            client.tokenizer,
+            args.max_repeated_ngram_ratio,
+            args.fixed_output_length,
+        )
+        quality = quality_evidence["checks"]
         summary["traffic"] = summarize_batch(traffic, wall, concurrency, f"{phase}-traffic")
         summary["probes"] = summarize_batch(probes_only, wall, 1, f"{phase}-probes")
         summary["semantic_sentinels"] = summarize_batch(
@@ -9217,7 +10514,8 @@ async def production_mode(
             args.fixed_output_length,
         )
         summary["quality_checked"] = len(quality)
-        summary["quality_failures"] = [item for item in quality if not item["valid"]]
+        summary["quality_failures"] = quality_evidence["failures"]
+        summary["quality_evidence"] = quality_evidence
         probe_cadence = scheduled_observation_evidence(
             probe_schedule,
             [
@@ -9309,7 +10607,7 @@ async def production_mode(
         summary["bounded_phase_output_tok_s"] = summary["first_vs_last_window"][
             "full_phase_output_tok_s_stream_timeline"
         ]
-        summary["quality_ok"] = all(item["valid"] for item in quality)
+        summary["quality_ok"] = quality_evidence["passed"]
         summary["prefix_cache"] = prefix_cache_evidence(
             phase_metrics_before,
             phase_metrics_after,
@@ -11307,6 +12605,111 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_prefix_pressure_args(prefix_pressure)
 
+    quality_replay = subparsers.add_parser("quality-replay", parents=[common])
+    add_speculative_evidence_args(quality_replay)
+    quality_replay.add_argument(
+        "--source-production-artifact",
+        type=Path,
+        required=True,
+    )
+    quality_replay.add_argument(
+        "--case-id",
+        dest="case_ids",
+        action="append",
+        required=True,
+    )
+    quality_replay.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_CONCURRENCY,
+    )
+    quality_replay.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    quality_replay.add_argument(
+        "--pressure-waves",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_PRESSURE_WAVES,
+        help="waves must cumulatively churn more blocks than the physical KV pool",
+    )
+    quality_replay.add_argument(
+        "--pressure-entries",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_PRESSURE_ENTRIES,
+        help=(
+            "distinct entries per wave; selected identities plus one wave must fit "
+            "the server's retained-prefix owner capacity"
+        ),
+    )
+    quality_replay.add_argument(
+        "--pressure-context-tokens",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_PRESSURE_CONTEXT_TOKENS,
+        help=(
+            "context size is runtime-gated so selected identities, retained prior "
+            "pressure owners, and the active wave fit the physical KV pool with "
+            "configured headroom"
+        ),
+    )
+    quality_replay.add_argument(
+        "--pressure-max-tokens",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_PRESSURE_MAX_TOKENS,
+    )
+    quality_replay.add_argument(
+        "--max-stability-passes",
+        type=int,
+        default=DEFAULT_QUALITY_REPLAY_MAX_STABILITY_PASSES,
+        help=(
+            "maximum resident passes allowed to reach consecutive exact outputs with "
+            "zero CUDA graph captures"
+        ),
+    )
+    quality_replay.add_argument(
+        "--prefix-pressure-kv-headroom-fraction",
+        type=float,
+        default=DEFAULT_PREFIX_PRESSURE_KV_HEADROOM_FRACTION,
+    )
+    quality_replay.add_argument(
+        "--min-prefix-reuse-fraction",
+        type=float,
+        default=DEFAULT_MIN_PREFIX_REUSE_FRACTION,
+    )
+    quality_replay.add_argument(
+        "--kv-block-size-tokens",
+        type=int,
+        default=DEFAULT_KV_BLOCK_SIZE_TOKENS,
+    )
+    quality_replay.add_argument(
+        "--max-repeated-ngram-ratio",
+        type=float,
+        default=DEFAULT_MAX_REPEATED_NGRAM_RATIO,
+    )
+    quality_replay.add_argument(
+        "--cleanup-timeout-seconds",
+        type=float,
+        default=DEFAULT_CLEANUP_TIMEOUT_SECONDS,
+    )
+    quality_replay.add_argument(
+        "--cleanup-poll-seconds",
+        type=float,
+        default=DEFAULT_CLEANUP_POLL_SECONDS,
+    )
+    quality_replay.add_argument(
+        "--expected-graph-components",
+        type=parse_graph_components,
+        default=("target",),
+    )
+    quality_replay.add_argument(
+        "--min-cuda-graph-replay-ratio",
+        type=float,
+        default=DEFAULT_MIN_CUDA_GRAPH_REPLAY_RATIO,
+    )
+    quality_replay.add_argument("--require-mtp", action="store_true")
+    quality_replay.add_argument(
+        "--require-empty-prefix-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+
     production = subparsers.add_parser("production", parents=[common])
     add_speculative_evidence_args(production)
     production.add_argument(
@@ -11820,6 +13223,7 @@ def validate_args(args: argparse.Namespace) -> None:
         "adversarial",
         "prefix-pressure",
         "production",
+        "quality-replay",
         "resident-decode",
     ) and not args.tokenizer:
         raise ValueError(f"{args.mode} mode requires --tokenizer")
@@ -11827,6 +13231,61 @@ def validate_args(args: argparse.Namespace) -> None:
         validate_prefix_pressure_args(args)
         if args.server_pid is None:
             raise ValueError("prefix-pressure mode requires --server-pid")
+    if args.mode == "quality-replay":
+        for name in (
+            "concurrency",
+            "max_tokens",
+            "pressure_waves",
+            "pressure_entries",
+            "pressure_context_tokens",
+            "pressure_max_tokens",
+            "max_stability_passes",
+            "kv_block_size_tokens",
+            "cleanup_timeout_seconds",
+            "cleanup_poll_seconds",
+        ):
+            if getattr(args, name) <= 0:
+                raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if args.server_pid is None:
+            raise ValueError("quality-replay mode requires --server-pid")
+        if not args.source_production_artifact.is_file():
+            raise ValueError("--source-production-artifact must be an existing file")
+        if len(set(args.case_ids)) != len(args.case_ids):
+            raise ValueError("--case-id values must be unique")
+        if len(args.case_ids) > args.concurrency:
+            raise ValueError("quality replay cases must fit in one concurrent batch")
+        if not 0 < args.min_prefix_reuse_fraction <= 1:
+            raise ValueError(
+                "--min-prefix-reuse-fraction must be greater than 0 and at most 1"
+            )
+        if not 0 < args.prefix_pressure_kv_headroom_fraction < 1:
+            raise ValueError(
+                "--prefix-pressure-kv-headroom-fraction must be greater than 0 "
+                "and less than 1"
+            )
+        if not 0 < args.min_cuda_graph_replay_ratio <= 1:
+            raise ValueError(
+                "--min-cuda-graph-replay-ratio must be greater than 0 and at most 1"
+            )
+        if args.require_mtp and set(args.expected_graph_components) != {
+            "target",
+            "dflash",
+        }:
+            raise ValueError(
+                "--require-mtp requires --expected-graph-components target,dflash"
+            )
+        sampling = production_sampling_policy_evidence(
+            PART1_PRODUCTION_SAMPLING_POLICY,
+            SamplingPolicy(
+                temperature=args.temperature,
+                top_p=args.top_p,
+                top_k=args.top_k,
+                min_p=args.min_p,
+                repetition_penalty=args.repetition_penalty,
+            ),
+        )
+        if not sampling["passed"]:
+            raise ValueError("quality-replay requires the production sampling values")
     if args.mode == "resident-decode":
         for name in (
             "requests",
@@ -12132,6 +13591,8 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "--max-recurrent-slot-utilization must be greater than 0 and at most 1"
             )
+        if len(set(args.concurrencies)) != len(args.concurrencies):
+            raise ValueError("--concurrencies must be unique")
         if not {8, 16}.issubset(args.concurrencies):
             raise ValueError("--concurrencies must include 8 and 16")
         if (
@@ -12509,6 +13970,8 @@ async def async_main(args: argparse.Namespace) -> int:
             summary = await adversarial_mode(args, client, writer)
         elif args.mode == "prefix-pressure":
             summary = await prefix_pressure_mode(args, client, writer)
+        elif args.mode == "quality-replay":
+            summary = await quality_replay_mode(args, client, writer)
         elif args.mode == "production":
             summary = await production_mode(args, client, writer)
         elif args.mode == "multimodal":

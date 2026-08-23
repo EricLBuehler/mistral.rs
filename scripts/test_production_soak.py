@@ -786,6 +786,636 @@ class PrefixPressurePlanTests(unittest.TestCase):
             soak.prefix_pressure_plan(self.metrics(3_000), self.config())
 
 
+class QualityReplayTests(unittest.TestCase):
+    @staticmethod
+    def pressure_cases() -> list[soak.QualityReplayCase]:
+        return [
+            soak.QualityReplayCase(
+                case_id=str(index),
+                seed=index,
+                concurrency=16,
+                worker_index=index,
+                request_index=0,
+                context_tokens=context,
+                prompt_index=index,
+                prompt_label=f"prompt-{index}",
+                source_output_transcript_sha256="hash",
+                source_quality_failure=False,
+            )
+            for index, context in enumerate((1_024, 8_192, 8_192, 32_768))
+        ]
+
+    @staticmethod
+    def pressure_specs(
+        cases: list[soak.QualityReplayCase],
+    ) -> list[soak.RequestSpec]:
+        return [
+            soak.RequestSpec(
+                case_id=f"selected-{index}",
+                seed=index,
+                max_tokens=256,
+                context_tokens=cases[index % len(cases)].context_tokens,
+            )
+            for index in range(16)
+        ]
+
+    @staticmethod
+    def pressure_config(
+        context_tokens: int = 8_192,
+    ) -> soak.QualityReplayPressureConfig:
+        return soak.QualityReplayPressureConfig(
+            waves=8,
+            entries=16,
+            context_tokens=context_tokens,
+            max_tokens=8,
+            block_size_tokens=32,
+            headroom_fraction=0.10,
+        )
+
+    @staticmethod
+    def pressure_metrics(
+        owner_capacity: int = 20,
+        owner_used: int = 0,
+        retained_blocks: int = 0,
+    ) -> dict[str, float]:
+        return {
+            "mistralrs_kv_cache_blocks_total": 27_080,
+            soak.PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_GAUGE: owner_capacity,
+            soak.PAGED_RECURRENT_PREFIX_OWNERS_USED_GAUGE: owner_used,
+            soak.PAGED_PREFIX_RETAINED_BLOCKS_GAUGE: retained_blocks,
+            soak.KV_CACHE_ACTIVE_GAUGE: 0,
+        }
+
+    def test_source_cases_reconstruct_production_rng_identity(self) -> None:
+        source_seed = 20260841
+        concurrency = 16
+        worker = 13
+        request_index = 2
+        phase_index = 1
+        context_mix = [[1_024, 45], [8_192, 30], [32_768, 20], [100_000, 5]]
+        pool_counts = {"1024": 7, "8192": 5, "32768": 3, "100000": 1}
+        rng = soak.random.Random(source_seed + phase_index * 100_000 + worker)
+        context_tokens = 0
+        prompt_index = 0
+        for _ in range(request_index + 1):
+            context_tokens = soak.choose_context(rng, context_mix)
+            prompt_index = rng.randrange(pool_counts[str(context_tokens)])
+        case_id = f"prod-c{concurrency}-w{worker}-r{request_index}"
+        request_seed = (
+            source_seed + phase_index * 1_000_000 + worker * 10_000 + request_index
+        )
+        records = [
+            {
+                "event": "run_start",
+                "mode": "production",
+                "arguments": {
+                    "seed": source_seed,
+                    "context_mix": context_mix,
+                    "concurrencies": [8, 16],
+                    "fixed_output_length": False,
+                },
+            },
+            {
+                "event": "prompt_calibration",
+                "profile": soak.CONTEXT_PROMPT_PROFILE,
+                "overhead_tokens": 17,
+            },
+            {
+                "event": "production_prewarm_summary",
+                "pool_counts": pool_counts,
+            },
+            {
+                "event": "request",
+                "case_id": case_id,
+                "seed": request_seed,
+                "context_tokens": context_tokens,
+                "output_transcript_sha256": "source-hash",
+                "tags": {"role": "traffic"},
+            },
+            {
+                "event": "production_phase_summary",
+                "quality_failures": [{"case_id": case_id}],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.jsonl"
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            cases, evidence = soak.load_quality_replay_cases(path, [case_id])
+
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0].context_tokens, context_tokens)
+        self.assertEqual(cases[0].prompt_index, prompt_index)
+        self.assertEqual(
+            cases[0].prompt_label,
+            f"production-{context_tokens}-{prompt_index}",
+        )
+        self.assertEqual(cases[0].seed, request_seed)
+        self.assertTrue(cases[0].source_quality_failure)
+        self.assertEqual(evidence["context_prompt_overhead_tokens"], 17)
+        self.assertTrue(evidence["seed_provenance_complete"])
+        self.assertEqual(
+            evidence["seed_provenance"],
+            [
+                {
+                    "case_id": case_id,
+                    "logged_source_seed": request_seed,
+                    "reconstructed_source_seed": request_seed,
+                    "matched": True,
+                }
+            ],
+        )
+        with patch.object(
+            soak, "exact_context", side_effect=lambda _, __, label: label
+        ):
+            specs, _ = soak.make_quality_replay_specs(
+                object(), cases, 1, 256, source_seed
+            )
+        self.assertEqual(specs[0].seed, request_seed)
+        self.assertFalse(specs[0].extra["ignore_eos"])
+
+        records[0]["arguments"]["fixed_output_length"] = True
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixed-source.jsonl"
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            fixed_cases, fixed_evidence = soak.load_quality_replay_cases(
+                path,
+                [case_id],
+            )
+
+        self.assertFalse(fixed_cases[0].source_quality_failure)
+        self.assertFalse(fixed_evidence["source_traffic_quality_eligible"])
+        self.assertEqual(
+            fixed_evidence["source_reported_quality_failures"],
+            [case_id],
+        )
+
+        records[0]["arguments"]["fixed_output_length"] = False
+        records[0]["arguments"]["concurrencies"] = [8, 16, 16]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicate-concurrency-source.jsonl"
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "concurrencies must be unique"):
+                soak.load_quality_replay_cases(path, [case_id])
+
+        records[0]["arguments"]["concurrencies"] = [8, 16]
+        records[3]["seed"] = request_seed + 1
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source.jsonl"
+            path.write_text(
+                "".join(json.dumps(record) + "\n" for record in records),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "does not match reconstructed seed"):
+                soak.load_quality_replay_cases(path, [case_id])
+
+    def test_replay_cohort_pads_one_full_batch_without_new_prompt_identities(
+        self,
+    ) -> None:
+        cases = [
+            soak.QualityReplayCase(
+                case_id="a",
+                seed=1,
+                concurrency=16,
+                worker_index=0,
+                request_index=0,
+                context_tokens=1_024,
+                prompt_index=0,
+                prompt_label="production-1024-0",
+                source_output_transcript_sha256="a",
+                source_quality_failure=True,
+            ),
+            soak.QualityReplayCase(
+                case_id="b",
+                seed=2,
+                concurrency=16,
+                worker_index=1,
+                request_index=0,
+                context_tokens=8_192,
+                prompt_index=1,
+                prompt_label="production-8192-1",
+                source_output_transcript_sha256="b",
+                source_quality_failure=False,
+            ),
+            soak.QualityReplayCase(
+                case_id="c",
+                seed=3,
+                concurrency=16,
+                worker_index=2,
+                request_index=0,
+                context_tokens=1_024,
+                prompt_index=0,
+                prompt_label="production-1024-0",
+                source_output_transcript_sha256="c",
+                source_quality_failure=False,
+            ),
+        ]
+        with patch.object(
+            soak, "exact_context", side_effect=lambda _, __, label: label
+        ):
+            specs, evidence = soak.make_quality_replay_specs(
+                object(), cases, 16, 256, 100
+            )
+
+        self.assertEqual(len(specs), 16)
+        self.assertEqual(evidence["logical_prompt_identity_count"], 2)
+        self.assertEqual(evidence["cold_compulsory_miss_requests"], 2)
+        self.assertEqual(evidence["cold_duplicate_request_upper_bound"], 14)
+        self.assertEqual(
+            evidence["selected_duplicate_prompt_identities"],
+            [
+                {
+                    "prompt_label": "production-1024-0",
+                    "request_count": 2,
+                    "case_ids": ["a", "c"],
+                }
+            ],
+        )
+        self.assertEqual(
+            {spec.prompt for spec in specs},
+            {"production-1024-0", "production-8192-1"},
+        )
+        self.assertTrue(all(spec.extra["ignore_eos"] is False for spec in specs))
+        self.assertEqual(evidence["quality_output_contract"], "normal_eos")
+        self.assertTrue(evidence["single_full_batch"])
+
+    def test_cold_prefix_evidence_accounts_for_duplicate_prompt_identities(
+        self,
+    ) -> None:
+        specs = [
+            soak.RequestSpec(
+                case_id="a-0",
+                seed=1,
+                max_tokens=8,
+                prompt="prompt-a",
+                context_tokens=100,
+                tags={"prompt_label": "a"},
+            ),
+            soak.RequestSpec(
+                case_id="a-1",
+                seed=2,
+                max_tokens=8,
+                prompt="prompt-a",
+                context_tokens=100,
+                tags={"prompt_label": "a"},
+            ),
+            soak.RequestSpec(
+                case_id="b-0",
+                seed=3,
+                max_tokens=8,
+                prompt="prompt-b",
+                context_tokens=200,
+                tags={"prompt_label": "b"},
+            ),
+        ]
+        before = {"mistralrs_prefix_cache_lookups_total": 0.0}
+        all_miss = {"mistralrs_prefix_cache_lookups_total": 3.0}
+
+        evidence = soak.quality_replay_prefix_state_evidence(
+            before,
+            all_miss,
+            specs,
+            "miss",
+            0.98,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["hits"], 0.0)
+        self.assertEqual(evidence["misses"], 3.0)
+        self.assertFalse(evidence["hits_counter_present"])
+        self.assertFalse(evidence["reused_tokens_counter_present"])
+        self.assertEqual(evidence["prompt_identity_count"], 2)
+        self.assertEqual(evidence["duplicate_prompt_requests"], 1)
+        self.assertEqual(evidence["compulsory_miss_prompt_tokens"], 300)
+        self.assertEqual(evidence["duplicate_prompt_tokens"], 100)
+
+        duplicate_hit = {
+            "mistralrs_prefix_cache_lookups_total": 3.0,
+            "mistralrs_prefix_cache_hits_total": 1.0,
+            "mistralrs_prefix_cache_tokens_reused_total": 100.0,
+        }
+        self.assertTrue(
+            soak.quality_replay_prefix_state_evidence(
+                before,
+                duplicate_hit,
+                specs,
+                "miss",
+                0.98,
+            )["passed"]
+        )
+
+        unexpected_hit = {
+            "mistralrs_prefix_cache_lookups_total": 3.0,
+            "mistralrs_prefix_cache_hits_total": 2.0,
+            "mistralrs_prefix_cache_tokens_reused_total": 300.0,
+        }
+        self.assertFalse(
+            soak.quality_replay_prefix_state_evidence(
+                before,
+                unexpected_hit,
+                specs,
+                "miss",
+                0.98,
+            )["passed"]
+        )
+
+    def test_missing_hit_counter_remains_a_failed_hit_expectation(self) -> None:
+        specs = [
+            soak.RequestSpec(
+                case_id="a",
+                seed=1,
+                max_tokens=8,
+                prompt="prompt-a",
+                context_tokens=100,
+            )
+        ]
+        evidence = soak.quality_replay_prefix_state_evidence(
+            {"mistralrs_prefix_cache_lookups_total": 0.0},
+            {"mistralrs_prefix_cache_lookups_total": 1.0},
+            specs,
+            "hit",
+            0.98,
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["hits"], 0.0)
+
+    def test_exactness_gates_only_equivalent_resident_paths(self) -> None:
+        failed_cold_transition = {"passed": False, "candidate_phase": "resident"}
+        stable = {"passed": True, "candidate_phase": "stable-reference"}
+        reversed_order = {"passed": True, "candidate_phase": "reversed-order"}
+        touches = [
+            {"passed": True, "candidate_phase": f"touch-{index}"}
+            for index in range(3)
+        ]
+
+        evidence = soak.quality_replay_exactness_evidence(
+            failed_cold_transition,
+            stable,
+            reversed_order,
+            touches,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["cold_resident_diagnostic_only"])
+        self.assertFalse(evidence["cold_resident"]["gated"])
+        self.assertTrue(evidence["resident_stable_reference"]["gated"])
+        self.assertTrue(evidence["reversed_order"]["gated"])
+        self.assertEqual(evidence["required_comparisons"], 5)
+
+        touches[-1]["passed"] = False
+        failed = soak.quality_replay_exactness_evidence(
+            failed_cold_transition,
+            stable,
+            reversed_order,
+            touches,
+        )
+        self.assertFalse(failed["passed"])
+        self.assertEqual(failed["failed_required_comparisons"], 1)
+
+    def test_reversed_request_order_preserves_fixed_seed_comparison(self) -> None:
+        specs = [
+            soak.RequestSpec(case_id="a", seed=1, max_tokens=8),
+            soak.RequestSpec(case_id="b", seed=2, max_tokens=8),
+        ]
+        stable = [
+            request_result(
+                case_id=spec.case_id,
+                seed=spec.seed,
+                completion_tokens=4,
+                output_chunks=4,
+                finish_reason="stop",
+                output_transcript=f"transcript-{spec.case_id}",
+            )
+            for spec in specs
+        ]
+
+        evidence = soak.exact_output_diagnostics(
+            stable,
+            list(reversed(stable)),
+            "stable-reference",
+            "reversed-order",
+            specs,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["exact_matches"], 2)
+
+    def test_stability_requires_exact_outputs_and_zero_graph_captures(self) -> None:
+        def capture_key(component: str) -> str:
+            return (
+                f'{soak.CUDA_GRAPH_EVENTS_COUNTER}{{component="{component}",'
+                'event="capture",outcome="success"}'
+            )
+
+        before = {
+            capture_key("target"): 3.0,
+            capture_key("dflash"): 2.0,
+        }
+        quiet = dict(before)
+        target_capture = {**before, capture_key("target"): 4.0}
+        quiet_evidence = soak.cuda_graph_capture_quiescence_evidence(
+            before,
+            quiet,
+            ("target", "dflash"),
+        )
+        capture_evidence = soak.cuda_graph_capture_quiescence_evidence(
+            before,
+            target_capture,
+            ("target", "dflash"),
+        )
+
+        self.assertTrue(quiet_evidence["passed"])
+        self.assertFalse(capture_evidence["passed"])
+        self.assertEqual(
+            capture_evidence["components"]["target"]["capture_delta"],
+            1.0,
+        )
+
+        attempts = [
+            {
+                "phase": "capture",
+                "stage_passed": True,
+                "exact_to_previous": {"passed": True},
+                "cuda_graph_captures": capture_evidence,
+            },
+            {
+                "phase": "changed-output",
+                "stage_passed": True,
+                "exact_to_previous": {"passed": False},
+                "cuda_graph_captures": quiet_evidence,
+            },
+            {
+                "phase": "stable",
+                "stage_passed": True,
+                "exact_to_previous": {"passed": True},
+                "cuda_graph_captures": quiet_evidence,
+            },
+        ]
+        convergence = soak.quality_replay_stability_evidence(attempts, 4)
+
+        self.assertTrue(convergence["passed"])
+        self.assertEqual(convergence["stable_reference_phase"], "stable")
+        self.assertEqual(convergence["required_consecutive_exact_sets"], 2)
+        self.assertEqual(
+            convergence["required_zero_capture_components"],
+            ["target", "dflash"],
+        )
+
+        failed = soak.quality_replay_stability_evidence(attempts[:2], 2)
+        self.assertFalse(failed["passed"])
+        self.assertTrue(failed["exhausted"])
+        self.assertIsNotNone(failed["failure"])
+
+    def test_pressure_requests_require_fixed_length_completion(self) -> None:
+        with patch.object(
+            soak,
+            "exact_context",
+            side_effect=lambda _, __, label: label,
+        ):
+            specs = soak.make_quality_replay_pressure_specs(
+                object(),
+                wave=0,
+                entries=2,
+                context_tokens=8_192,
+                max_tokens=8,
+                seed=1,
+            )
+        results = [
+            request_result(
+                case_id=spec.case_id,
+                seed=spec.seed,
+                completion_tokens=8,
+                output_chunks=8,
+                finish_reason="length",
+            )
+            for spec in specs
+        ]
+
+        self.assertTrue(all(spec.extra["ignore_eos"] for spec in specs))
+        self.assertTrue(soak.fixed_length_completion_evidence(results, 8)["passed"])
+        results[0].completion_tokens = 7
+        results[1].finish_reason = "stop"
+        evidence = soak.fixed_length_completion_evidence(results, 8)
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(len(evidence["failures"]), 2)
+
+    def test_pressure_plan_churns_pool_without_overcommitting_paired_footprint(
+        self,
+    ) -> None:
+        cases = self.pressure_cases()
+        specs = self.pressure_specs(cases)
+        evidence = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(),
+            cases,
+            specs,
+            self.pressure_config(),
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["logical_peak_entries"], 20)
+        self.assertEqual(evidence["previous_pressure_blocks"], 4_096)
+        self.assertLess(
+            evidence["peak_required_blocks"],
+            evidence["physical_budget_blocks"],
+        )
+        self.assertGreater(evidence["cumulative_pressure_blocks"], 27_080)
+
+        owner_overcommit = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(owner_capacity=19),
+            cases,
+            specs,
+            self.pressure_config(),
+        )
+        self.assertFalse(owner_overcommit["passed"])
+        self.assertFalse(owner_overcommit["owner_fit"])
+
+        physical_overcommit = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(),
+            cases,
+            specs,
+            self.pressure_config(100_000),
+        )
+        self.assertFalse(physical_overcommit["passed"])
+        self.assertFalse(physical_overcommit["physical_fit"])
+
+    def test_pressure_plan_accounts_for_retained_previous_wave(self) -> None:
+        cases = self.pressure_cases()
+        evidence = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(),
+            cases,
+            self.pressure_specs(cases),
+            self.pressure_config(32_000),
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["pressure_blocks_per_wave"], 16_000)
+        self.assertEqual(evidence["previous_pressure_blocks"], 16_000)
+        self.assertGreater(
+            evidence["pressure_peak_blocks"],
+            evidence["physical_budget_blocks"],
+        )
+
+    def test_pressure_plan_accounts_for_all_capacity_retained_prior_owners(
+        self,
+    ) -> None:
+        cases = self.pressure_cases()
+        evidence = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(owner_capacity=60),
+            cases,
+            self.pressure_specs(cases),
+            self.pressure_config(),
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["available_pressure_owner_entries"], 56)
+        self.assertEqual(evidence["elapsed_pressure_entries"], 112)
+        self.assertEqual(evidence["previous_pressure_entries"], 56)
+        self.assertEqual(evidence["previous_pressure_blocks"], 14_336)
+        self.assertEqual(evidence["retained_pressure_entries"], 56)
+
+        overcommitted = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(owner_capacity=100),
+            cases,
+            self.pressure_specs(cases),
+            self.pressure_config(),
+        )
+        self.assertFalse(overcommitted["physical_fit"])
+        self.assertEqual(overcommitted["previous_pressure_entries"], 96)
+
+    def test_pressure_plan_accounts_for_nonempty_baseline(self) -> None:
+        cases = self.pressure_cases()
+        specs = self.pressure_specs(cases)
+        owner_overcommit = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(owner_used=1),
+            cases,
+            specs,
+            self.pressure_config(),
+        )
+        physical_overcommit = soak.quality_replay_pressure_plan_evidence(
+            self.pressure_metrics(owner_capacity=40, retained_blocks=16_000),
+            cases,
+            specs,
+            self.pressure_config(),
+        )
+
+        self.assertFalse(owner_overcommit["owner_fit"])
+        self.assertEqual(owner_overcommit["logical_peak_entries"], 21)
+        self.assertFalse(physical_overcommit["physical_fit"])
+        self.assertGreater(
+            physical_overcommit["peak_required_blocks"],
+            physical_overcommit["physical_budget_blocks"],
+        )
+
+
 class CudaGraphEvidenceTests(unittest.TestCase):
     @staticmethod
     def key(metric: str, **labels: str) -> str:
@@ -2760,6 +3390,35 @@ class ArgumentValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "--concurrencies must be unique"):
             soak.validate_args(args)
 
+    def test_production_concurrencies_must_be_unique(self) -> None:
+        args = self.production_args("--concurrencies", "8,8,16")
+
+        with self.assertRaisesRegex(ValueError, "--concurrencies must be unique"):
+            soak.validate_args(args)
+
+    def test_quality_replay_stability_bound_must_be_positive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.jsonl"
+            source.touch()
+            args = soak.build_parser().parse_args(
+                [
+                    "quality-replay",
+                    "--tokenizer",
+                    "tokenizer.json",
+                    "--server-pid",
+                    "1",
+                    "--source-production-artifact",
+                    str(source),
+                    "--case-id",
+                    "prod-c16-w0-r0",
+                    "--max-stability-passes",
+                    "0",
+                ]
+            )
+
+            with self.assertRaisesRegex(ValueError, "--max-stability-passes"):
+                soak.validate_args(args)
+
     def test_prefix_pressure_headroom_default_validates(self) -> None:
         args = self.adversarial_args(16)
 
@@ -3009,6 +3668,40 @@ class ArgumentValidationTests(unittest.TestCase):
             soak.validate_args(args)
 
 
+class Part1EdgeCaseTests(unittest.IsolatedAsyncioTestCase):
+    async def test_max_length_remains_a_distinct_ignore_eos_case(self) -> None:
+        args = soak.build_parser().parse_args(["canary"])
+
+        class Client:
+            tokenizer = None
+
+        client = Client()
+        client.request_json = AsyncMock(return_value=({}, {"ok": True}))
+        writer = AsyncMock()
+        validators = {
+            name: (lambda *unused: (True, "valid"))
+            for name in (
+                "validate_stop",
+                "validate_max_length",
+                "validate_regex",
+                "validate_json_schema",
+                "validate_tool",
+                "validate_eos",
+            )
+        }
+        with patch.multiple(soak, **validators):
+            evidence = await soak.run_edge_cases(client, args, writer)
+
+        specs = [call.args[0] for call in client.request_json.await_args_list]
+        max_length_specs = [
+            spec for spec in specs if spec.case_id == "edge-max-length"
+        ]
+        self.assertEqual(len(max_length_specs), 1)
+        self.assertTrue(max_length_specs[0].extra["ignore_eos"])
+        self.assertEqual(max_length_specs[0].max_tokens, args.max_length_tokens)
+        self.assertIn("max_length", evidence["edges"])
+
+
 class ProductionGateTests(unittest.TestCase):
     @staticmethod
     def retrieval_result(
@@ -3102,6 +3795,47 @@ class ProductionGateTests(unittest.TestCase):
         evidence = soak.fixed_length_completion_evidence(complete, 8)
         self.assertFalse(evidence["passed"])
         self.assertEqual(len(evidence["failures"]), 2)
+
+    def test_fixed_length_traffic_is_not_production_quality_evidence(self) -> None:
+        fixed_traffic = request_result(
+            case_id="fixed-throughput",
+            completion_tokens=32,
+            output_chunks=32,
+            finish_reason="length",
+            output_text="alpha beta gamma delta " * 12,
+            tags={"role": "traffic"},
+        )
+        normal_eos = request_result(
+            case_id="normal-eos-sentinel",
+            completion_tokens=4,
+            output_chunks=4,
+            finish_reason="stop",
+            output_text="A concise normal response.",
+            tags={"role": "semantic_sentinel"},
+        )
+
+        fixed_evidence = soak.production_output_quality_evidence(
+            [fixed_traffic, normal_eos],
+            None,
+            0.20,
+            True,
+        )
+        normal_evidence = soak.production_output_quality_evidence(
+            [fixed_traffic, normal_eos],
+            None,
+            0.20,
+            False,
+        )
+
+        self.assertTrue(fixed_evidence["passed"])
+        self.assertEqual(fixed_evidence["quality_output_contract"], "normal_eos")
+        self.assertEqual(fixed_evidence["checked_requests"], 1)
+        self.assertEqual(
+            fixed_evidence["excluded_fixed_length_traffic_requests"],
+            1,
+        )
+        self.assertFalse(normal_evidence["passed"])
+        self.assertEqual(normal_evidence["checked_requests"], 2)
 
     def test_loaded_probe_gates_completion_length_and_finish_reason(self) -> None:
         baseline = self.retrieval_result("baseline")
