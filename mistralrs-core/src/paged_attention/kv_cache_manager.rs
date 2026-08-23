@@ -113,6 +113,17 @@ impl KVCacheManager {
         self.block_pool.num_gpu_blocks()
     }
 
+    /// Number of distinct physical blocks referenced by active requests.
+    pub fn num_active_blocks(&self) -> usize {
+        self.num_usable_blocks()
+            .saturating_sub(self.num_free_blocks())
+    }
+
+    /// Number of distinct physical blocks retaining prefix-cache keys.
+    pub fn num_prefix_cached_blocks(&self) -> usize {
+        self.block_pool.num_prefix_cached_physical_blocks()
+    }
+
     /// Whether prefix caching is enabled.
     pub fn caching_enabled(&self) -> bool {
         self.enable_caching
@@ -534,8 +545,31 @@ mod tests {
         let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
 
         mgr.allocate_slots(1, 8, &[]).unwrap();
+        assert_eq!(mgr.num_active_blocks(), 2);
         mgr.cache_blocks(1, &hashes, 8);
+        assert_eq!(mgr.block_pool().num_cached_blocks(), 4);
+        assert_eq!(mgr.num_prefix_cached_blocks(), 2);
         mgr.free(1);
+        assert_eq!(mgr.num_active_blocks(), 0);
+        assert_eq!(mgr.num_prefix_cached_blocks(), 2);
+
+        let computed = mgr.get_computed_blocks(&hashes, 12);
+        assert_eq!(computed.num_computed_tokens, 8);
+        assert_eq!(computed.block_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_prefix_cache_hit_with_duplicate_group_aliases() {
+        let mut mgr = KVCacheManager::new(16, 4, true, vec![0, 1]);
+        let tokens: Vec<u32> = (1..=8).collect();
+        let hashes = compute_block_hashes(&tokens, 4, &[], &[]);
+
+        for request_id in [1, 2] {
+            mgr.allocate_slots(request_id, 8, &[]).unwrap();
+            mgr.cache_blocks(request_id, &hashes, 8);
+        }
+        mgr.free(1);
+        mgr.free(2);
 
         let computed = mgr.get_computed_blocks(&hashes, 12);
         assert_eq!(computed.num_computed_tokens, 8);

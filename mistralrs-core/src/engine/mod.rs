@@ -4,6 +4,7 @@ use crate::{
     pipeline::{
         execution::StepSubmissionKind,
         llg::{constraint_from_llg_grammar, llg_grammar_from_constraint},
+        prompt_chunks::effective_recurrent_prefix_boundary,
         text_models_inputs_processor::PagedAttentionMeta,
         CacheBackendMetadata, CacheInstruction, DecodeGraphPrecaptureCtx, StepLookahead,
         StepSubmission, RECURRENT_GRAPH_PAD_SLOTS,
@@ -239,15 +240,17 @@ struct HybridPagedPrefixValidator {
 }
 
 impl HybridPagedPrefixValidator {
-    fn reset_recurrent_state(&self, slot_idx: usize) {
+    fn reset_recurrent_state(
+        &self,
+        sequence_id: usize,
+        slot_idx: usize,
+    ) -> candle_core::Result<()> {
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            return;
+            return Ok(());
         }
         let mut hybrid_cache = pipeline.cache().hybrid();
-        if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
-            tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
-        }
+        hybrid_cache.reset_seq(sequence_id, slot_idx)
     }
 }
 
@@ -258,59 +261,59 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
         block_hashes: &[BlockHash],
         cached_tokens: usize,
         block_size: usize,
-    ) -> usize {
+    ) -> candle_core::Result<usize> {
         let Some(slot_idx) = seq.recurrent_state_idx() else {
-            return 0;
+            return Ok(0);
         };
 
         let replay = {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             pipeline.speculative_prefix_replay()
         };
-        let cached_tokens = crate::speculative::target::clamp_speculative_prefix_cache_hit(
+        let Some(cached_tokens) = effective_recurrent_prefix_boundary(
             cached_tokens,
+            0,
             block_size,
             replay,
-        );
+            seq.mm_features(),
+        ) else {
+            self.reset_recurrent_state(*seq.id(), slot_idx)?;
+            return Ok(0);
+        };
 
-        if cached_tokens == 0 || !cached_tokens.is_multiple_of(block_size) {
-            self.reset_recurrent_state(slot_idx);
-            return 0;
+        if !cached_tokens.is_multiple_of(block_size) {
+            self.reset_recurrent_state(*seq.id(), slot_idx)?;
+            return Ok(0);
         }
 
         let max_blocks = cached_tokens / block_size;
         let Some((n_blocks, snapshots)) = get_mut_arcmutex!(self.prefix_cacher)
             .get_longest_paged_recurrent_prefix(block_hashes, max_blocks)
         else {
-            self.reset_recurrent_state(slot_idx);
-            return 0;
+            self.reset_recurrent_state(*seq.id(), slot_idx)?;
+            return Ok(0);
         };
 
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            return cached_tokens;
+            return Ok(cached_tokens);
         }
         let mut hybrid_cache = pipeline.cache().hybrid();
-        if hybrid_cache
-            .restore_recurrent_state(slot_idx, &snapshots)
-            .is_ok()
-        {
-            n_blocks * block_size
-        } else {
-            if let Err(e) = hybrid_cache.reset_seq(slot_idx) {
-                tracing::warn!("Failed to reset recurrent state slot {slot_idx}: {e}");
-            }
-            0
-        }
+        hybrid_cache.restore_recurrent_state(*seq.id(), slot_idx, &snapshots)?;
+        Ok(n_blocks * block_size)
     }
 
-    fn release_recurrent_state(&mut self, slot_idx: usize) -> bool {
+    fn release_recurrent_state(
+        &mut self,
+        sequence_id: usize,
+        slot_idx: usize,
+    ) -> candle_core::Result<bool> {
         let pipeline = get_mut_arcmutex!(self.pipeline);
         if !pipeline.cache().is_hybrid() {
-            return false;
+            return Ok(false);
         }
-        pipeline.cache().hybrid().free_seq(slot_idx);
-        true
+        let result = pipeline.cache().hybrid().release_seq(sequence_id, slot_idx);
+        result
     }
 }
 
@@ -384,6 +387,7 @@ impl Engine {
             supports_packed_prefill,
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
+            prefix_replay,
         ) = {
             let pipeline = get_mut_arcmutex!(pipeline);
             let pipeline_metadata = pipeline.get_metadata();
@@ -394,6 +398,7 @@ impl Engine {
                 pipeline.supports_packed_prefill(),
                 pipeline.device().is_cuda() && !pipeline_metadata.is_xlora,
                 pipeline.cache().is_hybrid(),
+                pipeline.speculative_prefix_replay(),
             )
         };
         let recurrent_capacity = match &config {
@@ -423,6 +428,7 @@ impl Engine {
         get_mut_arcmutex!(scheduler).set_scheduler_visible_prompt_chunks(
             scheduler_visible_prompt_chunks,
             prompt_chunks_require_block_alignment,
+            prefix_replay,
         );
 
         // Configure prefix caching on the scheduler based on the global no_prefix_cache flag
@@ -518,16 +524,25 @@ impl Engine {
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
         scheduler.cancel_closed_response_groups();
         let finished_sequence_ids = scheduler.get_finished_sequence_ids();
-        let recurrent_indices = scheduler.get_finished_recurrent_indices();
-        if !finished_sequence_ids.is_empty() || !recurrent_indices.is_empty() {
+        let recurrent_slots = scheduler.get_finished_recurrent_slots();
+        if !finished_sequence_ids.is_empty() || !recurrent_slots.is_empty() {
             let mut pipeline = get_mut_arcmutex!(self.pipeline);
-            pipeline.release_speculative_sequences(&finished_sequence_ids);
+            let mut recurrent_release_succeeded = true;
             if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                 let mut hybrid_cache = pipeline.cache().hybrid();
-                for idx in recurrent_indices {
-                    hybrid_cache.free_seq(idx);
+                for (sequence_id, slot_idx) in recurrent_slots {
+                    if let Err(err) = hybrid_cache.release_seq(sequence_id, slot_idx) {
+                        recurrent_release_succeeded = false;
+                        tracing::error!(
+                            "Failed to release recurrent state for sequence {sequence_id}: {err}"
+                        );
+                    }
                 }
             }
+            if !recurrent_release_succeeded {
+                return;
+            }
+            pipeline.release_speculative_sequences(&finished_sequence_ids);
         }
         scheduler.free_finished_sequence_groups();
         self.logger.set_num_running(scheduler.running_len());
@@ -1575,10 +1590,15 @@ impl Engine {
                         {
                             let pipeline = get_mut_arcmutex!(self.pipeline);
                             let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
+                            let prefix_replay = pipeline.speculative_prefix_replay();
                             if is_prompt
                                 && !scheduler_visible_prompt_step
                                 && pipeline.cache().is_hybrid()
                                 && prefix_cacher.accepts_paged_recurrent_prefix()
+                                && !matches!(
+                                    prefix_replay,
+                                    crate::speculative::SpeculativePrefixReplay::Full
+                                )
                             {
                                 let hybrid_cache = pipeline.cache().hybrid();
 
@@ -1592,8 +1612,24 @@ impl Engine {
                                         continue;
                                     };
 
+                                    let num_blocks = encoded_len / block_size;
+                                    let adapter_key =
+                                        adapter_generation_key(seq.adapter_generation());
+                                    let block_hashes = compute_block_hashes(
+                                        seq.get_toks(),
+                                        block_size,
+                                        seq.mm_features(),
+                                        adapter_key.as_slice(),
+                                    );
+                                    if block_hashes.len() < num_blocks {
+                                        continue;
+                                    }
+                                    let owner = block_hashes[num_blocks - 1];
+                                    if prefix_cacher.has_paged_recurrent_owner(owner) {
+                                        continue;
+                                    }
                                     let snapshots = match hybrid_cache
-                                        .snapshot_recurrent_state(slot_idx)
+                                        .snapshot_recurrent_state(*seq.id(), slot_idx)
                                     {
                                         Ok(snapshots) => snapshots,
                                         Err(e) => {
@@ -1607,20 +1643,8 @@ impl Engine {
                                     if snapshots.is_empty() {
                                         continue;
                                     }
-
-                                    let num_blocks = encoded_len / block_size;
-                                    let adapter_key =
-                                        adapter_generation_key(seq.adapter_generation());
-                                    let block_hashes = compute_block_hashes(
-                                        seq.get_toks(),
-                                        block_size,
-                                        seq.mm_features(),
-                                        adapter_key.as_slice(),
-                                    );
-                                    if block_hashes.len() < num_blocks {
-                                        continue;
-                                    }
                                     prefix_cacher.add_paged_recurrent_prefix(
+                                        owner,
                                         block_hashes[..num_blocks].to_vec(),
                                         snapshots,
                                     );

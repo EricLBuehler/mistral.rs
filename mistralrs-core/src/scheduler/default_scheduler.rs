@@ -343,12 +343,12 @@ impl Scheduler for DefaultScheduler<VecDeque<Sequence>> {
         self.running.retain(|seq| !seq.is_finished_paged_attn());
         self.waiting.retain(|seq| !seq.is_finished_paged_attn());
     }
-    fn get_finished_recurrent_indices(&self) -> Vec<usize> {
+    fn get_finished_recurrent_slots(&self) -> Vec<(usize, usize)> {
         self.running
             .iter()
             .chain(self.waiting.iter())
             .filter(|seq| seq.is_finished_paged_attn())
-            .filter_map(|seq| seq.recurrent_state_idx())
+            .filter_map(|seq| seq.recurrent_state_idx().map(|slot| (*seq.id(), slot)))
             .collect()
     }
     fn get_finished_sequence_ids(&self) -> Vec<usize> {

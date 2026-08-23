@@ -148,7 +148,11 @@ fn cache_finished_sequence(
             );
             return Ok(());
         };
-        match this.cache().hybrid().snapshot_recurrent_state(idx) {
+        match this
+            .cache()
+            .hybrid()
+            .snapshot_recurrent_state(*seq.id(), idx)
+        {
             Ok(snapshots) => Some(snapshots),
             Err(error) => {
                 tracing::warn!(

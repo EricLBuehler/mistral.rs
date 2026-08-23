@@ -23,6 +23,7 @@ use crate::{
     sequence::{
         clamp_prefix_cache_len_for_mm_features, SeqStepType, Sequence, SequenceState, StopReason,
     },
+    speculative::SpeculativePrefixReplay,
     AdapterGenerationId, Response, TERMINATE_ALL_NEXT_STEP,
 };
 
@@ -88,6 +89,7 @@ pub struct PagedAttentionScheduler {
     supports_packed_prefill: bool,
     scheduler_visible_prompt_chunks: bool,
     prompt_chunks_require_block_alignment: bool,
+    prefix_replay: SpeculativePrefixReplay,
     decode_steps_since_prefill: usize,
     completion_cursor: usize,
     /// Block hashes per sequence for prefix caching.
@@ -96,7 +98,7 @@ pub struct PagedAttentionScheduler {
     seq_block_hash_revisions: HashMap<usize, u64>,
     /// Per-sequence waitlist counter for starvation detection.
     waiting_counts: HashMap<usize, usize>,
-    finished_recurrent_indices: Vec<usize>,
+    finished_recurrent_slots: Vec<(usize, usize)>,
     preempted_sequence_ids: Vec<usize>,
 }
 
@@ -123,12 +125,13 @@ impl PagedAttentionScheduler {
             supports_packed_prefill: false,
             scheduler_visible_prompt_chunks: false,
             prompt_chunks_require_block_alignment: false,
+            prefix_replay: SpeculativePrefixReplay::NotRequired,
             decode_steps_since_prefill: 0,
             completion_cursor: 0,
             seq_block_hashes: HashMap::new(),
             seq_block_hash_revisions: HashMap::new(),
             waiting_counts: HashMap::new(),
-            finished_recurrent_indices: Vec::new(),
+            finished_recurrent_slots: Vec::new(),
             preempted_sequence_ids: Vec::new(),
         }
     }
@@ -211,6 +214,7 @@ impl PagedAttentionScheduler {
                     seq.num_computed_tokens(),
                     chunk_size,
                     block_align,
+                    self.prefix_replay,
                     seq.mm_features(),
                 )
             })
@@ -386,20 +390,22 @@ impl PagedAttentionScheduler {
     fn finish_ignored_sequence(
         &mut self,
         seq: Arc<Mutex<Sequence>>,
-        reason: String,
+        response: Response,
         recurrent_state_released: bool,
     ) {
         let (seq_id, responder, recurrent_state_idx) = {
             let mut seq_guard = get_mut_arcmutex!(seq);
             seq_guard.set_state(SequenceState::FinishedIgnored);
             let recurrent_state_idx = seq_guard.recurrent_state_idx();
-            seq_guard.set_recurrent_state_idx(None);
+            if recurrent_state_released {
+                seq_guard.set_recurrent_state_idx(None);
+            }
             (*seq_guard.id(), seq_guard.responder(), recurrent_state_idx)
         };
 
         if let Some(slot_idx) = recurrent_state_idx {
             if !recurrent_state_released {
-                self.finished_recurrent_indices.push(slot_idx);
+                self.finished_recurrent_slots.push((seq_id, slot_idx));
             }
         }
 
@@ -408,11 +414,8 @@ impl PagedAttentionScheduler {
         self.seq_block_hash_revisions.remove(&seq_id);
         get_mut_arcmutex!(self.kv_cache_manager).free(seq_id);
 
-        if responder
-            .try_send(Response::ValidationError(reason.into()))
-            .is_err()
-        {
-            warn!("Failed to deliver KV cache capacity error for sequence {seq_id}");
+        if responder.try_send(response).is_err() {
+            warn!("Failed to deliver scheduling error for sequence {seq_id}");
         }
     }
 
@@ -541,18 +544,56 @@ impl PagedAttentionScheduler {
         prefix_validator: &mut Option<&mut dyn PagedPrefixCacheValidator>,
     ) {
         warn!("{reason}");
+        self.finish_front_of_waiting(
+            Response::ValidationError(reason.into()),
+            metric_reason,
+            prefix_validator,
+        );
+    }
+
+    fn fail_front_of_waiting(
+        &mut self,
+        reason: String,
+        metric_reason: &'static str,
+        prefix_validator: &mut Option<&mut dyn PagedPrefixCacheValidator>,
+    ) {
+        warn!("{reason}");
+        self.finish_front_of_waiting(
+            Response::InternalError(reason.into()),
+            metric_reason,
+            prefix_validator,
+        );
+    }
+
+    fn finish_front_of_waiting(
+        &mut self,
+        response: Response,
+        metric_reason: &'static str,
+        prefix_validator: &mut Option<&mut dyn PagedPrefixCacheValidator>,
+    ) {
         metrics::counter!("mistralrs_sequences_rejected_total", "reason" => metric_reason)
             .increment(1);
         let seq = self.waiting.pop_front().unwrap();
-        let recurrent_state_idx = get_mut_arcmutex!(seq).recurrent_state_idx();
+        let (sequence_id, recurrent_state_idx) = {
+            let seq = get_mut_arcmutex!(seq);
+            (*seq.id(), seq.recurrent_state_idx())
+        };
         let recurrent_state_released = if let (Some(slot_idx), Some(validator)) =
             (recurrent_state_idx, prefix_validator.as_mut())
         {
-            validator.release_recurrent_state(slot_idx)
+            match validator.release_recurrent_state(sequence_id, slot_idx) {
+                Ok(_) => true,
+                Err(err) => {
+                    tracing::error!(
+                        "Failed to release recurrent state for sequence {sequence_id}: {err}"
+                    );
+                    false
+                }
+            }
         } else {
             false
         };
-        self.finish_ignored_sequence(seq, reason, recurrent_state_released);
+        self.finish_ignored_sequence(seq, response, recurrent_state_released);
     }
 
     fn enforce_completion_compatibility(&mut self) {
@@ -609,7 +650,7 @@ impl PagedAttentionScheduler {
             // A sequence larger than the whole cache can never be scheduled; reject it up front
             // instead of letting it wait out the starvation timeout.
             let total_token_capacity =
-                get_mut_arcmutex!(self.kv_cache_manager).num_gpu_blocks() * self.block_size;
+                get_mut_arcmutex!(self.kv_cache_manager).num_usable_blocks() * self.block_size;
             if num_tokens > total_token_capacity {
                 self.reject_front_of_waiting(
                     format!(
@@ -658,6 +699,7 @@ impl PagedAttentionScheduler {
                 computed.block_ids.truncate(clamped / self.block_size);
                 computed.num_computed_tokens = clamped;
             }
+            let matched_prefix_tokens = computed.num_computed_tokens;
             if let Some(validator) = prefix_validator.as_mut() {
                 let mut seq_guard = get_mut_arcmutex!(seq);
                 let valid_tokens = validator.validate_prefix_cache_hit(
@@ -667,6 +709,19 @@ impl PagedAttentionScheduler {
                     self.block_size,
                 );
                 drop(seq_guard);
+                let valid_tokens = match valid_tokens {
+                    Ok(valid_tokens) => valid_tokens,
+                    Err(err) => {
+                        self.fail_front_of_waiting(
+                            format!(
+                                "Failed to prepare recurrent state for sequence {seq_id}: {err}"
+                            ),
+                            "recurrent_state",
+                            &mut prefix_validator,
+                        );
+                        continue;
+                    }
+                };
                 if valid_tokens < computed.num_computed_tokens {
                     let valid_blocks = valid_tokens / self.block_size;
                     computed.block_ids.truncate(valid_blocks);
@@ -741,6 +796,11 @@ impl PagedAttentionScheduler {
                 continue;
             }
 
+            metrics::counter!("mistralrs_prefix_cache_tokens_matched_total").increment(
+                u64::try_from(matched_prefix_tokens).expect("prefix length exceeds u64"),
+            );
+            metrics::counter!("mistralrs_prefix_cache_tokens_reused_total")
+                .increment(u64::try_from(num_computed).expect("prefix length exceeds u64"));
             if num_computed > 0 && get_mut_arcmutex!(seq).record_prefix_cache_hit() {
                 logger.add_prefix_cache_hit();
             }
@@ -953,9 +1013,12 @@ impl PagedAttentionScheduler {
     fn publish_kv_block_metrics(&self) {
         let kv_mgr = get_mut_arcmutex!(self.kv_cache_manager);
         let total = kv_mgr.num_usable_blocks();
-        let used = total.saturating_sub(kv_mgr.num_free_blocks());
-        metrics::gauge!("mistralrs_kv_cache_blocks_used").set(used as f64);
+        let active = kv_mgr.num_active_blocks();
+        metrics::gauge!("mistralrs_kv_cache_blocks_used").set(active as f64);
         metrics::gauge!("mistralrs_kv_cache_blocks_total").set(total as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_active").set(active as f64);
+        metrics::gauge!("mistralrs_kv_cache_blocks_prefix_cached")
+            .set(kv_mgr.num_prefix_cached_blocks() as f64);
     }
 
     pub fn free_finished_sequence_groups(&mut self) {
@@ -1024,7 +1087,9 @@ impl PagedAttentionScheduler {
             self.seq_block_hash_revisions.remove(&id);
             self.waiting_counts.remove(&id);
         }
-        self.finished_recurrent_indices.clear();
+        drop(kv_mgr);
+        self.finished_recurrent_slots.clear();
+        self.publish_kv_block_metrics();
     }
 }
 
@@ -1122,16 +1187,20 @@ impl Scheduler for PagedAttentionScheduler {
     fn free_finished_sequence_groups(&mut self) {
         self.free_finished_sequence_groups()
     }
-    fn get_finished_recurrent_indices(&self) -> Vec<usize> {
-        let mut indices = self.finished_recurrent_indices.clone();
-        indices.extend(
+    fn get_finished_recurrent_slots(&self) -> Vec<(usize, usize)> {
+        let mut slots = self.finished_recurrent_slots.clone();
+        slots.extend(
             self.running
                 .iter()
                 .chain(self.waiting.iter())
-                .filter(|seq| get_mut_arcmutex!(seq).is_finished_paged_attn())
-                .filter_map(|seq| get_mut_arcmutex!(seq).recurrent_state_idx()),
+                .filter_map(|seq| {
+                    let seq = get_mut_arcmutex!(seq);
+                    seq.is_finished_paged_attn()
+                        .then(|| seq.recurrent_state_idx().map(|slot| (*seq.id(), slot)))
+                        .flatten()
+                }),
         );
-        indices
+        slots
     }
     fn get_finished_sequence_ids(&self) -> Vec<usize> {
         self.running
@@ -1163,9 +1232,11 @@ impl Scheduler for PagedAttentionScheduler {
         &mut self,
         enabled: bool,
         require_block_alignment: bool,
+        prefix_replay: SpeculativePrefixReplay,
     ) {
         self.scheduler_visible_prompt_chunks = enabled;
         self.prompt_chunks_require_block_alignment = require_block_alignment;
+        self.prefix_replay = prefix_replay;
     }
 
     fn can_continue_decode_batch(&self, sequence_ids: &[usize]) -> bool {
@@ -1218,7 +1289,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingPrefixValidator {
         cached_tokens: Vec<usize>,
-        released_slots: Vec<usize>,
+        released_slots: Vec<(usize, usize)>,
     }
 
     impl PagedPrefixCacheValidator for RecordingPrefixValidator {
@@ -1228,14 +1299,44 @@ mod tests {
             _block_hashes: &[BlockHash],
             cached_tokens: usize,
             _block_size: usize,
-        ) -> usize {
+        ) -> candle_core::Result<usize> {
             self.cached_tokens.push(cached_tokens);
-            cached_tokens
+            Ok(cached_tokens)
         }
 
-        fn release_recurrent_state(&mut self, slot_idx: usize) -> bool {
-            self.released_slots.push(slot_idx);
-            true
+        fn release_recurrent_state(
+            &mut self,
+            sequence_id: usize,
+            slot_idx: usize,
+        ) -> candle_core::Result<bool> {
+            self.released_slots.push((sequence_id, slot_idx));
+            Ok(true)
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingPrefixValidator {
+        released_slots: Vec<(usize, usize)>,
+    }
+
+    impl PagedPrefixCacheValidator for FailingPrefixValidator {
+        fn validate_prefix_cache_hit(
+            &mut self,
+            _seq: &mut Sequence,
+            _block_hashes: &[BlockHash],
+            _cached_tokens: usize,
+            _block_size: usize,
+        ) -> candle_core::Result<usize> {
+            candle_core::bail!("injected recurrent state reset failure")
+        }
+
+        fn release_recurrent_state(
+            &mut self,
+            sequence_id: usize,
+            slot_idx: usize,
+        ) -> candle_core::Result<bool> {
+            self.released_slots.push((sequence_id, slot_idx));
+            Ok(true)
         }
     }
 
@@ -1494,6 +1595,10 @@ mod tests {
             .allocate_slots(30, 4, &[])
             .is_some());
         scheduler.running.push_back(decode.clone());
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager).num_active_blocks(),
+            2
+        );
 
         drop(rx);
         Scheduler::cancel_closed_response_groups(&mut scheduler);
@@ -1509,8 +1614,8 @@ mod tests {
             vec![20, 30, 10]
         );
         assert_eq!(
-            Scheduler::get_finished_recurrent_indices(&scheduler),
-            vec![20, 30, 10]
+            Scheduler::get_finished_recurrent_slots(&scheduler),
+            vec![(20, 20), (30, 30), (10, 10)]
         );
         assert!(!scheduler.can_continue_decode_batch(&[30]));
 
@@ -1520,6 +1625,10 @@ mod tests {
         assert_eq!(
             get_mut_arcmutex!(scheduler.kv_cache_manager).num_free_blocks(),
             initial_free_blocks
+        );
+        assert_eq!(
+            get_mut_arcmutex!(scheduler.kv_cache_manager).num_active_blocks(),
+            0
         );
     }
 
@@ -1584,7 +1693,7 @@ mod tests {
 
         let (oversized, mut receiver) = test_sequence_with_media_and_receiver(
             1,
-            1_025,
+            1_024,
             Some(vec![image::DynamicImage::new_rgb8(1, 1)]),
             None,
             None,
@@ -1609,11 +1718,39 @@ mod tests {
             SequenceState::FinishedIgnored
         );
         assert_eq!(get_mut_arcmutex!(oversized).recurrent_state_idx(), None);
-        assert_eq!(validator.released_slots, vec![7]);
+        assert_eq!(validator.released_slots, vec![(1, 7)]);
         assert!(matches!(
             receiver.try_recv(),
             Ok(Response::ValidationError(_))
         ));
+    }
+
+    #[test]
+    fn recurrent_prefix_failure_rejects_request_and_releases_slot() {
+        let mut scheduler = test_scheduler();
+        let (seq, mut receiver) = test_sequence_with_media_and_receiver(1, 16, None, None, None);
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_state(SequenceState::Waiting);
+            seq.set_recurrent_state_idx(Some(7));
+        }
+        scheduler.waiting.push_back(seq.clone());
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut validator = FailingPrefixValidator::default();
+        let output = scheduler.schedule(&logger, Some(&mut validator));
+
+        assert!(output.scheduled.is_empty());
+        assert!(scheduler.waiting.is_empty());
+        assert!(scheduler.running.is_empty());
+        assert_eq!(validator.released_slots, vec![(1, 7)]);
+        assert_eq!(get_mut_arcmutex!(seq).recurrent_state_idx(), None);
+        assert_eq!(
+            get_mut_arcmutex!(seq).getstate(),
+            SequenceState::FinishedIgnored
+        );
+        let response = receiver.try_recv().unwrap();
+        assert!(matches!(response, Response::InternalError(_)));
     }
 
     #[test]
@@ -2377,6 +2514,51 @@ mod tests {
             assert_eq!(output.scheduled.len(), 1);
             assert_eq!((chunks[0].start, chunks[0].end), expected);
             assert_eq!(chunks[0].end - chunks[0].start, expected.1 - expected.0);
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(chunks[0].end);
+            seq.set_num_computed_tokens(chunks[0].end);
+        }
+    }
+
+    #[test]
+    fn hybrid_prefill_schedules_the_maximum_reusable_prefix_boundary() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.prompt_chunks_require_block_alignment = true;
+        scheduler.config.max_num_batched_tokens = 32;
+        let seq = test_sequence(0, 64);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq.clone());
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        for expected in [(0, 32), (32, 56), (56, 64)] {
+            let output = scheduler.schedule(&logger, None);
+            let chunks = output.scheduled_prompt_chunks.unwrap();
+            assert_eq!(output.scheduled.len(), 1);
+            assert_eq!((chunks[0].start, chunks[0].end), expected);
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(chunks[0].end);
+            seq.set_num_computed_tokens(chunks[0].end);
+        }
+    }
+
+    #[test]
+    fn hybrid_prefill_schedules_the_suffix_replay_boundary() {
+        let mut scheduler = test_scheduler();
+        scheduler.scheduler_visible_prompt_chunks = true;
+        scheduler.prompt_chunks_require_block_alignment = true;
+        scheduler.prefix_replay = SpeculativePrefixReplay::Suffix(16);
+        scheduler.config.max_num_batched_tokens = 32;
+        let seq = test_sequence(0, 64);
+        get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+        scheduler.waiting.push_back(seq.clone());
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+
+        for expected in [(0, 32), (32, 40), (40, 64)] {
+            let output = scheduler.schedule(&logger, None);
+            let chunks = output.scheduled_prompt_chunks.unwrap();
+            assert_eq!(output.scheduled.len(), 1);
+            assert_eq!((chunks[0].start, chunks[0].end), expected);
             let mut seq = get_mut_arcmutex!(seq);
             seq.set_prefix_cache_len(chunks[0].end);
             seq.set_num_computed_tokens(chunks[0].end);

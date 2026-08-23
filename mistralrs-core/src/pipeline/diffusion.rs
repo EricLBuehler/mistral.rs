@@ -282,7 +282,9 @@ impl IsqPipelineMixin for DiffusionPipeline {
 }
 
 impl CacheManagerMixin for DiffusionPipeline {
-    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
     fn set_none_cache(
         &self,
@@ -290,7 +292,8 @@ impl CacheManagerMixin for DiffusionPipeline {
         _reset_non_granular: bool,
         _modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         &self.dummy_cache

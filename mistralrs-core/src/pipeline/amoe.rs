@@ -185,7 +185,7 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).clone_in_cache(seqs)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
@@ -197,7 +197,7 @@ impl CacheManagerMixin for AnyMoePipeline {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).set_none_cache(
             seqs,
             reset_non_granular,
@@ -572,7 +572,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
 
                 // Clear KV cache in prep for training
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 let inputs = inputs_processor.process_inputs(
                     tokenizer.clone(),
@@ -595,7 +595,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let _ = target.forward_inputs(inputs.unwrap().inputs, false)?;
 
                 // Clear the KV cache
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 // === BACKWARD STEP ==
                 #[allow(clippy::cast_possible_truncation)]

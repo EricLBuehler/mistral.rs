@@ -1508,7 +1508,7 @@ impl IsqPipelineMixin for NormalPipeline {
 }
 
 impl CacheManagerMixin for NormalPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
             EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
@@ -1528,7 +1528,7 @@ impl CacheManagerMixin for NormalPipeline {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
         match self.model.cache() {
             EitherCache::Full(_) => {
                 FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
@@ -1545,10 +1545,11 @@ impl CacheManagerMixin for NormalPipeline {
                 modify_draft_cache,
                 load_preallocated_cache,
             ),
-        }
+        }?;
         if reset_non_granular {
             self.reset_non_granular_state()
         }
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         self.model.cache()
@@ -1578,6 +1579,11 @@ impl MetadataMixin for NormalPipeline {
                 .lock()
                 .expect("CUDA graph mutex poisoned")
                 .clear();
+            if self.model.cache().is_hybrid() {
+                if let Err(err) = self.model.cache().hybrid().release_graph_pad_slot() {
+                    tracing::error!("Failed to release CUDA graph recurrent pad slot: {err}");
+                }
+            }
         }
     }
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
@@ -1785,8 +1791,8 @@ impl NormalPipeline {
         }
         let hybrid_slots = if self.model.cache().is_hybrid() {
             let slots = hybrid_graph_slots(&mut self.model.cache().hybrid())?;
-            if slots.as_ref().is_some_and(|slots| slots.grew) {
-                state.clear();
+            if let Some(slots) = &slots {
+                state.observe_recurrent_storage_generation(slots.storage_generation);
             }
             slots
         } else {
@@ -2097,6 +2103,14 @@ impl NormalPipeline {
             warn!("CUDA decode graphs disabled after capture/replay error: {err}");
         }
         state.disable();
+        drop(state);
+        if self.model.cache().is_hybrid() {
+            if let Err(release_err) = self.model.cache().hybrid().release_graph_pad_slot() {
+                tracing::error!(
+                    "Failed to release recurrent graph pad after graph disable: {release_err}"
+                );
+            }
+        }
         eager_retry_allowed
     }
 }

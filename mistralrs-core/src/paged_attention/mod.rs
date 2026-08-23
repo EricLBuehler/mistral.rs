@@ -520,9 +520,10 @@ pub fn calculate_cache_config(
     }
 
     if !silent {
+        let available_context_tokens = num_gpu_blocks.saturating_sub(1) * block_size;
         info!("Allocating {mem_gpu} MB for PagedAttention KV cache per GPU");
         info!("PagedAttention KV cache type is {dtype:?}");
-        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {} tokens", num_gpu_blocks*block_size);
+        info!("Using PagedAttention with block size {block_size} and {num_gpu_blocks} GPU blocks: available context length is {available_context_tokens} tokens");
     }
     Ok(CacheConfig {
         block_size,

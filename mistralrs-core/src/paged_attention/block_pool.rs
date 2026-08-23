@@ -195,11 +195,35 @@ impl BlockHashToBlockMap {
         }
     }
 
-    /// Get any cached block ID for the given hash, or None.
-    fn get_one(&self, key: &BlockHashWithGroupId) -> Option<usize> {
-        match self.cache.get(key)? {
-            CachedBlocks::Single(id) => Some(*id),
-            CachedBlocks::Multiple(map) => map.values().next().copied(),
+    fn contains(&self, key: &BlockHashWithGroupId, block_id: usize) -> bool {
+        match self.cache.get(key) {
+            Some(CachedBlocks::Single(id)) => *id == block_id,
+            Some(CachedBlocks::Multiple(map)) => map.contains_key(&block_id),
+            None => false,
+        }
+    }
+
+    fn get_common(&self, block_hash: BlockHash, kv_cache_group_ids: &[u32]) -> Option<usize> {
+        let (&first_group_id, remaining_group_ids) = kv_cache_group_ids.split_first()?;
+        let first_key = BlockHashWithGroupId {
+            block_hash,
+            group_id: first_group_id,
+        };
+        let is_common = |block_id| {
+            remaining_group_ids.iter().all(|&group_id| {
+                self.contains(
+                    &BlockHashWithGroupId {
+                        block_hash,
+                        group_id,
+                    },
+                    block_id,
+                )
+            })
+        };
+
+        match self.cache.get(&first_key)? {
+            CachedBlocks::Single(id) => is_common(*id).then_some(*id),
+            CachedBlocks::Multiple(map) => map.keys().copied().find(|id| is_common(*id)),
         }
     }
 
@@ -271,6 +295,7 @@ pub struct BlockPool {
     free_queue: FreeKVCacheBlockQueue,
     /// Hash-to-block map for prefix cache lookups.
     cached_block_hash_to_block: BlockHashToBlockMap,
+    num_prefix_cached_physical_blocks: usize,
     /// Whether prefix caching is enabled.
     enable_caching: bool,
     /// Total number of real GPU blocks (excludes sentinels and null block).
@@ -306,6 +331,7 @@ impl BlockPool {
             blocks,
             free_queue,
             cached_block_hash_to_block: BlockHashToBlockMap::new(),
+            num_prefix_cached_physical_blocks: 0,
             enable_caching,
             num_gpu_blocks,
             null_block_id: 0, // Will be set below
@@ -350,22 +376,20 @@ impl BlockPool {
 
     /// Look up cached blocks for a given hash across the specified group IDs.
     ///
-    /// Returns `Some(vec_of_block_ids)` if ALL groups have a cached block for
-    /// this hash, or `None` if any group misses.
+    /// Returns the same physical block ID for every group if one block retains
+    /// all requested group keys, or `None` if no common block exists.
     pub fn get_cached_block(
         &self,
         block_hash: BlockHash,
         kv_cache_group_ids: &[u32],
     ) -> Option<Vec<usize>> {
-        let mut cached_ids = Vec::with_capacity(kv_cache_group_ids.len());
-        for &group_id in kv_cache_group_ids {
-            let key = BlockHashWithGroupId {
-                block_hash,
-                group_id,
-            };
-            cached_ids.push(self.cached_block_hash_to_block.get_one(&key)?);
+        if kv_cache_group_ids.is_empty() {
+            return Some(Vec::new());
         }
-        Some(cached_ids)
+        let block_id = self
+            .cached_block_hash_to_block
+            .get_common(block_hash, kv_cache_group_ids)?;
+        Some(vec![block_id; kv_cache_group_ids.len()])
     }
 
     /// Touch blocks, increment ref_cnt and remove from free list if ref_cnt was 0.
@@ -393,17 +417,25 @@ impl BlockPool {
     /// For a request being freed, pass blocks in REVERSE order so the tail of the
     /// sequence (most specific) is evicted first.
     pub fn free_blocks(&mut self, ordered_block_ids: &[usize]) {
-        // First pass: decrement ref_cnt
+        let mut release_counts = HashMap::<usize, u32>::new();
         for &block_id in ordered_block_ids {
-            debug_assert!(
-                self.blocks[block_id].ref_cnt > 0,
-                "Block {block_id} ref_cnt underflow: attempting to free block with ref_cnt=0"
-            );
-            self.blocks[block_id].ref_cnt = self.blocks[block_id].ref_cnt.saturating_sub(1);
+            let count = release_counts.entry(block_id).or_default();
+            *count = count.checked_add(1).expect("block release count overflow");
         }
 
-        // Second pass: add newly-free blocks to the free list
+        for (&block_id, &release_count) in &release_counts {
+            assert!(
+                self.blocks[block_id].ref_cnt >= release_count,
+                "Block {block_id} ref_cnt underflow: releasing {release_count} references from {}",
+                self.blocks[block_id].ref_cnt
+            );
+        }
+
         for &block_id in ordered_block_ids {
+            let Some(release_count) = release_counts.remove(&block_id) else {
+                continue;
+            };
+            self.blocks[block_id].ref_cnt -= release_count;
             if self.blocks[block_id].ref_cnt == 0 && !self.blocks[block_id].is_null {
                 self.free_queue.append(&mut self.blocks, block_id);
             }
@@ -487,6 +519,9 @@ impl BlockPool {
                 continue;
             }
 
+            if block.block_hashes.is_empty() {
+                self.num_prefix_cached_physical_blocks += 1;
+            }
             block.block_hashes.push(hash_with_group);
             self.cached_block_hash_to_block
                 .insert(hash_with_group, block_id);
@@ -496,6 +531,12 @@ impl BlockPool {
     /// Evict a cached block's hash from the cache map and reset its hash.
     fn maybe_evict_cached_block(&mut self, block_id: usize) {
         let block_hashes = std::mem::take(&mut self.blocks[block_id].block_hashes);
+        if !block_hashes.is_empty() {
+            self.num_prefix_cached_physical_blocks = self
+                .num_prefix_cached_physical_blocks
+                .checked_sub(1)
+                .expect("prefix-cached physical block count underflow");
+        }
         for hash in &block_hashes {
             self.cached_block_hash_to_block.pop(hash, block_id);
         }
@@ -515,6 +556,7 @@ impl BlockPool {
 
         let evicted = self.cached_block_hash_to_block.len();
         self.cached_block_hash_to_block.clear();
+        self.num_prefix_cached_physical_blocks = 0;
         for block in &mut self.blocks {
             block.reset_hash();
         }
@@ -528,6 +570,11 @@ impl BlockPool {
     /// Get the number of cached blocks in the hash map.
     pub fn num_cached_blocks(&self) -> usize {
         self.cached_block_hash_to_block.len()
+    }
+
+    /// Get the number of physical blocks that retain at least one prefix-cache key.
+    pub fn num_prefix_cached_physical_blocks(&self) -> usize {
+        self.num_prefix_cached_physical_blocks
     }
 
     /// Get the block size used for hash computation.
@@ -592,6 +639,29 @@ mod tests {
     }
 
     #[test]
+    fn test_duplicate_block_release_appends_once() {
+        let mut pool = BlockPool::new(4, true, 4);
+        let block_id = pool.get_new_blocks(1).unwrap()[0];
+        pool.touch(&[block_id]);
+
+        pool.free_blocks(&[block_id, block_id]);
+
+        assert_eq!(pool.block_ref_cnt(block_id), 0);
+        assert_eq!(pool.num_free_blocks(), 3);
+        assert_eq!(pool.get_new_blocks(3).unwrap().len(), 3);
+        assert_eq!(pool.num_free_blocks(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "ref_cnt underflow")]
+    fn test_block_release_underflow_fails_before_queue_mutation() {
+        let mut pool = BlockPool::new(4, true, 4);
+        let block_id = pool.get_new_blocks(1).unwrap()[0];
+        pool.free_blocks(&[block_id]);
+        pool.free_blocks(&[block_id]);
+    }
+
+    #[test]
     fn test_allocation_fails_when_exhausted() {
         let mut pool = BlockPool::new(2, false, 16);
         // 2 blocks, 1 null -> 1 free
@@ -621,6 +691,7 @@ mod tests {
 
         // Verify they're cached
         assert_eq!(pool.num_cached_blocks(), 3);
+        assert_eq!(pool.num_prefix_cached_physical_blocks(), 3);
 
         // Look up by hash
         let cached = pool.get_cached_block(h0, &[0]);
@@ -721,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_cached_block_multiple_groups() {
+    fn test_get_cached_block_requires_a_common_physical_block() {
         let mut pool = BlockPool::new(8, true, 4);
 
         // Allocate blocks for two groups
@@ -734,13 +805,7 @@ mod tests {
         pool.cache_full_blocks(&ids_g0, &[h0], 0, 1, 0);
         pool.cache_full_blocks(&ids_g1, &[h0], 0, 1, 1);
 
-        // Should find both groups
-        let cached = pool.get_cached_block(h0, &[0, 1]);
-        assert!(cached.is_some());
-        let cached = cached.unwrap();
-        assert_eq!(cached.len(), 2);
-        assert_eq!(cached[0], ids_g0[0]);
-        assert_eq!(cached[1], ids_g1[0]);
+        assert!(pool.get_cached_block(h0, &[0, 1]).is_none());
 
         // Should fail if one group is missing
         let cached = pool.get_cached_block(h0, &[0, 2]);
@@ -765,6 +830,23 @@ mod tests {
 
         assert!(pool.get_cached_block(h0, &[0]).is_none());
         assert!(pool.get_cached_block(h0, &[1]).is_none());
+    }
+
+    #[test]
+    fn test_duplicate_group_aliases_select_a_common_physical_block() {
+        let mut pool = BlockPool::new(8, true, 4);
+        let first = pool.get_new_blocks(1).unwrap();
+        let second = pool.get_new_blocks(1).unwrap();
+        let h0 = hash_block_tokens(None, &[1, 2, 3, 4], None);
+
+        for ids in [&first, &second] {
+            pool.cache_full_blocks(ids, &[h0], 0, 1, 0);
+            pool.cache_full_blocks(ids, &[h0], 0, 1, 1);
+        }
+
+        let cached = pool.get_cached_block(h0, &[0, 1]).unwrap();
+        assert_eq!(cached[0], cached[1]);
+        assert!(cached[0] == first[0] || cached[0] == second[0]);
     }
 
     #[test]

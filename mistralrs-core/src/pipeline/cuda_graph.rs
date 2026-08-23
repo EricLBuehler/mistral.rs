@@ -620,8 +620,7 @@ impl CudaGraphPrecaptureInputs {
 
 pub(crate) struct HybridGraphSlots {
     pub(crate) real: Vec<u32>,
-    // Reserving graph capacity may reallocate the pools, invalidating every captured graph.
-    pub(crate) grew: bool,
+    pub(crate) storage_generation: u64,
 }
 
 /// The batch's live recurrent slots after reserving graph capacity.
@@ -631,11 +630,10 @@ pub(crate) fn hybrid_graph_slots(
     let Some(real) = cache.state_indices_host().map(<[u32]>::to_vec) else {
         return Ok(None);
     };
-    let capacity = cache.recurrent_capacity();
     cache.graph_pad_slot()?;
     Ok(Some(HybridGraphSlots {
         real,
-        grew: cache.recurrent_capacity() != capacity,
+        storage_generation: cache.recurrent_storage_generation(),
     }))
 }
 
@@ -1661,6 +1659,7 @@ pub(crate) struct CudaDecodeGraphState {
     disabled: bool,
     suspended: bool,
     eager_retry_blocked: bool,
+    recurrent_storage_generation: Option<u64>,
 }
 
 impl CudaDecodeGraphState {
@@ -1684,6 +1683,13 @@ impl CudaDecodeGraphState {
     pub(crate) fn clear(&mut self) {
         self.eager_retry_blocked = false;
         release_cuda_graph_entries(std::mem::take(&mut self.entries));
+    }
+
+    pub(crate) fn observe_recurrent_storage_generation(&mut self, generation: u64) {
+        let previous = self.recurrent_storage_generation.replace(generation);
+        if previous.is_some_and(|previous| previous != generation) {
+            self.clear();
+        }
     }
 
     pub(crate) fn suspend(&mut self) {

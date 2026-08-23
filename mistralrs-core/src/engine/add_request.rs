@@ -843,42 +843,37 @@ impl Engine {
                 )
             };
 
-            let recurrent_slot_allocation_failed = {
+            let recurrent_slot_allocation = {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 if !pipeline.get_metadata().no_kv_cache && pipeline.cache().is_hybrid() {
                     let mut hybrid_cache = pipeline.cache().hybrid();
-                    let capacity_before = hybrid_cache.recurrent_capacity();
-                    let slot = hybrid_cache.allocate_seq();
-                    // Captured decode graphs hold the old pool buffers; growth reallocates them
-                    let pool_grew = hybrid_cache.recurrent_capacity() != capacity_before;
+                    let generation_before = hybrid_cache.recurrent_storage_generation();
+                    let slot = hybrid_cache.allocate_seq(*seq.id());
+                    let storage_changed =
+                        hybrid_cache.recurrent_storage_generation() != generation_before;
                     drop(hybrid_cache);
-                    if pool_grew {
+                    if storage_changed {
                         pipeline.cleanup_cuda_graphs();
                         if let Some(ctx) = &self.graph_precapture_ctx {
                             pipeline.precapture_cuda_decode_graphs(ctx);
                         }
                     }
-                    if let Some(slot_idx) = slot {
-                        seq.set_recurrent_state_idx(Some(slot_idx));
-                        false
-                    } else {
-                        true
-                    }
+                    slot.map(Some)
                 } else {
-                    false
+                    Ok(None)
                 }
             };
-            if recurrent_slot_allocation_failed {
-                request
-                    .response
-                    .send(Response::InternalError(
-                        "Failed to allocate recurrent state for request."
-                            .to_string()
-                            .into(),
-                    ))
-                    .await
-                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                return;
+            match recurrent_slot_allocation {
+                Ok(Some(slot_idx)) => seq.set_recurrent_state_idx(Some(slot_idx)),
+                Ok(None) => {}
+                Err(err) => {
+                    request
+                        .response
+                        .send(Response::InternalError(err.into()))
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
+                }
             }
 
             if matches!(seq_step_type, SeqStepType::PromptAndDecode) {
@@ -898,19 +893,41 @@ impl Engine {
                         self.logger.add_prefix_cache_hit();
                     }
 
-                    // Restore recurrent state for hybrid models
                     if let Some(snapshots) = recurrent_snapshots {
                         if let Some(slot_idx) = seq.recurrent_state_idx() {
-                            let pipeline = get_mut_arcmutex!(self.pipeline);
-                            if pipeline.cache().is_hybrid() {
-                                let mut hybrid_cache = pipeline.cache().hybrid();
-                                if let Err(e) =
-                                    hybrid_cache.restore_recurrent_state(slot_idx, &snapshots)
-                                {
-                                    tracing::warn!(
-                                        "Failed to restore recurrent state from prefix cache: {e}"
-                                    );
+                            let restore_result = {
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                if pipeline.cache().is_hybrid() {
+                                    pipeline.cache().hybrid().restore_recurrent_state(
+                                        *seq.id(),
+                                        slot_idx,
+                                        &snapshots,
+                                    )
+                                } else {
+                                    Ok(())
                                 }
+                            };
+                            if let Err(err) = restore_result {
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                if pipeline.cache().is_hybrid() {
+                                    match pipeline
+                                        .cache()
+                                        .hybrid()
+                                        .release_seq(*seq.id(), slot_idx)
+                                    {
+                                        Ok(_) => seq.set_recurrent_state_idx(None),
+                                        Err(release_err) => tracing::error!(
+                                            "Failed to release recurrent state after restore error: {release_err}"
+                                        ),
+                                    }
+                                }
+                                drop(pipeline);
+                                request
+                                    .response
+                                    .send(Response::InternalError(err.into()))
+                                    .await
+                                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                                return;
                             }
                         }
                     }
@@ -933,9 +950,13 @@ impl Engine {
                 if let Some(slot_idx) = seq.recurrent_state_idx() {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
                     if pipeline.cache().is_hybrid() {
-                        pipeline.cache().hybrid().free_seq(slot_idx);
+                        match pipeline.cache().hybrid().release_seq(*seq.id(), slot_idx) {
+                            Ok(_) => seq.set_recurrent_state_idx(None),
+                            Err(err) => tracing::error!(
+                                "Failed to release recurrent state for abandoned request: {err}"
+                            ),
+                        }
                     }
-                    seq.set_recurrent_state_idx(None);
                 }
                 return;
             }

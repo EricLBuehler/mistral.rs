@@ -166,7 +166,9 @@ use crate::paged_attention::block_hash::{
 };
 use crate::sequence::{SeqStepType, Sequence, SequenceState};
 
-use prompt_chunks::{build_prompt_chunk_plan, next_prompt_chunk_group};
+use prompt_chunks::{
+    build_prompt_chunk_plan, next_prompt_chunk_group, recurrent_checkpoint_boundary,
+};
 
 pub use self::inputs_processor::{
     text_models_inputs_processor, InputsProcessor, InputsProcessorType,
@@ -305,8 +307,7 @@ pub(crate) fn validate_lora_loader_config(
 }
 
 pub use crate::kv_cache::{
-    Cache, CacheManager, EitherCache, HybridLayerCache, KvCache, LayerCaches, NormalCache,
-    NormalCacheType,
+    Cache, CacheManager, EitherCache, KvCache, LayerCaches, NormalCache, NormalCacheType,
 };
 
 pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
@@ -1044,7 +1045,7 @@ pub trait IsqPipelineMixin {
 pub trait CacheManagerMixin {
     /// Clone the cache FROM the sequences' cache TO the model cache. Only called for completion seqs.
     /// It is not a guarantee that this will be called for each completion step.
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]);
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()>;
     /// Clone the cache FROM the model cache TO the sequences. Called for prompt and completion seqs.
     /// It is not a guarantee that this will be called for each step.
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]);
@@ -1057,7 +1058,7 @@ pub trait CacheManagerMixin {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    );
+    ) -> candle_core::Result<()>;
     fn cache(&self) -> &EitherCache;
 }
 
@@ -1524,7 +1525,10 @@ pub trait Pipeline:
             return Ok(());
         };
 
-        let snapshots = self.cache().hybrid().snapshot_recurrent_state(slot_idx)?;
+        let snapshots = self
+            .cache()
+            .hybrid()
+            .snapshot_recurrent_state(*seq.id(), slot_idx)?;
         if snapshots.is_empty() {
             return Ok(());
         }
@@ -1537,7 +1541,14 @@ pub trait Pipeline:
         );
         let n_blocks = cached_tokens / block_size;
         if block_hashes.len() >= n_blocks {
-            prefix_cacher.add_paged_recurrent_prefix(block_hashes[..n_blocks].to_vec(), snapshots);
+            let owner = *block_hashes
+                .last()
+                .expect("recurrent prefix owner requires a full block");
+            prefix_cacher.add_paged_recurrent_prefix(
+                owner,
+                block_hashes[..n_blocks].to_vec(),
+                snapshots,
+            );
         }
         Ok(())
     }
@@ -1622,7 +1633,7 @@ pub trait Pipeline:
                     } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
-                            CacheInstruction::In => self.clone_in_cache(input_seqs),
+                            CacheInstruction::In => self.clone_in_cache(input_seqs)?,
                             CacheInstruction::Nothing => (),
                             CacheInstruction::Reset {
                                 load_preallocated_cache,
@@ -1632,7 +1643,7 @@ pub trait Pipeline:
                                 reset_non_granular,
                                 false,
                                 load_preallocated_cache,
-                            ),
+                            )?,
                             _ => unreachable!("Unreachable PRE cache op."),
                         }
                     }
@@ -1674,7 +1685,7 @@ pub trait Pipeline:
                         reset_non_granular,
                         false,
                         load_preallocated_cache,
-                    ),
+                    )?,
                     _ => unreachable!("Unreachable POST cache op."),
                 }
 
@@ -1903,6 +1914,8 @@ pub trait Pipeline:
                 let has_suffix_only_prefill = input_seqs
                     .iter()
                     .any(|seq| seq.has_suffix_only_prefill_toks());
+                let hybrid_recurrent = self.cache().is_hybrid();
+                let prefix_replay = self.speculative_prefix_replay();
                 let keep_complete_packed_candidates = chunk_size.is_some_and(|chunk_size| {
                     input_seqs.len() > 1
                         && self.supports_packed_prefill()
@@ -1917,7 +1930,7 @@ pub trait Pipeline:
                             && !has_suffix_only_prefill
                             && !keep_complete_packed_candidates)
                             .then(|| {
-                                let block_align = self.cache().is_hybrid().then_some(block_size);
+                                let block_align = hybrid_recurrent.then_some(block_size);
                                 chunk_size.map(|chunk_size| {
                                     input_seqs
                                         .iter()
@@ -1927,6 +1940,7 @@ pub trait Pipeline:
                                                 seq.prefix_cache_len(),
                                                 chunk_size,
                                                 block_align,
+                                                prefix_replay,
                                                 seq.mm_features(),
                                             )
                                         })
@@ -1964,7 +1978,19 @@ pub trait Pipeline:
                             .iter()
                             .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
                             .collect::<Vec<_>>();
-                        let hybrid_recurrent = self.cache().is_hybrid();
+                        let recurrent_checkpoint_boundaries = input_seqs
+                            .iter()
+                            .zip(&originals)
+                            .map(|(seq, (tokens, prefix_len))| {
+                                recurrent_checkpoint_boundary(
+                                    tokens.len(),
+                                    *prefix_len,
+                                    hybrid_recurrent.then_some(block_size),
+                                    prefix_replay,
+                                    seq.mm_features(),
+                                )
+                            })
+                            .collect::<Vec<_>>();
                         let mut plan_indices = vec![0usize; chunk_plans.len()];
                         let mut inputs = Vec::new();
                         while plan_indices
@@ -1995,7 +2021,7 @@ pub trait Pipeline:
                                 let seq = &mut input_seqs[seq_idx];
                                 seq.set_prefix_cache_len(chunk.start);
                                 seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
-                                if chunk.end % block_size == 0 {
+                                if recurrent_checkpoint_boundaries[seq_idx] == Some(chunk.end) {
                                     recurrent_boundaries.push((seq_idx, chunk.end));
                                 }
                                 prompt_chunk.rows.push(SpeculativePromptRow {
@@ -2126,42 +2152,25 @@ pub trait Pipeline:
                                 ));
                         if self.cache().is_hybrid() {
                             let mut hybrid_cache = self.cache().hybrid();
-                            let device = hybrid_cache
-                                .caches
-                                .iter()
-                                .find_map(|cache| match cache {
-                                    HybridLayerCache::Recurrent(pool) => {
-                                        Some(pool.device().clone())
-                                    }
-                                    HybridLayerCache::Attention(_) => None,
-                                })
-                                .ok_or_else(|| {
-                                    candle_core::Error::msg(
-                                        "hybrid cache has no recurrent state pool",
-                                    )
-                                })?;
-                            let indices = seq_indices
+                            let sequence_slots = seq_indices
                                 .iter()
                                 .map(|&seq_idx| {
-                                    let state_idx = input_seqs
-                                        .get(seq_idx)
-                                        .and_then(|seq| seq.recurrent_state_idx())
-                                        .ok_or_else(|| {
-                                            candle_core::Error::msg(format!(
-                                                "sequence {seq_idx} has no recurrent state slot"
-                                            ))
-                                        })?;
-                                    u32::try_from(state_idx).map_err(|_| {
+                                    let seq = input_seqs.get(seq_idx).ok_or_else(|| {
                                         candle_core::Error::msg(format!(
-                                            "recurrent state slot {state_idx} exceeds u32"
+                                            "processed sequence index {seq_idx} exceeds batch size {}",
+                                            input_seqs.len()
                                         ))
-                                    })
+                                    })?;
+                                    let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
+                                        candle_core::Error::msg(format!(
+                                            "sequence {} has no recurrent state slot",
+                                            seq.id()
+                                        ))
+                                    })?;
+                                    Ok((*seq.id(), slot_idx))
                                 })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            let state_indices =
-                                Tensor::from_vec(indices.clone(), (indices.len(),), &device)?;
-                            hybrid_cache
-                                .set_state_indices_with_host(Some(state_indices), Some(indices));
+                                .collect::<candle_core::Result<Vec<_>>>()?;
+                            hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
                         }
                         let start = Instant::now();
                         #[cfg(feature = "cuda")]

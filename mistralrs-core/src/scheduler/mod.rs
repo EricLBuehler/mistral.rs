@@ -13,6 +13,7 @@ use crate::{
         PagedAttentionSchedulerOutput,
     },
     sequence::Sequence,
+    speculative::SpeculativePrefixReplay,
 };
 
 pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
@@ -119,10 +120,14 @@ pub trait PagedPrefixCacheValidator {
         block_hashes: &[BlockHash],
         cached_tokens: usize,
         block_size: usize,
-    ) -> usize;
+    ) -> candle_core::Result<usize>;
 
-    fn release_recurrent_state(&mut self, _slot_idx: usize) -> bool {
-        false
+    fn release_recurrent_state(
+        &mut self,
+        _sequence_id: usize,
+        _slot_idx: usize,
+    ) -> candle_core::Result<bool> {
+        Ok(false)
     }
 }
 
@@ -140,7 +145,7 @@ pub trait Scheduler: Send + Sync {
     fn free_finished_sequence_groups(&mut self);
     /// Get recurrent state pool indices of finished sequences for freeing.
     /// Called before free_finished_sequence_groups to allow cleanup of hybrid cache slots.
-    fn get_finished_recurrent_indices(&self) -> Vec<usize>;
+    fn get_finished_recurrent_slots(&self) -> Vec<(usize, usize)>;
     /// Get IDs of finished sequences before free_finished_sequence_groups removes them.
     fn get_finished_sequence_ids(&self) -> Vec<usize>;
 
@@ -164,6 +169,7 @@ pub trait Scheduler: Send + Sync {
         &mut self,
         _enabled: bool,
         _require_block_alignment: bool,
+        _prefix_replay: SpeculativePrefixReplay,
     ) {
     }
 
