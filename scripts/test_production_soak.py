@@ -1,7 +1,11 @@
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import httpx
 
 from scripts import production_soak as soak
 
@@ -13,7 +17,9 @@ def request_result(
     finish_reason: str,
     ok: bool = True,
     output_text: str = "output",
+    reasoning_text: str = "",
     case_id: str = "coverage",
+    seed: int = 1,
     started: float = 0.0,
     ended: float = 1.0,
     ttft_seconds: float | None = 0.1,
@@ -32,7 +38,7 @@ def request_result(
     event_times = output_event_times or []
     return soak.RequestResult(
         case_id=case_id,
-        seed=1,
+        seed=seed,
         ok=ok,
         status_code=200,
         started=started,
@@ -44,7 +50,7 @@ def request_result(
         prompt_tokens=prompt_tokens,
         finish_reason=finish_reason,
         output_text=output_text,
-        reasoning_text="",
+        reasoning_text=reasoning_text,
         tool_calls=[],
         output_transcript=output_transcript,
         output_chunks=output_chunks,
@@ -69,6 +75,110 @@ def request_result(
         output_event_window_counts=output_event_window_counts or [],
         output_token_window_counts=output_token_window_counts or [],
     )
+
+
+class SampledOutputQualityTests(unittest.TestCase):
+    def test_coherent_restatement_does_not_trigger_loop_gate(self) -> None:
+        reasoning = """We need answer user's request. Need parse user: long repeated deterministic production-soak context, ends with "This is deterministic production-so..." then "End of deterministic production-soak context.
+Respond with varied original prose without quoting or repeating the context."
+
+User wants: "Production soak case resident-decode-60000.
+This is deterministic production-soak context... repeated. ... End of deterministic production-soak context.
+Respond with varied original prose without quoting or repeating the context."
+
+We must respond with varied original prose without quoting/repeating context. Need likely produce original prose, not repeat. Need maybe acknowledge"""
+        valid, evidence = soak.validate_sampled_output(
+            request_result(
+                completion_tokens=128,
+                output_chunks=128,
+                finish_reason="length",
+                output_text="",
+                reasoning_text=reasoning,
+                output_transcript=reasoning,
+            ),
+            tokenizer=None,
+            max_repeated_ngram_ratio=0.20,
+        )
+
+        self.assertGreater(evidence["repeated_ngram_ratio"], 0.20)
+        self.assertLess(evidence["excess_repeated_ngram_ratio"], 0.20)
+        self.assertTrue(evidence["repetition_valid"])
+        self.assertTrue(evidence["reasoning_nonempty"])
+        self.assertFalse(evidence["content_nonempty"])
+        self.assertTrue(valid)
+
+    def test_severe_repeated_motif_is_rejected(self) -> None:
+        output = "alpha beta gamma delta " * 12
+        valid, evidence = soak.validate_sampled_output(
+            request_result(
+                completion_tokens=48,
+                output_chunks=48,
+                finish_reason="length",
+                output_text=output,
+                output_transcript=output,
+            ),
+            tokenizer=None,
+            max_repeated_ngram_ratio=0.20,
+        )
+
+        self.assertFalse(valid)
+        self.assertTrue(evidence["degeneration_detected"])
+        self.assertTrue(
+            evidence["channel_repetition"]["content"]["periodic_loop"]["detected"]
+        )
+
+    def test_tail_loop_after_coherent_prose_is_rejected(self) -> None:
+        output = (
+            "A healthy service keeps request state isolated while load changes. "
+            "Cancellation and retry paths must release their resources. "
+            + "late loop motif here " * 10
+        )
+        valid, evidence = soak.validate_sampled_output(
+            request_result(
+                completion_tokens=64,
+                output_chunks=64,
+                finish_reason="length",
+                output_text=output,
+                output_transcript=output,
+            ),
+            tokenizer=None,
+            max_repeated_ngram_ratio=0.20,
+        )
+
+        self.assertFalse(valid)
+        self.assertTrue(
+            evidence["channel_repetition"]["content"]["tail_periodic_loop"][
+                "detected"
+            ]
+        )
+
+    def test_one_coherent_repetition_is_allowed(self) -> None:
+        sentence = "The scheduler remains stable under changing load. "
+        output = sentence * 2
+        valid, evidence = soak.validate_sampled_output(
+            request_result(
+                completion_tokens=16,
+                output_chunks=16,
+                finish_reason="length",
+                output_text=output,
+                output_transcript=output,
+            ),
+            tokenizer=None,
+            max_repeated_ngram_ratio=0.20,
+        )
+
+        self.assertTrue(valid)
+        self.assertTrue(evidence["content_nonempty"])
+        self.assertFalse(evidence["reasoning_nonempty"])
+        self.assertFalse(evidence["degeneration_detected"])
+
+    def test_short_output_has_stable_degeneration_evidence(self) -> None:
+        evidence = soak.repetition_evidence(["brief", "answer"], 0.20)
+
+        self.assertTrue(evidence["valid"])
+        self.assertEqual(evidence["repeated_ngram_ratio"], 0.0)
+        self.assertEqual(evidence["excess_repeated_ngram_ratio"], 0.0)
+        self.assertEqual(evidence["periodic_loop"]["span_tokens"], 0)
 
 
 class OutputEventCoverageTests(unittest.TestCase):
@@ -244,6 +354,114 @@ class OutputEventCoverageTests(unittest.TestCase):
         self.assertEqual(evidence["latency_window_attribution"], "first_token_timestamp")
         self.assertEqual(evidence["first"]["requests"], 1)
         self.assertEqual(evidence["last"]["requests"], 1)
+
+    def test_production_windows_gate_sample_count_and_p95_p99_degradation(self) -> None:
+        results = []
+        for window, offset in (("first", 0.0), ("last", 10.0)):
+            for index in range(32):
+                started = offset + 0.1 + index * 0.1
+                slowdown = 1.0 if window == "first" else 1.1
+                results.append(
+                    request_result(
+                        case_id=f"{window}-{index}",
+                        completion_tokens=2,
+                        output_chunks=1,
+                        streamed_output_tokens=2,
+                        finish_reason="length",
+                        started=started,
+                        ended=started + 0.2,
+                        ttft_seconds=0.1 * slowdown,
+                        tpot_seconds=0.01 * slowdown,
+                        client_queue_seconds=0.01 * slowdown,
+                        output_event_times=[started + 0.1 * slowdown],
+                        output_event_token_counts=[2],
+                    )
+                )
+
+        evidence = soak.compare_time_windows(
+            results,
+            started=0.0,
+            ended=20.0,
+            window_seconds=10.0,
+            min_output_event_coverage=0.98,
+            minimum_samples=32,
+        )
+
+        self.assertTrue(evidence["window_sample_evidence"]["passed"])
+        self.assertEqual(
+            set(evidence["latency_degradation_fractions"]),
+            {
+                "ttft_seconds_p95",
+                "ttft_seconds_p99",
+                "tpot_seconds_p95",
+                "tpot_seconds_p99",
+                "client_queue_seconds_p95",
+                "client_queue_seconds_p99",
+            },
+        )
+        self.assertTrue(
+            all(
+                value is not None and value <= 0.20
+                for value in evidence["latency_degradation_fractions"].values()
+            )
+        )
+
+        evidence = soak.compare_time_windows(
+            results[:-1],
+            started=0.0,
+            ended=20.0,
+            window_seconds=10.0,
+            min_output_event_coverage=0.98,
+            minimum_samples=32,
+        )
+        self.assertFalse(evidence["window_sample_evidence"]["passed"])
+
+
+class StreamingTimeoutTests(unittest.IsolatedAsyncioTestCase):
+    async def test_read_timeout_closes_streaming_response(self) -> None:
+        class TimeoutStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                raise httpx.ReadTimeout("timed out while reading stream")
+                yield b""
+
+            async def aclose(self) -> None:
+                return None
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertTrue(json.loads(request.content)["stream"])
+            return httpx.Response(
+                200,
+                headers={"x-request-id": "timeout-request"},
+                stream=TimeoutStream(),
+            )
+
+        client = soak.SoakClient(
+            "http://soak.test",
+            "model",
+            "token",
+            10.0,
+            soak.SamplingPolicy(),
+            None,
+        )
+        await client.http.aclose()
+        client.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            result = await client.stream_request(
+                soak.RequestSpec(
+                    case_id="timeout",
+                    seed=1,
+                    max_tokens=64,
+                    prompt="prompt",
+                ),
+                timeout_seconds=0.05,
+            )
+        finally:
+            await client.close()
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.error_kind, "ReadTimeout")
+        self.assertEqual(result.request_id, "timeout-request")
 
 
 class OverlapIntervalTests(unittest.TestCase):
@@ -538,6 +756,84 @@ class CudaGraphEvidenceTests(unittest.TestCase):
             1.0,
         )
 
+    def test_cache_population_eager_is_accounted_by_successful_capture(self) -> None:
+        after = self.healthy_metrics()
+        after[
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="eager",
+                reason=soak.CUDA_GRAPH_CACHE_POPULATION_REASON,
+            )
+        ] = 4.0
+        after[
+            self.key(
+                soak.CUDA_GRAPH_EVENTS_COUNTER,
+                component="target",
+                event="capture",
+                outcome="success",
+            )
+        ] = 4.0
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 1.0)
+        target = evidence["components"]["target"]
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(target["eager_dispatches"], 4.0)
+        self.assertEqual(target["accounted_cache_population_dispatches"], 4.0)
+        self.assertEqual(target["unexpected_eager_dispatches"], 0.0)
+        self.assertEqual(target["eligible_replay_ratio"], 1.0)
+
+    def test_unaccounted_cache_population_and_other_eager_are_gated(self) -> None:
+        after = self.healthy_metrics()
+        after[
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="eager",
+                reason=soak.CUDA_GRAPH_CACHE_POPULATION_REASON,
+            )
+        ] = 4.0
+        after[
+            self.key(
+                soak.CUDA_GRAPH_EVENTS_COUNTER,
+                component="target",
+                event="capture",
+                outcome="success",
+            )
+        ] = 3.0
+        after[
+            self.key(
+                soak.CUDA_GRAPH_DISPATCH_COUNTER,
+                component="target",
+                mode="eager",
+                reason="replay_error",
+            )
+        ] = 1.0
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 0.98)
+        target = evidence["components"]["target"]
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(target["accounted_cache_population_dispatches"], 3.0)
+        self.assertEqual(target["unexpected_eager_dispatches"], 2.0)
+
+    def test_capture_failure_remains_a_hard_failure(self) -> None:
+        after = self.healthy_metrics()
+        after[
+            self.key(
+                soak.CUDA_GRAPH_EVENTS_COUNTER,
+                component="target",
+                event="capture",
+                outcome="failure",
+            )
+        ] = 1.0
+
+        evidence = soak.cuda_graph_evidence({}, after, after, ("target",), 0.98)
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["components"]["target"]["phase_failures"], 1.0)
+
     def test_dispatch_without_event_instrumentation_is_rejected(self) -> None:
         after = self.healthy_metrics()
         after = {
@@ -725,6 +1021,7 @@ class CpuTelemetryTests(unittest.TestCase):
             "process_cpu_clock_ticks_per_second": 100,
             "process_is_mistralrs": True,
             "process_vmrss_kib": 1_024,
+            "process_gpu_memory_used_mib": 100.0,
             "gpus": [
                 {
                     "utilization_percent": 50.0,
@@ -804,6 +1101,30 @@ class CpuTelemetryTests(unittest.TestCase):
             )["passed"]
         )
 
+    def test_process_scoped_gpu_coverage_is_required(self) -> None:
+        snapshots = [
+            (0.0, {"mistralrs_sequences_running": 1.0}, self.process(1_000, 400, 100)),
+            (1.0, {"mistralrs_sequences_running": 1.0}, self.process(1_100, 420, 150)),
+        ]
+        snapshots[-1][2]["process_gpu_memory_used_mib"] = None
+        cadence = soak.scheduled_observation_evidence(
+            [0.0, 1.0],
+            [0.0, 1.0],
+            0.1,
+        )
+
+        evidence = soak.telemetry_evidence(
+            snapshots,
+            42,
+            2,
+            0.95,
+            ("mistralrs_sequences_running",),
+            cadence,
+        )
+
+        self.assertEqual(evidence["process_gpu_memory_coverage"], 0.5)
+        self.assertFalse(evidence["passed"])
+
 
 class CadenceAndWindowEvidenceTests(unittest.TestCase):
     def test_periodic_schedule_and_observations_are_exactly_accounted(self) -> None:
@@ -855,6 +1176,87 @@ class CadenceAndWindowEvidenceTests(unittest.TestCase):
         self.assertTrue(complete["passed"])
         self.assertFalse(ended_early["passed"])
         self.assertFalse(overlapping["passed"])
+
+
+class ProductionRuntimeCoordinationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_shared_slots_bound_traffic_and_diagnostics(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.active = 0
+                self.maximum_active = 0
+
+            async def stream_request(self, spec, **_kwargs):
+                self.active += 1
+                self.maximum_active = max(self.maximum_active, self.active)
+                await asyncio.sleep(0.01)
+                self.active -= 1
+                return request_result(
+                    case_id=spec.case_id,
+                    completion_tokens=spec.max_tokens,
+                    output_chunks=spec.max_tokens,
+                    finish_reason="length",
+                    tags=spec.tags,
+                )
+
+        client = Client()
+        slots = asyncio.Semaphore(2)
+        specs = [
+            soak.RequestSpec(f"slot-{index}", index, 8, prompt="prompt")
+            for index in range(6)
+        ]
+
+        await asyncio.gather(
+            *(soak.stream_request_with_slot(client, slots, spec) for spec in specs)
+        )
+
+        self.assertEqual(client.maximum_active, 2)
+
+    async def test_telemetry_continues_until_stop_and_collects_terminal_sample(self) -> None:
+        class Writer:
+            def __init__(self) -> None:
+                self.records = []
+
+            async def emit(self, event, **record) -> None:
+                self.records.append((event, record))
+
+        writer = Writer()
+        stop = asyncio.Event()
+        started = soak.time.perf_counter()
+        snapshots = []
+        scheduled = [started]
+        observed = [started]
+        with (
+            patch.object(
+                soak,
+                "safe_metrics",
+                new=AsyncMock(return_value={"mistralrs_sequences_running": 0.0}),
+            ),
+            patch.object(
+                soak,
+                "process_telemetry",
+                new=AsyncMock(return_value={"process_gpu_memory_used_mib": 1.0}),
+            ),
+        ):
+            task = asyncio.create_task(
+                soak.telemetry_loop(
+                    object(),
+                    writer,
+                    stop,
+                    42,
+                    snapshots,
+                    0.01,
+                    scheduled,
+                    observed,
+                )
+            )
+            await asyncio.sleep(0.025)
+            stop.set()
+            terminal_at = await task
+
+        self.assertGreaterEqual(len(snapshots), 3)
+        self.assertEqual(len(scheduled), len(observed))
+        self.assertEqual(terminal_at, snapshots[-1][0])
+        self.assertTrue(writer.records[-1][1]["terminal"])
 
 
 class ServerProvenanceTests(unittest.TestCase):
@@ -935,6 +1337,48 @@ class ServerProvenanceTests(unittest.TestCase):
         )
 
         self.assertEqual(soak.serialized_arguments(args)["api_key"], "<redacted>")
+
+    def test_acceptance_adversarial_requires_complete_provenance_preflight(self) -> None:
+        parser = soak.build_parser()
+        acceptance = parser.parse_args(
+            [
+                "adversarial",
+                "--tokenizer",
+                "tokenizer.json",
+                "--server-pid",
+                "1",
+                "--min-output-tok-s-by-concurrency",
+                "1:1,3:1,8:1,16:1",
+                "--min-scaling-efficiency",
+                "0.1",
+                "--min-overlap-decode-events-per-second",
+                "1",
+                "--min-overlap-decode-throughput-ratio",
+                "0.1",
+            ]
+        )
+        diagnostic = parser.parse_args(
+            [
+                "adversarial",
+                "--tokenizer",
+                "tokenizer.json",
+                "--no-acceptance-grade",
+                "--no-require-mtp",
+                "--throughput-concurrencies",
+                "4",
+                "--min-output-tok-s-by-concurrency",
+                "4:1",
+                "--min-scaling-efficiency",
+                "0.1",
+                "--min-overlap-decode-events-per-second",
+                "1",
+                "--min-overlap-decode-throughput-ratio",
+                "0.1",
+            ]
+        )
+
+        self.assertTrue(soak.server_provenance_required(acceptance))
+        self.assertFalse(soak.server_provenance_required(diagnostic))
 
 
 class CudaMemoryPressureEvidenceTests(unittest.TestCase):
@@ -1208,7 +1652,7 @@ class ProductionMemoryEvidenceTests(unittest.TestCase):
             "server_pid_compute_process",
         )
 
-    def test_whole_device_memory_is_used_when_pid_metric_is_unavailable(self) -> None:
+    def test_whole_device_memory_does_not_replace_missing_pid_metric(self) -> None:
         snapshots = self.healthy_snapshots()
         for _, _, process in snapshots:
             process["process_gpu_memory_used_mib"] = None
@@ -1216,8 +1660,17 @@ class ProductionMemoryEvidenceTests(unittest.TestCase):
 
         evidence = self.evidence(snapshots)
 
-        self.assertTrue(evidence["gpu_memory"]["passed"])
-        self.assertEqual(evidence["gpu_memory"]["source"], "whole_device")
+        self.assertFalse(evidence["gpu_memory"]["passed"])
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(
+            evidence["gpu_memory"]["source"],
+            "server_pid_compute_process",
+        )
+        self.assertFalse(evidence["gpu_memory"]["whole_device_fallback_used"])
+        self.assertEqual(
+            evidence["gpu_memory"]["whole_device_diagnostic"]["max"],
+            91_500.0,
+        )
 
     def test_final_resource_leak_is_gated(self) -> None:
         snapshots = self.healthy_snapshots()
@@ -1234,21 +1687,285 @@ class ProductionMemoryEvidenceTests(unittest.TestCase):
 
 
 class BatchMeasurementTests(unittest.TestCase):
-    def test_c3_measurement_excludes_partial_drain_batch(self) -> None:
-        specs = [
+    @staticmethod
+    def specs(count: int = 16) -> list[soak.RequestSpec]:
+        return [
             soak.RequestSpec(
                 case_id=f"case-{index}",
                 messages=[],
                 max_tokens=1,
                 seed=index,
             )
-            for index in range(16)
+            for index in range(count)
         ]
+
+    def test_c3_measurement_excludes_partial_drain_batch(self) -> None:
+        specs = self.specs()
 
         measured = soak.full_batch_specs(specs, 3)
 
         self.assertEqual(len(measured), 15)
         self.assertEqual(len(measured) % 3, 0)
+
+    def test_mixed_specs_have_independent_prompt_contexts(self) -> None:
+        class Tokenizer:
+            @staticmethod
+            def retrieval_text(content_tokens: int, label: str):
+                return f"prompt-{content_tokens}-{label}", f"answer-{label}"
+
+        class Client:
+            tokenizer = Tokenizer()
+
+            @staticmethod
+            def calibrated_content_tokens(profile: str, prompt_tokens: int) -> int:
+                self = profile
+                return prompt_tokens
+
+        specs = soak.adversarial_mixed_specs(
+            Client(),
+            (1_024, 8_192, 32_768, 100_000),
+            16,
+            100,
+            64,
+        )
+        evidence = soak.request_cohort_uniqueness_evidence(specs)
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["requests"], 16)
+        self.assertEqual(evidence["unique_prompt_hashes"], 16)
+        self.assertEqual(len({spec.case_id for spec in specs}), 16)
+        self.assertEqual(
+            [spec.context_tokens for spec in specs[:4]],
+            [1_024, 8_192, 32_768, 100_000],
+        )
+
+    def test_mixed_cohort_rejects_reused_prompts(self) -> None:
+        specs = [
+            soak.RequestSpec(
+                case_id=f"case-{index}",
+                messages=[],
+                max_tokens=1,
+                seed=index,
+                prompt="same prompt",
+            )
+            for index in range(4)
+        ]
+
+        evidence = soak.request_cohort_uniqueness_evidence(specs)
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["unique_prompt_hashes"], 1)
+
+    def test_long_resident_cohort_uses_unique_prewarmed_prompts(self) -> None:
+        class Tokenizer:
+            @staticmethod
+            def exact_text(content_tokens: int, label: str) -> str:
+                return f"prompt-{content_tokens}-{label}"
+
+        class Client:
+            tokenizer = Tokenizer()
+
+            @staticmethod
+            def calibrated_content_tokens(profile: str, prompt_tokens: int) -> int:
+                self = profile
+                return prompt_tokens
+
+        measured, warm = soak.adversarial_long_resident_cohorts(
+            Client(),
+            100,
+            64,
+            {"ignore_eos": True},
+        )
+        uniqueness = soak.request_cohort_uniqueness_evidence(measured)
+
+        self.assertTrue(uniqueness["passed"])
+        self.assertEqual(len(measured), 3)
+        self.assertEqual([spec.prompt for spec in warm], [spec.prompt for spec in measured])
+        self.assertEqual([spec.max_tokens for spec in measured], [64, 64, 64])
+        self.assertEqual([spec.max_tokens for spec in warm], [1, 1, 1])
+        self.assertEqual(
+            [spec.context_tokens for spec in measured],
+            [soak.ADVERSARIAL_LONG_RESIDENT_CONTEXT_TOKENS] * 3,
+        )
+
+    def test_long_resident_completion_gate_requires_full_length(self) -> None:
+        complete = [
+            request_result(
+                case_id=f"case-{index}",
+                seed=index,
+                completion_tokens=64,
+                output_chunks=64,
+                finish_reason="length",
+            )
+            for index in range(3)
+        ]
+
+        self.assertTrue(soak.full_length_completion_evidence(complete, 64)["passed"])
+        complete[1].completion_tokens = 63
+        self.assertFalse(soak.full_length_completion_evidence(complete, 64)["passed"])
+        complete[1].completion_tokens = 64
+        complete[1].finish_reason = "stop"
+        self.assertFalse(soak.full_length_completion_evidence(complete, 64)["passed"])
+
+    def test_long_resident_gate_uses_exact_decode_thresholds(self) -> None:
+        summaries = [
+            {"concurrency": 1, "decode_tok_s_active": 204.6},
+            {"concurrency": 3, "decode_tok_s_active": 319.3},
+        ]
+
+        evidence = soak.exact_throughput_threshold_evidence(
+            summaries,
+            {1: 190.0, 3: 300.0},
+            "decode_tok_s_active",
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["throughput_metric"], "decode_tok_s_active")
+        self.assertFalse(
+            soak.exact_throughput_threshold_evidence(
+                summaries[:1],
+                {1: 190.0, 3: 300.0},
+                "decode_tok_s_active",
+            )["passed"]
+        )
+        self.assertFalse(
+            soak.exact_throughput_threshold_evidence(
+                [summaries[0], summaries[0], summaries[1]],
+                {1: 190.0, 3: 300.0},
+                "decode_tok_s_active",
+            )["passed"]
+        )
+
+    def test_fairness_uses_absolute_short_latency_slos(self) -> None:
+        healthy = request_result(
+            completion_tokens=8,
+            output_chunks=8,
+            finish_reason="stop",
+            ttft_seconds=0.182,
+            tpot_seconds=0.02,
+        )
+
+        evidence = soak.fairness_short_latency_evidence([healthy], 1.0, 0.05)
+
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["requests"][0]["ttft_passed"])
+        self.assertTrue(evidence["requests"][0]["tpot_passed"])
+
+    def test_fairness_absolute_short_latency_slos_reject_regressions(self) -> None:
+        slow_ttft = request_result(
+            completion_tokens=8,
+            output_chunks=8,
+            finish_reason="stop",
+            ttft_seconds=1.01,
+            tpot_seconds=0.02,
+        )
+        slow_tpot = request_result(
+            completion_tokens=8,
+            output_chunks=8,
+            finish_reason="stop",
+            ttft_seconds=0.2,
+            tpot_seconds=0.051,
+        )
+
+        self.assertFalse(
+            soak.fairness_short_latency_evidence([slow_ttft], 1.0, 0.05)["passed"]
+        )
+        self.assertFalse(
+            soak.fairness_short_latency_evidence([slow_tpot], 1.0, 0.05)["passed"]
+        )
+        failed = request_result(
+            completion_tokens=8,
+            output_chunks=8,
+            finish_reason="stop",
+            ok=False,
+            ttft_seconds=0.2,
+            tpot_seconds=0.02,
+        )
+        self.assertFalse(
+            soak.fairness_short_latency_evidence([failed], 1.0, 0.05)["passed"]
+        )
+
+    def test_correctness_order_keeps_c3_remainder(self) -> None:
+        specs = self.specs()
+
+        normal = soak.correctness_order_specs(specs, False)
+        reverse = soak.correctness_order_specs(specs, True)
+
+        self.assertEqual(len(normal), 16)
+        self.assertEqual(len(reverse), 16)
+        self.assertEqual([spec.seed for spec in normal], list(range(16)))
+        self.assertEqual([spec.seed for spec in reverse], list(reversed(range(16))))
+
+    def test_cross_concurrency_measurement_reports_common_cohort(self) -> None:
+        specs = self.specs()
+        concurrencies = [1, 3, 8, 16]
+
+        common = soak.common_full_batch_specs(specs, concurrencies)
+        evidence = soak.common_full_batch_cohort_evidence(
+            specs,
+            common,
+            concurrencies,
+        )
+
+        self.assertEqual(len(common), 15)
+        self.assertTrue(evidence["complete"])
+        self.assertEqual(evidence["requested_cases"], 16)
+        self.assertEqual(evidence["common_cases"], 15)
+        self.assertEqual(
+            evidence["measurement_cases_by_concurrency"],
+            {"1": 16, "3": 15, "8": 16, "16": 16},
+        )
+        self.assertEqual(
+            evidence["excluded_cases"],
+            [{"case_id": "case-15", "seed": 15}],
+        )
+
+    def test_multi_wave_measurement_is_not_reused_for_exact_replay(self) -> None:
+        specs = self.specs()
+        for concurrency in (3, 8):
+            with self.subTest(concurrency=concurrency):
+                measured = soak.full_batch_specs(specs, concurrency)
+                exact, evidence = soak.resident_exact_replay_cohort(
+                    measured,
+                    concurrency,
+                )
+
+                self.assertGreater(evidence["measurement_waves"], 1)
+                self.assertEqual(len(exact), concurrency)
+                self.assertEqual(evidence["exact_cases"], concurrency)
+                self.assertFalse(evidence["normal_phase_reusable"])
+                self.assertEqual(
+                    evidence["normal_reuse_reason"],
+                    "dedicated_single_full_batch_required",
+                )
+
+    def test_partial_drain_correctness_uses_dedicated_exact_wave(self) -> None:
+        specs = self.specs(5)
+
+        exact, evidence = soak.fixed_seed_exact_replay_cohort(specs, 3)
+
+        self.assertEqual(len(exact), 3)
+        self.assertEqual(evidence["measurement_cases"], 5)
+        self.assertEqual(evidence["measurement_waves"], 2)
+        self.assertFalse(evidence["normal_phase_reusable"])
+        self.assertEqual(
+            evidence["normal_reuse_reason"],
+            "dedicated_single_full_batch_required",
+        )
+
+    def test_exact_replay_reuses_only_single_batch_or_c1_serial(self) -> None:
+        specs = self.specs()
+        exact_c16, c16 = soak.resident_exact_replay_cohort(specs, 16)
+        exact_c1, c1 = soak.resident_exact_replay_cohort(specs, 1)
+
+        self.assertEqual(len(exact_c16), 16)
+        self.assertTrue(c16["normal_phase_reusable"])
+        self.assertEqual(c16["normal_reuse_reason"], "single_full_batch")
+        self.assertEqual(len(exact_c1), 16)
+        self.assertEqual(c1["measurement_waves"], 16)
+        self.assertTrue(c1["normal_phase_reusable"])
+        self.assertEqual(c1["cohort_kind"], "c1_serial")
+        self.assertEqual(c1["normal_reuse_reason"], "c1_batch_shape_constant")
 
     def test_c3_context_measurement_is_balanced(self) -> None:
         contexts = (1_024, 8_192, 32_768, 100_000)
@@ -1299,26 +2016,60 @@ class BatchMeasurementTests(unittest.TestCase):
 
 class FixedSeedGateTests(unittest.TestCase):
     @staticmethod
-    def comparison(exact_passed: bool = True) -> dict:
+    def comparison(
+        exact_passed: bool = True,
+        *,
+        exact_gated: bool = True,
+        coverage_complete: bool = True,
+        statistical_passed: bool = True,
+        semantic_passed: bool = True,
+    ) -> dict:
         return soak.fixed_seed_comparison_evidence(
-            {"passed": exact_passed, "mismatches": [] if exact_passed else [{}]},
-            {"passed": True},
-            True,
+            {
+                "passed": exact_passed and coverage_complete,
+                "coverage_complete": coverage_complete,
+                "mismatches": [] if exact_passed else [{}],
+            },
+            {"passed": statistical_passed},
+            semantic_passed,
+            exact_gated=exact_gated,
         )
 
-    def test_statistical_similarity_cannot_hide_exact_divergence(self) -> None:
-        evidence = self.comparison(False)
+    def test_same_shape_replay_exact_gates_every_concurrency(self) -> None:
+        for concurrency in (1, 3, 8, 16):
+            with self.subTest(concurrency=concurrency):
+                evidence = {
+                    "concurrency": concurrency,
+                    **self.comparison(False),
+                }
 
-        self.assertTrue(evidence["statistical_comparison"]["passed"])
-        self.assertTrue(evidence["semantic_passed"])
-        self.assertTrue(evidence["exact_diagnostics_gated"])
+                self.assertTrue(evidence["statistical_comparison"]["passed"])
+                self.assertTrue(evidence["semantic_passed"])
+                self.assertTrue(evidence["exact_diagnostics_gated"])
+                self.assertFalse(evidence["passed"])
+
+    def test_ordering_and_cross_concurrency_do_not_exact_gate(self) -> None:
+        evidence = self.comparison(False, exact_gated=False)
+
+        self.assertFalse(evidence["exact_diagnostics"]["passed"])
+        self.assertFalse(evidence["exact_diagnostics_gated"])
+        self.assertTrue(evidence["passed"])
+
+    def test_ungated_exact_diagnostics_still_require_complete_coverage(self) -> None:
+        evidence = self.comparison(
+            False,
+            exact_gated=False,
+            coverage_complete=False,
+        )
+
+        self.assertFalse(evidence["case_seed_coverage_complete"])
         self.assertFalse(evidence["passed"])
 
     def test_invariance_requires_every_replay_ordering_and_cross_phase(self) -> None:
         evidence = soak.fixed_seed_invariance_evidence(
             [self.comparison() for _ in range(3)],
-            [self.comparison() for _ in range(3)],
-            [self.comparison() for _ in range(2)],
+            [self.comparison(exact_gated=False) for _ in range(3)],
+            [self.comparison(exact_gated=False) for _ in range(2)],
             3,
         )
 
@@ -1326,10 +2077,199 @@ class FixedSeedGateTests(unittest.TestCase):
         self.assertFalse(
             soak.fixed_seed_invariance_evidence(
                 [self.comparison() for _ in range(3)],
-                [self.comparison() for _ in range(3)],
-                [self.comparison()],
+                [self.comparison(exact_gated=False) for _ in range(3)],
+                [self.comparison(exact_gated=False)],
                 3,
             )["passed"]
+        )
+
+    def test_invariance_rejects_wrong_gate_policy(self) -> None:
+        self.assertFalse(
+            soak.fixed_seed_invariance_evidence(
+                [self.comparison(exact_gated=False)],
+                [self.comparison(exact_gated=False)],
+                [],
+                1,
+            )["passed"]
+        )
+        self.assertFalse(
+            soak.fixed_seed_invariance_evidence(
+                [self.comparison()],
+                [self.comparison()],
+                [],
+                1,
+            )["passed"]
+        )
+
+    def test_exact_diagnostics_gate_expected_case_seed_coverage(self) -> None:
+        specs = [
+            soak.RequestSpec(
+                case_id=f"case-{index}",
+                messages=[],
+                max_tokens=1,
+                seed=index,
+            )
+            for index in range(2)
+        ]
+        observed = [
+            request_result(
+                completion_tokens=1,
+                output_chunks=1,
+                finish_reason="length",
+                case_id="case-0",
+                seed=0,
+            )
+        ]
+
+        evidence = soak.exact_output_diagnostics(
+            observed,
+            observed,
+            "reference",
+            "candidate",
+            specs,
+        )
+
+        self.assertFalse(evidence["coverage_complete"])
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(
+            evidence["reference_missing_expected"],
+            [{"case_id": "case-1", "seed": 1}],
+        )
+        self.assertEqual(
+            evidence["candidate_missing_expected"],
+            [{"case_id": "case-1", "seed": 1}],
+        )
+
+
+class DFlashCheckpointRetentionGateTests(unittest.TestCase):
+    @staticmethod
+    def snapshot(used: float, total: float = 17.0) -> dict[str, float]:
+        return {
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE: used,
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE: total,
+        }
+
+    @classmethod
+    def snapshots(cls) -> dict[str, dict[str, float]]:
+        return {
+            "before_cold": cls.snapshot(2.0),
+            "after_cold": cls.snapshot(3.0),
+            "after_hit": cls.snapshot(3.0),
+            "after_pressure": cls.snapshot(13.0),
+            "after_retry": cls.snapshot(13.0),
+            "quiescent": cls.snapshot(13.0),
+        }
+
+    def test_bounded_prefix_retention_passes(self) -> None:
+        evidence = soak.dflash_checkpoint_retention_evidence(
+            self.snapshots(),
+            distinct_successful_prefixes=11,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["available"])
+        self.assertTrue(evidence["instrumentation_complete"])
+        self.assertEqual(evidence["retained_capacity"], 16.0)
+        self.assertEqual(
+            evidence["checks"]["total_growth_bounded"]["observed_growth"],
+            11.0,
+        )
+
+    def test_missing_optional_instrumentation_passes(self) -> None:
+        snapshots = {stage: {} for stage in self.snapshots()}
+
+        evidence = soak.dflash_checkpoint_retention_evidence(
+            snapshots,
+            distinct_successful_prefixes=11,
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertFalse(evidence["available"])
+        self.assertFalse(evidence["instrumentation_complete"])
+
+    def test_partial_instrumentation_is_rejected(self) -> None:
+        snapshots = self.snapshots()
+        snapshots["after_hit"].pop(
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE
+        )
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 11)
+
+        self.assertFalse(evidence["passed"])
+        self.assertTrue(evidence["available"])
+        self.assertFalse(evidence["instrumentation_complete"])
+
+    def test_capacity_must_remain_stable(self) -> None:
+        snapshots = self.snapshots()
+        snapshots["after_pressure"][
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_TOTAL_GAUGE
+        ] = 18.0
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 11)
+
+        self.assertFalse(evidence["checks"]["stable_total"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_quiescent_state_must_leave_the_staging_slot_free(self) -> None:
+        snapshots = self.snapshots()
+        snapshots["quiescent"][
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE
+        ] = 17.0
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 15)
+
+        self.assertFalse(
+            evidence["checks"]["quiescent_within_retained_capacity"]["passed"]
+        )
+        self.assertFalse(evidence["passed"])
+
+    def test_cache_hit_must_not_grow_checkpoint_occupancy(self) -> None:
+        snapshots = self.snapshots()
+        snapshots["after_hit"][
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE
+        ] = 4.0
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 11)
+
+        self.assertFalse(evidence["checks"]["hit_no_growth"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_same_key_retry_must_not_grow_checkpoint_occupancy(self) -> None:
+        snapshots = self.snapshots()
+        snapshots["after_retry"][
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE
+        ] = 14.0
+        snapshots["quiescent"][
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE
+        ] = 14.0
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 12)
+
+        self.assertFalse(
+            evidence["checks"]["same_key_retry_no_growth"]["passed"]
+        )
+        self.assertFalse(evidence["passed"])
+
+    def test_growth_cannot_exceed_successful_distinct_prefixes(self) -> None:
+        snapshots = self.snapshots()
+        for stage in ("after_pressure", "after_retry", "quiescent"):
+            snapshots[stage][
+                soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE
+            ] = 14.0
+
+        evidence = soak.dflash_checkpoint_retention_evidence(snapshots, 11)
+
+        self.assertFalse(evidence["checks"]["total_growth_bounded"]["passed"])
+        self.assertFalse(evidence["passed"])
+
+    def test_abort_cleanup_keeps_checkpoint_non_growth_gate(self) -> None:
+        self.assertIn(
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+            soak.DFLASH_ABORT_CLEANUP_GAUGES,
+        )
+        self.assertNotIn(
+            soak.DFLASH_WINDOWED_KV_CHECKPOINT_SLOTS_USED_GAUGE,
+            soak.OPTIONAL_CLEANUP_GAUGES,
         )
 
 
@@ -1388,6 +2328,25 @@ class ChurnCapacityGateTests(unittest.TestCase):
         self.assertFalse(transient["near_capacity_sustained"])
         self.assertFalse(transient["passed"])
 
+    def test_long_drain_does_not_erase_sustained_boundary_window(self) -> None:
+        samples = [self.sample(15.0, waiting=1.0) for _ in range(18)]
+        samples.extend(self.sample(1.0) for _ in range(8_543))
+
+        evidence = soak.churn_capacity_evidence(
+            samples,
+            15,
+            16,
+            16.0,
+            True,
+            0,
+        )
+
+        self.assertTrue(evidence["near_capacity_sustained"])
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["near_capacity_consecutive_samples"], 18)
+        self.assertLess(evidence["near_capacity_sample_fraction"], 0.01)
+        self.assertFalse(evidence["near_capacity_sample_fraction_gated"])
+
 
 class ArgumentValidationTests(unittest.TestCase):
     @staticmethod
@@ -1397,6 +2356,8 @@ class ArgumentValidationTests(unittest.TestCase):
                 "adversarial",
                 "--tokenizer",
                 "tokenizer.json",
+                "--server-pid",
+                "1",
                 "--min-output-tok-s-by-concurrency",
                 "1:1,3:1,8:1,16:1",
                 "--min-scaling-efficiency",
@@ -1439,6 +2400,87 @@ class ArgumentValidationTests(unittest.TestCase):
         self.assertEqual(set(valid.expected_graph_components), {"target", "dflash"})
         with self.assertRaisesRegex(ValueError, "cannot exceed --max-seqs"):
             soak.validate_args(self.adversarial_args(17))
+
+    def test_acceptance_adversarial_requires_server_pid(self) -> None:
+        args = self.adversarial_args(16)
+        args.server_pid = None
+
+        with self.assertRaisesRegex(ValueError, "requires --server-pid"):
+            soak.validate_args(args)
+
+    def test_diagnostic_adversarial_accepts_focused_c4(self) -> None:
+        args = self.adversarial_args(16)
+        args.acceptance_grade = False
+        args.require_mtp = False
+        args.expected_graph_components = ("target",)
+        args.server_pid = None
+        args.throughput_concurrencies = (4,)
+        args.min_output_tok_s_by_concurrency = {4: 1.0}
+
+        soak.validate_args(args)
+
+    def test_acceptance_adversarial_rejects_focused_c4(self) -> None:
+        args = self.adversarial_args(16)
+        args.throughput_concurrencies = (4,)
+        args.min_output_tok_s_by_concurrency = {4: 1.0}
+
+        with self.assertRaisesRegex(ValueError, "must include 1,3,8,16"):
+            soak.validate_args(args)
+
+    def test_long_correctness_rejects_concurrency_above_case_count(self) -> None:
+        args = self.adversarial_args(16)
+        args.long_correctness_concurrencies = (3, 8)
+
+        with self.assertRaisesRegex(ValueError, "cannot exceed the number"):
+            soak.validate_args(args)
+
+    def test_acceptance_requires_every_long_context_boundary(self) -> None:
+        args = self.adversarial_args(16)
+        args.long_correctness_context_lengths = (60_000, 65_536, 100_000)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "60000,65535,65536,65537,100000",
+        ):
+            soak.validate_args(args)
+
+        args.acceptance_grade = False
+        soak.validate_args(args)
+
+    def test_long_resident_thresholds_require_exact_c1_c3_cohort(self) -> None:
+        args = self.adversarial_args(16)
+        args.min_long_resident_decode_tok_s_by_concurrency = {1: 190.0}
+
+        with self.assertRaisesRegex(ValueError, "concurrencies 1 and 3 exactly"):
+            soak.validate_args(args)
+
+    def test_acceptance_long_resident_requires_64_tokens(self) -> None:
+        args = self.adversarial_args(16)
+        args.long_resident_max_tokens = 63
+
+        with self.assertRaisesRegex(ValueError, "must be at least 64"):
+            soak.validate_args(args)
+
+        args.acceptance_grade = False
+        soak.validate_args(args)
+
+    def test_resident_decode_concurrencies_must_be_unique(self) -> None:
+        args = soak.build_parser().parse_args(
+            [
+                "resident-decode",
+                "--tokenizer",
+                "tokenizer.json",
+                "--concurrencies",
+                "1,1,8",
+                "--min-output-tok-s-by-concurrency",
+                "1:1,8:1",
+                "--min-scaling-efficiency",
+                "0.1",
+            ]
+        )
+
+        with self.assertRaisesRegex(ValueError, "--concurrencies must be unique"):
+            soak.validate_args(args)
 
     def test_prefix_pressure_headroom_default_validates(self) -> None:
         args = self.adversarial_args(16)
@@ -1574,6 +2616,59 @@ class ArgumentValidationTests(unittest.TestCase):
             soak.DEFAULT_MAX_GPU_MEMORY_HIGH_WATER_MIB,
         )
         self.assertEqual(args.max_recurrent_slot_utilization, 1.0)
+        self.assertEqual(
+            args.min_comparison_window_samples,
+            soak.DEFAULT_MIN_COMPARISON_WINDOW_SAMPLES,
+        )
+
+    def test_production_throughput_floors_default_to_c8_and_c16_targets(self) -> None:
+        args = soak.build_parser().parse_args(
+            [
+                "production",
+                "--tokenizer",
+                "tokenizer.json",
+                "--min-scaling-efficiency",
+                "0.1",
+                "--max-probe-ttft-seconds",
+                "1",
+                "--max-probe-tpot-seconds",
+                "1",
+                "--server-pid",
+                "1",
+            ]
+        )
+
+        soak.validate_args(args)
+        self.assertEqual(
+            args.min_output_tok_s_by_concurrency,
+            {8: 450.0, 16: 500.0},
+        )
+
+    def test_acceptance_production_rejects_weakened_certification_gates(self) -> None:
+        with self.assertRaisesRegex(ValueError, "min-telemetry-coverage"):
+            soak.validate_args(
+                self.production_args("--min-telemetry-coverage", "0.9")
+            )
+        with self.assertRaisesRegex(ValueError, "comparison-window samples"):
+            soak.validate_args(
+                self.production_args("--min-comparison-window-samples", "31")
+            )
+        with self.assertRaisesRegex(ValueError, "fixed-output-length"):
+            soak.validate_args(self.production_args("--no-fixed-output-length"))
+        with self.assertRaisesRegex(ValueError, "throughput-degradation"):
+            soak.validate_args(
+                self.production_args(
+                    "--max-throughput-degradation-fraction",
+                    "0.051",
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "latency-degradation"):
+            soak.validate_args(
+                self.production_args(
+                    "--max-latency-degradation-fraction",
+                    "0.201",
+                )
+            )
 
     def test_invalid_resource_utilization_is_rejected(self) -> None:
         args = self.production_args("--max-kv-block-utilization", "1.1")
@@ -1708,6 +2803,18 @@ class ProductionGateTests(unittest.TestCase):
             )["passed"]
         )
 
+    def test_traffic_requires_exact_fixed_length_completion(self) -> None:
+        complete = [self.retrieval_result(f"traffic-{index}") for index in range(4)]
+
+        evidence = soak.fixed_length_completion_evidence(complete, 8)
+
+        self.assertTrue(evidence["passed"])
+        complete[1].completion_tokens = 7
+        complete[2].finish_reason = "stop"
+        evidence = soak.fixed_length_completion_evidence(complete, 8)
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(len(evidence["failures"]), 2)
+
     def test_loaded_probe_gates_completion_length_and_finish_reason(self) -> None:
         baseline = self.retrieval_result("baseline")
         loaded = self.retrieval_result("loaded")
@@ -1838,16 +2945,59 @@ class ProductionGateTests(unittest.TestCase):
 
 
 class MultimodalOracleTests(unittest.TestCase):
+    @staticmethod
+    def provenance() -> dict:
+        return {
+            "system_info": {"build": {"git_revision": "a" * 40}},
+            "process": {
+                "executable_sha256": "b" * 64,
+                "serve_configuration": {
+                    "subcommand": "serve",
+                    "model": "model",
+                    "paged_attn": "auto",
+                    "pa_context_len": None,
+                    "pa_memory_mb": None,
+                    "pa_memory_fraction": None,
+                    "pa_block_size": None,
+                    "pa_cache_type": "f8e4m3",
+                    "max_seqs": "16",
+                    "max_num_batched_tokens": None,
+                    "max_prefill_chunk_tokens": None,
+                    "max_decode_steps_before_prefill": None,
+                    "mtp_model": "draft",
+                },
+            },
+            "gpu_driver": {
+                "gpus": [
+                    {
+                        "uuid": "GPU-1",
+                        "name": "GH200",
+                        "driver_version": "580.0",
+                        "memory_total_mib": 97871.0,
+                    }
+                ]
+            },
+            "realized_kv_configuration": {
+                "blocks_total": 1000.0,
+                "sequence_capacity": 16.0,
+                "recurrent_slots_total": 17.0,
+            },
+            "evidence": {"complete": True},
+        }
+
     def test_text_prerequisites_require_acceptance_grade_soak_artifacts(self) -> None:
+        provenance = self.provenance()
         canary = {
             "mode": "canary",
             "passed": True,
             "coverage_complete": True,
+            "server_provenance": provenance,
         }
         adversarial = {
             "mode": "adversarial",
             "passed": True,
             "max_seqs_queue_evidence": {"passed": True},
+            "server_provenance": provenance,
         }
         production = {
             "mode": "production",
@@ -1855,6 +3005,7 @@ class MultimodalOracleTests(unittest.TestCase):
             "telemetry_evidence": {"passed": True},
             "acceptance_grade": True,
             "acceptance_grade_evidence": {"certification_complete": True},
+            "server_provenance": provenance,
         }
         with tempfile.TemporaryDirectory() as directory:
             paths = []
@@ -1867,13 +3018,103 @@ class MultimodalOracleTests(unittest.TestCase):
                 path.write_text(json.dumps(summary), encoding="utf-8")
                 paths.append(path)
 
-            self.assertFalse(soak.text_prerequisite_evidence(paths)["passed"])
+            self.assertFalse(
+                soak.text_prerequisite_evidence(paths, provenance)["passed"]
+            )
             adversarial["acceptance_grade"] = True
             adversarial["acceptance_grade_evidence"] = {
                 "certification_complete": True
             }
             paths[1].write_text(json.dumps(adversarial), encoding="utf-8")
-            self.assertTrue(soak.text_prerequisite_evidence(paths)["passed"])
+            self.assertTrue(
+                soak.text_prerequisite_evidence(paths, provenance)["passed"]
+            )
+
+            mismatched = self.provenance()
+            mismatched["process"]["serve_configuration"]["max_seqs"] = "8"
+            evidence = soak.text_prerequisite_evidence(paths, mismatched)
+            self.assertFalse(evidence["passed"])
+            self.assertFalse(
+                evidence["artifacts"][0]["server_provenance_match"]["passed"]
+            )
+
+    def test_multimodal_messages_put_unique_text_before_identical_image(self) -> None:
+        messages = soak.multimodal_messages(
+            "data:image/png;base64,AA==",
+            "unique nonce",
+            "read the image",
+        )
+
+        content = messages[0]["content"]
+        self.assertEqual([item["type"] for item in content], ["text", "image_url", "text"])
+        self.assertEqual(content[0]["text"], "unique nonce")
+        self.assertEqual(content[1]["image_url"]["url"], "data:image/png;base64,AA==")
+
+    def test_fresh_server_requires_zero_state_and_encoder_instrumentation(self) -> None:
+        snapshot = {
+            **{name: 0.0 for name in soak.MULTIMODAL_FRESH_GAUGES},
+            "mistralrs_encoder_cache_hits_total": 0.0,
+            "mistralrs_encoder_cache_misses_total": 0.0,
+        }
+        evidence = soak.fresh_multimodal_server_evidence(snapshot)
+        self.assertTrue(evidence["passed"])
+        self.assertTrue(evidence["encoder_instrumentation_complete"])
+
+        snapshot[soak.KV_CACHE_PREFIX_CACHED_GAUGE] = 1.0
+        self.assertFalse(soak.fresh_multimodal_server_evidence(snapshot)["passed"])
+        snapshot[soak.KV_CACHE_PREFIX_CACHED_GAUGE] = 0.0
+        snapshot["mistralrs_encoder_cache_hits_total"] = 1.0
+        self.assertFalse(soak.fresh_multimodal_server_evidence(snapshot)["passed"])
+
+    def test_vision_capability_requires_c8_capacity(self) -> None:
+        models = [
+            {
+                "name": "model",
+                "kind": "multimodal",
+                "input_modalities": ["text", "vision"],
+            }
+        ]
+        evidence = soak.multimodal_capability_evidence(
+            models,
+            "model",
+            {"mistralrs_sequences_capacity": 8.0},
+        )
+        self.assertTrue(evidence["passed"])
+        self.assertFalse(
+            soak.multimodal_capability_evidence(
+                models,
+                "model",
+                {"mistralrs_sequences_capacity": 7.0},
+            )["passed"]
+        )
+
+    def test_encoder_cache_transitions_exclude_paged_attention_reuse(self) -> None:
+        before = {
+            "mistralrs_encoder_cache_hits_total": 0.0,
+            "mistralrs_encoder_cache_misses_total": 0.0,
+            "mistralrs_prefix_cache_tokens_reused_total": 0.0,
+        }
+        cold = {
+            **before,
+            "mistralrs_encoder_cache_misses_total": 1.0,
+        }
+        cold_evidence = soak.encoder_cache_transition_evidence(
+            before,
+            cold,
+            "cold",
+        )
+        self.assertTrue(cold_evidence["passed"])
+        hit = {
+            **cold,
+            "mistralrs_encoder_cache_hits_total": 1.0,
+        }
+        self.assertTrue(
+            soak.encoder_cache_transition_evidence(cold, hit, "hit")["passed"]
+        )
+        hit["mistralrs_prefix_cache_tokens_reused_total"] = 32.0
+        self.assertFalse(
+            soak.encoder_cache_transition_evidence(cold, hit, "hit")["passed"]
+        )
 
     def test_image_oracle_accepts_phrase_and_attribute_alternative(self) -> None:
         valid, evidence = soak.validate_image_output(
@@ -1939,8 +3180,10 @@ class MultimodalOracleTests(unittest.TestCase):
         args = soak.build_parser().parse_args(
             [
                 "multimodal",
-                "--image",
-                "website/public/og.png",
+                "--server-pid",
+                "123",
+                "--tokenizer",
+                "tokenizer.json",
                 "--image-required-phrase",
                 "mistral.rs",
                 "--image-expected-attribute",
@@ -1953,10 +3196,10 @@ class MultimodalOracleTests(unittest.TestCase):
         )
         soak.validate_args(args)
 
-        self.assertEqual(args.image_required_phrases, ["mistral.rs"])
-        self.assertEqual(
+        self.assertIn("mistral.rs", args.image_required_phrases)
+        self.assertIn(
+            ("dark background", "black background"),
             args.image_expected_attributes,
-            [("dark background", "black background")],
         )
         serialized = soak.serialized_arguments(args)
         json.dumps(serialized)
@@ -1973,8 +3216,28 @@ class MultimodalOracleTests(unittest.TestCase):
         args = soak.build_parser().parse_args(
             [
                 "multimodal",
-                "--image",
-                "website/public/og.png",
+                "--server-pid",
+                "123",
+                "--tokenizer",
+                "tokenizer.json",
+                "--text-prerequisite-artifacts",
+                "canary.json",
+                "adversarial.json",
+                "production.json",
+            ]
+        )
+        args.image_required_phrases = []
+        args.image_expected_attributes = []
+
+        with self.assertRaisesRegex(ValueError, "requires --image-required-phrase"):
+            soak.validate_args(args)
+
+    def test_acceptance_multimodal_requires_tokenizer_accounting(self) -> None:
+        args = soak.build_parser().parse_args(
+            [
+                "multimodal",
+                "--server-pid",
+                "123",
                 "--text-prerequisite-artifacts",
                 "canary.json",
                 "adversarial.json",
@@ -1982,8 +3245,159 @@ class MultimodalOracleTests(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(ValueError, "requires --image-required-phrase"):
+        with self.assertRaisesRegex(ValueError, "requires --tokenizer"):
             soak.validate_args(args)
+
+    def test_acceptance_multimodal_gates_cannot_be_weakened(self) -> None:
+        def arguments(*extra: str):
+            return soak.build_parser().parse_args(
+                [
+                    "multimodal",
+                    "--server-pid",
+                    "123",
+                    "--tokenizer",
+                    "tokenizer.json",
+                    "--text-prerequisite-artifacts",
+                    "canary.json",
+                    "adversarial.json",
+                    "production.json",
+                    *extra,
+                ]
+            )
+
+        soak.validate_args(arguments())
+        cases = (
+            ("--phase-duration-seconds", "299"),
+            ("--concurrency", "7"),
+            ("--image-interval-seconds", "31"),
+            ("--min-text-requests-per-phase", "31"),
+            ("--min-image-requests", "9"),
+            ("--min-mixed-throughput-ratio", "0.89"),
+            ("--max-mixed-tpot-ratio", "1.21"),
+            ("--max-mixed-ttft-p99-seconds", "2.01"),
+            ("--min-recovery-throughput-ratio", "0.94"),
+            ("--min-output-event-coverage", "0.97"),
+            ("--min-telemetry-coverage", "0.94"),
+            ("--min-cuda-graph-replay-ratio", "0.97"),
+            ("--max-kv-block-utilization", "0.96"),
+            ("--telemetry-interval-seconds", "5.01"),
+            ("--cleanup-timeout-seconds", "30.01"),
+            ("--cleanup-poll-seconds", "0.251"),
+            ("--min-mtp-acceptance-rate", "0.04"),
+            ("--min-mtp-mean-advance", "1.09"),
+            ("--min-mtp-proposal-depth", "1.9"),
+            ("--max-sparse-verifier-fallback-ratio", "0.02"),
+            ("--min-sparse-verifier-accounting-coverage", "0.97"),
+        )
+        for flag, value in cases:
+            with self.subTest(flag=flag), self.assertRaisesRegex(
+                ValueError,
+                "acceptance-grade multimodal",
+            ):
+                soak.validate_args(arguments(flag, value))
+
+        non_acceptance = arguments(
+            "--no-acceptance-grade",
+            "--no-require-mtp",
+            "--phase-duration-seconds",
+            "1",
+            "--concurrency",
+            "1",
+            "--min-text-requests-per-phase",
+            "1",
+            "--min-image-requests",
+            "1",
+        )
+        soak.validate_args(non_acceptance)
+
+    def test_multimodal_phase_performance_gates_all_ratios(self) -> None:
+        args = soak.build_parser().parse_args(
+            [
+                "multimodal",
+                "--server-pid",
+                "123",
+                "--tokenizer",
+                "tokenizer.json",
+                "--text-prerequisite-artifacts",
+                "canary.json",
+                "adversarial.json",
+                "production.json",
+            ]
+        )
+        baseline = {
+            "nominal_output_tok_s": 100.0,
+            "tpot_seconds": {"p95": 0.01},
+        }
+        mixed_text = {
+            "nominal_output_tok_s": 91.0,
+            "tpot_seconds": {"p95": 0.011},
+        }
+        mixed_all = {"offered_ttft_seconds": {"p99": 1.9}}
+        recovery = {"nominal_output_tok_s": 96.0}
+
+        evidence = soak.multimodal_phase_performance_evidence(
+            baseline,
+            mixed_text,
+            mixed_all,
+            recovery,
+            args,
+        )
+        self.assertTrue(evidence["passed"])
+        mixed_text["nominal_output_tok_s"] = 89.0
+        self.assertFalse(
+            soak.multimodal_phase_performance_evidence(
+                baseline,
+                mixed_text,
+                mixed_all,
+                recovery,
+                args,
+            )["passed"]
+        )
+
+    def test_multimodal_nominal_window_excludes_drain_tokens(self) -> None:
+        results = [
+            request_result(
+                case_id="inside",
+                completion_tokens=128,
+                output_chunks=128,
+                finish_reason="length",
+                started=1.0,
+                ended=11.0,
+                ttft_seconds=0.1,
+                client_queue_seconds=0.4,
+                output_event_window_counts=[90],
+                output_token_window_counts=[90],
+            ),
+            request_result(
+                case_id="queued-after-window",
+                completion_tokens=128,
+                output_chunks=128,
+                finish_reason="length",
+                started=10.1,
+                ended=12.0,
+                ttft_seconds=0.1,
+                output_event_window_counts=[0],
+                output_token_window_counts=[0],
+            ),
+        ]
+
+        summary = soak.nominal_multimodal_phase_summary(
+            results,
+            0.0,
+            10.0,
+            12.1,
+            8,
+            "mixed",
+        )
+
+        self.assertEqual(summary["submitted_requests"], 2)
+        self.assertEqual(summary["offered_in_nominal_window_requests"], 1)
+        self.assertEqual(summary["first_token_in_nominal_window_requests"], 1)
+        self.assertEqual(summary["nominal_output_tokens"], 90)
+        self.assertEqual(summary["nominal_output_tok_s"], 9.0)
+        self.assertEqual(summary["offered_ttft_seconds"]["p99"], 0.5)
+        self.assertEqual(summary["requests_ending_after_nominal_window"], 2)
+        self.assertTrue(summary["drain_complete"])
 
 
 if __name__ == "__main__":
