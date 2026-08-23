@@ -34,8 +34,9 @@ use crate::paged_attention::windowed_pool::{
 };
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 use crate::pipeline::cuda_graph::{
-    record_cuda_graph_dispatch, CudaGraphComponent, CudaGraphDispatchMode, CudaGraphDispatchReason,
-    CudaGraphEvent, CudaGraphEventGuard,
+    record_cuda_graph_dispatch, record_cuda_graph_evictions, record_cuda_graph_resident_entries,
+    take_cuda_graph_capacity_eviction, CudaGraphComponent, CudaGraphDispatchMode,
+    CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard, CudaGraphEvictionReason,
 };
 
 const DEFAULT_BLOCK_SIZE: usize = 16;
@@ -1534,7 +1535,9 @@ fn release_dflash_cuda_graph(entry: DFlashCudaGraphEntry) {
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl Drop for DFlashCudaGraphState {
     fn drop(&mut self) {
-        release_dflash_cuda_graphs(std::mem::take(&mut self.entries));
+        let entries = std::mem::take(&mut self.entries);
+        record_cuda_graph_resident_entries(CudaGraphComponent::DFlash, 0);
+        release_dflash_cuda_graphs(entries);
     }
 }
 
@@ -1546,22 +1549,31 @@ impl DFlashCudaGraphState {
         if evicted == 0 {
             return 0;
         }
+        record_cuda_graph_resident_entries(CudaGraphComponent::DFlash, self.entries.len());
         release_dflash_cuda_graphs(entries);
-        crate::pipeline::cuda_graph::record_cuda_graph_evictions(
+        record_cuda_graph_evictions(
             CudaGraphComponent::DFlash,
-            "memory_pressure",
+            CudaGraphEvictionReason::MemoryPressure,
             evicted,
         );
         evicted
     }
 
     fn store(&mut self, entry: DFlashCudaGraphEntry) {
-        if self.entries.len() >= DFLASH_CUDA_GRAPH_CACHE_CAPACITY {
-            release_dflash_cuda_graph(self.entries.remove(0));
+        if let Some(evicted) =
+            take_cuda_graph_capacity_eviction(&mut self.entries, DFLASH_CUDA_GRAPH_CACHE_CAPACITY)
+        {
+            record_cuda_graph_evictions(
+                CudaGraphComponent::DFlash,
+                CudaGraphEvictionReason::Capacity,
+                1,
+            );
+            release_dflash_cuda_graph(evicted);
         }
         self.warmed.remove(&entry.key);
         self.failed.remove(&entry.key);
         self.entries.push(entry);
+        record_cuda_graph_resident_entries(CudaGraphComponent::DFlash, self.entries.len());
     }
 
     fn retire_failed_entry(
@@ -1578,6 +1590,7 @@ impl DFlashCudaGraphState {
             .map_err(candle_core::Error::wrap);
         self.failed.insert(key);
         self.warmed.remove(&key);
+        record_cuda_graph_resident_entries(CudaGraphComponent::DFlash, self.entries.len());
         release_dflash_cuda_graph(entry);
         match synchronize_result {
             Ok(()) => {
@@ -1790,6 +1803,7 @@ impl DFlashCudaGraphState {
             .position(|entry| entry.key == key)
             .map(|position| self.entries.remove(position));
         if let Some(entry) = mismatched {
+            record_cuda_graph_resident_entries(CudaGraphComponent::DFlash, self.entries.len());
             release_dflash_cuda_graph(entry);
         }
         if self.failed.contains(&key) {
@@ -2351,6 +2365,10 @@ impl DFlashDraftModel {
                 }
                 if let Some(position) = state.entries.iter().position(|entry| entry.key == key) {
                     release_dflash_cuda_graph(state.entries.remove(position));
+                    record_cuda_graph_resident_entries(
+                        CudaGraphComponent::DFlash,
+                        state.entries.len(),
+                    );
                 }
                 let attention_batch = temporary.attention_batch(batch_bucket, block)?;
                 let anchors = vec![0u32; batch_bucket];

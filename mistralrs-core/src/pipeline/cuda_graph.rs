@@ -39,7 +39,7 @@ const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
     sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
 // Matches the standard CUDA paged-attention V2 partition size.
 const PAGED_ATTENTION_PARTITION_SIZE: usize = 512;
-pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
+const TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 64;
 // Batches up to this size get their own graph; larger ones pad up to the next power of two.
 pub(crate) const CUDA_GRAPH_EXACT_BATCH_BUCKETS: usize = 8;
 pub(crate) const CUDA_GRAPH_MAX_BATCH_BUCKET: usize = 64;
@@ -49,6 +49,7 @@ const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_
 const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
 const CUDA_GRAPH_DISPATCH_METRIC: &str = "mistralrs_cuda_graph_dispatch_total";
 const CUDA_GRAPH_EVICTIONS_METRIC: &str = "mistralrs_cuda_graph_evictions_total";
+const CUDA_GRAPH_RESIDENT_ENTRIES_METRIC: &str = "mistralrs_cuda_graph_resident_entries";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -57,6 +58,23 @@ static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolSc
 pub(crate) enum CudaGraphComponent {
     Target,
     DFlash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum CudaGraphEvictionReason {
+    Capacity,
+    MemoryPressure,
+    SpecStateBudget,
+}
+
+impl CudaGraphEvictionReason {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Capacity => "capacity",
+            Self::MemoryPressure => "memory_pressure",
+            Self::SpecStateBudget => "spec_state_budget",
+        }
+    }
 }
 
 impl CudaGraphComponent {
@@ -224,15 +242,32 @@ fn record_cuda_graph_event(
 
 pub(crate) fn record_cuda_graph_evictions(
     component: CudaGraphComponent,
-    reason: &'static str,
+    reason: CudaGraphEvictionReason,
     count: usize,
 ) {
     metrics::counter!(
         CUDA_GRAPH_EVICTIONS_METRIC,
         "component" => component.label(),
-        "reason" => reason
+        "reason" => reason.label()
     )
     .increment(u64::try_from(count).unwrap_or(u64::MAX));
+}
+
+pub(crate) fn record_cuda_graph_resident_entries(component: CudaGraphComponent, count: usize) {
+    let count = u32::try_from(count).unwrap_or(u32::MAX);
+    metrics::gauge!(
+        CUDA_GRAPH_RESIDENT_ENTRIES_METRIC,
+        "component" => component.label()
+    )
+    .set(f64::from(count));
+}
+
+pub(crate) fn take_cuda_graph_capacity_eviction<T>(
+    entries: &mut Vec<T>,
+    capacity: usize,
+) -> Option<T> {
+    assert!(capacity > 0, "CUDA graph cache capacity must be nonzero");
+    (entries.len() >= capacity).then(|| entries.remove(0))
 }
 
 pub(crate) fn reclaim_cuda_graph_entries(
@@ -1708,6 +1743,12 @@ pub(crate) struct CudaDecodeGraphState {
     recurrent_storage_generation: Option<u64>,
 }
 
+impl Drop for CudaDecodeGraphState {
+    fn drop(&mut self) {
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, 0);
+    }
+}
+
 impl CudaDecodeGraphState {
     pub(crate) fn disabled(&self) -> bool {
         self.disabled || self.suspended
@@ -1728,7 +1769,9 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn clear(&mut self) {
         self.eager_retry_blocked = false;
-        release_cuda_graph_entries(std::mem::take(&mut self.entries));
+        let entries = std::mem::take(&mut self.entries);
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, 0);
+        release_cuda_graph_entries(entries);
     }
 
     pub(crate) fn evict_lru_for_memory_pressure(&mut self, max_entries: usize) -> usize {
@@ -1737,8 +1780,13 @@ impl CudaDecodeGraphState {
         if evicted == 0 {
             return 0;
         }
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
         release_cuda_graph_entries(entries);
-        record_cuda_graph_evictions(CudaGraphComponent::Target, "memory_pressure", evicted);
+        record_cuda_graph_evictions(
+            CudaGraphComponent::Target,
+            CudaGraphEvictionReason::MemoryPressure,
+            evicted,
+        );
         evicted
     }
 
@@ -1939,11 +1987,20 @@ impl CudaDecodeGraphState {
 
     pub(crate) fn insert(&mut self, mut entry: CudaDecodeGraphEntry) {
         self.evict_for_spec_state(&entry.spec_state_usage);
-        if self.entries.len() >= CUDA_DECODE_GRAPH_CACHE_CAPACITY {
-            release_cuda_graph_entries(vec![self.entries.remove(0)]);
+        if let Some(evicted) = take_cuda_graph_capacity_eviction(
+            &mut self.entries,
+            TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY,
+        ) {
+            record_cuda_graph_evictions(
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::Capacity,
+                1,
+            );
+            release_cuda_graph_entries(vec![evicted]);
         }
         entry.generation = self.allocate_generation();
         self.entries.push(entry);
+        record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
     }
 
     fn evict_for_spec_state(&mut self, incoming: &CudaGraphSpecStateUsage) {
@@ -1959,8 +2016,9 @@ impl CudaDecodeGraphState {
             .collect::<Vec<_>>();
         let mut evictions = spec_state_eviction_plan(&usages, incoming, &self.spec_state_budgets);
         if !evictions.is_empty() {
+            let evicted = evictions.len();
             tracing::debug!(
-                entries = evictions.len(),
+                entries = evicted,
                 incoming_bytes = incoming.total_bytes(),
                 "Evicting CUDA graphs to stay within the speculative state budget"
             );
@@ -1969,7 +2027,13 @@ impl CudaDecodeGraphState {
             for idx in evictions.into_iter().rev() {
                 entries.push(self.entries.remove(idx));
             }
+            record_cuda_graph_resident_entries(CudaGraphComponent::Target, self.entries.len());
             release_cuda_graph_entries(entries);
+            record_cuda_graph_evictions(
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::SpecStateBudget,
+                evicted,
+            );
         }
     }
 
@@ -3417,6 +3481,87 @@ mod tests {
                 .len(),
             reasons.len()
         );
+    }
+
+    #[test]
+    fn graph_eviction_labels_have_fixed_cardinality() {
+        use std::collections::HashSet;
+
+        let labels = [
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::Capacity,
+            ),
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::MemoryPressure,
+            ),
+            (
+                CudaGraphComponent::Target,
+                CudaGraphEvictionReason::SpecStateBudget,
+            ),
+            (
+                CudaGraphComponent::DFlash,
+                CudaGraphEvictionReason::Capacity,
+            ),
+            (
+                CudaGraphComponent::DFlash,
+                CudaGraphEvictionReason::MemoryPressure,
+            ),
+        ]
+        .into_iter()
+        .map(|(component, reason)| (component.label(), reason.label()))
+        .collect::<HashSet<_>>();
+
+        assert_eq!(
+            CUDA_GRAPH_EVICTIONS_METRIC,
+            "mistralrs_cuda_graph_evictions_total"
+        );
+        assert_eq!(
+            CUDA_GRAPH_RESIDENT_ENTRIES_METRIC,
+            "mistralrs_cuda_graph_resident_entries"
+        );
+        assert_eq!(labels.len(), 5);
+        assert!(labels.contains(&("target", "capacity")));
+        assert!(labels.contains(&("dflash", "capacity")));
+        assert!(labels.contains(&("target", "memory_pressure")));
+        assert!(labels.contains(&("dflash", "memory_pressure")));
+        assert!(labels.contains(&("target", "spec_state_budget")));
+    }
+
+    #[test]
+    fn capacity_eviction_removes_one_lru_entry_and_preserves_the_bound() {
+        let mut entries = vec![10, 20, 30];
+        assert_eq!(take_cuda_graph_capacity_eviction(&mut entries, 4), None);
+        entries.push(40);
+        assert_eq!(take_cuda_graph_capacity_eviction(&mut entries, 4), Some(10));
+        entries.push(50);
+        assert_eq!(entries, vec![20, 30, 40, 50]);
+        assert_eq!(entries.len(), 4);
+    }
+
+    #[test]
+    fn target_cache_retains_64_entries_before_lru_eviction() {
+        let capacity = TARGET_CUDA_DECODE_GRAPH_CACHE_CAPACITY;
+        assert_eq!(capacity, 64);
+
+        let mut entries = (0..capacity - 1).collect::<Vec<_>>();
+        assert_eq!(
+            take_cuda_graph_capacity_eviction(&mut entries, capacity),
+            None
+        );
+        entries.push(capacity - 1);
+        assert_eq!(entries.len(), capacity);
+
+        assert_eq!(
+            take_cuda_graph_capacity_eviction(&mut entries, capacity),
+            Some(0),
+        );
+        entries.push(capacity);
+
+        assert_eq!(entries.len(), capacity);
+        assert_eq!(entries.first(), Some(&1));
+        assert_eq!(entries.last(), Some(&capacity));
     }
 
     #[test]
