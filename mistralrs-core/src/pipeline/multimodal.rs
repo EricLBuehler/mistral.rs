@@ -1892,7 +1892,13 @@ impl MultimodalPipeline {
             },
             true,
         )?;
-        step.input_ids.device().synchronize()?;
+        super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
+            |err| {
+                candle_core::Error::msg(format!(
+                    "CUDA graph rollback synchronization failed: {err}"
+                ))
+            },
+        )?;
         let replay = state
             .replay(&replay_key, &step, CudaDecodeGraphReplayInput::Host)?
             .ok_or_else(|| {
@@ -2032,7 +2038,7 @@ impl MultimodalPipeline {
         Ok(())
     }
 
-    /// Runs the padded step eagerly as the live forward, then captures the same step into a graph.
+    /// Captures after one eager warmup; live calls roll it back so the first replay is canonical.
     fn capture_cuda_decode_graph_step(
         &self,
         state: &mut CudaDecodeGraphState,
@@ -2119,7 +2125,7 @@ impl MultimodalPipeline {
                 })
                 .transpose()?;
 
-            // Captured recurrent writes do not execute, so the eager warm state remains live.
+            // CUDA stream capture records recurrent writes without executing them.
             let entry = capture_cuda_decode_graph(
                 CudaDecodeGraphCaptureCtx {
                     key,
