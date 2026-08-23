@@ -60,6 +60,14 @@ DEFAULT_PREFIX_PRESSURE_CAPACITY_FRACTION = 1.10
 DEFAULT_KV_BLOCK_SIZE_TOKENS = 32
 DEFAULT_PREFIX_PRESSURE_MAX_ENTRIES = 128
 DEFAULT_MIN_OUTPUT_EVENT_COVERAGE = 0.98
+DEFAULT_MAX_LATENCY_DEGRADATION_FRACTION = 0.20
+DEFAULT_MIN_TELEMETRY_COVERAGE = 0.95
+DEFAULT_MIN_TELEMETRY_SAMPLES = 2
+MIN_PRODUCTION_PROBES_PER_PHASE = 2
+MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES = 2
+DEFAULT_OVERLAP_BASELINE_SECONDS = 2.0
+DEFAULT_OVERLAP_QUEUE_POLL_SECONDS = 0.01
+DEFAULT_MIN_OVERLAP_BASELINE_COMPLETIONS = 2
 RETRIEVAL_PADDING_SLACK_TOKENS = 64
 RETRIEVAL_SOURCE_MARGIN_TOKENS = 256
 RETRIEVAL_INITIAL_SAMPLE_ROWS = 512
@@ -87,6 +95,18 @@ EXACT_CONTEXT_SUFFIX = "\nEnd of deterministic production-soak context.\n"
 PROMETHEUS_METRIC_PREFIXES = ("mistralrs_", "http_requests_in_flight")
 KV_CACHE_ACTIVE_GAUGE = "mistralrs_kv_cache_blocks_active"
 KV_CACHE_PREFIX_CACHED_GAUGE = "mistralrs_kv_cache_blocks_prefix_cached"
+REQUEST_OUTCOMES_COUNTER = "mistralrs_request_outcomes_total"
+REQUIRED_PRODUCTION_GAUGES = (
+    "mistralrs_sequences_running",
+    "mistralrs_sequences_waiting",
+    "mistralrs_sequences_capacity",
+    "mistralrs_requests_pending_admission",
+    KV_CACHE_ACTIVE_GAUGE,
+    KV_CACHE_PREFIX_CACHED_GAUGE,
+    "mistralrs_kv_cache_blocks_total",
+    "mistralrs_recurrent_state_slots_used",
+    "mistralrs_recurrent_state_slots_total",
+)
 EOS_TOKEN_CANDIDATES = (
     "<|im_end|>",
     "<|eot_id|>",
@@ -156,6 +176,31 @@ def parse_context_mix(value: str) -> tuple[tuple[int, int], ...]:
     if not items:
         raise argparse.ArgumentTypeError("context mix cannot be empty")
     return tuple(items)
+
+
+def parse_concurrency_thresholds(value: str) -> dict[int, float]:
+    thresholds: dict[int, float] = {}
+    for part in value.split(","):
+        try:
+            raw_concurrency, raw_threshold = part.split(":", maxsplit=1)
+            concurrency = int(raw_concurrency)
+            threshold = float(raw_threshold)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                "expected concurrency thresholds such as 1:150,8:800,16:1200"
+            ) from exc
+        if concurrency <= 0 or not math.isfinite(threshold) or threshold <= 0:
+            raise argparse.ArgumentTypeError(
+                "concurrency and throughput thresholds must be positive"
+            )
+        if concurrency in thresholds:
+            raise argparse.ArgumentTypeError(
+                f"duplicate concurrency threshold for {concurrency}"
+            )
+        thresholds[concurrency] = threshold
+    if not thresholds:
+        raise argparse.ArgumentTypeError("throughput thresholds cannot be empty")
+    return thresholds
 
 
 def percentile(values: Sequence[float], quantile: float) -> float | None:
@@ -627,10 +672,7 @@ class SoakClient:
                             for index, (start, end) in enumerate(
                                 retain_output_event_windows
                             ):
-                                if start <= now and (
-                                    now < end
-                                    or index + 1 == len(retain_output_event_windows)
-                                ):
+                                if start <= now < end:
                                     output_event_window_counts[index] += 1
                         chunks += 1
                     if piece:
@@ -749,6 +791,7 @@ class SoakClient:
 
     async def disconnect(self, spec: RequestSpec, after_seconds: float) -> dict[str, Any]:
         started = time.perf_counter()
+        accepted = asyncio.Event()
 
         async def consume() -> None:
             async with self.http.stream(
@@ -757,10 +800,28 @@ class SoakClient:
                 json=self.payload(spec, stream=True),
             ) as response:
                 response.raise_for_status()
+                accepted.set()
                 async for _ in response.aiter_bytes():
                     pass
 
         task = asyncio.create_task(consume())
+        try:
+            await asyncio.wait_for(accepted.wait(), timeout=min(30.0, self.timeout_seconds))
+        except asyncio.TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+            return {
+                "case_id": spec.case_id,
+                "outcome": "acceptance_timeout",
+                "elapsed_seconds": time.perf_counter() - started,
+                "disconnect_after_seconds": after_seconds,
+                "server_stream_accepted": False,
+                "error": "server did not accept the streaming response before timeout",
+                "context_tokens": spec.context_tokens,
+            }
         await asyncio.sleep(after_seconds)
         task.cancel()
         outcome = "cancelled"
@@ -778,6 +839,7 @@ class SoakClient:
             "outcome": outcome,
             "elapsed_seconds": time.perf_counter() - started,
             "disconnect_after_seconds": after_seconds,
+            "server_stream_accepted": True,
             "error": error,
             "context_tokens": spec.context_tokens,
         }
@@ -1277,6 +1339,41 @@ async def compare_mode(
         args.stat_max_ks,
         args.stat_max_js,
     )
+    statistical_by_concurrency = []
+    if args.require_part1_complete:
+        for concurrency in DEFAULT_CONCURRENCIES:
+            phase = f"canary-c{concurrency}-normal"
+            candidate_phase_samples, _ = load_canary_artifact(args.candidate, phase)
+            reference_phase_samples, _ = load_canary_artifact(args.reference, phase)
+            comparison = compare_samples(
+                candidate_phase_samples,
+                reference_phase_samples,
+                tokenizer,
+                args.stat_max_ks,
+                args.stat_max_js,
+            )
+            comparison.update(
+                {
+                    "concurrency": concurrency,
+                    "candidate_phase": phase,
+                    "reference_phase": phase,
+                    "candidate_errors": sum(
+                        not result.ok for result in candidate_phase_samples
+                    ),
+                    "reference_errors": sum(
+                        not result.ok for result in reference_phase_samples
+                    ),
+                }
+            )
+            comparison["passed"] = (
+                comparison["passed"]
+                and comparison["candidate_errors"] == 0
+                and comparison["reference_errors"] == 0
+                and comparison["candidate_samples"]
+                == comparison["reference_samples"]
+            )
+            statistical_by_concurrency.append(comparison)
+            await writer.emit("offline_comparison_by_concurrency", **comparison)
     candidate_by_seed = {
         (item.case_id, item.seed): item.output_transcript for item in candidate if item.ok
     }
@@ -1287,15 +1384,68 @@ async def compare_mode(
     exact = sum(candidate_by_seed[key] == reference_by_seed[key] for key in shared)
     candidate_canary_passed = (candidate_metadata.get("run_summary") or {}).get("passed")
     reference_canary_passed = (reference_metadata.get("run_summary") or {}).get("passed")
-    passed = (
+    candidate_summary = candidate_metadata.get("run_summary") or {}
+    reference_summary = reference_metadata.get("run_summary") or {}
+    candidate_args = (candidate_metadata.get("run_start") or {}).get("arguments") or {}
+    reference_args = (reference_metadata.get("run_start") or {}).get("arguments") or {}
+    candidate_concurrencies = set(candidate_args.get("concurrencies") or ())
+    reference_concurrencies = set(reference_args.get("concurrencies") or ())
+    candidate_mtp = candidate_summary.get("candidate_mtp") or {}
+    reference_mtp = reference_summary.get("candidate_mtp") or {}
+    candidate_graph = candidate_summary.get("candidate_cuda_graph") or {}
+    reference_graph = reference_summary.get("candidate_cuda_graph") or {}
+    candidate_edges = candidate_summary.get("edge_cases") or {}
+    part1_coverage = {
+        "candidate_c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(
+            candidate_concurrencies
+        ),
+        "reference_c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(
+            reference_concurrencies
+        ),
+        "candidate_edge_cases": (
+            candidate_edges.get("passed") is True
+            and candidate_edges.get("skipped") is not True
+        ),
+        "candidate_mtp": (
+            candidate_mtp.get("passed") is True
+            and candidate_mtp.get("active") is True
+        ),
+        "candidate_target_and_dflash_graphs": (
+            candidate_graph.get("passed") is True
+            and set((candidate_graph.get("components") or {}).keys())
+            == {"target", "dflash"}
+        ),
+        "reference_target_only": (
+            reference_mtp.get("passed") is True
+            and reference_mtp.get("active") is False
+        ),
+        "reference_target_graph": (
+            reference_graph.get("passed") is True
+            and set((reference_graph.get("components") or {}).keys()) == {"target"}
+        ),
+        "statistical_comparison": (
+            statistical["passed"]
+            and len(statistical_by_concurrency) == len(DEFAULT_CONCURRENCIES)
+            and all(item["passed"] for item in statistical_by_concurrency)
+        ),
+    }
+    coverage_complete = all(part1_coverage.values())
+    comparison_passed = (
         compatibility["compatible"]
         and statistical["passed"]
         and bool(candidate_canary_passed)
         and bool(reference_canary_passed)
     )
+    passed = comparison_passed and (
+        not args.require_part1_complete or coverage_complete
+    )
     summary = {
         "mode": "compare",
         "passed": passed,
+        "comparison_passed": comparison_passed,
+        "coverage_complete": coverage_complete,
+        "part1_coverage": part1_coverage,
+        "require_part1_complete": args.require_part1_complete,
         "candidate": str(args.candidate),
         "reference": str(args.reference),
         "candidate_phase": args.candidate_phase,
@@ -1304,6 +1454,7 @@ async def compare_mode(
         "reference_canary_passed": reference_canary_passed,
         "compatibility": compatibility,
         "statistical_comparison": statistical,
+        "statistical_comparison_by_concurrency": statistical_by_concurrency,
         "shared_fixed_seed_cases": len(shared),
         "exact_fixed_seed_matches": exact,
         "exact_fixed_seed_match_rate": exact / len(shared) if shared else None,
@@ -1532,6 +1683,7 @@ async def canary_mode(
     client: SoakClient,
     writer: JsonlWriter,
 ) -> dict[str, Any]:
+    candidate_metrics_before = await safe_metrics(client, writer, "canary-candidate-start")
     specs = make_canary_specs(args)
     baseline: list[RequestResult] | None = None
     baseline_phase = ""
@@ -1544,6 +1696,17 @@ async def canary_mode(
     quality_checks: list[dict[str, Any]] = []
     semantic_by_phase: dict[str, bool] = {}
     for concurrency in args.concurrencies:
+        stabilization_phase = f"canary-c{concurrency}-stabilize"
+        _, stabilization_summary = await run_batch(
+            client,
+            specs,
+            concurrency,
+            writer,
+            stabilization_phase,
+            keep_output=False,
+        )
+        stabilization_summary["order"] = "stabilize"
+        summaries.append(stabilization_summary)
         normal_results: list[RequestResult] | None = None
         normal_phase = ""
         ordering_specs = full_batch_specs(specs, concurrency)
@@ -1582,19 +1745,64 @@ async def canary_mode(
             elif order == "normal-replay":
                 if normal_results is None:
                     raise RuntimeError("normal canary phase must precede its exact replay")
-                replay = exact_output_diagnostics(
+                exact = exact_output_diagnostics(
                     normal_results, results, normal_phase, phase
+                )
+                statistical_replay = compare_samples(
+                    results,
+                    normal_results,
+                    client.tokenizer,
+                    args.stat_max_ks,
+                    args.stat_max_js,
+                )
+                exact_gated = concurrency == 1
+                replay = {
+                    "concurrency": concurrency,
+                    "exact_diagnostics": exact,
+                    "exact_diagnostics_gated": exact_gated,
+                    "statistical_comparison": statistical_replay,
+                    "semantic_passed": (
+                        semantic_by_phase[normal_phase] and semantic_by_phase[phase]
+                    ),
+                }
+                replay["passed"] = (
+                    replay["semantic_passed"]
+                    and statistical_replay["passed"]
+                    and (not exact_gated or exact["passed"])
                 )
                 exact_replays.append(replay)
                 await writer.emit("exact_replay_comparison", **replay)
             else:
                 if normal_results is None:
                     raise RuntimeError("normal canary phase must precede reverse ordering")
-                ordering = exact_output_diagnostics(
-                    results_for_specs(normal_results, ordering_specs),
+                normal_ordering_results = results_for_specs(
+                    normal_results, ordering_specs
+                )
+                exact = exact_output_diagnostics(
+                    normal_ordering_results,
                     results,
                     normal_phase,
                     phase,
+                )
+                statistical_ordering = compare_samples(
+                    results,
+                    normal_ordering_results,
+                    client.tokenizer,
+                    args.stat_max_ks,
+                    args.stat_max_js,
+                )
+                ordering = {
+                    "concurrency": concurrency,
+                    "exact_diagnostics": exact,
+                    "exact_diagnostics_gated": False,
+                    "statistical_comparison": statistical_ordering,
+                    "semantic_passed": (
+                        semantic_by_phase[normal_phase] and semantic_by_phase[phase]
+                    ),
+                }
+                ordering["passed"] = (
+                    ordering["semantic_passed"]
+                    and statistical_ordering["passed"]
                 )
                 exact_orderings.append(ordering)
                 await writer.emit("exact_ordering_comparison", **ordering)
@@ -1628,12 +1836,14 @@ async def canary_mode(
             {"phase": phase, **mismatch} for mismatch in exact["mismatches"]
         )
         await writer.emit("cross_shape_comparison", **comparison)
-    edge_summary = {"passed": True, "edges": {}}
+    edge_summary = {"passed": True, "skipped": True, "edges": {}}
     if not args.skip_edge_cases:
         edge_summary = await run_edge_cases(client, args, writer)
     statistical = None
     statistical_by_concurrency: list[dict[str, Any]] = []
     reference_summaries: list[dict[str, Any]] = []
+    reference_target_only: dict[str, Any] | None = None
+    reference_graph: dict[str, Any] | None = None
     if args.reference_url:
         reference = SoakClient(
             args.reference_url,
@@ -1645,6 +1855,9 @@ async def canary_mode(
         )
         all_reference: list[RequestResult] = []
         try:
+            reference_metrics_before = await safe_metrics(
+                reference, writer, "canary-reference-start"
+            )
             for concurrency in args.concurrencies:
                 results, summary = await run_batch(
                     reference,
@@ -1682,6 +1895,20 @@ async def canary_mode(
                 )
                 statistical_by_concurrency.append(comparison)
                 await writer.emit("statistical_comparison_by_concurrency", **comparison)
+            reference_metrics_after = await safe_metrics(
+                reference, writer, "canary-reference-end"
+            )
+            reference_target_only = target_only_speculative_evidence(
+                reference_metrics_before,
+                reference_metrics_after,
+            )
+            reference_graph = cuda_graph_evidence(
+                reference_metrics_before,
+                reference_metrics_after,
+                reference_metrics_before,
+                ("target",),
+                args.min_cuda_graph_replay_ratio,
+            )
         finally:
             await reference.close()
         statistical = compare_samples(
@@ -1692,8 +1919,47 @@ async def canary_mode(
             args.stat_max_js,
         )
         await writer.emit("statistical_comparison", **statistical)
+    candidate_metrics_after = await safe_metrics(client, writer, "canary-candidate-end")
+    candidate_mtp = speculative_evidence(
+        candidate_metrics_before,
+        candidate_metrics_after,
+        args.require_mtp,
+    )
+    candidate_graph = cuda_graph_evidence(
+        candidate_metrics_before,
+        candidate_metrics_after,
+        candidate_metrics_before,
+        args.expected_graph_components,
+        args.min_cuda_graph_replay_ratio,
+    )
+    edge_names = {"stop_sequence", "max_length", "regex", "json_schema", "required_tool", "eos"}
+    edge_coverage_complete = (
+        not args.skip_edge_cases
+        and edge_names.issubset(edge_summary["edges"])
+        and edge_summary["passed"]
+    )
+    part1_coverage = {
+        "c1_c8_c16": set(DEFAULT_CONCURRENCIES).issubset(args.concurrencies),
+        "edge_cases": edge_coverage_complete,
+        "target_reference": args.reference_url is not None,
+        "statistical_comparison": (
+            statistical is not None
+            and len(statistical_by_concurrency) >= len(DEFAULT_CONCURRENCIES)
+        ),
+        "candidate_mtp": (
+            args.require_mtp and candidate_mtp["passed"] and candidate_mtp["active"]
+        ),
+        "candidate_target_and_dflash_graphs": candidate_graph["passed"],
+        "reference_target_only": (
+            reference_target_only is not None and reference_target_only["passed"]
+        ),
+        "reference_target_graph": (
+            reference_graph is not None and reference_graph["passed"]
+        ),
+    }
+    coverage_complete = all(part1_coverage.values())
     request_errors = sum(summary["errors"] for summary in summaries)
-    passed = (
+    engine_passed = (
         request_errors == 0
         and all(item["passed"] for item in exact_replays)
         and all(item["passed"] for item in exact_orderings)
@@ -1702,10 +1968,16 @@ async def canary_mode(
         and edge_summary["passed"]
         and (statistical is None or statistical["passed"])
         and all(item["passed"] for item in statistical_by_concurrency)
+        and (not args.require_mtp or (candidate_mtp["passed"] and candidate_graph["passed"]))
     )
+    passed = engine_passed and (not args.require_part1_complete or coverage_complete)
     return {
         "mode": "canary",
         "passed": passed,
+        "engine_passed": engine_passed,
+        "coverage_complete": coverage_complete,
+        "part1_coverage": part1_coverage,
+        "require_part1_complete": args.require_part1_complete,
         "production_sampling": asdict(client.policy),
         "summaries": summaries,
         "exact_replays": exact_replays,
@@ -1717,6 +1989,10 @@ async def canary_mode(
         "reference_summaries": reference_summaries,
         "statistical_comparison": statistical,
         "statistical_comparison_by_concurrency": statistical_by_concurrency,
+        "candidate_mtp": candidate_mtp,
+        "candidate_cuda_graph": candidate_graph,
+        "reference_target_only": reference_target_only,
+        "reference_cuda_graph": reference_graph,
     }
 
 
@@ -1945,6 +2221,78 @@ async def run_long_context_correctness(
         )
         for index, length in enumerate(args.long_correctness_context_lengths)
     ]
+    cold_metrics_before = await safe_metrics(
+        client,
+        writer,
+        "long-correctness-c1-cold-start",
+    )
+    cold_phase = "long-correctness-c1-cold"
+    cold, cold_summary = await run_batch(
+        client,
+        specs,
+        1,
+        writer,
+        cold_phase,
+        keep_output=True,
+    )
+    cold_metrics_after = await safe_metrics(
+        client,
+        writer,
+        "long-correctness-c1-cold-end",
+    )
+    cold_dispatch = labeled_metric_deltas(
+        cold_metrics_before,
+        cold_metrics_after,
+        "mistralrs_cuda_graph_dispatch_total",
+    )
+    cold_events = labeled_metric_deltas(
+        cold_metrics_before,
+        cold_metrics_after,
+        "mistralrs_cuda_graph_events_total",
+    )
+    cold_eager_captures = sum(
+        item["delta"]
+        for item in cold_dispatch
+        if item["labels"].get("component") == "target"
+        and item["labels"].get("mode") == "eager"
+        and item["labels"].get("reason") == "cache_population"
+    )
+    cold_capture_successes = sum(
+        item["delta"]
+        for item in cold_events
+        if item["labels"].get("component") == "target"
+        and item["labels"].get("event") == "capture"
+        and item["labels"].get("outcome") == "success"
+    )
+    cold_capture_failures = sum(
+        item["delta"]
+        for item in cold_events
+        if item["labels"].get("component") == "target"
+        and item["labels"].get("event") == "capture"
+        and item["labels"].get("outcome") == "failure"
+    )
+    cold_graph_evidence = {
+        "passed": (
+            cold_eager_captures >= MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES
+            and cold_capture_successes >= MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES
+            and cold_capture_failures == 0
+        ),
+        "minimum_captures": MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES,
+        "eager_cache_population_dispatches": cold_eager_captures,
+        "successful_captures": cold_capture_successes,
+        "failed_captures": cold_capture_failures,
+        "dispatch": cold_dispatch,
+        "events": cold_events,
+    }
+    await writer.emit("cold_long_context_graph_evidence", **cold_graph_evidence)
+    _, stabilization_summary = await run_batch(
+        client,
+        specs,
+        1,
+        writer,
+        "long-correctness-c1-stabilize",
+        keep_output=False,
+    )
     baseline_phase = "long-correctness-c1-baseline"
     baseline, baseline_summary = await run_batch(
         client,
@@ -1954,12 +2302,23 @@ async def run_long_context_correctness(
         baseline_phase,
         keep_output=True,
     )
-    summaries = [baseline_summary]
+    summaries = [cold_summary, stabilization_summary, baseline_summary]
     exact_replays: list[dict[str, Any]] = []
     exact_orderings: list[dict[str, Any]] = []
     cross_phase_results: list[tuple[str, list[RequestResult]]] = []
     semantic_checks: list[dict[str, Any]] = []
     semantic_by_phase: dict[str, bool] = {}
+    cold_semantic_checks = []
+    for result in cold:
+        valid, detail = validate_retrieval_result(
+            result, client.tokenizer, args.max_repeated_ngram_ratio
+        )
+        check = {"phase": cold_phase, "valid": valid, **detail}
+        cold_semantic_checks.append(check)
+        semantic_checks.append(check)
+    semantic_by_phase[cold_phase] = bool(cold_semantic_checks) and all(
+        item["valid"] for item in cold_semantic_checks
+    )
     baseline_semantic_checks = []
     for result in baseline:
         valid, detail = validate_retrieval_result(
@@ -1971,6 +2330,24 @@ async def run_long_context_correctness(
     semantic_by_phase[baseline_phase] = bool(baseline_semantic_checks) and all(
         item["valid"] for item in baseline_semantic_checks
     )
+    cold_exact = exact_output_diagnostics(
+        cold,
+        baseline,
+        cold_phase,
+        baseline_phase,
+    )
+    cold_vs_canonical = {
+        "passed": (
+            cold_exact["passed"]
+            and semantic_by_phase[cold_phase]
+            and semantic_by_phase[baseline_phase]
+        ),
+        "exact_diagnostics": cold_exact,
+        "exact_diagnostics_gated": True,
+        "cold_semantic_passed": semantic_by_phase[cold_phase],
+        "canonical_semantic_passed": semantic_by_phase[baseline_phase],
+    }
+    await writer.emit("cold_long_context_comparison", **cold_vs_canonical)
 
     replay_phase = "long-correctness-c1-replay"
     replay, replay_summary = await run_batch(
@@ -2003,20 +2380,35 @@ async def run_long_context_correctness(
     )
 
     for concurrency in args.long_correctness_concurrencies:
+        _, stabilization_summary = await run_batch(
+            client,
+            specs,
+            concurrency,
+            writer,
+            f"long-correctness-c{concurrency}-stabilize",
+            keep_output=False,
+        )
+        summaries.append(stabilization_summary)
         normal_results: list[RequestResult] | None = None
         normal_phase = ""
-        ordering_specs = full_batch_specs(specs, concurrency)
         for order in ("normal", "normal-replay", "reverse"):
-            ordered = (
-                list(reversed(ordering_specs))
-                if order == "reverse"
-                else specs
-            )
+            ordered = list(reversed(specs)) if order == "reverse" else specs
             phase = f"long-correctness-c{concurrency}-{order}"
             results, summary = await run_batch(
                 client, ordered, concurrency, writer, phase, keep_output=True
             )
             summaries.append(summary)
+            phase_semantic_checks = []
+            for result in results:
+                valid, detail = validate_retrieval_result(
+                    result, client.tokenizer, args.max_repeated_ngram_ratio
+                )
+                check = {"phase": phase, "valid": valid, **detail}
+                phase_semantic_checks.append(check)
+                semantic_checks.append(check)
+            semantic_by_phase[phase] = bool(phase_semantic_checks) and all(
+                item["valid"] for item in phase_semantic_checks
+            )
             if order == "normal":
                 normal_results = results
                 normal_phase = phase
@@ -2034,27 +2426,35 @@ async def run_long_context_correctness(
                     raise RuntimeError(
                         "normal long-context phase must precede reverse ordering"
                     )
-                ordering_diagnostics = exact_output_diagnostics(
-                    results_for_specs(normal_results, ordering_specs),
+                exact = exact_output_diagnostics(
+                    normal_results,
                     results,
                     normal_phase,
                     phase,
+                )
+                statistical = compare_samples(
+                    results,
+                    normal_results,
+                    client.tokenizer,
+                    args.long_correctness_stat_max_ks,
+                    args.long_correctness_stat_max_js,
+                )
+                ordering_diagnostics = {
+                    "concurrency": concurrency,
+                    "exact_diagnostics": exact,
+                    "exact_diagnostics_gated": False,
+                    "statistical_comparison": statistical,
+                    "semantic_passed": (
+                        semantic_by_phase[normal_phase] and semantic_by_phase[phase]
+                    ),
+                }
+                ordering_diagnostics["passed"] = (
+                    ordering_diagnostics["semantic_passed"] and statistical["passed"]
                 )
                 exact_orderings.append(ordering_diagnostics)
                 await writer.emit(
                     "exact_ordering_comparison", **ordering_diagnostics
                 )
-            phase_semantic_checks = []
-            for result in results:
-                valid, detail = validate_retrieval_result(
-                    result, client.tokenizer, args.max_repeated_ngram_ratio
-                )
-                check = {"phase": phase, "valid": valid, **detail}
-                phase_semantic_checks.append(check)
-                semantic_checks.append(check)
-            semantic_by_phase[phase] = bool(phase_semantic_checks) and all(
-                item["valid"] for item in phase_semantic_checks
-            )
 
     cross_phase_comparisons = []
     for phase, results in cross_phase_results:
@@ -2082,6 +2482,8 @@ async def run_long_context_correctness(
 
     passed = (
         all(summary["errors"] == 0 for summary in summaries)
+        and cold_graph_evidence["passed"]
+        and cold_vs_canonical["passed"]
         and all(item["passed"] for item in exact_replays)
         and all(item["passed"] for item in exact_orderings)
         and all(item["passed"] for item in cross_phase_comparisons)
@@ -2092,6 +2494,8 @@ async def run_long_context_correctness(
         "lengths": list(args.long_correctness_context_lengths),
         "concurrencies": list(args.long_correctness_concurrencies),
         "summaries": summaries,
+        "cold_graph_evidence": cold_graph_evidence,
+        "cold_vs_canonical": cold_vs_canonical,
         "exact_replays": exact_replays,
         "exact_orderings": exact_orderings,
         "cross_phase_comparisons": cross_phase_comparisons,
@@ -2215,6 +2619,8 @@ async def adversarial_mode(
     quality_checks: list[dict[str, Any]] = []
     runtime_evidence: list[dict[str, Any]] = []
     runtime_cursor = initial_metrics
+    sequence_capacity = metric_total(initial_metrics, "mistralrs_sequences_capacity")
+    max_seqs_capacity_ok = sequence_capacity == args.max_seqs == 16
 
     async def record_quality(phase: str, results: Sequence[RequestResult]) -> None:
         for result in results:
@@ -2227,6 +2633,19 @@ async def adversarial_mode(
             quality_checks.append(check)
             await writer.emit("adversarial_quality", **check)
 
+    async def record_retrieval_quality(
+        phase: str, results: Sequence[RequestResult]
+    ) -> None:
+        for result in results:
+            valid, detail = validate_retrieval_result(
+                result,
+                client.tokenizer,
+                args.max_repeated_ngram_ratio,
+            )
+            check = {"phase": phase, "valid": valid, **detail}
+            quality_checks.append(check)
+            await writer.emit("adversarial_retrieval_quality", **check)
+
     async def record_runtime(phase: str, gated: bool) -> None:
         nonlocal runtime_cursor
         after = await safe_metrics(client, writer, f"{phase}-runtime-end")
@@ -2236,7 +2655,7 @@ async def adversarial_mode(
             "mtp": speculative_evidence(
                 runtime_cursor,
                 after,
-                gated and "dflash" in args.expected_graph_components,
+                gated and args.require_mtp,
             ),
             "cuda_graph": cuda_graph_evidence(
                 runtime_cursor,
@@ -2268,28 +2687,65 @@ async def adversarial_mode(
     mixed_lengths = (
         args.context_lengths * math.ceil(args.mixed_requests / len(args.context_lengths))
     )[: args.mixed_requests]
+    mixed_templates = {
+        length: retrieval_spec(
+            client,
+            length,
+            f"mixed-resident-{length}",
+            args.seed + 500 + index,
+            args.max_tokens,
+            {"scenario": "mixed", "length": length, "role": "template"},
+        )
+        for index, length in enumerate(args.context_lengths)
+    }
+    mixed_warmup, mixed_warmup_summary = await run_batch(
+        client,
+        list(mixed_templates.values()),
+        min(args.max_seqs, len(mixed_templates)),
+        writer,
+        "adversarial-mixed-context-warmup",
+        keep_output=True,
+    )
+    summaries.append(mixed_warmup_summary)
+    await record_retrieval_quality(
+        "adversarial-mixed-context-warmup", mixed_warmup
+    )
     mixed_specs = [
         RequestSpec(
             case_id=f"mixed-{index:03d}-{length}",
             seed=args.seed + index,
-            max_tokens=args.max_tokens,
-            prompt=exact_context(client, length, f"mixed-{index}-{length}"),
+            max_tokens=mixed_templates[length].max_tokens,
+            prompt=mixed_templates[length].prompt,
             context_tokens=length,
-            tags={"scenario": "mixed"},
+            tags={
+                **mixed_templates[length].tags,
+                "role": "traffic",
+            },
+            extra=dict(mixed_templates[length].extra),
         )
         for index, length in enumerate(mixed_lengths)
     ]
-    mixed_results, summary = await run_batch(
-        client,
-        mixed_specs,
-        min(args.max_seqs, len(mixed_specs)),
-        writer,
-        "adversarial-mixed-context",
-        keep_output=True,
+    mixed_throughput_summaries = []
+    for concurrency in args.throughput_concurrencies:
+        phase = f"adversarial-mixed-context-c{concurrency}"
+        mixed_results, summary = await run_batch(
+            client,
+            mixed_specs,
+            concurrency,
+            writer,
+            phase,
+            keep_output=True,
+        )
+        summaries.append(summary)
+        mixed_throughput_summaries.append(summary)
+        await record_retrieval_quality(phase, mixed_results)
+        await record_runtime(phase, True)
+    mixed_throughput = throughput_evidence(
+        mixed_throughput_summaries,
+        args.min_output_tok_s_by_concurrency,
+        args.min_scaling_efficiency,
     )
-    summaries.append(summary)
-    await record_quality("adversarial-mixed-context", mixed_results)
-    await record_runtime("adversarial-mixed-context", True)
+    await writer.emit("adversarial_throughput_evidence", **mixed_throughput)
 
     short_spec = retrieval_spec(
         client,
@@ -2299,6 +2755,15 @@ async def adversarial_mode(
         args.max_tokens,
         {"scenario": "fairness", "role": "short"},
     )
+    _, stabilization_summary = await run_batch(
+        client,
+        [short_spec],
+        1,
+        writer,
+        "fairness-short-stabilize",
+        keep_output=False,
+    )
+    summaries.append(stabilization_summary)
     warmup, warmup_summary = await run_batch(
         client, [short_spec], 1, writer, "fairness-short-warmup", keep_output=True
     )
@@ -2377,7 +2842,6 @@ async def adversarial_mode(
     fairness_passed = (
         all(result.ok for result in fairness_semantic_results)
         and warmup_short.output_transcript == isolated_short.output_transcript
-        and all(run["short_equal_to_isolated"] for run in fairness_runs)
         and all(value is not None and value <= args.fairness_max_slowdown for value in fairness_slowdowns)
         and all(fairness_semantic)
     )
@@ -2388,6 +2852,7 @@ async def adversarial_mode(
         "warmup_equal_to_isolated": (
             warmup_short.output_transcript == isolated_short.output_transcript
         ),
+        "cross_shape_exact_diagnostics_gated": False,
         "isolated_short_ttft_seconds": isolated_short.ttft_seconds,
         "isolated_short_tpot_seconds": isolated_short.tpot_seconds,
         "orders": fairness_runs,
@@ -2395,49 +2860,176 @@ async def adversarial_mode(
     await writer.emit("fairness_summary", **fairness_result)
     await record_runtime("adversarial-fairness", True)
 
-    overlap_specs = [
-        RequestSpec(
-            case_id="overlap-large-prefill",
-            seed=args.seed + 20_000,
-            max_tokens=args.max_tokens,
-            prompt=exact_context(client, longest, "overlap-large-prefill"),
-            context_tokens=longest,
-            tags={"scenario": "overlap", "role": "large_prefill"},
-        )
-    ] + [
-        RequestSpec(
-            case_id=f"overlap-decode-{index:03d}",
-            seed=args.seed + 20_001 + index,
-            max_tokens=args.max_tokens,
-            prompt=exact_context(client, shortest, f"overlap-decode-{index}"),
-            context_tokens=shortest,
-            tags={"scenario": "overlap", "role": "decode"},
-        )
+    overlap_decode_template = retrieval_spec(
+        client,
+        shortest,
+        "overlap-resident-decode",
+        args.seed + 20_000,
+        args.max_tokens,
+        {"scenario": "overlap", "role": "decode"},
+    )
+    overlap_warmup, overlap_warmup_summary = await run_batch(
+        client,
+        [overlap_decode_template],
+        1,
+        writer,
+        "adversarial-prefill-overlap-warmup",
+        keep_output=True,
+    )
+    summaries.append(overlap_warmup_summary)
+    await record_retrieval_quality(
+        "adversarial-prefill-overlap-warmup", overlap_warmup
+    )
+    overlap_stop = asyncio.Event()
+    overlap_decode_results: list[RequestResult] = []
+
+    async def overlap_decode_worker(worker_index: int) -> None:
+        request_index = 0
+        while not overlap_stop.is_set():
+            spec = RequestSpec(
+                case_id=f"overlap-decode-w{worker_index}-r{request_index}",
+                seed=args.seed + 21_000 + worker_index * 10_000 + request_index,
+                max_tokens=overlap_decode_template.max_tokens,
+                prompt=overlap_decode_template.prompt,
+                context_tokens=overlap_decode_template.context_tokens,
+                tags=dict(overlap_decode_template.tags),
+                extra=dict(overlap_decode_template.extra),
+            )
+            result = await client.stream_request(spec)
+            overlap_decode_results.append(result)
+            await writer.emit(
+                "request",
+                phase="adversarial-prefill-overlap-decode",
+                concurrency=args.overlap_short_requests,
+                **result.record(True),
+            )
+            request_index += 1
+
+    decode_started = time.perf_counter()
+    overlap_workers = [
+        asyncio.create_task(overlap_decode_worker(index))
         for index in range(args.overlap_short_requests)
     ]
-    overlap_results, overlap_summary = await run_batch(
+    establish_deadline = decode_started + args.cleanup_timeout_seconds
+    while (
+        time.perf_counter() - decode_started < args.overlap_baseline_seconds
+        or len(overlap_decode_results) < args.min_overlap_baseline_completions
+    ) and time.perf_counter() < establish_deadline:
+        await asyncio.sleep(args.overlap_queue_poll_seconds)
+    prefill_started = time.perf_counter()
+    baseline_completions = len(overlap_decode_results)
+    overlap_prefill_spec = retrieval_spec(
         client,
-        overlap_specs,
-        min(args.max_seqs, len(overlap_specs)),
-        writer,
+        longest,
+        "overlap-large-prefill",
+        args.seed + 22_000,
+        args.max_tokens,
+        {"scenario": "overlap", "role": "large_prefill"},
+    )
+    overlap_prefill = await client.stream_request(overlap_prefill_spec)
+    prefill_ended = time.perf_counter()
+    await writer.emit(
+        "request",
+        phase="adversarial-prefill-overlap-prefill",
+        concurrency=args.overlap_short_requests + 1,
+        **overlap_prefill.record(True),
+    )
+    overlap_stop.set()
+    await asyncio.gather(*overlap_workers)
+    overlap_finished = time.perf_counter()
+    baseline_seconds = prefill_started - decode_started
+    overlapped_seconds = prefill_ended - prefill_started
+    baseline_decode_events = sum(
+        decode_started <= timestamp < prefill_started
+        for result in overlap_decode_results
+        for timestamp in result.output_event_times
+    )
+    overlapped_decode_events = sum(
+        prefill_started <= timestamp < prefill_ended
+        for result in overlap_decode_results
+        for timestamp in result.output_event_times
+    )
+    baseline_decode_tok_s = ratio(baseline_decode_events, baseline_seconds)
+    overlapped_decode_tok_s = ratio(overlapped_decode_events, overlapped_seconds)
+    overlap_decode_ratio = ratio(overlapped_decode_tok_s, baseline_decode_tok_s)
+    overlap_results = [overlap_prefill, *overlap_decode_results]
+    overlap_summary = summarize_batch(
+        overlap_results,
+        overlap_finished - decode_started,
+        args.overlap_short_requests + 1,
         "adversarial-prefill-overlap",
-        keep_output=False,
     )
     summaries.append(overlap_summary)
-    await record_quality("adversarial-prefill-overlap", overlap_results)
+    await record_retrieval_quality("adversarial-prefill-overlap", overlap_results)
+    overlap_prefill_semantic_ok = validate_retrieval_result(
+        overlap_prefill,
+        client.tokenizer,
+        args.max_repeated_ngram_ratio,
+    )[0]
+    overlap_decode_semantic_ok = all(
+        validate_retrieval_result(
+            result, client.tokenizer, args.max_repeated_ngram_ratio
+        )[0]
+        for result in overlap_decode_results
+    )
+    overlap_output_event_coverage = ratio(
+        sum(result.output_chunks for result in overlap_decode_results),
+        sum(result.completion_tokens for result in overlap_decode_results),
+    )
+    overlap_output_event_coverage_ok = (
+        overlap_output_event_coverage is not None
+        and args.min_output_event_coverage
+        <= overlap_output_event_coverage
+        <= 2.0 - args.min_output_event_coverage
+    )
+    overlap_evidence = {
+        "passed": (
+            baseline_completions >= args.min_overlap_baseline_completions
+            and baseline_decode_events > 0
+            and overlapped_decode_events > 0
+            and overlapped_decode_tok_s is not None
+            and overlapped_decode_tok_s
+            >= args.min_overlap_decode_events_per_second
+            and overlap_decode_ratio is not None
+            and overlap_decode_ratio >= args.min_overlap_decode_throughput_ratio
+            and overlap_prefill_semantic_ok
+            and overlap_decode_semantic_ok
+            and overlap_output_event_coverage_ok
+        ),
+        "decode_workers": args.overlap_short_requests,
+        "baseline_seconds": baseline_seconds,
+        "prefill_overlap_seconds": overlapped_seconds,
+        "baseline_completions_before_prefill": baseline_completions,
+        "minimum_baseline_completions": args.min_overlap_baseline_completions,
+        "baseline_decode_output_events": baseline_decode_events,
+        "overlapped_decode_output_events": overlapped_decode_events,
+        "baseline_decode_output_events_per_second": baseline_decode_tok_s,
+        "overlapped_decode_output_events_per_second": overlapped_decode_tok_s,
+        "minimum_overlapped_decode_events_per_second": (
+            args.min_overlap_decode_events_per_second
+        ),
+        "overlap_to_baseline_throughput_ratio": overlap_decode_ratio,
+        "minimum_overlap_to_baseline_throughput_ratio": (
+            args.min_overlap_decode_throughput_ratio
+        ),
+        "prefill_semantic_ok": overlap_prefill_semantic_ok,
+        "all_decode_semantic_ok": overlap_decode_semantic_ok,
+        "output_event_coverage": overlap_output_event_coverage,
+        "minimum_output_event_coverage": args.min_output_event_coverage,
+        "output_event_coverage_ok": overlap_output_event_coverage_ok,
+    }
+    await writer.emit("overlap_decode_evidence", **overlap_evidence)
     await record_runtime("adversarial-prefill-overlap", True)
 
     pre_cancel_metrics = await safe_metrics(client, writer, "adversarial-pre-cancel")
     cancellation_specs = [
-        RequestSpec(
-            case_id=f"disconnect-{index:03d}",
-            seed=args.seed + 30_000 + index,
-            max_tokens=args.max_tokens * 4,
-            prompt=exact_context(
-                client, args.cancel_context_tokens, f"disconnect-{index}"
-            ),
-            context_tokens=args.cancel_context_tokens,
-            tags={"scenario": "disconnect"},
+        retrieval_spec(
+            client,
+            args.cancel_context_tokens,
+            f"disconnect-{index:03d}",
+            args.seed + 30_000 + index,
+            args.max_tokens * 4,
+            {"scenario": "disconnect"},
         )
         for index in range(args.cancel_requests)
     ]
@@ -2454,7 +3046,10 @@ async def adversarial_mode(
     )
     for result in cancellation_results:
         await writer.emit("disconnect", phase="adversarial-cancellation", **result)
-    disconnects_ok = all(result["outcome"] == "cancelled" for result in cancellation_results)
+    disconnects_ok = all(
+        result["outcome"] == "cancelled" and result["server_stream_accepted"]
+        for result in cancellation_results
+    )
     cancel_cleanup_ok, post_cancel_metrics, cancel_cleanup_detail = await poll_for_cleanup(
         client,
         writer,
@@ -2463,6 +3058,31 @@ async def adversarial_mode(
         args.cleanup_poll_seconds,
         "adversarial-cancel-cleanup-poll",
     )
+    counter_deadline = time.perf_counter() + args.cleanup_timeout_seconds
+    while True:
+        disconnect_server_evidence = request_outcome_evidence(
+            pre_cancel_metrics,
+            post_cancel_metrics,
+            "client_disconnected",
+            len(cancellation_specs),
+        )
+        cancelled_sequences_evidence = labeled_counter_evidence(
+            pre_cancel_metrics,
+            post_cancel_metrics,
+            "mistralrs_sequences_completed_total",
+            "reason",
+            "canceled",
+            len(cancellation_specs),
+        )
+        if (
+            disconnect_server_evidence["passed"]
+            and cancelled_sequences_evidence["passed"]
+        ) or time.perf_counter() >= counter_deadline:
+            break
+        await asyncio.sleep(args.cleanup_poll_seconds)
+        post_cancel_metrics = await safe_metrics(
+            client, writer, "adversarial-cancel-counter-poll"
+        )
     cancel_admissions = metric_delta(
         pre_cancel_metrics, post_cancel_metrics, "mistralrs_prefix_cache_lookups_total"
     )
@@ -2477,6 +3097,37 @@ async def adversarial_mode(
     cancel_kv_blocks_prefix_cached_delta = metric_delta(
         pre_cancel_metrics,
         post_cancel_metrics,
+        KV_CACHE_PREFIX_CACHED_GAUGE,
+    )
+    cancel_retry, cancel_retry_summary = await run_batch(
+        client,
+        cancellation_specs,
+        min(args.max_seqs, len(cancellation_specs)),
+        writer,
+        "adversarial-cancelled-prefix-retry",
+        keep_output=True,
+    )
+    summaries.append(cancel_retry_summary)
+    await record_retrieval_quality("adversarial-cancelled-prefix-retry", cancel_retry)
+    cancel_retry_semantic_ok = all(
+        validate_retrieval_result(
+            result, client.tokenizer, args.max_repeated_ngram_ratio
+        )[0]
+        for result in cancel_retry
+    )
+    cancel_retry_cleanup_ok, post_cancel_retry_metrics, cancel_retry_cleanup_detail = (
+        await poll_for_cleanup(
+            client,
+            writer,
+            post_cancel_metrics,
+            args.cleanup_timeout_seconds,
+            args.cleanup_poll_seconds,
+            "adversarial-cancel-retry-cleanup-poll",
+        )
+    )
+    cancel_retry_prefix_cached_delta = metric_delta(
+        post_cancel_metrics,
+        post_cancel_retry_metrics,
         KV_CACHE_PREFIX_CACHED_GAUGE,
     )
 
@@ -2521,6 +3172,20 @@ async def adversarial_mode(
         post_timeout_metrics,
         KV_CACHE_PREFIX_CACHED_GAUGE,
     )
+    timeout_counter_deadline = time.perf_counter() + args.cleanup_timeout_seconds
+    while True:
+        timeout_server_evidence = request_outcome_evidence(
+            pre_timeout_metrics,
+            post_timeout_metrics,
+            "client_disconnected",
+            1,
+        )
+        if timeout_server_evidence["passed"] or time.perf_counter() >= timeout_counter_deadline:
+            break
+        await asyncio.sleep(args.cleanup_poll_seconds)
+        post_timeout_metrics = await safe_metrics(
+            client, writer, "adversarial-timeout-counter-poll"
+        )
     retry, retry_summary = await run_batch(
         client, [timeout_spec], 1, writer, "adversarial-retry", keep_output=True
     )
@@ -2719,39 +3384,147 @@ async def adversarial_mode(
     await record_runtime("adversarial-prefix-cache", False)
 
     churn_summaries = []
+    churn_evidence = []
     for round_index in range(args.churn_rounds):
         for width in (args.max_seqs - 1, args.max_seqs, args.max_seqs + 1):
             churn_specs = [
-                RequestSpec(
-                    case_id=f"churn-r{round_index}-c{width}-{index}",
-                    seed=args.seed + 70_000 + round_index * 1_000 + width * 20 + index,
-                    max_tokens=args.churn_max_tokens,
-                    prompt=exact_context(
-                        client,
-                        args.context_lengths[index % len(args.context_lengths)],
-                        f"churn-r{round_index}-c{width}-{index}",
-                    ),
-                    context_tokens=args.context_lengths[index % len(args.context_lengths)],
-                    tags={"scenario": "churn", "round": round_index, "width": width},
+                retrieval_spec(
+                    client,
+                    args.context_lengths[index % len(args.context_lengths)],
+                    f"churn-r{round_index}-c{width}-{index}",
+                    args.seed + 70_000 + round_index * 1_000 + width * 20 + index,
+                    args.churn_max_tokens,
+                    {
+                        "scenario": "churn",
+                        "round": round_index,
+                        "width": width,
+                    },
                 )
                 for index in range(width)
             ]
-            churn_results, churn_summary = await run_batch(
-                client,
-                churn_specs,
-                width,
-                writer,
-                f"churn-r{round_index}-width{width}",
-                keep_output=False,
+            phase = f"churn-r{round_index}-width{width}"
+            pre_churn_metrics = await safe_metrics(client, writer, f"{phase}-start")
+            batch_task = asyncio.create_task(
+                run_batch(
+                    client,
+                    churn_specs,
+                    width,
+                    writer,
+                    phase,
+                    keep_output=True,
+                )
             )
+            await asyncio.sleep(0)
+            queue_samples = []
+            while not batch_task.done():
+                snapshot = await safe_metrics(client, writer, f"{phase}-queue-poll")
+                queue_samples.append(
+                    metric_values(
+                        snapshot,
+                        (
+                            "mistralrs_sequences_capacity",
+                            "mistralrs_sequences_running",
+                            "mistralrs_sequences_waiting",
+                            "mistralrs_requests_pending_admission",
+                            "http_requests_in_flight",
+                        ),
+                    )
+                )
+                await asyncio.sleep(args.overlap_queue_poll_seconds)
+            churn_results, churn_summary = await batch_task
             churn_summaries.append(churn_summary)
             summaries.append(churn_summary)
-            await record_quality(
-                f"churn-r{round_index}-width{width}",
-                churn_results,
+            await record_retrieval_quality(phase, churn_results)
+            churn_cleanup_ok, _, churn_cleanup = await poll_for_cleanup(
+                client,
+                writer,
+                pre_churn_metrics,
+                args.cleanup_timeout_seconds,
+                args.cleanup_poll_seconds,
+                f"{phase}-cleanup",
             )
+            required_gauges = (
+                "mistralrs_sequences_capacity",
+                "mistralrs_sequences_running",
+                "mistralrs_sequences_waiting",
+                "mistralrs_requests_pending_admission",
+            )
+            instrumentation_complete = bool(queue_samples) and all(
+                sample[name] is not None
+                for sample in queue_samples
+                for name in required_gauges
+            )
+            peak_running = max(
+                (
+                    sample["mistralrs_sequences_running"]
+                    for sample in queue_samples
+                    if sample["mistralrs_sequences_running"] is not None
+                ),
+                default=None,
+            )
+            peak_waiting = max(
+                (
+                    sample["mistralrs_sequences_waiting"]
+                    for sample in queue_samples
+                    if sample["mistralrs_sequences_waiting"] is not None
+                ),
+                default=None,
+            )
+            peak_pending = max(
+                (
+                    sample["mistralrs_requests_pending_admission"]
+                    for sample in queue_samples
+                    if sample["mistralrs_requests_pending_admission"] is not None
+                ),
+                default=None,
+            )
+            queue_required = width == args.max_seqs + 1
+            queue_observed = bool(
+                (peak_waiting is not None and peak_waiting > 0)
+                or (peak_pending is not None and peak_pending > 0)
+            )
+            capacity_respected = (
+                peak_running is not None and peak_running <= args.max_seqs
+            )
+            evidence = {
+                "passed": (
+                    instrumentation_complete
+                    and capacity_respected
+                    and (not queue_required or queue_observed)
+                    and churn_cleanup_ok
+                    and churn_summary["errors"] == 0
+                ),
+                "round": round_index,
+                "width": width,
+                "configured_max_seqs": args.max_seqs,
+                "server_sequence_capacity": sequence_capacity,
+                "instrumentation_complete": instrumentation_complete,
+                "queue_required": queue_required,
+                "queue_observed": queue_observed,
+                "peak_running": peak_running,
+                "peak_waiting": peak_waiting,
+                "peak_pending_admission": peak_pending,
+                "capacity_respected": capacity_respected,
+                "cleanup_ok": churn_cleanup_ok,
+                "cleanup": churn_cleanup,
+                "samples": queue_samples,
+            }
+            churn_evidence.append(evidence)
+            await writer.emit("max_seqs_queue_evidence", **evidence)
 
     await record_runtime("adversarial-churn", True)
+
+    max_seqs_queue_evidence = {
+        "passed": (
+            max_seqs_capacity_ok
+            and any(item["queue_required"] for item in churn_evidence)
+            and all(item["passed"] for item in churn_evidence)
+        ),
+        "configured_max_seqs": args.max_seqs,
+        "server_sequence_capacity": sequence_capacity,
+        "capacity_matches_16_boundary": max_seqs_capacity_ok,
+        "batches": churn_evidence,
+    }
 
     final_metrics = await safe_metrics(client, writer, "adversarial-end")
     running_after_cancel = metric_total(post_cancel_metrics, "mistralrs_sequences_running")
@@ -2760,7 +3533,7 @@ async def adversarial_mode(
     adversarial_mtp = speculative_evidence(
         initial_metrics,
         final_metrics,
-        "dflash" in args.expected_graph_components,
+        args.require_mtp,
     )
     adversarial_graph = cuda_graph_evidence(
         initial_metrics,
@@ -2772,15 +3545,24 @@ async def adversarial_mode(
     passed = (
         all(summary["errors"] == 0 for summary in summaries)
         and long_correctness["passed"]
+        and mixed_throughput["passed"]
         and fairness_passed
+        and overlap_evidence["passed"]
         and disconnects_ok
         and cancel_cleanup_ok
         and cancel_admissions_ok
+        and disconnect_server_evidence["passed"]
+        and cancelled_sequences_evidence["passed"]
+        and cancel_retry_summary["errors"] == 0
+        and cancel_retry_semantic_ok
+        and cancel_retry_cleanup_ok
         and timeout_observed
         and timeout_admitted
+        and timeout_server_evidence["passed"]
         and timeout_cleanup_ok
         and retry_semantic_ok
         and prefix_cache_stage_passed
+        and max_seqs_queue_evidence["passed"]
         and all(item["valid"] for item in quality_checks)
         and all(item["passed"] for item in runtime_evidence)
         and adversarial_mtp["passed"]
@@ -2791,19 +3573,28 @@ async def adversarial_mode(
         "passed": passed,
         "summaries": summaries,
         "long_context_correctness": long_correctness,
+        "throughput": mixed_throughput,
         "fairness": fairness_result,
+        "overlap": overlap_evidence,
         "disconnects": cancellation_results,
         "disconnects_ok": disconnects_ok,
         "cancel_admissions": cancel_admissions,
         "cancel_admissions_ok": cancel_admissions_ok,
+        "disconnect_server_evidence": disconnect_server_evidence,
+        "cancelled_sequences_evidence": cancelled_sequences_evidence,
         "cancel_cleanup_ok": cancel_cleanup_ok,
         "cancel_cleanup_detail": cancel_cleanup_detail,
         "cancel_kv_cache_blocks_active_delta": cancel_kv_blocks_active_delta,
         "cancel_kv_cache_blocks_prefix_cached_delta": (
             cancel_kv_blocks_prefix_cached_delta
         ),
+        "cancel_retry_semantic_ok": cancel_retry_semantic_ok,
+        "cancel_retry_cleanup_ok": cancel_retry_cleanup_ok,
+        "cancel_retry_cleanup_detail": cancel_retry_cleanup_detail,
+        "cancel_retry_prefix_cached_delta": cancel_retry_prefix_cached_delta,
         "timeout_observed": timeout_observed,
         "timeout_admitted": timeout_admitted,
+        "timeout_server_evidence": timeout_server_evidence,
         "timeout_cleanup_ok": timeout_cleanup_ok,
         "timeout_cleanup_detail": timeout_cleanup_detail,
         "timeout_kv_cache_blocks_active_delta": timeout_kv_blocks_active_delta,
@@ -2815,7 +3606,9 @@ async def adversarial_mode(
         "prefix_outputs_equal": prefix_correct,
         "prefix_cache_stages": prefix_cache_stages,
         "quality_checks": quality_checks,
-        "cleanup_ok": cancel_cleanup_ok and timeout_cleanup_ok,
+        "cleanup_ok": (
+            cancel_cleanup_ok and cancel_retry_cleanup_ok and timeout_cleanup_ok
+        ),
         "post_cancel_sequences_running": running_after_cancel,
         "post_cancel_sequences_waiting": waiting_after_cancel,
         "metrics_delta": metrics_delta,
@@ -2823,6 +3616,7 @@ async def adversarial_mode(
         "mtp": adversarial_mtp,
         "cuda_graph": adversarial_graph,
         "churn_batches": len(churn_summaries),
+        "max_seqs_queue_evidence": max_seqs_queue_evidence,
     }
 
 
@@ -2830,6 +3624,111 @@ def ratio(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator is None or denominator == 0:
         return None
     return numerator / denominator
+
+
+def throughput_evidence(
+    summaries: Sequence[dict[str, Any]],
+    thresholds: dict[int, float],
+    min_scaling_efficiency: float,
+) -> dict[str, Any]:
+    actual = {
+        int(summary["concurrency"]): summary.get("output_tok_s_common_wall")
+        for summary in summaries
+    }
+    missing = sorted(set(thresholds) - set(actual))
+    absolute = {
+        str(concurrency): {
+            "actual_output_tok_s": actual.get(concurrency),
+            "minimum_output_tok_s": minimum,
+            "passed": (
+                actual.get(concurrency) is not None
+                and actual[concurrency] >= minimum
+            ),
+        }
+        for concurrency, minimum in sorted(thresholds.items())
+    }
+    baseline_concurrency = min(thresholds)
+    baseline_throughput = actual.get(baseline_concurrency)
+    scaling = {}
+    for concurrency in sorted(thresholds):
+        if concurrency == baseline_concurrency:
+            continue
+        observed_ratio = ratio(actual.get(concurrency), baseline_throughput)
+        ideal_ratio = concurrency / baseline_concurrency
+        efficiency = ratio(observed_ratio, ideal_ratio)
+        scaling[str(concurrency)] = {
+            "baseline_concurrency": baseline_concurrency,
+            "observed_throughput_ratio": observed_ratio,
+            "ideal_linear_ratio": ideal_ratio,
+            "scaling_efficiency": efficiency,
+            "minimum_scaling_efficiency": min_scaling_efficiency,
+            "passed": (
+                efficiency is not None and efficiency >= min_scaling_efficiency
+            ),
+        }
+    return {
+        "passed": (
+            not missing
+            and bool(absolute)
+            and all(item["passed"] for item in absolute.values())
+            and all(item["passed"] for item in scaling.values())
+        ),
+        "missing_concurrencies": missing,
+        "absolute": absolute,
+        "scaling": scaling,
+        "baseline_concurrency": baseline_concurrency,
+        "minimum_scaling_efficiency": min_scaling_efficiency,
+    }
+
+
+def request_outcome_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    outcome: str,
+    minimum_events: int,
+) -> dict[str, Any]:
+    counters = labeled_metric_deltas(before, after, REQUEST_OUTCOMES_COUNTER)
+    matching = [item for item in counters if item["labels"].get("outcome") == outcome]
+    observed = sum(item["delta"] for item in matching)
+    instrumentation_present = any(
+        key.split("{", 1)[0] == REQUEST_OUTCOMES_COUNTER
+        for key in set(before) | set(after)
+    )
+    return {
+        "passed": instrumentation_present and observed >= minimum_events,
+        "metric": REQUEST_OUTCOMES_COUNTER,
+        "outcome": outcome,
+        "minimum_events": minimum_events,
+        "observed_events": observed,
+        "instrumentation_present": instrumentation_present,
+        "matching_series": matching,
+    }
+
+
+def labeled_counter_evidence(
+    before: dict[str, float],
+    after: dict[str, float],
+    metric: str,
+    label: str,
+    value: str,
+    minimum_events: int,
+) -> dict[str, Any]:
+    counters = labeled_metric_deltas(before, after, metric)
+    matching = [item for item in counters if item["labels"].get(label) == value]
+    observed = sum(item["delta"] for item in matching)
+    instrumentation_present = any(
+        key.split("{", 1)[0] == metric for key in set(before) | set(after)
+    )
+    return {
+        "passed": instrumentation_present and observed >= minimum_events,
+        "metric": metric,
+        "label": label,
+        "value": value,
+        "minimum_events": minimum_events,
+        "observed_events": observed,
+        "instrumentation_present": instrumentation_present,
+        "matching_series": matching,
+    }
 
 
 def selected_metric_deltas(
@@ -2851,6 +3750,8 @@ def selected_metric_deltas(
         "mistralrs_encoder_cache_misses_total",
         "mistralrs_cuda_graph_events_total",
         "mistralrs_cuda_graph_dispatch_total",
+        REQUEST_OUTCOMES_COUNTER,
+        "mistralrs_sequences_completed_total",
         KV_CACHE_ACTIVE_GAUGE,
         KV_CACHE_PREFIX_CACHED_GAUGE,
     )
@@ -2946,11 +3847,39 @@ def speculative_evidence(
         "proposed_draft_tokens": proposed,
         "accepted_draft_tokens": accepted,
         "acceptance_rate": ratio(accepted, proposed),
-        "mean_accepted_draft_length": ratio(accepted, drafts),
-        "mean_advance_length_with_bonus": (
+        "mean_accepted_draft_tokens_per_draft": ratio(accepted, drafts),
+        "mean_advance_tokens_per_target_step": (
             1.0 + accepted / drafts if accepted is not None and drafts else None
         ),
         "accepted_per_position": per_position,
+    }
+
+
+def target_only_speculative_evidence(
+    before: dict[str, float], after: dict[str, float]
+) -> dict[str, Any]:
+    evidence = speculative_evidence(before, after, False)
+    present = all(
+        evidence[name] is not None
+        for name in ("drafts", "proposed_draft_tokens", "accepted_draft_tokens")
+    )
+    absent = all(
+        evidence[name] is None
+        for name in ("drafts", "proposed_draft_tokens", "accepted_draft_tokens")
+    )
+    inactive = absent or (
+        present
+        and all(
+            evidence[name] == 0
+            for name in ("drafts", "proposed_draft_tokens", "accepted_draft_tokens")
+        )
+    )
+    return {
+        **evidence,
+        "passed": inactive,
+        "instrumentation_present": present,
+        "target_only_inactive": inactive,
+        "inactive_evidence": "metrics_absent" if absent else "zero_deltas",
     }
 
 
@@ -3274,7 +4203,7 @@ async def resident_decode_mode(
         mtp = speculative_evidence(
             before,
             after,
-            "dflash" in args.expected_graph_components,
+            args.require_mtp,
         )
         graph = cuda_graph_evidence(
             before,
@@ -3345,12 +4274,37 @@ async def resident_decode_mode(
             "normal-replay",
         )
         replay_results = phase_runs[-1][1]
-        replay_diagnostics = exact_output_diagnostics(
+        replay_summary = phase_runs[-1][2]
+        exact = exact_output_diagnostics(
             normal_run[1],
             replay_results,
             normal_phase,
             replay_phase,
         )
+        statistical = compare_samples(
+            replay_results,
+            normal_run[1],
+            client.tokenizer,
+            args.stat_max_ks,
+            args.stat_max_js,
+        )
+        semantic_passed = all(
+            item["valid"]
+            for item in normal_run[2]["quality"] + replay_summary["quality"]
+        )
+        exact_gated = concurrency == 1
+        replay_diagnostics = {
+            "concurrency": concurrency,
+            "exact_diagnostics": exact,
+            "exact_diagnostics_gated": exact_gated,
+            "statistical_comparison": statistical,
+            "semantic_passed": semantic_passed,
+            "passed": (
+                semantic_passed
+                and statistical["passed"]
+                and (not exact_gated or exact["passed"])
+            ),
+        }
         exact_replays.append(replay_diagnostics)
         await writer.emit("exact_replay_comparison", **replay_diagnostics)
 
@@ -3363,12 +4317,33 @@ async def resident_decode_mode(
             "reverse",
         )
         reverse_results = phase_runs[-1][1]
-        ordering_diagnostics = exact_output_diagnostics(
-            results_for_specs(normal_run[1], ordering_specs),
+        reverse_summary = phase_runs[-1][2]
+        normal_ordering_results = results_for_specs(normal_run[1], ordering_specs)
+        exact = exact_output_diagnostics(
+            normal_ordering_results,
             reverse_results,
             normal_phase,
             reverse_phase,
         )
+        statistical = compare_samples(
+            reverse_results,
+            normal_ordering_results,
+            client.tokenizer,
+            args.stat_max_ks,
+            args.stat_max_js,
+        )
+        semantic_passed = all(
+            item["valid"]
+            for item in normal_run[2]["quality"] + reverse_summary["quality"]
+        )
+        ordering_diagnostics = {
+            "concurrency": concurrency,
+            "exact_diagnostics": exact,
+            "exact_diagnostics_gated": False,
+            "statistical_comparison": statistical,
+            "semantic_passed": semantic_passed,
+            "passed": semantic_passed and statistical["passed"],
+        }
         exact_orderings.append(ordering_diagnostics)
         await writer.emit("exact_ordering_comparison", **ordering_diagnostics)
 
@@ -3433,14 +4408,29 @@ async def resident_decode_mode(
             final_summary["output_tok_s_common_wall"],
             initial_c1_summary["output_tok_s_common_wall"],
         )
+        statistical = compare_samples(
+            final_results,
+            initial_c1,
+            client.tokenizer,
+            args.stat_max_ks,
+            args.stat_max_js,
+        )
+        semantic_passed = all(
+            item["valid"]
+            for item in initial_c1_summary["quality"] + final_summary["quality"]
+        )
         final_c1_replay = {
             "passed": (
-                exact["passed"]
-                and final_summary["passed"]
+                final_summary["passed"]
+                and semantic_passed
+                and statistical["passed"]
                 and throughput_ratio is not None
                 and throughput_ratio >= args.min_final_c1_throughput_ratio
             ),
             "exact_diagnostics": exact,
+            "exact_diagnostics_gated": False,
+            "statistical_comparison": statistical,
+            "semantic_passed": semantic_passed,
             "initial_output_tok_s": initial_c1_summary["output_tok_s_common_wall"],
             "final_output_tok_s": final_summary["output_tok_s_common_wall"],
             "throughput_ratio": throughput_ratio,
@@ -3450,8 +4440,16 @@ async def resident_decode_mode(
 
     final_metrics = await safe_metrics(client, writer, "resident-decode-end")
     phase_summaries = [summary for _, _, summary in phase_runs]
+    normal_phase_summaries = [summary for _, _, summary in normal_phase_runs]
+    throughput = throughput_evidence(
+        normal_phase_summaries,
+        args.min_output_tok_s_by_concurrency,
+        args.min_scaling_efficiency,
+    )
+    await writer.emit("resident_decode_throughput_evidence", **throughput)
     passed = (
         residency_passed
+        and throughput["passed"]
         and all(summary["passed"] for summary in phase_summaries)
         and all(item["passed"] for item in exact_replays)
         and all(item["passed"] for item in exact_orderings)
@@ -3470,6 +4468,7 @@ async def resident_decode_mode(
         "exact_replays": exact_replays,
         "exact_orderings": exact_orderings,
         "cross_shape_comparisons": cross_shape_comparisons,
+        "throughput": throughput,
         "final_c1_replay": final_c1_replay,
         "metrics_delta": selected_metric_deltas(initial_metrics, final_metrics),
         "cleanup_gauges": metric_values(final_metrics, CLEANUP_GAUGES),
@@ -3578,6 +4577,72 @@ def summarize_telemetry(
     }
 
 
+def telemetry_evidence(
+    snapshots: Sequence[tuple[float, dict[str, float], dict[str, Any]]],
+    server_pid: int | None,
+    min_samples: int,
+    min_coverage: float,
+) -> dict[str, Any]:
+    sample_count = len(snapshots)
+
+    def coverage(count: int) -> float | None:
+        return ratio(count, sample_count)
+
+    metric_samples = sum(bool(metrics) for _, metrics, _ in snapshots)
+    gpu_samples = sum(bool(process.get("gpus")) for _, _, process in snapshots)
+    rss_samples = sum(
+        process.get("process_vmrss_kib") is not None
+        for _, _, process in snapshots
+    )
+    server_process_samples = sum(
+        process.get("process_is_mistralrs") is True
+        for _, _, process in snapshots
+    )
+    gauge_coverage = {}
+    for gauge in REQUIRED_PRODUCTION_GAUGES:
+        present = sum(
+            metric_total(metrics, gauge) is not None for _, metrics, _ in snapshots
+        )
+        value = coverage(present)
+        gauge_coverage[gauge] = {
+            "samples": present,
+            "coverage": value,
+            "passed": value is not None and value >= min_coverage,
+        }
+    metrics_coverage = coverage(metric_samples)
+    gpu_coverage = coverage(gpu_samples)
+    rss_coverage = coverage(rss_samples)
+    server_process_coverage = coverage(server_process_samples)
+    return {
+        "passed": (
+            server_pid is not None
+            and sample_count >= min_samples
+            and metrics_coverage is not None
+            and metrics_coverage >= min_coverage
+            and gpu_coverage is not None
+            and gpu_coverage >= min_coverage
+            and rss_coverage is not None
+            and rss_coverage >= min_coverage
+            and server_process_coverage is not None
+            and server_process_coverage >= min_coverage
+            and all(item["passed"] for item in gauge_coverage.values())
+        ),
+        "server_pid": server_pid,
+        "samples": sample_count,
+        "minimum_samples": min_samples,
+        "minimum_coverage": min_coverage,
+        "metrics_samples": metric_samples,
+        "metrics_coverage": metrics_coverage,
+        "nvidia_smi_samples": gpu_samples,
+        "nvidia_smi_coverage": gpu_coverage,
+        "process_rss_samples": rss_samples,
+        "process_rss_coverage": rss_coverage,
+        "mistralrs_process_samples": server_process_samples,
+        "mistralrs_process_coverage": server_process_coverage,
+        "gauge_coverage": gauge_coverage,
+    }
+
+
 async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
     telemetry: dict[str, Any] = {}
     try:
@@ -3589,6 +4654,8 @@ async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(f"nvidia-smi exited with status {process.returncode}")
         gpu_rows = []
         for line in stdout.decode().splitlines():
             fields = [part.strip() for part in line.split(",")]
@@ -3604,12 +4671,16 @@ async def process_telemetry(server_pid: int | None) -> dict[str, Any]:
                     }
                 )
         telemetry["gpus"] = gpu_rows
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         telemetry["gpus"] = []
+        telemetry["nvidia_smi_error"] = f"{type(exc).__name__}: {exc}"
     if server_pid is not None:
         status_path = Path(f"/proc/{server_pid}/status")
+        cmdline_path = Path(f"/proc/{server_pid}/cmdline")
         try:
             status = status_path.read_text(encoding="utf-8")
+            cmdline = cmdline_path.read_bytes()
+            telemetry["process_is_mistralrs"] = b"mistralrs" in cmdline
             for key in ("VmRSS", "VmSize", "VmSwap"):
                 match = re.search(rf"^{key}:\s+(\d+)\s+kB$", status, re.MULTILINE)
                 telemetry[f"process_{key.lower()}_kib"] = int(match.group(1)) if match else None
@@ -3684,10 +4755,37 @@ async def production_mode(
     client: SoakClient,
     writer: JsonlWriter,
 ) -> dict[str, Any]:
-    await calibrate_prompt_profiles(client, writer, (CONTEXT_PROMPT_PROFILE,))
+    await calibrate_prompt_profiles(
+        client,
+        writer,
+        (CONTEXT_PROMPT_PROFILE, RETRIEVAL_PROMPT_PROFILE),
+    )
     lengths = tuple(length for length, _ in args.context_mix)
     capacity_metrics = await safe_metrics(client, writer, "production-capacity")
     sequence_capacity = metric_total(capacity_metrics, "mistralrs_sequences_capacity")
+    preflight_process = await process_telemetry(args.server_pid)
+    missing_gauges = [
+        gauge
+        for gauge in REQUIRED_PRODUCTION_GAUGES
+        if metric_total(capacity_metrics, gauge) is None
+    ]
+    preflight = {
+        "passed": (
+            not missing_gauges
+            and preflight_process.get("process_is_mistralrs") is True
+            and preflight_process.get("process_vmrss_kib") is not None
+            and bool(preflight_process.get("gpus"))
+        ),
+        "server_pid": args.server_pid,
+        "missing_required_gauges": missing_gauges,
+        "process": preflight_process,
+    }
+    await writer.emit("production_telemetry_preflight", **preflight)
+    if not preflight["passed"]:
+        raise RuntimeError(
+            "production telemetry preflight requires a live mistralrs --server-pid, "
+            "readable process RSS, and nvidia-smi GPU data"
+        )
     resident_prompt_budget = args.resident_prompt_budget
     if resident_prompt_budget is None:
         resident_prompt_budget = (
@@ -3707,6 +4805,14 @@ async def production_mode(
         ]
         for length in lengths
     }
+    probe_template = retrieval_spec(
+        client,
+        min(lengths),
+        "production-c1-probe",
+        args.seed + 9_000_000,
+        args.probe_max_tokens,
+        {"scenario": "production", "role": "c1_probe"},
+    )
     prewarm_metrics = await safe_metrics(client, writer, "production-prewarm-start")
     prewarm_specs = [
         RequestSpec(
@@ -3829,6 +4935,7 @@ async def production_mode(
         retained_output_event_windows = (
             (phase_start, phase_start + comparison_window),
             (phase_end - comparison_window, phase_end),
+            (phase_start, phase_end),
         )
         phase_results: list[RequestResult] = []
 
@@ -3869,12 +4976,12 @@ async def production_mode(
                     break
                 spec = RequestSpec(
                     case_id=f"probe-c{concurrency}-{probe_index:04d}",
-                    seed=args.seed + 9_000_000,
-                    max_tokens=args.probe_max_tokens,
-                    prompt=context_pools[min(lengths)][0],
-                    context_tokens=min(lengths),
-                    tags={"scenario": "production", "role": "c1_probe", "load": concurrency},
-                    extra={"ignore_eos": args.fixed_output_length},
+                    seed=probe_template.seed,
+                    max_tokens=probe_template.max_tokens,
+                    prompt=probe_template.prompt,
+                    context_tokens=probe_template.context_tokens,
+                    tags={**probe_template.tags, "load": concurrency},
+                    extra=dict(probe_template.extra),
                 )
                 result = await client.stream_request(spec, scheduled_at=next_probe)
                 phase_results.append(result)
@@ -3934,10 +5041,30 @@ async def production_mode(
         summary["probe_fixed_seed_samples"] = len(probes_only)
         summary["probe_fixed_seed_unique_outputs"] = len(probe_transcripts)
         summary["probe_fixed_seed_exact"] = (
-            len(probes_only) >= 2
+            len(probes_only) >= MIN_PRODUCTION_PROBES_PER_PHASE
             and len(probe_transcripts) == 1
             and all(result.ok for result in probes_only)
         )
+        probe_semantic_checks = [
+            {
+                "valid": valid,
+                **detail,
+            }
+            for result in probes_only
+            for valid, detail in [
+                validate_retrieval_result(
+                    result,
+                    client.tokenizer,
+                    args.max_repeated_ngram_ratio,
+                )
+            ]
+        ]
+        summary["probe_semantic_checks"] = probe_semantic_checks
+        summary["probe_semantic_ok"] = (
+            len(probe_semantic_checks) >= MIN_PRODUCTION_PROBES_PER_PHASE
+            and all(item["valid"] for item in probe_semantic_checks)
+        )
+        summary["probe_exact_diagnostics_gated"] = False
         summary["first_vs_last_window"] = compare_time_windows(
             traffic,
             phase_start,
@@ -3951,6 +5078,19 @@ async def production_mode(
             and degradation <= args.max_throughput_degradation_fraction
             and summary["first_vs_last_window"]["output_event_coverage_ok"]
         )
+        summary["latency_degradation_ok"] = all(
+            value is not None
+            and value <= args.max_latency_degradation_fraction
+            for value in summary["first_vs_last_window"][
+                "latency_degradation_fractions"
+            ].values()
+        )
+        summary["steady_state_output_tok_s"] = summary["first_vs_last_window"][
+            "last_output_tok_s_stream_timeline"
+        ]
+        summary["bounded_phase_output_tok_s"] = summary["first_vs_last_window"][
+            "full_phase_output_tok_s_stream_timeline"
+        ]
         summary["quality_ok"] = all(item["valid"] for item in quality)
         summary["prefix_cache"] = prefix_cache_evidence(
             phase_metrics_before,
@@ -3962,7 +5102,7 @@ async def production_mode(
         summary["mtp"] = speculative_evidence(
             phase_metrics_before,
             phase_metrics_after,
-            "dflash" in args.expected_graph_components,
+            args.require_mtp,
         )
         summary["cuda_graph"] = cuda_graph_evidence(
             phase_metrics_before,
@@ -3974,6 +5114,9 @@ async def production_mode(
         summary["queue_latency_histograms"] = queue_histogram_summaries(
             phase_metrics_before,
             phase_metrics_after,
+        )
+        summary["queue_latency_instrumentation_complete"] = bool(
+            summary["queue_latency_histograms"]
         )
         summary["metric_deltas"] = selected_metric_deltas(
             phase_metrics_before,
@@ -4011,7 +5154,7 @@ async def production_mode(
     mtp = speculative_evidence(
         initial_metrics,
         final_metrics,
-        "dflash" in args.expected_graph_components,
+        args.require_mtp,
     )
     graph = cuda_graph_evidence(
         initial_metrics,
@@ -4027,17 +5170,50 @@ async def production_mode(
         result.output_transcript for result in all_probes if result.ok
     }
     probes_exact_across_load = (
-        len(all_probes) >= 2
+        len(all_probes) >= MIN_PRODUCTION_PROBES_PER_PHASE
         and len(probe_transcripts) == 1
         and all(result.ok for result in all_probes)
     )
+    probe_semantic_checks = [
+        validate_retrieval_result(
+            result,
+            client.tokenizer,
+            args.max_repeated_ngram_ratio,
+        )[0]
+        for result in all_probes
+    ]
+    probes_semantic_across_load = (
+        len(probe_semantic_checks) >= MIN_PRODUCTION_PROBES_PER_PHASE
+        and all(probe_semantic_checks)
+    )
+    throughput = throughput_evidence(
+        [
+            {
+                "concurrency": summary["concurrency"],
+                "output_tok_s_common_wall": summary["steady_state_output_tok_s"],
+            }
+            for summary in phase_summaries
+        ],
+        args.min_output_tok_s_by_concurrency,
+        args.min_scaling_efficiency,
+    )
+    telemetry_gate = telemetry_evidence(
+        snapshots,
+        args.server_pid,
+        args.min_telemetry_samples,
+        args.min_telemetry_coverage,
+    )
     passed = (
         prewarm_passed
+        and throughput["passed"]
+        and telemetry_gate["passed"]
         and all(
             summary["errors"] == 0
             and summary["degradation_ok"]
+            and summary["latency_degradation_ok"]
             and summary["quality_ok"]
-            and summary["probe_fixed_seed_exact"]
+            and summary["probe_semantic_ok"]
+            and summary["queue_latency_instrumentation_complete"]
             and summary["phase_metrics_ok"]
             for summary in phase_summaries
         )
@@ -4045,7 +5221,7 @@ async def production_mode(
         and bool(final_metrics)
         and mtp["passed"]
         and graph["passed"]
-        and probes_exact_across_load
+        and probes_semantic_across_load
         and cleanup_ok
     )
     return {
@@ -4054,18 +5230,27 @@ async def production_mode(
         "elapsed_seconds": run_ended - run_started,
         "prewarm": prewarm,
         "phase_summaries": phase_summaries,
+        "throughput": throughput,
         "metrics_delta": metrics_delta,
         "queue_latency_histograms": queue_latency,
         "mtp": mtp,
         "mtp_acceptance_rate": mtp["acceptance_rate"],
-        "mtp_accepted_length": mtp["mean_advance_length_with_bonus"],
+        "mtp_mean_accepted_draft_tokens_per_draft": (
+            mtp["mean_accepted_draft_tokens_per_draft"]
+        ),
+        "mtp_mean_advance_tokens_per_target_step": (
+            mtp["mean_advance_tokens_per_target_step"]
+        ),
         "telemetry_samples": len(snapshots),
         "telemetry": summarize_telemetry(snapshots),
+        "telemetry_evidence": telemetry_gate,
         "cuda_graph": graph,
         "cuda_graph_events": graph["events"],
         "cuda_graph_ok": graph["passed"],
         "c1_probe_samples": len(all_probes),
         "c1_probes_exact_across_load": probes_exact_across_load,
+        "c1_probe_exact_diagnostics_gated": False,
+        "c1_probes_semantic_across_load": probes_semantic_across_load,
         "cleanup_ok": cleanup_ok,
         "cleanup_detail": cleanup_detail,
     }
@@ -4090,7 +5275,7 @@ def compare_time_windows(
     first_summary = window_summary(first, started, min(ended, started + window_seconds))
     last_summary = window_summary(last, max(started, ended - window_seconds), ended)
     window_counts_available = all(
-        len(result.output_event_window_counts) >= 2 for result in successful
+        len(result.output_event_window_counts) >= 3 for result in successful
     )
     if window_counts_available:
         first_event_count = sum(
@@ -4098,6 +5283,9 @@ def compare_time_windows(
         )
         last_event_count = sum(
             result.output_event_window_counts[1] for result in successful
+        )
+        full_phase_event_count = sum(
+            result.output_event_window_counts[2] for result in successful
         )
     else:
         first_event_count = sum(
@@ -4107,6 +5295,11 @@ def compare_time_windows(
         )
         last_event_count = sum(
             ended - window_seconds <= timestamp <= ended
+            for result in successful
+            for timestamp in result.output_event_times
+        )
+        full_phase_event_count = sum(
+            started <= timestamp < ended
             for result in successful
             for timestamp in result.output_event_times
         )
@@ -4121,15 +5314,31 @@ def compare_time_windows(
     )
     first_tps = first_event_count / window_seconds
     last_tps = last_event_count / window_seconds
+    full_phase_seconds = ended - started
+    full_phase_tps = full_phase_event_count / full_phase_seconds
+    latency_degradation_fractions = {}
+    for name in ("ttft_seconds", "tpot_seconds"):
+        first_p95 = first_summary[name]["p95"]
+        last_p95 = last_summary[name]["p95"]
+        latency_degradation_fractions[f"{name}_p95"] = (
+            last_p95 / first_p95 - 1.0
+            if first_p95 is not None and first_p95 > 0 and last_p95 is not None
+            else None
+        )
     return {
         "window_seconds": window_seconds,
+        "first_window": [started, started + window_seconds],
+        "last_window": [ended - window_seconds, ended],
+        "full_phase_window": [started, ended],
         "first": first_summary,
         "last": last_summary,
         "first_timed_output_events": first_event_count,
         "last_timed_output_events": last_event_count,
+        "full_phase_timed_output_events": full_phase_event_count,
         "window_counts_available": window_counts_available,
         "first_output_tok_s_stream_timeline": first_tps,
         "last_output_tok_s_stream_timeline": last_tps,
+        "full_phase_output_tok_s_stream_timeline": full_phase_tps,
         "timed_output_events": timed_events,
         "reported_completion_tokens": completion_tokens,
         "output_event_coverage": event_coverage,
@@ -4139,6 +5348,7 @@ def compare_time_windows(
         "throughput_degradation_fraction": (
             1.0 - last_tps / first_tps if first_tps else None
         ),
+        "latency_degradation_fractions": latency_degradation_fractions,
     }
 
 
@@ -4163,11 +5373,85 @@ def multimodal_messages(image: str, prompt: str) -> list[dict[str, Any]]:
     ]
 
 
+def load_summary_artifact(path: Path) -> dict[str, Any]:
+    if path.suffix == ".jsonl":
+        summary = None
+        with path.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError(f"invalid JSON at {path}:{line_number}: {exc}") from exc
+                if record.get("event") == "run_summary":
+                    summary = record
+        if summary is None:
+            raise RuntimeError(f"{path} does not contain a run_summary event")
+        return summary
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{path} does not contain a summary object")
+    return value
+
+
+def text_prerequisite_evidence(paths: Sequence[Path]) -> dict[str, Any]:
+    required_stages = {"part1", "adversarial", "production"}
+    artifacts = []
+    observed_stages = set()
+    for path in paths:
+        summary = load_summary_artifact(path)
+        mode = summary.get("mode")
+        stage = "part1" if mode in ("canary", "compare") else mode
+        observed_stages.add(stage)
+        mode_specific_complete = True
+        if mode in ("canary", "compare"):
+            mode_specific_complete = summary.get("coverage_complete") is True
+        elif mode == "adversarial":
+            mode_specific_complete = (
+                (summary.get("max_seqs_queue_evidence") or {}).get("passed") is True
+            )
+        elif mode == "production":
+            mode_specific_complete = (
+                (summary.get("telemetry_evidence") or {}).get("passed") is True
+            )
+        artifact = {
+            "path": str(path),
+            "mode": mode,
+            "stage": stage,
+            "run_passed": summary.get("passed") is True,
+            "mode_specific_complete": mode_specific_complete,
+        }
+        artifact["passed"] = (
+            stage in required_stages
+            and artifact["run_passed"]
+            and mode_specific_complete
+        )
+        artifacts.append(artifact)
+    missing_stages = sorted(required_stages - observed_stages)
+    return {
+        "passed": (
+            not missing_stages
+            and len(artifacts) >= len(required_stages)
+            and all(item["passed"] for item in artifacts)
+        ),
+        "required_stages": sorted(required_stages),
+        "missing_stages": missing_stages,
+        "artifacts": artifacts,
+    }
+
+
 async def multimodal_mode(
     args: argparse.Namespace,
     client: SoakClient,
     writer: JsonlWriter,
 ) -> dict[str, Any]:
+    prerequisites = text_prerequisite_evidence(args.text_prerequisite_artifacts)
+    await writer.emit("multimodal_text_prerequisites", **prerequisites)
+    if not prerequisites["passed"]:
+        return {
+            "mode": "multimodal",
+            "passed": False,
+            "text_prerequisites": prerequisites,
+        }
     image = image_content(args.image)
     before = await safe_metrics(client, writer, "multimodal-start")
     text_specs = [
@@ -4254,12 +5538,22 @@ async def multimodal_mode(
     outputs_equal = cold[0].output_text == repeat[0].output_text
     all_summaries = [baseline_summary, cold_summary, variant_summary, repeat_summary, *mixed_summaries]
     encoder_hits = metrics_delta.get("mistralrs_encoder_cache_hits_total")
-    passed = all(summary["errors"] == 0 for summary in all_summaries) and outputs_equal
-    if encoder_hits is not None:
-        passed = passed and encoder_hits >= 1
+    encoder_misses = metrics_delta.get("mistralrs_encoder_cache_misses_total")
+    encoder_cache_complete = (
+        encoder_hits is not None
+        and encoder_hits >= 1
+        and encoder_misses is not None
+        and encoder_misses >= 1
+    )
+    passed = (
+        all(summary["errors"] == 0 for summary in all_summaries)
+        and outputs_equal
+        and encoder_cache_complete
+    )
     return {
         "mode": "multimodal",
         "passed": passed,
+        "text_prerequisites": prerequisites,
         "fixed_seed_repeat_equal": outputs_equal,
         "baseline": baseline_summary,
         "cold": cold_summary,
@@ -4267,7 +5561,8 @@ async def multimodal_mode(
         "repeat": repeat_summary,
         "mixed": mixed_summaries,
         "metrics_delta": metrics_delta,
-        "encoder_cache_observed": encoder_hits is not None,
+        "encoder_cache_observed": encoder_hits is not None and encoder_misses is not None,
+        "encoder_cache_complete": encoder_cache_complete,
     }
 
 
@@ -4301,10 +5596,22 @@ def build_parser() -> argparse.ArgumentParser:
     canary.add_argument("--max-tokens", type=int, default=128)
     canary.add_argument("--max-length-tokens", type=int, default=17)
     canary.add_argument("--skip-edge-cases", action="store_true")
+    canary.add_argument("--require-part1-complete", action="store_true")
+    canary.add_argument("--require-mtp", action="store_true")
     canary.add_argument("--eos-token-id", type=int)
     canary.add_argument("--reference-url", help="target-only server for statistical comparison")
     canary.add_argument("--stat-max-ks", type=float, default=0.35)
     canary.add_argument("--stat-max-js", type=float, default=0.20)
+    canary.add_argument(
+        "--expected-graph-components",
+        type=parse_graph_components,
+        default=("target",),
+    )
+    canary.add_argument(
+        "--min-cuda-graph-replay-ratio",
+        type=float,
+        default=DEFAULT_MIN_CUDA_GRAPH_REPLAY_RATIO,
+    )
     canary.add_argument(
         "--max-repeated-ngram-ratio",
         type=float,
@@ -4375,6 +5682,17 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
     )
+    resident_decode.add_argument("--require-mtp", action="store_true")
+    resident_decode.add_argument(
+        "--min-output-tok-s-by-concurrency",
+        type=parse_concurrency_thresholds,
+        required=True,
+    )
+    resident_decode.add_argument(
+        "--min-scaling-efficiency",
+        type=float,
+        required=True,
+    )
 
     adversarial = subparsers.add_parser("adversarial", parents=[common])
     adversarial.add_argument(
@@ -4401,7 +5719,52 @@ def build_parser() -> argparse.ArgumentParser:
     adversarial.add_argument("--max-seqs", type=int, default=16)
     adversarial.add_argument("--max-tokens", type=int, default=128)
     adversarial.add_argument("--mixed-requests", type=int, default=16)
+    adversarial.add_argument(
+        "--throughput-concurrencies",
+        type=parse_int_list,
+        default=DEFAULT_RESIDENT_CONCURRENCIES,
+    )
+    adversarial.add_argument(
+        "--min-output-tok-s-by-concurrency",
+        type=parse_concurrency_thresholds,
+        required=True,
+    )
+    adversarial.add_argument(
+        "--min-scaling-efficiency",
+        type=float,
+        required=True,
+    )
     adversarial.add_argument("--overlap-short-requests", type=int, default=8)
+    adversarial.add_argument(
+        "--overlap-baseline-seconds",
+        type=float,
+        default=DEFAULT_OVERLAP_BASELINE_SECONDS,
+    )
+    adversarial.add_argument(
+        "--overlap-queue-poll-seconds",
+        type=float,
+        default=DEFAULT_OVERLAP_QUEUE_POLL_SECONDS,
+    )
+    adversarial.add_argument(
+        "--min-overlap-baseline-completions",
+        type=int,
+        default=DEFAULT_MIN_OVERLAP_BASELINE_COMPLETIONS,
+    )
+    adversarial.add_argument(
+        "--min-overlap-decode-events-per-second",
+        type=float,
+        required=True,
+    )
+    adversarial.add_argument(
+        "--min-overlap-decode-throughput-ratio",
+        type=float,
+        required=True,
+    )
+    adversarial.add_argument(
+        "--min-output-event-coverage",
+        type=float,
+        default=DEFAULT_MIN_OUTPUT_EVENT_COVERAGE,
+    )
     adversarial.add_argument("--cancel-requests", type=int, default=8)
     adversarial.add_argument("--cancel-context-tokens", type=int, default=32_768)
     adversarial.add_argument("--disconnect-after-seconds", type=float, default=0.25)
@@ -4456,10 +5819,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     adversarial.add_argument("--churn-rounds", type=int, default=3)
     adversarial.add_argument("--churn-max-tokens", type=int, default=64)
+    adversarial.add_argument("--require-mtp", action="store_true")
 
     production = subparsers.add_parser("production", parents=[common])
     production.add_argument("--duration-seconds", type=float, default=3_600.0)
     production.add_argument("--concurrencies", type=parse_int_list, default=(8, 16))
+    production.add_argument(
+        "--min-output-tok-s-by-concurrency",
+        type=parse_concurrency_thresholds,
+        required=True,
+    )
+    production.add_argument(
+        "--min-scaling-efficiency",
+        type=float,
+        required=True,
+    )
     production.add_argument("--context-mix", type=parse_context_mix, default=DEFAULT_CONTEXT_MIX)
     production.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     production.add_argument("--prompt-pool-size", type=int, default=16)
@@ -4495,6 +5869,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MAX_THROUGHPUT_DEGRADATION_FRACTION,
     )
     production.add_argument(
+        "--max-latency-degradation-fraction",
+        type=float,
+        default=DEFAULT_MAX_LATENCY_DEGRADATION_FRACTION,
+    )
+    production.add_argument(
         "--max-repeated-ngram-ratio",
         type=float,
         default=DEFAULT_MAX_REPEATED_NGRAM_RATIO,
@@ -4524,7 +5903,18 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_CLEANUP_POLL_SECONDS,
     )
-    production.add_argument("--server-pid", type=int)
+    production.add_argument("--server-pid", type=int, required=True)
+    production.add_argument(
+        "--min-telemetry-samples",
+        type=int,
+        default=DEFAULT_MIN_TELEMETRY_SAMPLES,
+    )
+    production.add_argument(
+        "--min-telemetry-coverage",
+        type=float,
+        default=DEFAULT_MIN_TELEMETRY_COVERAGE,
+    )
+    production.add_argument("--require-mtp", action="store_true")
 
     multimodal = subparsers.add_parser("multimodal", parents=[common])
     multimodal.add_argument("--image", required=True, help="image URL, data URL, or local path")
@@ -4535,6 +5925,12 @@ def build_parser() -> argparse.ArgumentParser:
     multimodal.add_argument("--concurrency", type=int, default=4)
     multimodal.add_argument("--mixed-rounds", type=int, default=4)
     multimodal.add_argument("--max-tokens", type=int, default=128)
+    multimodal.add_argument(
+        "--text-prerequisite-artifacts",
+        type=Path,
+        nargs="+",
+        required=True,
+    )
 
     compare = subparsers.add_parser("compare")
     compare.add_argument("--candidate", type=Path, required=True)
@@ -4544,6 +5940,7 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--tokenizer", help="tokenizer.json path or Hugging Face tokenizer ID")
     compare.add_argument("--stat-max-ks", type=float, default=0.35)
     compare.add_argument("--stat-max-js", type=float, default=0.20)
+    compare.add_argument("--require-part1-complete", action="store_true")
     compare.add_argument("--output", type=Path, help="JSONL comparison evidence path")
     return parser
 
@@ -4578,6 +5975,17 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--max-repeated-ngram-ratio must be between 0 and 1")
     if args.mode == "canary" and (args.stat_max_ks <= 0 or args.stat_max_js <= 0):
         raise ValueError("statistical thresholds must be positive")
+    if args.mode == "canary":
+        if args.max_length_tokens <= 0:
+            raise ValueError("--max-length-tokens must be positive")
+        if not 0 < args.min_cuda_graph_replay_ratio <= 1:
+            raise ValueError(
+                "--min-cuda-graph-replay-ratio must be greater than 0 and at most 1"
+            )
+        if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
+            raise ValueError(
+                "--require-mtp requires --expected-graph-components target,dflash"
+            )
     if args.mode in ("adversarial", "production", "resident-decode") and not args.tokenizer:
         raise ValueError(f"{args.mode} mode requires --tokenizer")
     if args.mode == "resident-decode":
@@ -4607,7 +6015,27 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "--min-final-c1-throughput-ratio must be greater than 0 and at most 1"
             )
+        if set(args.min_output_tok_s_by_concurrency) != set(args.concurrencies):
+            raise ValueError(
+                "--min-output-tok-s-by-concurrency must cover every resident concurrency exactly"
+            )
+        if len(args.concurrencies) < 2 or args.min_scaling_efficiency <= 0:
+            raise ValueError(
+                "resident throughput gating requires at least two concurrencies and a positive "
+                "--min-scaling-efficiency"
+            )
+        if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
+            raise ValueError(
+                "--require-mtp requires --expected-graph-components target,dflash"
+            )
     if args.mode == "adversarial":
+        required_contexts = set(DEFAULT_CONTEXT_LENGTHS)
+        if not required_contexts.issubset(args.context_lengths):
+            raise ValueError(
+                "--context-lengths must include 1024,8192,32768,100000"
+            )
+        if args.max_seqs != 16:
+            raise ValueError("the adversarial boundary contract requires --max-seqs 16")
         missing = {
             args.cancel_context_tokens,
             args.prefix_context_tokens,
@@ -4617,6 +6045,15 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(f"context lengths must include cancellation/prefix lengths: {values}")
         if 3 not in args.long_correctness_concurrencies:
             raise ValueError("--long-correctness-concurrencies must include 3")
+        required_long_contexts = {60_000, 65_536, 100_000}
+        if not required_long_contexts.issubset(args.long_correctness_context_lengths):
+            raise ValueError(
+                "--long-correctness-context-lengths must include 60000,65536,100000"
+            )
+        if "target" not in args.expected_graph_components:
+            raise ValueError(
+                "cold long-context graph coverage requires target graph instrumentation"
+            )
         if args.long_correctness_stat_max_ks <= 0 or args.long_correctness_stat_max_js <= 0:
             raise ValueError("long-context statistical thresholds must be positive")
         for name in (
@@ -4628,9 +6065,13 @@ def validate_args(args: argparse.Namespace) -> None:
             "prefix_pressure_entries",
             "prefix_pressure_context_tokens",
             "prefix_pressure_max_entries",
+            "prefix_pressure_max_tokens",
             "kv_block_size_tokens",
             "churn_rounds",
+            "churn_max_tokens",
+            "burst_max_tokens",
             "long_correctness_max_tokens",
+            "min_overlap_baseline_completions",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
@@ -4652,11 +6093,41 @@ def validate_args(args: argparse.Namespace) -> None:
             "cleanup_timeout_seconds",
             "cleanup_poll_seconds",
             "timeout_test_seconds",
+            "disconnect_after_seconds",
             "fairness_max_slowdown",
             "fairness_stagger_seconds",
+            "overlap_baseline_seconds",
+            "overlap_queue_poll_seconds",
+            "min_overlap_decode_events_per_second",
+            "min_overlap_decode_throughput_ratio",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if set(DEFAULT_RESIDENT_CONCURRENCIES) - set(args.throughput_concurrencies):
+            raise ValueError("--throughput-concurrencies must include 1,3,8,16")
+        if set(args.min_output_tok_s_by_concurrency) != set(
+            args.throughput_concurrencies
+        ):
+            raise ValueError(
+                "--min-output-tok-s-by-concurrency must cover every adversarial throughput "
+                "concurrency exactly"
+            )
+        if args.mixed_requests < max(args.throughput_concurrencies):
+            raise ValueError(
+                "--mixed-requests must be at least the maximum throughput concurrency"
+            )
+        if args.min_scaling_efficiency <= 0:
+            raise ValueError("--min-scaling-efficiency must be positive")
+        if not 0 < args.min_output_event_coverage <= 1:
+            raise ValueError(
+                "--min-output-event-coverage must be greater than 0 and at most 1"
+            )
+        if args.overlap_short_requests >= args.max_seqs:
+            raise ValueError("--overlap-short-requests must leave one slot for the large prefill")
+        if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
+            raise ValueError(
+                "--require-mtp requires --expected-graph-components target,dflash"
+            )
     if args.mode == "production":
         for name in (
             "duration_seconds",
@@ -4665,14 +6136,20 @@ def validate_args(args: argparse.Namespace) -> None:
             "comparison_window_seconds",
             "prompt_pool_size",
             "prewarm_max_tokens",
+            "probe_max_tokens",
             "cleanup_timeout_seconds",
             "cleanup_poll_seconds",
+            "min_telemetry_samples",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
         if not 0 <= args.max_throughput_degradation_fraction <= 1:
             raise ValueError(
                 "--max-throughput-degradation-fraction must be between 0 and 1"
+            )
+        if not 0 <= args.max_latency_degradation_fraction <= 1:
+            raise ValueError(
+                "--max-latency-degradation-fraction must be between 0 and 1"
             )
         if args.resident_prompt_budget is not None and args.resident_prompt_budget <= 0:
             raise ValueError("--resident-prompt-budget must be positive")
@@ -4688,6 +6165,40 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError(
                 "--min-cuda-graph-replay-ratio must be greater than 0 and at most 1"
             )
+        if not 0 < args.min_telemetry_coverage <= 1:
+            raise ValueError(
+                "--min-telemetry-coverage must be greater than 0 and at most 1"
+            )
+        if not {8, 16}.issubset(args.concurrencies):
+            raise ValueError("--concurrencies must include 8 and 16")
+        if args.server_pid <= 0:
+            raise ValueError("--server-pid must be positive")
+        minimum_phase_seconds = (
+            args.probe_interval_seconds * MIN_PRODUCTION_PROBES_PER_PHASE
+        )
+        phase_seconds = args.duration_seconds / len(args.concurrencies)
+        if phase_seconds <= minimum_phase_seconds:
+            raise ValueError(
+                "each production concurrency phase must be longer than "
+                f"{MIN_PRODUCTION_PROBES_PER_PHASE} probe intervals; increase "
+                "--duration-seconds or decrease --probe-interval-seconds"
+            )
+        if set(args.min_output_tok_s_by_concurrency) != set(args.concurrencies):
+            raise ValueError(
+                "--min-output-tok-s-by-concurrency must cover every production concurrency "
+                "exactly"
+            )
+        if args.min_scaling_efficiency <= 0:
+            raise ValueError("--min-scaling-efficiency must be positive")
+        if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
+            raise ValueError(
+                "--require-mtp requires --expected-graph-components target,dflash"
+            )
+    if args.mode == "multimodal":
+        if args.concurrency <= 0:
+            raise ValueError("--concurrency must be positive")
+        if args.mixed_rounds <= 0:
+            raise ValueError("--mixed-rounds must be positive")
 
 
 def output_paths(args: argparse.Namespace) -> tuple[Path, Path]:
