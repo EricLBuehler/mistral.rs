@@ -68,6 +68,13 @@ MIN_COLD_LONG_CONTEXT_GRAPH_CAPTURES = 2
 DEFAULT_OVERLAP_BASELINE_SECONDS = 2.0
 DEFAULT_OVERLAP_QUEUE_POLL_SECONDS = 0.01
 DEFAULT_MIN_OVERLAP_BASELINE_COMPLETIONS = 2
+DEFAULT_MIN_OVERLAP_BASELINE_EVENTS = 256
+DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS = 0
+DEFAULT_MAX_PROBE_LATENCY_SLOWDOWN = 3.0
+DEFAULT_MAX_FINAL_C1_LATENCY_SLOWDOWN = 1.20
+DEFAULT_MIN_FINAL_C1_DECODE_RATIO = 0.95
+DEFAULT_MAX_SCHEDULE_LATENESS_SECONDS = 1.0
+PRODUCTION_SENTINEL_STAGES = (("early", 0.10), ("middle", 0.50), ("late", 0.90))
 RETRIEVAL_PADDING_SLACK_TOKENS = 64
 RETRIEVAL_SOURCE_MARGIN_TOKENS = 256
 RETRIEVAL_INITIAL_SAMPLE_ROWS = 512
@@ -176,6 +183,20 @@ def parse_context_mix(value: str) -> tuple[tuple[int, int], ...]:
     if not items:
         raise argparse.ArgumentTypeError("context mix cannot be empty")
     return tuple(items)
+
+
+def parse_nonempty_phrase(value: str) -> str:
+    phrase = value.strip()
+    if not phrase:
+        raise argparse.ArgumentTypeError("phrase cannot be empty")
+    return phrase
+
+
+def parse_phrase_alternatives(value: str) -> tuple[str, ...]:
+    alternatives = tuple(part.strip() for part in value.split("|") if part.strip())
+    if not alternatives:
+        raise argparse.ArgumentTypeError("expected one or more phrases separated by |")
+    return alternatives
 
 
 def parse_concurrency_thresholds(value: str) -> dict[int, float]:
@@ -769,6 +790,7 @@ class SoakClient:
         status_code: int | None = None
         request_id: str | None = None
         error: str | None = None
+        error_kind: str | None = None
         body: dict[str, Any] | None = None
         try:
             response = await self.http.post(
@@ -781,6 +803,7 @@ class SoakClient:
             response.raise_for_status()
             body = response.json()
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
+            error_kind = type(exc).__name__
             error = f"{type(exc).__name__}: {exc}"
         ended = time.perf_counter()
         return body, {
@@ -791,10 +814,16 @@ class SoakClient:
             "request_id": request_id,
             "elapsed_seconds": ended - started,
             "error": error,
+            "error_kind": error_kind,
             "tags": spec.tags,
         }
 
-    async def disconnect(self, spec: RequestSpec, after_seconds: float) -> dict[str, Any]:
+    async def disconnect(
+        self,
+        spec: RequestSpec,
+        after_seconds: float,
+        admission_release: asyncio.Event | None = None,
+    ) -> dict[str, Any]:
         started = time.perf_counter()
         accepted = asyncio.Event()
 
@@ -827,6 +856,8 @@ class SoakClient:
                 "error": "server did not accept the streaming response before timeout",
                 "context_tokens": spec.context_tokens,
             }
+        if admission_release is not None:
+            await admission_release.wait()
         await asyncio.sleep(after_seconds)
         task.cancel()
         outcome = "cancelled"
@@ -890,6 +921,45 @@ def metric_delta(before: dict[str, float], after: dict[str, float], metric: str)
     return end - (start or 0.0)
 
 
+def interval_union_seconds(intervals: Iterable[tuple[float, float]]) -> float:
+    ordered = sorted(
+        (start, end)
+        for start, end in intervals
+        if math.isfinite(start) and math.isfinite(end) and end > start
+    )
+    if not ordered:
+        return 0.0
+    total = 0.0
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end:
+            current_end = max(current_end, end)
+            continue
+        total += current_end - current_start
+        current_start, current_end = start, end
+    return total + current_end - current_start
+
+
+def output_interval_evidence(
+    results: Sequence[RequestResult],
+    start: float,
+    end: float,
+) -> dict[str, int | float]:
+    return {
+        "start": start,
+        "end": end,
+        "seconds": max(0.0, end - start),
+        "completed_requests": sum(
+            start <= result.ended < end for result in results
+        ),
+        "output_events": sum(
+            start <= timestamp < end
+            for result in results
+            for timestamp in result.output_event_times
+        ),
+    }
+
+
 def summarize_batch(
     results: Sequence[RequestResult],
     wall_seconds: float,
@@ -898,6 +968,29 @@ def summarize_batch(
 ) -> dict[str, Any]:
     successful = [result for result in results if result.ok]
     output_tokens = sum(result.completion_tokens for result in successful)
+    decode_candidates = [
+        result
+        for result in successful
+        if result.completion_tokens > 1
+    ]
+    decode_results = [
+        result for result in decode_candidates if result.ttft_seconds is not None
+    ]
+    decode_intervals_missing = len(decode_candidates) - len(decode_results)
+    decode_tokens = sum(result.completion_tokens - 1 for result in decode_candidates)
+    decode_active_seconds = interval_union_seconds(
+        (result.started + result.ttft_seconds, result.ended)
+        for result in decode_results
+        if result.ttft_seconds is not None
+    )
+    common_wall_throughput = (
+        output_tokens / wall_seconds if wall_seconds > 0 else None
+    )
+    decode_active_throughput = (
+        decode_tokens / decode_active_seconds
+        if decode_active_seconds > 0 and decode_intervals_missing == 0
+        else None
+    )
     return {
         "name": name,
         "concurrency": concurrency,
@@ -906,7 +999,14 @@ def summarize_batch(
         "errors": len(results) - len(successful),
         "wall_seconds": wall_seconds,
         "output_tokens": output_tokens,
-        "output_tok_s_common_wall": output_tokens / wall_seconds if wall_seconds > 0 else None,
+        "decode_requests": len(decode_candidates),
+        "decode_intervals": len(decode_results),
+        "decode_intervals_missing": decode_intervals_missing,
+        "decode_tokens": decode_tokens,
+        "decode_active_seconds": decode_active_seconds,
+        "end_to_end_output_tok_s_common_wall": common_wall_throughput,
+        "output_tok_s_common_wall": common_wall_throughput,
+        "decode_tok_s_active": decode_active_throughput,
         "request_latency_seconds": distribution(result.elapsed_seconds for result in successful),
         "ttft_seconds": distribution(
             result.ttft_seconds for result in successful if result.ttft_seconds is not None
@@ -1208,8 +1308,42 @@ def full_batch_specs(
 ) -> list[RequestSpec]:
     count = len(specs) - len(specs) % concurrency
     if count == 0:
-        raise ValueError("ordering checks require at least one full concurrent batch")
+        raise ValueError("measurement requires at least one full concurrent batch")
     return list(specs[:count])
+
+
+def balanced_context_full_batch_specs(
+    specs: Sequence[RequestSpec], concurrency: int
+) -> list[RequestSpec]:
+    contexts = tuple(
+        dict.fromkeys(
+            spec.context_tokens
+            for spec in specs
+            if spec.context_tokens is not None
+        )
+    )
+    if not contexts or any(spec.context_tokens is None for spec in specs):
+        raise ValueError("balanced measurement requires a context length on every request")
+    grouped = {
+        context: [spec for spec in specs if spec.context_tokens == context]
+        for context in contexts
+    }
+    requests_per_context = min(len(group) for group in grouped.values())
+    while (
+        requests_per_context > 0
+        and requests_per_context * len(contexts) % concurrency != 0
+    ):
+        requests_per_context -= 1
+    if requests_per_context == 0:
+        raise ValueError(
+            "measurement requires a context-balanced full concurrent batch"
+        )
+    selected = {
+        (spec.case_id, spec.seed)
+        for group in grouped.values()
+        for spec in group[:requests_per_context]
+    }
+    return [spec for spec in specs if (spec.case_id, spec.seed) in selected]
 
 
 def results_for_specs(
@@ -2732,10 +2866,29 @@ async def adversarial_mode(
     ]
     mixed_throughput_summaries = []
     for concurrency in args.throughput_concurrencies:
+        measured_specs = balanced_context_full_batch_specs(
+            mixed_specs,
+            concurrency,
+        )
+        stabilization_phase = f"adversarial-mixed-context-c{concurrency}-stabilize"
+        stabilization_results, stabilization_summary = await run_batch(
+            client,
+            measured_specs,
+            concurrency,
+            writer,
+            stabilization_phase,
+            keep_output=True,
+        )
+        summaries.append(stabilization_summary)
+        await record_retrieval_quality(
+            stabilization_phase,
+            stabilization_results,
+        )
+        await record_runtime(stabilization_phase, False)
         phase = f"adversarial-mixed-context-c{concurrency}"
         mixed_results, summary = await run_batch(
             client,
-            mixed_specs,
+            measured_specs,
             concurrency,
             writer,
             phase,
@@ -2745,7 +2898,7 @@ async def adversarial_mode(
         mixed_throughput_summaries.append(summary)
         await record_retrieval_quality(phase, mixed_results)
         await record_runtime(phase, True)
-    mixed_throughput = throughput_evidence(
+    mixed_throughput = serving_throughput_evidence(
         mixed_throughput_summaries,
         args.min_output_tok_s_by_concurrency,
         args.min_scaling_efficiency,
@@ -2915,14 +3068,36 @@ async def adversarial_mode(
         asyncio.create_task(overlap_decode_worker(index))
         for index in range(args.overlap_short_requests)
     ]
-    establish_deadline = decode_started + args.cleanup_timeout_seconds
+    readiness_deadline = decode_started + args.cleanup_timeout_seconds
     while (
-        time.perf_counter() - decode_started < args.overlap_baseline_seconds
-        or len(overlap_decode_results) < args.min_overlap_baseline_completions
-    ) and time.perf_counter() < establish_deadline:
+        len(overlap_decode_results) < args.min_overlap_baseline_completions
+        and time.perf_counter() < readiness_deadline
+    ):
+        await asyncio.sleep(args.overlap_queue_poll_seconds)
+    baseline_started = time.perf_counter()
+    baseline_deadline = baseline_started + args.cleanup_timeout_seconds
+    while time.perf_counter() < baseline_deadline:
+        baseline_observation = output_interval_evidence(
+            overlap_decode_results,
+            baseline_started,
+            time.perf_counter(),
+        )
+        if (
+            baseline_observation["seconds"] >= args.overlap_baseline_seconds
+            and baseline_observation["completed_requests"]
+            >= args.min_overlap_baseline_completions
+            and baseline_observation["output_events"]
+            >= args.min_overlap_baseline_events
+        ):
+            break
         await asyncio.sleep(args.overlap_queue_poll_seconds)
     prefill_started = time.perf_counter()
-    baseline_completions = len(overlap_decode_results)
+    baseline_observation = output_interval_evidence(
+        overlap_decode_results,
+        baseline_started,
+        prefill_started,
+    )
+    baseline_completions = int(baseline_observation["completed_requests"])
     overlap_prefill_spec = retrieval_spec(
         client,
         longest,
@@ -2932,7 +3107,12 @@ async def adversarial_mode(
         {"scenario": "overlap", "role": "large_prefill"},
     )
     overlap_prefill = await client.stream_request(overlap_prefill_spec)
-    prefill_ended = time.perf_counter()
+    prefill_completed = time.perf_counter()
+    prefill_first_token = (
+        overlap_prefill.started + overlap_prefill.ttft_seconds
+        if overlap_prefill.ttft_seconds is not None
+        else None
+    )
     await writer.emit(
         "request",
         phase="adversarial-prefill-overlap-prefill",
@@ -2942,18 +3122,18 @@ async def adversarial_mode(
     overlap_stop.set()
     await asyncio.gather(*overlap_workers)
     overlap_finished = time.perf_counter()
-    baseline_seconds = prefill_started - decode_started
-    overlapped_seconds = prefill_ended - prefill_started
-    baseline_decode_events = sum(
-        decode_started <= timestamp < prefill_started
-        for result in overlap_decode_results
-        for timestamp in result.output_event_times
+    baseline_seconds = prefill_started - baseline_started
+    overlapped_seconds = (
+        prefill_first_token - prefill_started
+        if prefill_first_token is not None
+        else None
     )
+    baseline_decode_events = int(baseline_observation["output_events"])
     overlapped_decode_events = sum(
-        prefill_started <= timestamp < prefill_ended
+        prefill_started <= timestamp < prefill_first_token
         for result in overlap_decode_results
         for timestamp in result.output_event_times
-    )
+    ) if prefill_first_token is not None else 0
     baseline_decode_tok_s = ratio(baseline_decode_events, baseline_seconds)
     overlapped_decode_tok_s = ratio(overlapped_decode_events, overlapped_seconds)
     overlap_decode_ratio = ratio(overlapped_decode_tok_s, baseline_decode_tok_s)
@@ -2977,19 +3157,15 @@ async def adversarial_mode(
         )[0]
         for result in overlap_decode_results
     )
-    overlap_output_event_coverage = ratio(
-        sum(result.output_chunks for result in overlap_decode_results),
-        sum(result.completion_tokens for result in overlap_decode_results),
-    )
-    overlap_output_event_coverage_ok = (
-        overlap_output_event_coverage is not None
-        and args.min_output_event_coverage
-        <= overlap_output_event_coverage
-        <= 2.0 - args.min_output_event_coverage
+    overlap_output_event_coverage = output_event_coverage_evidence(
+        overlap_decode_results,
+        args.min_output_event_coverage,
     )
     overlap_evidence = {
         "passed": (
             baseline_completions >= args.min_overlap_baseline_completions
+            and baseline_decode_events >= args.min_overlap_baseline_events
+            and overlap_prefill.ttft_seconds is not None
             and baseline_decode_events > 0
             and overlapped_decode_events > 0
             and overlapped_decode_tok_s is not None
@@ -2999,13 +3175,18 @@ async def adversarial_mode(
             and overlap_decode_ratio >= args.min_overlap_decode_throughput_ratio
             and overlap_prefill_semantic_ok
             and overlap_decode_semantic_ok
-            and overlap_output_event_coverage_ok
+            and overlap_output_event_coverage["output_event_coverage_ok"]
         ),
         "decode_workers": args.overlap_short_requests,
+        "decode_warmup_seconds": baseline_started - decode_started,
+        "baseline_window": baseline_observation,
         "baseline_seconds": baseline_seconds,
         "prefill_overlap_seconds": overlapped_seconds,
+        "prefill_completion_seconds": prefill_completed - prefill_started,
+        "prefill_ttft_seconds": overlap_prefill.ttft_seconds,
         "baseline_completions_before_prefill": baseline_completions,
         "minimum_baseline_completions": args.min_overlap_baseline_completions,
+        "minimum_baseline_output_events": args.min_overlap_baseline_events,
         "baseline_decode_output_events": baseline_decode_events,
         "overlapped_decode_output_events": overlapped_decode_events,
         "baseline_decode_output_events_per_second": baseline_decode_tok_s,
@@ -3019,9 +3200,8 @@ async def adversarial_mode(
         ),
         "prefill_semantic_ok": overlap_prefill_semantic_ok,
         "all_decode_semantic_ok": overlap_decode_semantic_ok,
-        "output_event_coverage": overlap_output_event_coverage,
+        **overlap_output_event_coverage,
         "minimum_output_event_coverage": args.min_output_event_coverage,
-        "output_event_coverage_ok": overlap_output_event_coverage_ok,
     }
     await writer.emit("overlap_decode_evidence", **overlap_evidence)
     await record_runtime("adversarial-prefill-overlap", True)
@@ -3038,17 +3218,44 @@ async def adversarial_mode(
         )
         for index in range(args.cancel_requests)
     ]
+    for spec in cancellation_specs:
+        spec.extra["ignore_eos"] = True
     cancellation_rng = random.Random(args.seed + 30_000)
     disconnect_delays = [
         args.disconnect_after_seconds * cancellation_rng.uniform(0.5, 2.0)
         for _ in cancellation_specs
     ]
-    cancellation_results = await asyncio.gather(
-        *(
-            client.disconnect(spec, disconnect_delays[index])
-            for index, spec in enumerate(cancellation_specs)
+    admission_release = asyncio.Event()
+    cancellation_tasks = [
+        asyncio.create_task(
+            client.disconnect(
+                spec,
+                disconnect_delays[index],
+                admission_release,
+            )
         )
-    )
+        for index, spec in enumerate(cancellation_specs)
+    ]
+    admission_deadline = time.perf_counter() + args.cleanup_timeout_seconds
+    admitted_cancel_requests = 0.0
+    admission_metrics = pre_cancel_metrics
+    while time.perf_counter() < admission_deadline:
+        admission_metrics = await safe_metrics(
+            client,
+            writer,
+            "adversarial-cancel-admission-poll",
+        )
+        admitted_cancel_requests = metric_delta(
+            pre_cancel_metrics,
+            admission_metrics,
+            "mistralrs_prefix_cache_lookups_total",
+        ) or 0.0
+        if admitted_cancel_requests >= len(cancellation_specs):
+            break
+        await asyncio.sleep(args.cleanup_poll_seconds)
+    cancel_admissions_ok = admitted_cancel_requests >= len(cancellation_specs)
+    admission_release.set()
+    cancellation_results = await asyncio.gather(*cancellation_tasks)
     for result in cancellation_results:
         await writer.emit("disconnect", phase="adversarial-cancellation", **result)
     disconnects_ok = all(
@@ -3088,12 +3295,7 @@ async def adversarial_mode(
         post_cancel_metrics = await safe_metrics(
             client, writer, "adversarial-cancel-counter-poll"
         )
-    cancel_admissions = metric_delta(
-        pre_cancel_metrics, post_cancel_metrics, "mistralrs_prefix_cache_lookups_total"
-    )
-    cancel_admissions_ok = (
-        cancel_admissions is not None and cancel_admissions >= len(cancellation_specs)
-    )
+    cancel_admissions = admitted_cancel_requests
     cancel_kv_blocks_active_delta = metric_delta(
         pre_cancel_metrics,
         post_cancel_metrics,
@@ -3104,10 +3306,22 @@ async def adversarial_mode(
         post_cancel_metrics,
         KV_CACHE_PREFIX_CACHED_GAUGE,
     )
+    cancel_retry_specs = [
+        RequestSpec(
+            case_id=f"cancel-retry-{index:03d}",
+            seed=spec.seed,
+            max_tokens=args.max_tokens,
+            prompt=spec.prompt,
+            context_tokens=spec.context_tokens,
+            tags=dict(spec.tags),
+            extra=prompt_profile_extra(RETRIEVAL_PROMPT_PROFILE),
+        )
+        for index, spec in enumerate(cancellation_specs)
+    ]
     cancel_retry, cancel_retry_summary = await run_batch(
         client,
-        cancellation_specs,
-        min(args.max_seqs, len(cancellation_specs)),
+        cancel_retry_specs,
+        min(args.max_seqs, len(cancel_retry_specs)),
         writer,
         "adversarial-cancelled-prefix-retry",
         keep_output=True,
@@ -3138,22 +3352,39 @@ async def adversarial_mode(
 
     timeout_spec = retrieval_spec(
         client,
-        longest,
-        "timeout-large",
+        shortest,
+        "timeout-short",
         args.seed + 40_000,
-        args.max_tokens,
+        args.max_tokens * 4,
         {"scenario": "timeout"},
     )
+    timeout_spec.extra["ignore_eos"] = True
     pre_timeout_metrics = await safe_metrics(client, writer, "adversarial-pre-timeout")
-    timeout_result = await client.stream_request(
+    _, timeout_result = await client.request_json(
         timeout_spec, timeout_seconds=args.timeout_test_seconds
     )
     await writer.emit(
         "request",
         phase="adversarial-timeout",
         concurrency=1,
-        **timeout_result.record(False),
+        **timeout_result,
     )
+    timeout_admission_deadline = time.perf_counter() + args.cleanup_timeout_seconds
+    timeout_admissions = 0.0
+    while time.perf_counter() < timeout_admission_deadline:
+        timeout_admission_metrics = await safe_metrics(
+            client,
+            writer,
+            "adversarial-timeout-admission-poll",
+        )
+        timeout_admissions = metric_delta(
+            pre_timeout_metrics,
+            timeout_admission_metrics,
+            "mistralrs_prefix_cache_lookups_total",
+        ) or 0.0
+        if timeout_admissions >= 1:
+            break
+        await asyncio.sleep(args.cleanup_poll_seconds)
     timeout_cleanup_ok, post_timeout_metrics, timeout_cleanup_detail = await poll_for_cleanup(
         client,
         writer,
@@ -3162,11 +3393,8 @@ async def adversarial_mode(
         args.cleanup_poll_seconds,
         "adversarial-timeout-cleanup-poll",
     )
-    timeout_admissions = metric_delta(
-        pre_timeout_metrics, post_timeout_metrics, "mistralrs_prefix_cache_lookups_total"
-    )
-    timeout_observed = timeout_result.error_kind == "ReadTimeout"
-    timeout_admitted = timeout_admissions is not None and timeout_admissions >= 1
+    timeout_observed = timeout_result["error_kind"] == "ReadTimeout"
+    timeout_admitted = timeout_admissions >= 1
     timeout_kv_blocks_active_delta = metric_delta(
         pre_timeout_metrics,
         post_timeout_metrics,
@@ -3191,8 +3419,22 @@ async def adversarial_mode(
         post_timeout_metrics = await safe_metrics(
             client, writer, "adversarial-timeout-counter-poll"
         )
+    timeout_retry_spec = RequestSpec(
+        case_id="timeout-short-retry",
+        seed=timeout_spec.seed,
+        max_tokens=args.max_tokens,
+        prompt=timeout_spec.prompt,
+        context_tokens=timeout_spec.context_tokens,
+        tags=dict(timeout_spec.tags),
+        extra=prompt_profile_extra(RETRIEVAL_PROMPT_PROFILE),
+    )
     retry, retry_summary = await run_batch(
-        client, [timeout_spec], 1, writer, "adversarial-retry", keep_output=True
+        client,
+        [timeout_retry_spec],
+        1,
+        writer,
+        "adversarial-retry",
+        keep_output=True,
     )
     summaries.append(retry_summary)
     retry_semantic_ok = validate_retrieval_result(
@@ -3261,9 +3503,10 @@ async def adversarial_mode(
     hit_evidence = prefix_cache_evidence(
         post_cold_metrics,
         post_hit_metrics,
-        1,
-        args.prefix_context_tokens,
+        [args.prefix_context_tokens],
         args.min_prefix_reuse_fraction,
+        args.kv_block_size_tokens,
+        args.speculative_prefix_replay_tokens,
     )
     cold_reused_tokens = metric_delta(
         pre_prefix_metrics,
@@ -3631,18 +3874,327 @@ def ratio(numerator: float | None, denominator: float | None) -> float | None:
     return numerator / denominator
 
 
+def request_decode_tok_s(result: RequestResult) -> float | None:
+    if (
+        not result.ok
+        or result.ttft_seconds is None
+        or result.completion_tokens <= 1
+    ):
+        return None
+    decode_seconds = result.ended - result.started - result.ttft_seconds
+    if decode_seconds <= 0:
+        return None
+    return (result.completion_tokens - 1) / decode_seconds
+
+
+def fixed_seed_result_signature(result: RequestResult) -> tuple[str, int, str | None]:
+    return (
+        result.output_transcript,
+        result.completion_tokens,
+        result.finish_reason,
+    )
+
+
+def production_probe_evidence(
+    results: Sequence[RequestResult],
+    baseline: RequestResult,
+    tokenizer: TokenizerAdapter | None,
+    max_repeated_ngram_ratio: float,
+    min_output_event_coverage: float,
+    minimum_samples: int,
+    max_ttft_seconds: float,
+    max_tpot_seconds: float,
+    max_latency_slowdown: float,
+    max_schedule_lateness_seconds: float,
+) -> dict[str, Any]:
+    baseline_semantic_ok, baseline_semantic = validate_retrieval_result(
+        baseline,
+        tokenizer,
+        max_repeated_ngram_ratio,
+    )
+    checks = []
+    for result in results:
+        semantic_ok, semantic = validate_retrieval_result(
+            result,
+            tokenizer,
+            max_repeated_ngram_ratio,
+        )
+        ttft_ratio = ratio(result.ttft_seconds, baseline.ttft_seconds)
+        tpot_ratio = ratio(result.tpot_seconds, baseline.tpot_seconds)
+        transcript_exact = result.output_transcript == baseline.output_transcript
+        completion_tokens_exact = (
+            result.completion_tokens == baseline.completion_tokens
+        )
+        finish_reason_exact = result.finish_reason == baseline.finish_reason
+        exact = transcript_exact and completion_tokens_exact and finish_reason_exact
+        schedule_lateness_ok = (
+            result.client_queue_seconds <= max_schedule_lateness_seconds
+        )
+        latency_ok = (
+            result.ttft_seconds is not None
+            and result.ttft_seconds <= max_ttft_seconds
+            and result.tpot_seconds is not None
+            and result.tpot_seconds <= max_tpot_seconds
+            and ttft_ratio is not None
+            and ttft_ratio <= max_latency_slowdown
+            and tpot_ratio is not None
+            and tpot_ratio <= max_latency_slowdown
+            and schedule_lateness_ok
+        )
+        checks.append(
+            {
+                "case_id": result.case_id,
+                "ok": result.ok,
+                "exact_result": exact,
+                "exact_transcript": transcript_exact,
+                "completion_tokens_exact": completion_tokens_exact,
+                "finish_reason_exact": finish_reason_exact,
+                "semantic_ok": semantic_ok,
+                "semantic": semantic,
+                "ttft_seconds": result.ttft_seconds,
+                "tpot_seconds": result.tpot_seconds,
+                "ttft_ratio_to_isolated": ttft_ratio,
+                "tpot_ratio_to_isolated": tpot_ratio,
+                "decode_tok_s": request_decode_tok_s(result),
+                "completion_tokens": result.completion_tokens,
+                "finish_reason": result.finish_reason,
+                "schedule_lateness_seconds": result.client_queue_seconds,
+                "schedule_lateness_ok": schedule_lateness_ok,
+                "latency_ok": latency_ok,
+                "output_transcript_sha256": stable_hash(result.output_transcript),
+            }
+        )
+    output_events = output_event_coverage_evidence(
+        results,
+        min_output_event_coverage,
+    )
+    complete = len(results) >= minimum_samples
+    exact_transcripts = complete and all(
+        item["exact_transcript"] for item in checks
+    )
+    exact_results = complete and all(item["exact_result"] for item in checks)
+    semantic_ok = complete and all(item["semantic_ok"] for item in checks)
+    latency_ok = complete and all(item["latency_ok"] for item in checks)
+    return {
+        "passed": (
+            baseline_semantic_ok
+            and exact_results
+            and semantic_ok
+            and latency_ok
+            and output_events["output_event_coverage_ok"]
+        ),
+        "samples": len(results),
+        "minimum_samples": minimum_samples,
+        "exact_transcripts": exact_transcripts,
+        "exact_results": exact_results,
+        "semantic_ok": semantic_ok,
+        "latency_ok": latency_ok,
+        "max_ttft_seconds": max_ttft_seconds,
+        "max_tpot_seconds": max_tpot_seconds,
+        "max_latency_slowdown": max_latency_slowdown,
+        "max_schedule_lateness_seconds": max_schedule_lateness_seconds,
+        "baseline": {
+            "case_id": baseline.case_id,
+            "semantic_ok": baseline_semantic_ok,
+            "semantic": baseline_semantic,
+            "ttft_seconds": baseline.ttft_seconds,
+            "tpot_seconds": baseline.tpot_seconds,
+            "decode_tok_s": request_decode_tok_s(baseline),
+            "completion_tokens": baseline.completion_tokens,
+            "finish_reason": baseline.finish_reason,
+            "output_transcript_sha256": stable_hash(baseline.output_transcript),
+        },
+        "checks": checks,
+        "output_event_coverage": output_events,
+    }
+
+
+def production_semantic_sentinel_evidence(
+    results: Sequence[RequestResult],
+    context_lengths: Sequence[int],
+    stages: Sequence[str],
+    tokenizer: TokenizerAdapter | None,
+    max_repeated_ngram_ratio: float,
+    min_output_event_coverage: float,
+    max_schedule_lateness_seconds: float,
+) -> dict[str, Any]:
+    expected = {
+        (length, stage)
+        for length in context_lengths
+        for stage in stages
+    }
+    observed = Counter(
+        (int(result.context_tokens or 0), str(result.tags.get("sentinel_stage")))
+        for result in results
+    )
+    semantic_checks = []
+    for result in results:
+        valid, detail = validate_retrieval_result(
+            result,
+            tokenizer,
+            max_repeated_ngram_ratio,
+        )
+        schedule_lateness_ok = (
+            result.client_queue_seconds <= max_schedule_lateness_seconds
+        )
+        semantic_checks.append(
+            {
+                "valid": valid and schedule_lateness_ok,
+                "semantic_valid": valid,
+                **detail,
+                "completion_tokens": result.completion_tokens,
+                "finish_reason": result.finish_reason,
+                "schedule_lateness_seconds": result.client_queue_seconds,
+                "schedule_lateness_ok": schedule_lateness_ok,
+            }
+        )
+    signatures_by_context = {
+        str(length): {
+            fixed_seed_result_signature(result)
+            for result in results
+            if result.context_tokens == length and result.ok
+        }
+        for length in context_lengths
+    }
+    coverage_complete = set(observed) == expected and all(
+        observed[key] == 1 for key in expected
+    )
+    fixed_seed_exact = coverage_complete and all(
+        len(signatures) == 1 for signatures in signatures_by_context.values()
+    )
+    output_events = output_event_coverage_evidence(
+        results,
+        min_output_event_coverage,
+    )
+    semantic_ok = len(semantic_checks) == len(expected) and all(
+        item["semantic_valid"] for item in semantic_checks
+    )
+    schedule_lateness_ok = len(semantic_checks) == len(expected) and all(
+        item["schedule_lateness_ok"] for item in semantic_checks
+    )
+    return {
+        "passed": (
+            coverage_complete
+            and fixed_seed_exact
+            and semantic_ok
+            and schedule_lateness_ok
+            and output_events["output_event_coverage_ok"]
+        ),
+        "expected": [
+            {"context_tokens": length, "stage": stage}
+            for length, stage in sorted(expected)
+        ],
+        "observed": [
+            {
+                "context_tokens": length,
+                "stage": stage,
+                "count": count,
+            }
+            for (length, stage), count in sorted(observed.items())
+        ],
+        "coverage_complete": coverage_complete,
+        "fixed_seed_exact": fixed_seed_exact,
+        "semantic_ok": semantic_ok,
+        "schedule_lateness_ok": schedule_lateness_ok,
+        "semantic_checks": semantic_checks,
+        "max_schedule_lateness_seconds": max_schedule_lateness_seconds,
+        "unique_result_signatures_by_context": {
+            length: len(signatures)
+            for length, signatures in signatures_by_context.items()
+        },
+        "output_event_coverage": output_events,
+    }
+
+
+def output_event_coverage_evidence(
+    results: Sequence[RequestResult],
+    min_output_event_coverage: float,
+) -> dict[str, Any]:
+    successful = [result for result in results if result.ok]
+    per_request = []
+    for result in successful:
+        terminal_tokens = int(
+            result.completion_tokens > 0 and result.finish_reason == "stop"
+        )
+        expected_tokens = result.completion_tokens - terminal_tokens
+        if expected_tokens == 0 and result.output_chunks == 0:
+            request_coverage = 1.0
+        else:
+            request_coverage = ratio(result.output_chunks, expected_tokens)
+        request_ok = (
+            request_coverage is not None
+            and min_output_event_coverage
+            <= request_coverage
+            <= 2.0 - min_output_event_coverage
+        )
+        per_request.append(
+            {
+                "case_id": result.case_id,
+                "observed_output_events": result.output_chunks,
+                "reported_completion_tokens": result.completion_tokens,
+                "unstreamed_terminal_tokens": terminal_tokens,
+                "expected_streamable_tokens": expected_tokens,
+                "output_event_coverage": request_coverage,
+                "passed": request_ok,
+            }
+        )
+    observed_output_events = sum(item["observed_output_events"] for item in per_request)
+    reported_completion_tokens = sum(item["reported_completion_tokens"] for item in per_request)
+    unstreamed_terminal_tokens = sum(item["unstreamed_terminal_tokens"] for item in per_request)
+    expected_streamable_tokens = (
+        reported_completion_tokens - unstreamed_terminal_tokens
+    )
+    if successful and expected_streamable_tokens == 0 and observed_output_events == 0:
+        coverage = 1.0
+    else:
+        coverage = ratio(observed_output_events, expected_streamable_tokens)
+    aggregate_coverage_ok = (
+        coverage is not None
+        and min_output_event_coverage
+        <= coverage
+        <= 2.0 - min_output_event_coverage
+    )
+    coverage_ok = bool(per_request) and aggregate_coverage_ok and all(
+        item["passed"] for item in per_request
+    )
+    return {
+        "observed_output_events": observed_output_events,
+        "reported_completion_tokens": reported_completion_tokens,
+        "unstreamed_terminal_tokens": unstreamed_terminal_tokens,
+        "expected_streamable_tokens": expected_streamable_tokens,
+        "output_event_coverage": coverage,
+        "min_output_event_coverage": min_output_event_coverage,
+        "aggregate_output_event_coverage_ok": aggregate_coverage_ok,
+        "per_request_output_event_coverage": per_request,
+        "output_event_coverage_ok": coverage_ok,
+    }
+
+
 def throughput_evidence(
     summaries: Sequence[dict[str, Any]],
     thresholds: dict[int, float],
     min_scaling_efficiency: float,
+    throughput_metric: str = "output_tok_s_common_wall",
 ) -> dict[str, Any]:
     actual = {
-        int(summary["concurrency"]): summary.get("output_tok_s_common_wall")
+        int(summary["concurrency"]): summary.get(throughput_metric)
+        for summary in summaries
+    }
+    measurements = {
+        str(int(summary["concurrency"])): {
+            "end_to_end_output_tok_s_common_wall": summary.get(
+                "end_to_end_output_tok_s_common_wall",
+                summary.get("output_tok_s_common_wall"),
+            ),
+            "decode_tok_s_active": summary.get("decode_tok_s_active"),
+        }
         for summary in summaries
     }
     missing = sorted(set(thresholds) - set(actual))
     absolute = {
         str(concurrency): {
+            "throughput_metric": throughput_metric,
+            "actual_throughput": actual.get(concurrency),
             "actual_output_tok_s": actual.get(concurrency),
             "minimum_output_tok_s": minimum,
             "passed": (
@@ -3662,6 +4214,7 @@ def throughput_evidence(
         ideal_ratio = concurrency / baseline_concurrency
         efficiency = ratio(observed_ratio, ideal_ratio)
         scaling[str(concurrency)] = {
+            "throughput_metric": throughput_metric,
             "baseline_concurrency": baseline_concurrency,
             "observed_throughput_ratio": observed_ratio,
             "ideal_linear_ratio": ideal_ratio,
@@ -3679,10 +4232,37 @@ def throughput_evidence(
             and all(item["passed"] for item in scaling.values())
         ),
         "missing_concurrencies": missing,
+        "throughput_metric": throughput_metric,
+        "measurements": measurements,
         "absolute": absolute,
         "scaling": scaling,
         "baseline_concurrency": baseline_concurrency,
         "minimum_scaling_efficiency": min_scaling_efficiency,
+    }
+
+
+def serving_throughput_evidence(
+    summaries: Sequence[dict[str, Any]],
+    thresholds: dict[int, float],
+    min_scaling_efficiency: float,
+) -> dict[str, Any]:
+    common_wall = throughput_evidence(
+        summaries,
+        thresholds,
+        min_scaling_efficiency,
+        "output_tok_s_common_wall",
+    )
+    decode_active = throughput_evidence(
+        summaries,
+        thresholds,
+        min_scaling_efficiency,
+        "decode_tok_s_active",
+    )
+    return {
+        **common_wall,
+        "passed": common_wall["passed"] and decode_active["passed"],
+        "common_wall": common_wall,
+        "decode_active": decode_active,
     }
 
 
@@ -3985,13 +4565,32 @@ def metric_values(
     return {name: metric_total(snapshot, name) for name in names}
 
 
+def cacheable_prefix_tokens(prompt_tokens: int, block_size_tokens: int) -> int:
+    if prompt_tokens <= 1:
+        return 0
+    return (prompt_tokens - 1) // block_size_tokens * block_size_tokens
+
+
+def eligible_prefix_reuse_tokens(
+    prompt_tokens: int,
+    block_size_tokens: int,
+    replay_tokens: int,
+) -> int:
+    cached = cacheable_prefix_tokens(prompt_tokens, block_size_tokens)
+    retained = max(0, cached - replay_tokens)
+    return retained // block_size_tokens * block_size_tokens
+
+
 def prefix_cache_evidence(
     before: dict[str, float],
     after: dict[str, float],
-    expected_requests: int,
-    expected_prompt_tokens: int,
-    min_reuse_fraction: float,
+    expected_prompt_tokens: Sequence[int],
+    min_match_fraction: float,
+    block_size_tokens: int,
+    replay_tokens_per_request: int,
 ) -> dict[str, Any]:
+    prompt_tokens = list(expected_prompt_tokens)
+    expected_requests = len(prompt_tokens)
     lookups = metric_delta(before, after, "mistralrs_prefix_cache_lookups_total")
     hits = metric_delta(before, after, "mistralrs_prefix_cache_hits_total")
     matched_tokens = metric_delta(
@@ -4004,29 +4603,74 @@ def prefix_cache_evidence(
         after,
         "mistralrs_prefix_cache_tokens_reused_total",
     )
-    minimum_reused_tokens = expected_prompt_tokens * min_reuse_fraction
+    expected_cacheable_tokens = sum(
+        cacheable_prefix_tokens(tokens, block_size_tokens) for tokens in prompt_tokens
+    )
+    expected_eligible_reuse_tokens = sum(
+        eligible_prefix_reuse_tokens(
+            tokens,
+            block_size_tokens,
+            replay_tokens_per_request,
+        )
+        for tokens in prompt_tokens
+    )
+    expected_reusable_requests = sum(
+        eligible_prefix_reuse_tokens(
+            tokens,
+            block_size_tokens,
+            replay_tokens_per_request,
+        )
+        > 0
+        for tokens in prompt_tokens
+    )
+    minimum_matched_tokens = expected_cacheable_tokens * min_match_fraction
+    minimum_reused_tokens = expected_eligible_reuse_tokens * min_match_fraction
+    matched_prompt_fraction = ratio(matched_tokens, expected_cacheable_tokens)
+    eligible_reuse_fraction = (
+        1.0
+        if expected_eligible_reuse_tokens == 0 and reused_tokens == 0
+        else ratio(reused_tokens, expected_eligible_reuse_tokens)
+    )
+    reuse_contract_non_vacuous = (
+        expected_requests > 0
+        and expected_cacheable_tokens > 0
+        and expected_eligible_reuse_tokens > 0
+        and expected_reusable_requests > 0
+    )
     return {
         "passed": (
-            lookups is not None
+            reuse_contract_non_vacuous
+            and lookups is not None
             and hits is not None
             and matched_tokens is not None
             and reused_tokens is not None
             and lookups >= expected_requests
-            and hits >= expected_requests
+            and hits >= expected_reusable_requests
+            and matched_tokens >= minimum_matched_tokens
             and reused_tokens >= minimum_reused_tokens
-            and ratio(reused_tokens, matched_tokens) is not None
-            and ratio(reused_tokens, matched_tokens) >= min_reuse_fraction
+            and matched_prompt_fraction is not None
+            and matched_prompt_fraction >= min_match_fraction
+            and eligible_reuse_fraction is not None
+            and eligible_reuse_fraction >= min_match_fraction
         ),
         "expected_requests": expected_requests,
-        "expected_prompt_tokens": expected_prompt_tokens,
+        "expected_prompt_tokens": prompt_tokens,
+        "expected_cacheable_tokens": expected_cacheable_tokens,
+        "expected_eligible_reuse_tokens": expected_eligible_reuse_tokens,
+        "expected_reusable_requests": expected_reusable_requests,
+        "reuse_contract_non_vacuous": reuse_contract_non_vacuous,
+        "block_size_tokens": block_size_tokens,
+        "replay_tokens_per_request": replay_tokens_per_request,
+        "minimum_matched_tokens": minimum_matched_tokens,
         "minimum_reused_tokens": minimum_reused_tokens,
-        "min_reuse_fraction": min_reuse_fraction,
+        "min_match_fraction": min_match_fraction,
         "lookups": lookups,
         "hits": hits,
         "hit_rate": ratio(hits, lookups),
         "matched_tokens": matched_tokens,
         "reused_tokens": reused_tokens,
-        "reused_prompt_fraction": ratio(reused_tokens, expected_prompt_tokens),
+        "matched_prompt_fraction": matched_prompt_fraction,
+        "eligible_reuse_fraction": eligible_reuse_fraction,
         "matched_reuse_fraction": ratio(reused_tokens, matched_tokens),
     }
 
@@ -4111,9 +4755,10 @@ async def resident_decode_mode(
     verification_prefix = prefix_cache_evidence(
         post_warm_metrics,
         resident_metrics,
-        len(verification_specs),
-        sum(spec.context_tokens for spec in verification_specs),
+        [int(spec.context_tokens or 0) for spec in verification_specs],
         args.min_prefix_reuse_fraction,
+        args.kv_block_size_tokens,
+        args.speculative_prefix_replay_tokens,
     )
     residency_passed = (
         warmup_summary["errors"] == 0
@@ -4179,6 +4824,7 @@ async def resident_decode_mode(
         phase: str,
         batch_specs: Sequence[RequestSpec],
         order: str,
+        runtime_gated: bool = True,
     ) -> None:
         before = await safe_metrics(client, writer, f"{phase}-start")
         results, summary = await run_batch(
@@ -4201,9 +4847,10 @@ async def resident_decode_mode(
         prefix = prefix_cache_evidence(
             before,
             after,
-            len(batch_specs),
-            sum(spec.context_tokens for spec in batch_specs),
+            [int(spec.context_tokens or 0) for spec in batch_specs],
             args.min_prefix_reuse_fraction,
+            args.kv_block_size_tokens,
+            args.speculative_prefix_replay_tokens,
         )
         mtp = speculative_evidence(
             before,
@@ -4237,12 +4884,15 @@ async def resident_decode_mode(
         summary.update(
             {
                 "order": order,
+                "runtime_gated": runtime_gated,
                 "passed": (
                     summary["errors"] == 0
                     and cleanup_ok
                     and prefix["passed"]
-                    and mtp["passed"]
-                    and graph["passed"]
+                    and (
+                        not runtime_gated
+                        or (mtp["passed"] and graph["passed"])
+                    )
                     and all(item["valid"] for item in quality)
                 ),
                 "prefix_cache": prefix,
@@ -4266,8 +4916,16 @@ async def resident_decode_mode(
     exact_replays = []
     exact_orderings = []
     for concurrency in args.concurrencies:
+        measured_specs = full_batch_specs(specs, concurrency)
+        await run_resident_batch(
+            concurrency,
+            f"resident-decode-c{concurrency}-stabilize",
+            measured_specs,
+            "stabilize",
+            False,
+        )
         normal_phase = f"resident-decode-c{concurrency}"
-        await run_resident_batch(concurrency, normal_phase, specs, "normal")
+        await run_resident_batch(concurrency, normal_phase, measured_specs, "normal")
         normal_run = phase_runs[-1]
         normal_phase_runs.append(normal_run)
 
@@ -4275,7 +4933,7 @@ async def resident_decode_mode(
         await run_resident_batch(
             concurrency,
             replay_phase,
-            specs,
+            measured_specs,
             "normal-replay",
         )
         replay_results = phase_runs[-1][1]
@@ -4313,7 +4971,7 @@ async def resident_decode_mode(
         exact_replays.append(replay_diagnostics)
         await writer.emit("exact_replay_comparison", **replay_diagnostics)
 
-        ordering_specs = full_batch_specs(specs, concurrency)
+        ordering_specs = measured_specs
         reverse_phase = f"resident-decode-c{concurrency}-reverse"
         await run_resident_batch(
             concurrency,
@@ -4409,7 +5067,11 @@ async def resident_decode_mode(
             for phase, _, summary in phase_runs
             if phase == "resident-decode-c1"
         )
-        throughput_ratio = ratio(
+        decode_throughput_ratio = ratio(
+            final_summary["decode_tok_s_active"],
+            initial_c1_summary["decode_tok_s_active"],
+        )
+        common_wall_throughput_ratio = ratio(
             final_summary["output_tok_s_common_wall"],
             initial_c1_summary["output_tok_s_common_wall"],
         )
@@ -4429,16 +5091,21 @@ async def resident_decode_mode(
                 final_summary["passed"]
                 and semantic_passed
                 and statistical["passed"]
-                and throughput_ratio is not None
-                and throughput_ratio >= args.min_final_c1_throughput_ratio
+                and decode_throughput_ratio is not None
+                and decode_throughput_ratio >= args.min_final_c1_throughput_ratio
             ),
             "exact_diagnostics": exact,
             "exact_diagnostics_gated": False,
             "statistical_comparison": statistical,
             "semantic_passed": semantic_passed,
+            "throughput_metric": "decode_tok_s_active",
+            "initial_decode_tok_s_active": initial_c1_summary["decode_tok_s_active"],
+            "final_decode_tok_s_active": final_summary["decode_tok_s_active"],
             "initial_output_tok_s": initial_c1_summary["output_tok_s_common_wall"],
             "final_output_tok_s": final_summary["output_tok_s_common_wall"],
-            "throughput_ratio": throughput_ratio,
+            "throughput_ratio": decode_throughput_ratio,
+            "decode_throughput_ratio": decode_throughput_ratio,
+            "common_wall_throughput_ratio": common_wall_throughput_ratio,
             "min_throughput_ratio": args.min_final_c1_throughput_ratio,
         }
         await writer.emit("resident_decode_c1_replay", **final_c1_replay)
@@ -4450,6 +5117,7 @@ async def resident_decode_mode(
         normal_phase_summaries,
         args.min_output_tok_s_by_concurrency,
         args.min_scaling_efficiency,
+        "decode_tok_s_active",
     )
     await writer.emit("resident_decode_throughput_evidence", **throughput)
     passed = (
@@ -4818,8 +5486,27 @@ async def production_mode(
         args.probe_max_tokens,
         {"scenario": "production", "role": "c1_probe"},
     )
+    semantic_templates = {
+        length: (
+            probe_template
+            if length == min(lengths)
+            else retrieval_spec(
+                client,
+                length,
+                f"production-semantic-{length}",
+                args.seed + 9_000_000 + index,
+                args.probe_max_tokens,
+                {
+                    "scenario": "production",
+                    "role": "semantic_sentinel",
+                    "context_tokens": length,
+                },
+            )
+        )
+        for index, length in enumerate(lengths)
+    }
     prewarm_metrics = await safe_metrics(client, writer, "production-prewarm-start")
-    prewarm_specs = [
+    traffic_prewarm_specs = [
         RequestSpec(
             case_id=f"production-prewarm-{length}-{index}",
             seed=args.seed + 8_000_000 + offset,
@@ -4835,6 +5522,19 @@ async def production_mode(
             for index, prompt in enumerate(prompts)
         )
     ]
+    sentinel_prewarm_specs = [
+        RequestSpec(
+            case_id=f"production-prewarm-semantic-{length}",
+            seed=template.seed,
+            max_tokens=args.prewarm_max_tokens,
+            prompt=template.prompt,
+            context_tokens=template.context_tokens,
+            tags={"scenario": "production", "role": "sentinel_prewarm"},
+            extra={**template.extra, "ignore_eos": True},
+        )
+        for length, template in semantic_templates.items()
+    ]
+    prewarm_specs = [*traffic_prewarm_specs, *sentinel_prewarm_specs]
     _, prewarm_summary = await run_batch(
         client,
         prewarm_specs,
@@ -4860,7 +5560,7 @@ async def production_mode(
             prompt=spec.prompt,
             context_tokens=spec.context_tokens,
             tags={"scenario": "production", "role": "residency_verification"},
-            extra={"ignore_eos": True},
+            extra=dict(spec.extra),
         )
         for spec in prewarm_specs
     ]
@@ -4886,9 +5586,10 @@ async def production_mode(
     residency_evidence = prefix_cache_evidence(
         post_prewarm_metrics,
         verified_metrics,
-        len(verification_specs),
-        sum(spec.context_tokens or 0 for spec in verification_specs),
+        [int(spec.context_tokens or 0) for spec in verification_specs],
         args.min_prefix_reuse_fraction,
+        args.kv_block_size_tokens,
+        args.speculative_prefix_replay_tokens,
     )
     prewarm_passed = (
         prewarm_summary["errors"] == 0
@@ -4909,6 +5610,43 @@ async def production_mode(
         "verification_cleanup": verification_cleanup,
     }
     await writer.emit("production_prewarm_summary", **prewarm)
+    isolated_before_spec = RequestSpec(
+        case_id="production-c1-isolated-before",
+        seed=probe_template.seed,
+        max_tokens=probe_template.max_tokens,
+        prompt=probe_template.prompt,
+        context_tokens=probe_template.context_tokens,
+        tags={**probe_template.tags, "isolation": "before"},
+        extra=dict(probe_template.extra),
+    )
+    isolated_before = await client.stream_request(isolated_before_spec)
+    await writer.emit(
+        "request",
+        phase="production-c1-isolated-before",
+        concurrency=1,
+        **isolated_before.record(True),
+    )
+    isolated_before_evidence = production_probe_evidence(
+        [isolated_before],
+        isolated_before,
+        client.tokenizer,
+        args.max_repeated_ngram_ratio,
+        args.min_output_event_coverage,
+        1,
+        args.max_probe_ttft_seconds,
+        args.max_probe_tpot_seconds,
+        1.0,
+        args.max_schedule_lateness_seconds,
+    )
+    isolated_before_cleanup_ok, _, isolated_before_cleanup = await poll_for_cleanup(
+        client,
+        writer,
+        verified_metrics,
+        args.cleanup_timeout_seconds,
+        args.cleanup_poll_seconds,
+        "production-c1-isolated-before-cleanup",
+        RESIDENT_TRANSIENT_CLEANUP_GAUGES,
+    )
     stop = asyncio.Event()
     snapshots: list[tuple[float, dict[str, float], dict[str, Any]]] = []
     initial_metrics, initial_process = await asyncio.gather(
@@ -5002,6 +5740,44 @@ async def production_mode(
                 while next_probe <= now:
                     next_probe += args.probe_interval_seconds
 
+        async def semantic_sentinels() -> None:
+            for stage, fraction in PRODUCTION_SENTINEL_STAGES:
+                scheduled_at = phase_start + phase_duration * fraction
+                await asyncio.sleep(max(0.0, scheduled_at - time.perf_counter()))
+                specs = [
+                    RequestSpec(
+                        case_id=(
+                            f"semantic-c{concurrency}-{stage}-{length}"
+                        ),
+                        seed=template.seed,
+                        max_tokens=template.max_tokens,
+                        prompt=template.prompt,
+                        context_tokens=template.context_tokens,
+                        tags={
+                            **template.tags,
+                            "role": "semantic_sentinel",
+                            "load": concurrency,
+                            "sentinel_stage": stage,
+                        },
+                        extra=dict(template.extra),
+                    )
+                    for length, template in semantic_templates.items()
+                ]
+                results = await asyncio.gather(
+                    *(
+                        client.stream_request(spec, scheduled_at=scheduled_at)
+                        for spec in specs
+                    )
+                )
+                phase_results.extend(results)
+                for result in results:
+                    await writer.emit(
+                        "request",
+                        phase=phase,
+                        concurrency=concurrency,
+                        **result.record(True),
+                    )
+
         await writer.emit(
             "production_phase_start",
             phase=phase,
@@ -5010,12 +5786,18 @@ async def production_mode(
         )
         workers = [asyncio.create_task(worker(index)) for index in range(concurrency)]
         probe_task = asyncio.create_task(probes())
-        await asyncio.gather(*workers, probe_task)
+        semantic_task = asyncio.create_task(semantic_sentinels())
+        await asyncio.gather(*workers, probe_task, semantic_task)
         phase_metrics_after = await safe_metrics(client, writer, f"{phase}-metrics-end")
         wall = time.perf_counter() - phase_start
         summary = summarize_batch(phase_results, wall, concurrency, phase)
         traffic = [result for result in phase_results if result.tags.get("role") == "traffic"]
         probes_only = [result for result in phase_results if result.tags.get("role") == "c1_probe"]
+        semantic_only = [
+            result
+            for result in phase_results
+            if result.tags.get("role") == "semantic_sentinel"
+        ]
         quality = [
             {
                 "valid": valid,
@@ -5032,6 +5814,12 @@ async def production_mode(
         ]
         summary["traffic"] = summarize_batch(traffic, wall, concurrency, f"{phase}-traffic")
         summary["probes"] = summarize_batch(probes_only, wall, 1, f"{phase}-probes")
+        summary["semantic_sentinels"] = summarize_batch(
+            semantic_only,
+            wall,
+            len(lengths),
+            f"{phase}-semantic-sentinels",
+        )
         summary["traffic_by_context"] = summarize_context_groups(
             traffic,
             wall,
@@ -5040,36 +5828,51 @@ async def production_mode(
         )
         summary["quality_checked"] = len(quality)
         summary["quality_failures"] = [item for item in quality if not item["valid"]]
-        probe_transcripts = {
-            result.output_transcript for result in probes_only if result.ok
-        }
+        probe_evidence = production_probe_evidence(
+            probes_only,
+            isolated_before,
+            client.tokenizer,
+            args.max_repeated_ngram_ratio,
+            args.min_output_event_coverage,
+            MIN_PRODUCTION_PROBES_PER_PHASE,
+            args.max_probe_ttft_seconds,
+            args.max_probe_tpot_seconds,
+            args.max_probe_latency_slowdown,
+            args.max_schedule_lateness_seconds,
+        )
         summary["probe_fixed_seed_samples"] = len(probes_only)
-        summary["probe_fixed_seed_unique_outputs"] = len(probe_transcripts)
-        summary["probe_fixed_seed_exact"] = (
-            len(probes_only) >= MIN_PRODUCTION_PROBES_PER_PHASE
-            and len(probe_transcripts) == 1
-            and all(result.ok for result in probes_only)
-        )
-        probe_semantic_checks = [
+        summary["probe_fixed_seed_unique_outputs"] = len(
             {
-                "valid": valid,
-                **detail,
+                result.output_transcript
+                for result in probes_only
+                if result.ok
             }
-            for result in probes_only
-            for valid, detail in [
-                validate_retrieval_result(
-                    result,
-                    client.tokenizer,
-                    args.max_repeated_ngram_ratio,
-                )
-            ]
-        ]
-        summary["probe_semantic_checks"] = probe_semantic_checks
-        summary["probe_semantic_ok"] = (
-            len(probe_semantic_checks) >= MIN_PRODUCTION_PROBES_PER_PHASE
-            and all(item["valid"] for item in probe_semantic_checks)
         )
-        summary["probe_exact_diagnostics_gated"] = False
+        summary["probe_fixed_seed_unique_results"] = len(
+            {
+                fixed_seed_result_signature(result)
+                for result in probes_only
+                if result.ok
+            }
+        )
+        summary["probe_fixed_seed_exact"] = probe_evidence["exact_results"]
+        summary["probe_semantic_checks"] = [
+            item["semantic"] for item in probe_evidence["checks"]
+        ]
+        summary["probe_semantic_ok"] = probe_evidence["semantic_ok"]
+        summary["probe_performance"] = probe_evidence
+        summary["probe_exact_diagnostics_gated"] = True
+        summary["semantic_sentinel_evidence"] = (
+            production_semantic_sentinel_evidence(
+                semantic_only,
+                lengths,
+                [stage for stage, _ in PRODUCTION_SENTINEL_STAGES],
+                client.tokenizer,
+                args.max_repeated_ngram_ratio,
+                args.min_output_event_coverage,
+                args.max_schedule_lateness_seconds,
+            )
+        )
         summary["first_vs_last_window"] = compare_time_windows(
             traffic,
             phase_start,
@@ -5100,9 +5903,10 @@ async def production_mode(
         summary["prefix_cache"] = prefix_cache_evidence(
             phase_metrics_before,
             phase_metrics_after,
-            len(phase_results),
-            sum(result.context_tokens or 0 for result in phase_results),
+            [int(result.context_tokens or 0) for result in phase_results],
             args.min_prefix_reuse_fraction,
+            args.kv_block_size_tokens,
+            args.speculative_prefix_replay_tokens,
         )
         summary["mtp"] = speculative_evidence(
             phase_metrics_before,
@@ -5142,6 +5946,65 @@ async def production_mode(
     finally:
         stop.set()
         await telemetry_task
+    pre_final_c1_cleanup_ok, _, pre_final_c1_cleanup = await poll_for_cleanup(
+        client,
+        writer,
+        initial_metrics,
+        args.cleanup_timeout_seconds,
+        args.cleanup_poll_seconds,
+        "production-pre-final-c1-cleanup",
+        RESIDENT_TRANSIENT_CLEANUP_GAUGES,
+    )
+    isolated_after_spec = RequestSpec(
+        case_id="production-c1-isolated-after",
+        seed=probe_template.seed,
+        max_tokens=probe_template.max_tokens,
+        prompt=probe_template.prompt,
+        context_tokens=probe_template.context_tokens,
+        tags={**probe_template.tags, "isolation": "after"},
+        extra=dict(probe_template.extra),
+    )
+    isolated_after = await client.stream_request(isolated_after_spec)
+    await writer.emit(
+        "request",
+        phase="production-c1-isolated-after",
+        concurrency=1,
+        **isolated_after.record(True),
+    )
+    isolated_after_evidence = production_probe_evidence(
+        [isolated_after],
+        isolated_before,
+        client.tokenizer,
+        args.max_repeated_ngram_ratio,
+        args.min_output_event_coverage,
+        1,
+        args.max_probe_ttft_seconds,
+        args.max_probe_tpot_seconds,
+        args.max_final_c1_latency_slowdown,
+        args.max_schedule_lateness_seconds,
+    )
+    final_c1_decode_ratio = ratio(
+        request_decode_tok_s(isolated_after),
+        request_decode_tok_s(isolated_before),
+    )
+    isolated_c1_evidence = {
+        "passed": (
+            isolated_before_evidence["passed"]
+            and isolated_after_evidence["passed"]
+            and isolated_before_cleanup_ok
+            and pre_final_c1_cleanup_ok
+            and final_c1_decode_ratio is not None
+            and final_c1_decode_ratio >= args.min_final_c1_decode_ratio
+        ),
+        "before": isolated_before_evidence,
+        "after": isolated_after_evidence,
+        "decode_throughput_ratio_after_over_before": final_c1_decode_ratio,
+        "minimum_decode_throughput_ratio": args.min_final_c1_decode_ratio,
+        "before_cleanup_ok": isolated_before_cleanup_ok,
+        "before_cleanup": isolated_before_cleanup,
+        "pre_after_cleanup_ok": pre_final_c1_cleanup_ok,
+        "pre_after_cleanup": pre_final_c1_cleanup,
+    }
     run_ended = time.perf_counter()
     cleanup_ok, final_metrics, cleanup_detail = await poll_for_cleanup(
         client,
@@ -5171,36 +6034,35 @@ async def production_mode(
     all_probes = [
         result for result in all_results if result.tags.get("role") == "c1_probe"
     ]
-    probe_transcripts = {
-        result.output_transcript for result in all_probes if result.ok
-    }
-    probes_exact_across_load = (
-        len(all_probes) >= MIN_PRODUCTION_PROBES_PER_PHASE
-        and len(probe_transcripts) == 1
-        and all(result.ok for result in all_probes)
+    all_probe_evidence = production_probe_evidence(
+        all_probes,
+        isolated_before,
+        client.tokenizer,
+        args.max_repeated_ngram_ratio,
+        args.min_output_event_coverage,
+        MIN_PRODUCTION_PROBES_PER_PHASE * len(args.concurrencies),
+        args.max_probe_ttft_seconds,
+        args.max_probe_tpot_seconds,
+        args.max_probe_latency_slowdown,
+        args.max_schedule_lateness_seconds,
     )
-    probe_semantic_checks = [
-        validate_retrieval_result(
-            result,
-            client.tokenizer,
-            args.max_repeated_ngram_ratio,
-        )[0]
-        for result in all_probes
-    ]
-    probes_semantic_across_load = (
-        len(probe_semantic_checks) >= MIN_PRODUCTION_PROBES_PER_PHASE
-        and all(probe_semantic_checks)
-    )
+    probes_exact_across_load = all_probe_evidence["exact_results"]
+    probes_semantic_across_load = all_probe_evidence["semantic_ok"]
     throughput = throughput_evidence(
         [
             {
                 "concurrency": summary["concurrency"],
+                "end_to_end_output_tok_s_common_wall": summary[
+                    "steady_state_output_tok_s"
+                ],
                 "output_tok_s_common_wall": summary["steady_state_output_tok_s"],
+                "decode_tok_s_active": summary["decode_tok_s_active"],
             }
             for summary in phase_summaries
         ],
         args.min_output_tok_s_by_concurrency,
         args.min_scaling_efficiency,
+        "output_tok_s_common_wall",
     )
     telemetry_gate = telemetry_evidence(
         snapshots,
@@ -5217,7 +6079,8 @@ async def production_mode(
             and summary["degradation_ok"]
             and summary["latency_degradation_ok"]
             and summary["quality_ok"]
-            and summary["probe_semantic_ok"]
+            and summary["probe_performance"]["passed"]
+            and summary["semantic_sentinel_evidence"]["passed"]
             and summary["queue_latency_instrumentation_complete"]
             and summary["phase_metrics_ok"]
             for summary in phase_summaries
@@ -5226,7 +6089,8 @@ async def production_mode(
         and bool(final_metrics)
         and mtp["passed"]
         and graph["passed"]
-        and probes_semantic_across_load
+        and all_probe_evidence["passed"]
+        and isolated_c1_evidence["passed"]
         and cleanup_ok
     )
     return {
@@ -5254,8 +6118,10 @@ async def production_mode(
         "cuda_graph_ok": graph["passed"],
         "c1_probe_samples": len(all_probes),
         "c1_probes_exact_across_load": probes_exact_across_load,
-        "c1_probe_exact_diagnostics_gated": False,
+        "c1_probe_exact_diagnostics_gated": True,
         "c1_probes_semantic_across_load": probes_semantic_across_load,
+        "c1_loaded_probe_evidence": all_probe_evidence,
+        "isolated_c1_evidence": isolated_c1_evidence,
         "cleanup_ok": cleanup_ok,
         "cleanup_detail": cleanup_detail,
     }
@@ -5269,10 +6135,24 @@ def compare_time_windows(
     min_output_event_coverage: float,
 ) -> dict[str, Any]:
     successful = [result for result in results if result.ok]
+
+    def first_token_at(result: RequestResult) -> float | None:
+        if result.ttft_seconds is None:
+            return None
+        return result.started + result.ttft_seconds
+
     first = [
-        result for result in results if started <= result.ended <= started + window_seconds
+        result
+        for result in results
+        if (timestamp := first_token_at(result)) is not None
+        and started <= timestamp < started + window_seconds
     ]
-    last = [result for result in results if ended - window_seconds <= result.ended <= ended]
+    last = [
+        result
+        for result in results
+        if (timestamp := first_token_at(result)) is not None
+        and ended - window_seconds <= timestamp < ended
+    ]
 
     def window_summary(items: Sequence[RequestResult], start: float, end: float) -> dict[str, Any]:
         return summarize_batch(items, max(0.0, end - start), 0, "window")
@@ -5308,14 +6188,9 @@ def compare_time_windows(
             for result in successful
             for timestamp in result.output_event_times
         )
-    timed_events = sum(result.output_chunks for result in successful)
-    completion_tokens = sum(result.completion_tokens for result in successful)
-    event_coverage = ratio(timed_events, completion_tokens)
-    event_coverage_ok = (
-        event_coverage is not None
-        and min_output_event_coverage
-        <= event_coverage
-        <= 2.0 - min_output_event_coverage
+    event_coverage = output_event_coverage_evidence(
+        successful,
+        min_output_event_coverage,
     )
     first_tps = first_event_count / window_seconds
     last_tps = last_event_count / window_seconds
@@ -5334,6 +6209,7 @@ def compare_time_windows(
         "window_seconds": window_seconds,
         "first_window": [started, started + window_seconds],
         "last_window": [ended - window_seconds, ended],
+        "latency_window_attribution": "first_token_timestamp",
         "full_phase_window": [started, ended],
         "first": first_summary,
         "last": last_summary,
@@ -5344,11 +6220,8 @@ def compare_time_windows(
         "first_output_tok_s_stream_timeline": first_tps,
         "last_output_tok_s_stream_timeline": last_tps,
         "full_phase_output_tok_s_stream_timeline": full_phase_tps,
-        "timed_output_events": timed_events,
-        "reported_completion_tokens": completion_tokens,
-        "output_event_coverage": event_coverage,
-        "min_output_event_coverage": min_output_event_coverage,
-        "output_event_coverage_ok": event_coverage_ok,
+        "timed_output_events": event_coverage["observed_output_events"],
+        **event_coverage,
         "throughput_ratio_last_over_first": ratio(last_tps, first_tps),
         "throughput_degradation_fraction": (
             1.0 - last_tps / first_tps if first_tps else None
@@ -5376,6 +6249,62 @@ def multimodal_messages(image: str, prompt: str) -> list[dict[str, Any]]:
             ],
         }
     ]
+
+
+def normalized_semantic_text(value: str) -> str:
+    return " ".join(value.casefold().split())
+
+
+def validate_image_output(
+    result: RequestResult,
+    tokenizer: TokenizerAdapter | None,
+    max_repeated_ngram_ratio: float,
+    required_phrases: Sequence[str],
+    expected_attributes: Sequence[Sequence[str]],
+) -> tuple[bool, dict[str, Any]]:
+    sampled_output_valid, sampled_output = validate_sampled_output(
+        result,
+        tokenizer,
+        max_repeated_ngram_ratio,
+    )
+    generated = result.reasoning_text + "\n" + result.output_text
+    if result.tool_calls:
+        generated += "\n" + json.dumps(result.tool_calls, sort_keys=True)
+    normalized_output = normalized_semantic_text(generated)
+    phrase_checks = [
+        {
+            "phrase": phrase,
+            "matched": normalized_semantic_text(phrase) in normalized_output,
+        }
+        for phrase in required_phrases
+    ]
+    attribute_checks = []
+    for alternatives in expected_attributes:
+        matches = [
+            phrase
+            for phrase in alternatives
+            if normalized_semantic_text(phrase) in normalized_output
+        ]
+        attribute_checks.append(
+            {
+                "alternatives": list(alternatives),
+                "matches": matches,
+                "matched": bool(matches),
+            }
+        )
+    semantic_checks = (*phrase_checks, *attribute_checks)
+    semantic_oracle_valid = bool(semantic_checks) and all(
+        check["matched"] for check in semantic_checks
+    )
+    valid = sampled_output_valid and semantic_oracle_valid
+    return valid, {
+        **sampled_output,
+        "sampled_output_valid": sampled_output_valid,
+        "required_phrase_checks": phrase_checks,
+        "expected_attribute_checks": attribute_checks,
+        "semantic_oracle_valid": semantic_oracle_valid,
+        "valid": valid,
+    }
 
 
 def load_summary_artifact(path: Path) -> dict[str, Any]:
@@ -5469,7 +6398,7 @@ async def multimodal_mode(
         )
         for index in range(args.concurrency)
     ]
-    _, baseline_summary = await run_batch(
+    baseline_results, baseline_summary = await run_batch(
         client,
         text_specs,
         args.concurrency,
@@ -5496,7 +6425,7 @@ async def multimodal_mode(
         messages=multimodal_messages(image, args.image_variant_prompt),
         tags={"scenario": "multimodal", "role": "image", "stage": "variant"},
     )
-    _, variant_summary = await run_batch(
+    variant, variant_summary = await run_batch(
         client, [variant_spec], 1, writer, "multimodal-image-variant", keep_output=True
     )
     repeat_spec = RequestSpec(
@@ -5510,6 +6439,7 @@ async def multimodal_mode(
         client, [repeat_spec], 1, writer, "multimodal-image-repeat", keep_output=True
     )
     mixed_summaries = []
+    mixed_results: list[tuple[str, list[RequestResult]]] = []
     for round_index in range(args.mixed_rounds):
         specs = [
             RequestSpec(
@@ -5529,18 +6459,98 @@ async def multimodal_mode(
             )
             for index in range(max(1, args.concurrency - 1))
         ]
-        _, summary = await run_batch(
+        phase = f"multimodal-mixed-r{round_index}"
+        results, summary = await run_batch(
             client,
             specs,
             args.concurrency,
             writer,
-            f"multimodal-mixed-r{round_index}",
-            keep_output=False,
+            phase,
+            keep_output=True,
         )
         mixed_summaries.append(summary)
+        mixed_results.append((phase, results))
     after = await safe_metrics(client, writer, "multimodal-end")
     metrics_delta = selected_metric_deltas(before, after)
-    outputs_equal = cold[0].output_text == repeat[0].output_text
+    outputs_equal = (
+        cold[0].output_transcript == repeat[0].output_transcript
+        and cold[0].completion_tokens == repeat[0].completion_tokens
+        and cold[0].finish_reason == repeat[0].finish_reason
+    )
+    image_checks = []
+    text_checks = []
+
+    def add_quality_checks(phase: str, results: Sequence[RequestResult]) -> None:
+        for result in results:
+            role = result.tags.get("role")
+            if role == "image":
+                _, evidence = validate_image_output(
+                    result,
+                    client.tokenizer,
+                    args.max_repeated_ngram_ratio,
+                    args.image_required_phrases,
+                    args.image_expected_attributes,
+                )
+                image_checks.append({"phase": phase, "role": role, **evidence})
+            else:
+                valid, evidence = validate_sampled_output(
+                    result,
+                    client.tokenizer,
+                    args.max_repeated_ngram_ratio,
+                )
+                text_checks.append(
+                    {
+                        "phase": phase,
+                        "role": role,
+                        **evidence,
+                        "sampled_output_valid": valid,
+                        "valid": valid,
+                    }
+                )
+
+    add_quality_checks("multimodal-text-baseline", baseline_results)
+    add_quality_checks("multimodal-image-cold", cold)
+    add_quality_checks("multimodal-image-variant", variant)
+    add_quality_checks("multimodal-image-repeat", repeat)
+    for phase, results in mixed_results:
+        add_quality_checks(phase, results)
+    baseline_text_checks = [
+        check for check in text_checks if check["role"] == "text_baseline"
+    ]
+    colocated_text_checks = [check for check in text_checks if check["role"] == "text"]
+    expected_image_checks = 3 + args.mixed_rounds
+    expected_baseline_text_checks = args.concurrency
+    expected_colocated_text_checks = args.mixed_rounds * max(
+        1,
+        args.concurrency - 1,
+    )
+    image_quality_complete = len(image_checks) == expected_image_checks and all(
+        check["valid"] for check in image_checks
+    )
+    baseline_text_quality_complete = (
+        len(baseline_text_checks) == expected_baseline_text_checks
+        and all(check["valid"] for check in baseline_text_checks)
+    )
+    colocated_text_quality_complete = (
+        len(colocated_text_checks) == expected_colocated_text_checks
+        and all(check["valid"] for check in colocated_text_checks)
+    )
+    text_quality_complete = (
+        baseline_text_quality_complete and colocated_text_quality_complete
+    )
+    await writer.emit(
+        "multimodal_quality_evidence",
+        image_checks=image_checks,
+        baseline_text_checks=baseline_text_checks,
+        colocated_text_checks=colocated_text_checks,
+        expected_image_checks=expected_image_checks,
+        expected_baseline_text_checks=expected_baseline_text_checks,
+        expected_colocated_text_checks=expected_colocated_text_checks,
+        image_quality_complete=image_quality_complete,
+        baseline_text_quality_complete=baseline_text_quality_complete,
+        colocated_text_quality_complete=colocated_text_quality_complete,
+        text_quality_complete=text_quality_complete,
+    )
     all_summaries = [baseline_summary, cold_summary, variant_summary, repeat_summary, *mixed_summaries]
     encoder_hits = metrics_delta.get("mistralrs_encoder_cache_hits_total")
     encoder_misses = metrics_delta.get("mistralrs_encoder_cache_misses_total")
@@ -5553,6 +6563,8 @@ async def multimodal_mode(
     passed = (
         all(summary["errors"] == 0 for summary in all_summaries)
         and outputs_equal
+        and image_quality_complete
+        and text_quality_complete
         and encoder_cache_complete
     )
     return {
@@ -5560,6 +6572,29 @@ async def multimodal_mode(
         "passed": passed,
         "text_prerequisites": prerequisites,
         "fixed_seed_repeat_equal": outputs_equal,
+        "fixed_seed_repeat": {
+            "passed": outputs_equal,
+            "cold_transcript_sha256": stable_hash(cold[0].output_transcript),
+            "repeat_transcript_sha256": stable_hash(repeat[0].output_transcript),
+            "cold_completion_tokens": cold[0].completion_tokens,
+            "repeat_completion_tokens": repeat[0].completion_tokens,
+            "cold_finish_reason": cold[0].finish_reason,
+            "repeat_finish_reason": repeat[0].finish_reason,
+        },
+        "image_oracle": {
+            "required_phrases": args.image_required_phrases,
+            "expected_attributes": args.image_expected_attributes,
+        },
+        "image_quality_checks": image_checks,
+        "baseline_text_quality_checks": baseline_text_checks,
+        "colocated_text_quality_checks": colocated_text_checks,
+        "expected_image_quality_checks": expected_image_checks,
+        "expected_baseline_text_quality_checks": expected_baseline_text_checks,
+        "expected_colocated_text_quality_checks": expected_colocated_text_checks,
+        "image_quality_complete": image_quality_complete,
+        "baseline_text_quality_complete": baseline_text_quality_complete,
+        "colocated_text_quality_complete": colocated_text_quality_complete,
+        "text_quality_complete": text_quality_complete,
         "baseline": baseline_summary,
         "cold": cold_summary,
         "variant": variant_summary,
@@ -5666,6 +6701,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-prefix-reuse-fraction",
         type=float,
         default=DEFAULT_MIN_PREFIX_REUSE_FRACTION,
+    )
+    resident_decode.add_argument(
+        "--kv-block-size-tokens", type=int, default=DEFAULT_KV_BLOCK_SIZE_TOKENS
+    )
+    resident_decode.add_argument(
+        "--speculative-prefix-replay-tokens",
+        type=int,
+        default=DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS,
     )
     resident_decode.add_argument(
         "--expected-graph-components",
@@ -5811,6 +6854,16 @@ def build_parser() -> argparse.ArgumentParser:
     adversarial.add_argument(
         "--kv-block-size-tokens", type=int, default=DEFAULT_KV_BLOCK_SIZE_TOKENS
     )
+    adversarial.add_argument(
+        "--speculative-prefix-replay-tokens",
+        type=int,
+        default=DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS,
+    )
+    adversarial.add_argument(
+        "--min-overlap-baseline-events",
+        type=int,
+        default=DEFAULT_MIN_OVERLAP_BASELINE_EVENTS,
+    )
     adversarial.add_argument("--prefix-pressure-max-tokens", type=int, default=8)
     adversarial.add_argument(
         "--expected-graph-components",
@@ -5850,11 +6903,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_MIN_PREFIX_REUSE_FRACTION,
     )
     production.add_argument(
+        "--kv-block-size-tokens", type=int, default=DEFAULT_KV_BLOCK_SIZE_TOKENS
+    )
+    production.add_argument(
+        "--speculative-prefix-replay-tokens",
+        type=int,
+        default=DEFAULT_SPECULATIVE_PREFIX_REPLAY_TOKENS,
+    )
+    production.add_argument(
         "--fixed-output-length",
         action=argparse.BooleanOptionalAction,
         default=True,
     )
     production.add_argument("--probe-max-tokens", type=int, default=128)
+    production.add_argument("--max-probe-ttft-seconds", type=float, required=True)
+    production.add_argument("--max-probe-tpot-seconds", type=float, required=True)
+    production.add_argument(
+        "--max-probe-latency-slowdown",
+        type=float,
+        default=DEFAULT_MAX_PROBE_LATENCY_SLOWDOWN,
+    )
+    production.add_argument(
+        "--max-final-c1-latency-slowdown",
+        type=float,
+        default=DEFAULT_MAX_FINAL_C1_LATENCY_SLOWDOWN,
+    )
+    production.add_argument(
+        "--min-final-c1-decode-ratio",
+        type=float,
+        default=DEFAULT_MIN_FINAL_C1_DECODE_RATIO,
+    )
+    production.add_argument(
+        "--max-schedule-lateness-seconds",
+        type=float,
+        default=DEFAULT_MAX_SCHEDULE_LATENESS_SECONDS,
+    )
     production.add_argument(
         "--probe-interval-seconds", type=float, default=DEFAULT_PROBE_INTERVAL_SECONDS
     )
@@ -5927,9 +7010,33 @@ def build_parser() -> argparse.ArgumentParser:
     multimodal.add_argument(
         "--image-variant-prompt", default="List the main visible objects and colors."
     )
+    multimodal.add_argument(
+        "--image-required-phrase",
+        dest="image_required_phrases",
+        action="append",
+        type=parse_nonempty_phrase,
+        default=[],
+        help="case-insensitive phrase required in every image response; repeatable",
+    )
+    multimodal.add_argument(
+        "--image-expected-attribute",
+        dest="image_expected_attributes",
+        action="append",
+        type=parse_phrase_alternatives,
+        default=[],
+        help=(
+            "case-insensitive visual-attribute phrases; separate acceptable alternatives "
+            "with | and repeat the flag for each required attribute"
+        ),
+    )
     multimodal.add_argument("--concurrency", type=int, default=4)
     multimodal.add_argument("--mixed-rounds", type=int, default=4)
     multimodal.add_argument("--max-tokens", type=int, default=128)
+    multimodal.add_argument(
+        "--max-repeated-ngram-ratio",
+        type=float,
+        default=DEFAULT_MAX_REPEATED_NGRAM_RATIO,
+    )
     multimodal.add_argument(
         "--text-prerequisite-artifacts",
         type=Path,
@@ -6001,9 +7108,12 @@ def validate_args(args: argparse.Namespace) -> None:
             "cleanup_poll_seconds",
             "stat_max_ks",
             "stat_max_js",
+            "kv_block_size_tokens",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if args.speculative_prefix_replay_tokens < 0:
+            raise ValueError("--speculative-prefix-replay-tokens cannot be negative")
         if args.requests < max(args.concurrencies):
             raise ValueError(
                 "--requests must be at least the maximum resident-decode concurrency"
@@ -6077,9 +7187,12 @@ def validate_args(args: argparse.Namespace) -> None:
             "burst_max_tokens",
             "long_correctness_max_tokens",
             "min_overlap_baseline_completions",
+            "min_overlap_baseline_events",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if args.speculative_prefix_replay_tokens < 0:
+            raise ValueError("--speculative-prefix-replay-tokens cannot be negative")
         if args.prefix_pressure_max_entries < args.prefix_pressure_entries:
             raise ValueError(
                 "--prefix-pressure-max-entries must be at least --prefix-pressure-entries"
@@ -6129,6 +7242,10 @@ def validate_args(args: argparse.Namespace) -> None:
             )
         if args.overlap_short_requests >= args.max_seqs:
             raise ValueError("--overlap-short-requests must leave one slot for the large prefill")
+        if args.cancel_requests > args.max_seqs:
+            raise ValueError(
+                "--cancel-requests cannot exceed --max-seqs for post-admission cancellation"
+            )
         if args.require_mtp and set(args.expected_graph_components) != {"target", "dflash"}:
             raise ValueError(
                 "--require-mtp requires --expected-graph-components target,dflash"
@@ -6142,12 +7259,24 @@ def validate_args(args: argparse.Namespace) -> None:
             "prompt_pool_size",
             "prewarm_max_tokens",
             "probe_max_tokens",
+            "max_probe_ttft_seconds",
+            "max_probe_tpot_seconds",
+            "max_probe_latency_slowdown",
+            "max_final_c1_latency_slowdown",
+            "max_schedule_lateness_seconds",
             "cleanup_timeout_seconds",
             "cleanup_poll_seconds",
             "min_telemetry_samples",
+            "kv_block_size_tokens",
         ):
             if getattr(args, name) <= 0:
                 raise ValueError(f"--{name.replace('_', '-')} must be positive")
+        if args.speculative_prefix_replay_tokens < 0:
+            raise ValueError("--speculative-prefix-replay-tokens cannot be negative")
+        if not 0 < args.min_final_c1_decode_ratio <= 1:
+            raise ValueError(
+                "--min-final-c1-decode-ratio must be greater than 0 and at most 1"
+            )
         if not 0 <= args.max_throughput_degradation_fraction <= 1:
             raise ValueError(
                 "--max-throughput-degradation-fraction must be between 0 and 1"
@@ -6204,6 +7333,11 @@ def validate_args(args: argparse.Namespace) -> None:
             raise ValueError("--concurrency must be positive")
         if args.mixed_rounds <= 0:
             raise ValueError("--mixed-rounds must be positive")
+        if not args.image_required_phrases and not args.image_expected_attributes:
+            raise ValueError(
+                "multimodal mode requires --image-required-phrase or "
+                "--image-expected-attribute"
+            )
 
 
 def output_paths(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -6220,6 +7354,20 @@ def output_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     return jsonl, summary
 
 
+def json_compatible(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_compatible(item) for item in value]
+    return value
+
+
+def serialized_arguments(args: argparse.Namespace) -> dict[str, Any]:
+    return {key: json_compatible(value) for key, value in vars(args).items()}
+
+
 async def async_main(args: argparse.Namespace) -> int:
     validate_args(args)
     tokenizer = TokenizerAdapter(args.tokenizer) if args.tokenizer else None
@@ -6230,10 +7378,7 @@ async def async_main(args: argparse.Namespace) -> int:
         await writer.emit(
             "run_start",
             mode=args.mode,
-            arguments={
-                key: str(value) if isinstance(value, Path) else value
-                for key, value in vars(args).items()
-            },
+            arguments=serialized_arguments(args),
         )
         try:
             summary = await compare_mode(args, tokenizer, writer)
@@ -6279,7 +7424,7 @@ async def async_main(args: argparse.Namespace) -> int:
     await writer.emit(
         "run_start",
         mode=args.mode,
-        arguments={key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
+        arguments=serialized_arguments(args),
         policy=asdict(policy),
     )
     started = time.perf_counter()
