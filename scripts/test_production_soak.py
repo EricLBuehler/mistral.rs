@@ -77,6 +77,95 @@ def request_result(
     )
 
 
+class TokenizerExactTextTests(unittest.TestCase):
+    class BoundaryExpansionTokenizer(soak.TokenizerAdapter):
+        body_marker = "\x1e"
+
+        def __init__(self, expansion: int = 5_000, body_token_width: int = 1) -> None:
+            self.expansion = expansion
+            self.body_token_width = body_token_width
+            self.encode_calls = 0
+            self.source_builds = 0
+            self._exact_text_source_cache = {}
+
+        def encode(self, text: str) -> list[int]:
+            self.encode_calls += 1
+            if text.startswith(soak.CONTEXT_PARAGRAPH) and len(text) > len(
+                soak.CONTEXT_PARAGRAPH
+            ):
+                self.source_builds += 1
+            body_tokens = text.count(self.body_marker)
+            ordinary_tokens = len(text) - body_tokens
+            expansion = self.expansion if body_tokens else 0
+            return [0] * (
+                ordinary_tokens + body_tokens * self.body_token_width + expansion
+            )
+
+        def decode(self, token_ids) -> str:
+            return self.body_marker * len(token_ids)
+
+    class ContractingSourceTokenizer(BoundaryExpansionTokenizer):
+        def encode(self, text: str) -> list[int]:
+            if text.startswith(soak.CONTEXT_PARAGRAPH) and len(text) > len(
+                soak.CONTEXT_PARAGRAPH
+            ):
+                self.encode_calls += 1
+                self.source_builds += 1
+                return [0] * (len(text) // 2)
+            return super().encode(text)
+
+    def test_exact_text_corrects_large_round_trip_boundary_drift(self) -> None:
+        tokenizer = self.BoundaryExpansionTokenizer()
+        label = "large-boundary-drift"
+        prefix = f"Production soak case {label}.\n"
+        fixed_tokens = tokenizer.count(prefix + soak.EXACT_CONTEXT_SUFFIX)
+        target_tokens = fixed_tokens + 6_000
+
+        text = tokenizer.exact_text(target_tokens, label)
+
+        self.assertEqual(tokenizer.count(text), target_tokens)
+        self.assertTrue(text.startswith(prefix))
+        self.assertTrue(text.endswith(soak.EXACT_CONTEXT_SUFFIX))
+        self.assertLessEqual(tokenizer.encode_calls, 7)
+
+    def test_exact_text_uses_bounded_padding_for_token_count_gaps(self) -> None:
+        tokenizer = self.BoundaryExpansionTokenizer(
+            expansion=0,
+            body_token_width=2,
+        )
+        label = "two-token-body"
+        prefix = f"Production soak case {label}.\n"
+        fixed_tokens = tokenizer.count(prefix + soak.EXACT_CONTEXT_SUFFIX)
+        target_tokens = fixed_tokens + 201
+
+        text = tokenizer.exact_text(target_tokens, label)
+
+        self.assertEqual(tokenizer.count(text), target_tokens)
+        self.assertTrue(text.startswith(prefix))
+        self.assertTrue(text.endswith(soak.EXACT_CONTEXT_SUFFIX))
+        self.assertLess(tokenizer.encode_calls, 80)
+
+    def test_exact_text_reuses_encoded_context_source(self) -> None:
+        tokenizer = self.BoundaryExpansionTokenizer()
+
+        first = tokenizer.exact_text(10_000, "source-cache-a")
+        second = tokenizer.exact_text(10_000, "source-cache-b")
+
+        self.assertEqual(tokenizer.count(first), 10_000)
+        self.assertEqual(tokenizer.count(second), 10_000)
+        self.assertEqual(tokenizer.source_builds, 1)
+
+    def test_exact_text_grows_source_after_cross_boundary_contraction(self) -> None:
+        tokenizer = self.ContractingSourceTokenizer(expansion=0)
+        label = "contracting-source"
+
+        text = tokenizer.exact_text(10_000, label)
+
+        self.assertEqual(tokenizer.count(text), 10_000)
+        self.assertGreaterEqual(tokenizer.source_builds, 2)
+        self.assertLessEqual(tokenizer.source_builds, 3)
+
+
 class SampledOutputQualityTests(unittest.TestCase):
     def test_coherent_restatement_does_not_trigger_loop_gate(self) -> None:
         reasoning = """We need answer user's request. Need parse user: long repeated deterministic production-soak context, ends with "This is deterministic production-so..." then "End of deterministic production-soak context.

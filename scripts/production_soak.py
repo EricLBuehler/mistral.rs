@@ -129,6 +129,11 @@ DEFAULT_MULTIMODAL_EXPECTED_ATTRIBUTES = (
     ("white lettering", "white text", "white letters"),
     ("orange lettering", "orange text", "orange letters"),
 )
+EXACT_TEXT_SOURCE_MARGIN_TOKENS = 8_192
+EXACT_TEXT_LENGTH_REFINEMENT_STEPS = 16
+EXACT_TEXT_LOCAL_SEARCH_RADIUS = 16
+EXACT_TEXT_PADDING_REFINEMENT_STEPS = 16
+EXACT_TEXT_PADDING_STABILITY_REPEATS = 32
 SCHEDULE_TIME_EPSILON_SECONDS = 1e-6
 PROCESS_CPU_CLOCK_TICKS_PER_SECOND = int(os.sysconf("SC_CLK_TCK"))
 PART1_PRODUCTION_SAMPLING_POLICY = "production"
@@ -541,6 +546,7 @@ class TokenizerAdapter:
         path = Path(source)
         self.source = source
         self.tokenizer = Tokenizer.from_file(str(path)) if path.is_file() else Tokenizer.from_pretrained(source)
+        self._exact_text_source_cache: dict[int, list[int]] = {}
 
     def encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False).ids
@@ -568,22 +574,104 @@ class TokenizerAdapter:
         body_tokens = self.encode(CONTEXT_PARAGRAPH)
         if not body_tokens:
             raise RuntimeError("tokenizer produced no tokens for the context corpus")
-        required = target_tokens + 8_192
+        required = target_tokens + EXACT_TEXT_SOURCE_MARGIN_TOKENS
         repeats = max(1, math.ceil(required / len(body_tokens)))
-        source_ids = self.encode(CONTEXT_PARAGRAPH * repeats)
-        estimated_body_tokens = target_tokens - fixed_tokens
-        low = max(1, estimated_body_tokens - 4_096)
-        high = min(len(source_ids), estimated_body_tokens + 4_096)
-        candidates = [estimated_body_tokens]
-        for offset in range(1, high - low + 1):
-            if estimated_body_tokens - offset >= low:
-                candidates.append(estimated_body_tokens - offset)
-            if estimated_body_tokens + offset <= high:
-                candidates.append(estimated_body_tokens + offset)
-        for candidate_length in candidates:
-            text = prefix + self.decode(source_ids[:candidate_length]) + EXACT_CONTEXT_SUFFIX
-            if self.count(text) == target_tokens:
+        source_cache = getattr(self, "_exact_text_source_cache", None)
+        if source_cache is None:
+            source_cache = {}
+            self._exact_text_source_cache = source_cache
+        while True:
+            source_ids = source_cache.get(repeats)
+            if source_ids is None:
+                source_ids = self.encode(CONTEXT_PARAGRAPH * repeats)
+                source_cache[repeats] = source_ids
+            if len(source_ids) >= required:
+                break
+            repeats = max(
+                repeats + 1,
+                math.ceil(repeats * required / max(1, len(source_ids))),
+            )
+
+        def build(candidate_length: int, padding: str = "") -> str:
+            return (
+                prefix
+                + self.decode(source_ids[:candidate_length])
+                + padding
+                + EXACT_CONTEXT_SUFFIX
+            )
+
+        evaluated: dict[int, tuple[str, int]] = {}
+
+        def evaluate(candidate_length: int) -> tuple[str, int]:
+            cached = evaluated.get(candidate_length)
+            if cached is not None:
+                return cached
+            text = build(candidate_length)
+            result = (text, self.count(text))
+            evaluated[candidate_length] = result
+            return result
+
+        candidate_length = min(
+            len(source_ids),
+            max(0, target_tokens - fixed_tokens),
+        )
+        for _ in range(EXACT_TEXT_LENGTH_REFINEMENT_STEPS):
+            text, actual = evaluate(candidate_length)
+            if actual == target_tokens:
                 return text
+            corrected = min(
+                len(source_ids),
+                max(0, candidate_length + target_tokens - actual),
+            )
+            if corrected == candidate_length or corrected in evaluated:
+                break
+            candidate_length = corrected
+
+        best_candidate, (_, best_actual) = min(
+            evaluated.items(),
+            key=lambda item: abs(target_tokens - item[1][1]),
+        )
+        predicted = min(
+            len(source_ids),
+            max(0, best_candidate + target_tokens - best_actual),
+        )
+        local_candidates = [predicted]
+        for offset in range(1, EXACT_TEXT_LOCAL_SEARCH_RADIUS + 1):
+            if predicted - offset >= 0:
+                local_candidates.append(predicted - offset)
+            if predicted + offset <= len(source_ids):
+                local_candidates.append(predicted + offset)
+        for candidate_length in local_candidates:
+            text, actual = evaluate(candidate_length)
+            if actual == target_tokens:
+                return text
+
+        below = [
+            (candidate, text, actual)
+            for candidate, (text, actual) in evaluated.items()
+            if actual < target_tokens
+        ]
+        if below:
+            candidate_length, _, actual = max(below, key=lambda item: item[2])
+            stable_padding = [
+                unit
+                for unit in RETRIEVAL_PADDING_CANDIDATES
+                if self.count(unit) == 1
+                and self.count(unit * EXACT_TEXT_PADDING_STABILITY_REPEATS)
+                == EXACT_TEXT_PADDING_STABILITY_REPEATS
+            ]
+            for unit in stable_padding:
+                padding_tokens = target_tokens - actual
+                visited_padding: set[int] = set()
+                for _ in range(EXACT_TEXT_PADDING_REFINEMENT_STEPS):
+                    if padding_tokens <= 0 or padding_tokens in visited_padding:
+                        break
+                    visited_padding.add(padding_tokens)
+                    text = build(candidate_length, unit * padding_tokens)
+                    padded_actual = self.count(text)
+                    if padded_actual == target_tokens:
+                        return text
+                    padding_tokens += target_tokens - padded_actual
         raise RuntimeError(
             f"could not construct round-trip-stable text with exactly {target_tokens} tokens"
         )
