@@ -8940,6 +8940,10 @@ async def production_mode(
         "verification_cleanup": verification_cleanup,
     }
     await writer.emit("production_prewarm_summary", **prewarm)
+    if not prewarm_passed:
+        raise RuntimeError(
+            "production prewarm gate failed; sustained traffic was not started"
+        )
     isolated_before_spec = RequestSpec(
         case_id="production-c1-isolated-before",
         seed=probe_template.seed,

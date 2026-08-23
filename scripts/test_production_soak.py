@@ -1268,6 +1268,116 @@ class CadenceAndWindowEvidenceTests(unittest.TestCase):
 
 
 class ProductionRuntimeCoordinationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_prewarm_stops_before_production_traffic(self) -> None:
+        args = soak.build_parser().parse_args(
+            [
+                "production",
+                "--server-pid",
+                "42",
+                "--tokenizer",
+                "tokenizer.json",
+                "--min-scaling-efficiency",
+                "0.5",
+                "--max-probe-ttft-seconds",
+                "1.0",
+                "--max-probe-tpot-seconds",
+                "0.05",
+            ]
+        )
+        client = type(
+            "Client",
+            (),
+            {
+                "tokenizer": object(),
+                "stream_request": AsyncMock(),
+            },
+        )()
+        writer = type("Writer", (), {"emit": AsyncMock()})()
+        clean_metrics = {"mistralrs_sequences_running": 0.0}
+        cleanup = {"passed": True}
+
+        def retrieval(
+            _client,
+            length,
+            label,
+            seed,
+            max_tokens,
+            tags,
+        ):
+            return soak.RequestSpec(
+                case_id=label,
+                seed=seed,
+                max_tokens=max_tokens,
+                prompt=f"prompt-{length}",
+                context_tokens=length,
+                tags=tags,
+            )
+
+        process = {
+            "process_is_mistralrs": True,
+            "process_vmrss_kib": 1,
+            "host_cpu_total_ticks": 1,
+            "host_cpu_idle_ticks": 1,
+            "process_cpu_ticks": 1,
+            "gpus": [{}],
+            "process_gpus": [{}],
+            "process_gpu_memory_used_mib": 1.0,
+        }
+        run_batch = AsyncMock(
+            side_effect=[
+                ([], {"errors": 0}),
+                ([], {"errors": 0}),
+            ]
+        )
+        poll_for_cleanup = AsyncMock(
+            side_effect=[
+                (True, clean_metrics, cleanup),
+                (True, clean_metrics, cleanup),
+            ]
+        )
+        with (
+            patch.object(soak, "calibrate_prompt_profiles", new=AsyncMock()),
+            patch.object(
+                soak,
+                "safe_metrics",
+                new=AsyncMock(
+                    side_effect=[
+                        {"mistralrs_sequences_capacity": 16.0},
+                        clean_metrics,
+                    ]
+                ),
+            ),
+            patch.object(soak, "process_telemetry", new=AsyncMock(return_value=process)),
+            patch.object(soak, "production_required_gauges", return_value=()),
+            patch.object(soak, "exact_context", return_value="prompt"),
+            patch.object(soak, "retrieval_spec", side_effect=retrieval),
+            patch.object(soak, "run_batch", new=run_batch),
+            patch.object(soak, "poll_for_cleanup", new=poll_for_cleanup),
+            patch.object(
+                soak,
+                "prefix_cache_evidence",
+                return_value={"passed": False},
+            ),
+            patch.object(
+                soak,
+                "cuda_memory_pressure_evidence",
+                return_value={"passed": True},
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "production prewarm gate failed",
+            ):
+                await soak.production_mode(args, client, writer)
+
+        self.assertEqual(run_batch.await_count, 2)
+        client.stream_request.assert_not_awaited()
+        final_emit = writer.emit.await_args_list[-1]
+        event = final_emit.args[0]
+        fields = final_emit.kwargs
+        self.assertEqual(event, "production_prewarm_summary")
+        self.assertFalse(fields["passed"])
+
     async def test_shared_slots_bound_traffic_and_diagnostics(self) -> None:
         class Client:
             def __init__(self) -> None:
