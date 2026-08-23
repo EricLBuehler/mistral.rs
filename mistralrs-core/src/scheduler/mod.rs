@@ -20,6 +20,7 @@ pub(crate) const IMAGE_MODALITY: u8 = 1 << 0;
 pub(crate) const AUDIO_MODALITY: u8 = 1 << 1;
 pub(crate) const VIDEO_MODALITY: u8 = 1 << 2;
 pub const DEFAULT_MAX_NUM_BATCHED_TOKENS: usize = 4096;
+pub const DEFAULT_MAX_PREFILL_CHUNK_TOKENS: usize = 512;
 pub const DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL: usize = 8;
 
 pub(crate) fn modality_signature(sequence: &Sequence) -> u8 {
@@ -59,6 +60,7 @@ pub enum SchedulerConfig {
     PagedAttentionMeta {
         max_num_seqs: usize,
         max_num_batched_tokens: usize,
+        max_prefill_chunk_tokens: usize,
         max_decode_steps_before_prefill: usize,
         config: CacheConfig,
     },
@@ -89,12 +91,14 @@ impl SchedulerConfig {
             Self::PagedAttentionMeta {
                 max_num_seqs,
                 max_num_batched_tokens,
+                max_prefill_chunk_tokens,
                 max_decode_steps_before_prefill,
                 config,
             } => Arc::new(Mutex::new(PagedAttentionScheduler::new(
                 PagedAttentionSchedulerConfig {
                     max_num_seqs,
                     max_num_batched_tokens,
+                    max_prefill_chunk_tokens,
                     max_decode_steps_before_prefill,
                 },
                 config,
@@ -200,6 +204,7 @@ mod tests {
         let mut scheduler = SchedulerConfig::PagedAttentionMeta {
             max_num_seqs: 16,
             max_num_batched_tokens: 4096,
+            max_prefill_chunk_tokens: 512,
             max_decode_steps_before_prefill: 8,
             config: cache_config(128),
         };
@@ -209,6 +214,7 @@ mod tests {
         let SchedulerConfig::PagedAttentionMeta {
             max_num_seqs,
             max_num_batched_tokens,
+            max_prefill_chunk_tokens,
             max_decode_steps_before_prefill,
             config,
         } = scheduler
@@ -217,6 +223,7 @@ mod tests {
         };
         assert_eq!(max_num_seqs, 16);
         assert_eq!(max_num_batched_tokens, 4096);
+        assert_eq!(max_prefill_chunk_tokens, 512);
         assert_eq!(max_decode_steps_before_prefill, 8);
         assert_eq!(config.num_gpu_blocks, 256);
         assert_eq!(config.kv_cache_group_ids, vec![0, 1]);
@@ -235,6 +242,7 @@ mod tests {
         let mut scheduler = SchedulerConfig::PagedAttentionMeta {
             max_num_seqs: 16,
             max_num_batched_tokens: 4096,
+            max_prefill_chunk_tokens: 512,
             max_decode_steps_before_prefill: 8,
             config: cache_config(128),
         };

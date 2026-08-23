@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 use mistralrs_core::{
     ReasoningEffort, TokenSource, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
-    DEFAULT_MAX_NUM_BATCHED_TOKENS,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
 };
 use serde::Deserialize;
 use std::{num::NonZeroUsize, path::PathBuf};
@@ -580,6 +580,11 @@ pub struct RuntimeOptions {
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
+    /// Maximum chunkable CUDA text-prompt tokens in one paged-attention scheduler step
+    #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
+    #[serde(default = "default_max_prefill_chunk_tokens")]
+    pub max_prefill_chunk_tokens: NonZeroUsize,
+
     /// Maximum decode steps before a waiting prefill batch is admitted
     #[arg(long, default_value_t = default_max_decode_steps_before_prefill())]
     #[serde(default = "default_max_decode_steps_before_prefill")]
@@ -973,6 +978,7 @@ impl Default for RuntimeOptions {
         Self {
             max_seqs: 32,
             max_num_batched_tokens: default_max_num_batched_tokens(),
+            max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
             prefix_cache_n: 16,
@@ -1025,6 +1031,10 @@ fn default_max_seqs() -> usize {
 
 fn default_max_num_batched_tokens() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
+}
+
+fn default_max_prefill_chunk_tokens() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_PREFILL_CHUNK_TOKENS).unwrap()
 }
 
 fn default_max_decode_steps_before_prefill() -> NonZeroUsize {

@@ -383,6 +383,7 @@ where
             return Ok(SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs,
                 max_num_batched_tokens: mistralrs_core::DEFAULT_MAX_NUM_BATCHED_TOKENS,
+                max_prefill_chunk_tokens: mistralrs_core::DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
                 max_decode_steps_before_prefill:
                     mistralrs_core::DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
                 config,
