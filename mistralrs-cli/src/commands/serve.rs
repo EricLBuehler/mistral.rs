@@ -13,7 +13,7 @@ use mistralrs_server_core::{
     approvals::ApprovalBroker,
     lora_adapters::runtime_lora_updates_enabled,
     mcp_server::{create_mcp_router, MCP_PROTOCOL_VERSION, MCP_ROUTE},
-    metrics::{observe_http, ObservabilityState},
+    metrics::{install_prometheus_recorder, observe_http, ObservabilityState},
     mistralrs_for_server_builder::MistralRsForServerBuilder,
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
     route_registry::{RouteInfo, RouteKind, MISTRALRS_API_ROUTES, RUNTIME_LORA_API_ROUTES},
@@ -41,6 +41,9 @@ pub async fn run_server(
     global: GlobalOptions,
 ) -> Result<()> {
     initialize_logging();
+    if server.observability_config().metrics {
+        install_prometheus_recorder();
+    }
 
     agent_options.apply_to(&mut runtime);
     apply_agent_mode(&mut runtime);

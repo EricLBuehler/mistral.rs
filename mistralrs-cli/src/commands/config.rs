@@ -6,7 +6,7 @@ use tracing::info;
 
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::{
-    metrics::{observe_http, ObservabilityState},
+    metrics::{install_prometheus_recorder, observe_http, ObservabilityState},
     mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
 };
@@ -46,6 +46,9 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         default_model_id,
     } = cfg;
 
+    if server.observability_config().metrics {
+        install_prometheus_recorder();
+    }
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
