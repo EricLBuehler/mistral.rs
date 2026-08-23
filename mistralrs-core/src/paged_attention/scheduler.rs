@@ -91,6 +91,7 @@ pub struct PagedAttentionScheduler {
     prompt_chunks_require_block_alignment: bool,
     prefix_replay: SpeculativePrefixReplay,
     decode_steps_since_prefill: usize,
+    next_prompt_sequence_id: Option<usize>,
     completion_cursor: usize,
     /// Block hashes per sequence for prefix caching.
     /// Computed incrementally as sequences grow.
@@ -127,6 +128,7 @@ impl PagedAttentionScheduler {
             prompt_chunks_require_block_alignment: false,
             prefix_replay: SpeculativePrefixReplay::NotRequired,
             decode_steps_since_prefill: 0,
+            next_prompt_sequence_id: None,
             completion_cursor: 0,
             seq_block_hashes: HashMap::new(),
             seq_block_hash_revisions: HashMap::new(),
@@ -150,14 +152,29 @@ impl PagedAttentionScheduler {
                 && seq.mm_features().is_empty())
     }
 
-    fn select_prompt_batch(&mut self, candidates: VecDeque<Arc<Mutex<Sequence>>>) -> PromptBatch {
-        let Some(first) = candidates.front() else {
+    fn select_prompt_batch(
+        &mut self,
+        mut candidates: VecDeque<Arc<Mutex<Sequence>>>,
+    ) -> PromptBatch {
+        if candidates.is_empty() {
+            self.next_prompt_sequence_id = None;
             return PromptBatch {
                 scheduled: VecDeque::new(),
                 chunk_size: None,
                 chunks: None,
             };
-        };
+        }
+        if let Some(position) = self.next_prompt_sequence_id.and_then(|sequence_id| {
+            candidates
+                .iter()
+                .position(|seq| *get_mut_arcmutex!(seq).id() == sequence_id)
+        }) {
+            candidates.rotate_left(position);
+        }
+        let rotation_candidates = candidates.clone();
+        let first = candidates
+            .front()
+            .expect("non-empty prompt candidates disappeared");
         let first = get_mut_arcmutex!(first);
         let scheduler_visible = self.supports_scheduler_visible_prompt_chunks(&first);
         let first_modality = modality_signature(&first);
@@ -194,6 +211,7 @@ impl PagedAttentionScheduler {
             } else {
                 self.prompt_chunk_size(scheduled.len())
             };
+            self.advance_prompt_cursor(&rotation_candidates, &scheduled);
             return PromptBatch {
                 scheduled,
                 chunk_size,
@@ -233,11 +251,28 @@ impl PagedAttentionScheduler {
             scheduled.push_back(candidates[index].clone());
             scheduled_chunks.push(chunk_plans[index][0]);
         }
+        self.advance_prompt_cursor(&rotation_candidates, &scheduled);
         PromptBatch {
             scheduled,
             chunk_size: Some(chunk_size),
             chunks: Some(scheduled_chunks),
         }
+    }
+
+    fn advance_prompt_cursor(
+        &mut self,
+        candidates: &VecDeque<Arc<Mutex<Sequence>>>,
+        scheduled: &VecDeque<Arc<Mutex<Sequence>>>,
+    ) {
+        self.next_prompt_sequence_id = candidates
+            .iter()
+            .find(|candidate| {
+                let candidate_id = *get_mut_arcmutex!(candidate).id();
+                scheduled
+                    .iter()
+                    .all(|seq| *get_mut_arcmutex!(seq).id() != candidate_id)
+            })
+            .map(|seq| *get_mut_arcmutex!(seq).id());
     }
 
     fn completion_is_due(&self) -> bool {
@@ -2235,6 +2270,69 @@ mod tests {
         assert_eq!(second.scheduled.len(), 1);
         assert_eq!(*get_mut_arcmutex!(second.scheduled[0]).id(), 2);
         assert!(get_mut_arcmutex!(second.scheduled[0]).is_prompt());
+    }
+
+    #[test]
+    fn chunked_prompt_buckets_rotate_without_discarding_partial_state() {
+        let mut scheduler = test_scheduler();
+        scheduler.config.max_num_batched_tokens = 4;
+        scheduler.scheduler_visible_prompt_chunks = true;
+
+        for (id, computed) in [(0, 4), (1, 0), (2, 4)] {
+            let prompt = test_sequence(id, 12);
+            {
+                let mut prompt = get_mut_arcmutex!(prompt);
+                prompt.set_state(SequenceState::RunningPrompt);
+                prompt.set_prefix_cache_len(computed);
+                prompt.set_num_computed_tokens(computed);
+            }
+            scheduler.running.push_back(prompt);
+        }
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let first = scheduler.schedule(&logger, None);
+        assert_eq!(
+            first
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        for seq in &first.scheduled {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_prefix_cache_len(6);
+            seq.set_num_computed_tokens(6);
+        }
+
+        let second = scheduler.schedule(&logger, None);
+        assert_eq!(second.scheduled.len(), 1);
+        assert_eq!(*get_mut_arcmutex!(second.scheduled[0]).id(), 1);
+        assert_eq!(scheduler.running.len(), 3);
+        assert!(scheduler.waiting.is_empty());
+        assert_eq!(
+            scheduler
+                .running
+                .iter()
+                .map(|seq| get_mut_arcmutex!(seq).num_computed_tokens())
+                .collect::<Vec<_>>(),
+            vec![6, 0, 6]
+        );
+
+        {
+            let mut seq = get_mut_arcmutex!(second.scheduled[0]);
+            seq.set_prefix_cache_len(4);
+            seq.set_num_computed_tokens(4);
+        }
+        let third = scheduler.schedule(&logger, None);
+        assert_eq!(
+            third
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            vec![2, 0]
+        );
     }
 
     #[test]
