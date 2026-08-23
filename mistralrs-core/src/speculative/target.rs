@@ -161,6 +161,10 @@ pub trait SpeculativeTargetMixin {
         Ok(())
     }
 
+    fn evict_speculative_cuda_graphs(&self, _max_entries: usize) -> usize {
+        0
+    }
+
     fn speculative_observe(&self, _observation: SpeculativeBatchObservation) {}
 
     fn speculative_bypass(&mut self, _seq_ids: &[usize]) {}
@@ -213,7 +217,13 @@ pub trait SpeculativeTargetMixin {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_speculative_prefix_cache_hit, SpeculativePrefixReplay};
+    use super::{
+        clamp_speculative_prefix_cache_hit, SpeculativePrefixReplay, SpeculativeTargetMixin,
+    };
+
+    struct NoSpeculativeProposer;
+
+    impl SpeculativeTargetMixin for NoSpeculativeProposer {}
 
     #[test]
     fn prefix_replay_clamp_preserves_block_alignment() {
@@ -235,6 +245,14 @@ mod tests {
         );
         assert_eq!(
             clamp_speculative_prefix_cache_hit(4096, 32, SpeculativePrefixReplay::Full),
+            0
+        );
+    }
+
+    #[test]
+    fn models_without_a_proposer_have_no_graphs_to_evict() {
+        assert_eq!(
+            NoSpeculativeProposer.evict_speculative_cuda_graphs(usize::MAX),
             0
         );
     }

@@ -193,6 +193,7 @@ pub(crate) fn make_paged_rows_metadata(
         prompt_chunk_attention_policy:
             crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
         has_noncausal_mm_context: false,
+        prefix_gather_workspace_limit: None,
         mm_prefix_ranges: None,
         full_mm_prefix_ranges: None,
         prefill_attention_heads: 1,

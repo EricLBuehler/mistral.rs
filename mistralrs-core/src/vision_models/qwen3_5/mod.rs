@@ -604,10 +604,10 @@ impl MultimodalModel for Qwen3_5Model {
         &self.text.cfg
     }
     fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
-        Arc::new(HybridPagedKvCacheConfig::new(
-            self.text.cfg.clone(),
-            self.text.paged_kv_layers(),
-        ))
+        Arc::new(
+            HybridPagedKvCacheConfig::new(self.text.cfg.clone(), self.text.paged_kv_layers())
+                .with_uniform_prefix_prefill_attention_features(Default::default()),
+        )
     }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");

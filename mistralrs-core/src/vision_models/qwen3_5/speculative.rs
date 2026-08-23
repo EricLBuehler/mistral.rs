@@ -1065,6 +1065,13 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         drafter.precapture_cuda_graphs(self.mtp_n_predict(), self.text.token_embedding(), lm_head)
     }
 
+    fn evict_speculative_cuda_graphs(&self, max_entries: usize) -> usize {
+        let Some(drafter) = self.dflash.lock().expect("dflash poisoned").clone() else {
+            return 0;
+        };
+        drafter.evict_cuda_graphs_lru(max_entries)
+    }
+
     fn speculative_bypass(&mut self, seq_ids: &[usize]) {
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             drafter.mark_seqs_dormant(seq_ids);

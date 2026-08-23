@@ -12,13 +12,19 @@ use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::attention::sliding_window_left;
 #[cfg(all(feature = "cuda", target_family = "unix"))]
-use crate::flashinfer::{Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS};
+use crate::flashinfer::{
+    fa3_device_num_sm, fa3_prefill_cache_num_sm, fa3_prefill_num_splits,
+    with_fa3_prefill_workspace, Fa3DecodeScheduleKey, Fa3DecodeView, FA3_DECODE_NUM_SPLITS,
+};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
         block_aligned_sliding_window_start,
-        plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
+        plan::{
+            gather_prefill_workspace_for_lengths, DecodePlan, DecodePlanInput,
+            GatherPrefillWorkspaceRequest, PrefixPrefillPlan, PrefixPrefillPlanInput,
+        },
         AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
@@ -1093,10 +1099,11 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+        let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
             cache_dtype: key_cache.as_ref().unwrap().dtype(),
+            has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
             causality_known,
@@ -1104,10 +1111,61 @@ impl PagedAttention {
             has_softcap: ctx.sdpa_params.softcap.is_some(),
             has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
             query_layout_is_dense,
+            query_len: ctx.dims.seq_len,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads: ctx.dims.key_value_heads,
+            writes_cache: write_cache,
+            is_causal: prefix_causal,
+            has_noncausal_mm_context: mm_prefix_ranges.is_some(),
+            fa3_supported: fa3_prefill_cache_num_sm(
+                key_cache.as_ref().unwrap(),
+                value_cache.as_ref().unwrap(),
+                ctx.dims.attention_heads,
+                ctx.dims.key_value_heads,
+                ctx.dims.head_size,
+                block_size,
+            )?
+            .is_some(),
             block_size,
             attention_backend,
-        });
+        };
+        let prefill_plan = PrefixPrefillPlan::choose(prefill_plan_input);
+        if matches!(prefill_plan, PrefixPrefillPlan::GatherSdpa) {
+            if let Some(limit) = ctx.input_metadata.prefix_gather_workspace_limit {
+                let v_head_dim =
+                    tensors.value.dims().last().copied().ok_or_else(|| {
+                        candle_core::Error::msg("value tensor has no head dimension")
+                    })?;
+                let required =
+                    gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                        query_lens: &query_lens,
+                        kv_lens: &kv_lens,
+                        q_heads: ctx.dims.attention_heads,
+                        kv_heads: ctx.dims.key_value_heads,
+                        k_head_dim: ctx.dims.head_size,
+                        v_head_dim,
+                        dtype: tensors.query.dtype(),
+                        plan_input: prefill_plan_input,
+                    })?;
+                if required > limit {
+                    candle_core::bail!(
+                        "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
+                    );
+                }
+            }
+        }
         match prefill_plan {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            PrefixPrefillPlan::Fa3Fp8Paged => {
+                let output = self.run_fa3_paged_prefill(
+                    ctx,
+                    tensors.query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    prefix_causal,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+            }
             #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
             PrefixPrefillPlan::FlashAttentionPaged => {
                 let output = self.run_flash_attention_paged_prefill(
@@ -1348,6 +1406,94 @@ impl PagedAttention {
             ctx.sdpa_params,
         )?;
         prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn run_fa3_paged_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        query: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        causal: bool,
+    ) -> Result<Tensor> {
+        let metadata = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill metadata is missing"))?;
+        let num_sm = fa3_device_num_sm(query.device())
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill requires an SM90 CUDA device"))?;
+        let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        if num_pages == 0
+            || value_cache.dims4()? != key_cache.dims4()?
+            || query.dims4()?
+                != (
+                    ctx.dims.batch_size,
+                    ctx.dims.attention_heads,
+                    ctx.dims.seq_len,
+                    head_dim,
+                )
+        {
+            candle_core::bail!("FA3 prefill cache/query shape invariant failed");
+        }
+        let num_splits = fa3_prefill_num_splits(
+            ctx.dims.batch_size,
+            ctx.dims.seq_len,
+            ctx.dims.attention_heads,
+            kv_heads,
+            num_sm,
+        )
+        .ok_or_else(|| candle_core::Error::msg("FA3 prefill schedule invariant failed"))?;
+        let key = Fa3DecodeScheduleKey {
+            device: query.device().location(),
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+            num_splits,
+        };
+        let query = query
+            .transpose(1, 2)?
+            .reshape((
+                ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .contiguous()?;
+        let output =
+            with_fa3_prefill_workspace(metadata, key, key_cache, query.device(), |buffers| {
+                fa3_fp8_decode(Fa3DecodeParams {
+                    query: &query,
+                    quantized_query: &buffers.query,
+                    key_cache,
+                    value_cache,
+                    page_table: &buffers.page_table,
+                    seqused_k: &buffers.seqused_k,
+                    cu_seqlens_q: &buffers.cu_seqlens_q,
+                    scheduler_metadata: &buffers.scheduler_metadata,
+                    output_accum: &buffers.output_accum,
+                    lse_accum: &buffers.lse_accum,
+                    output_lse: &buffers.output_lse,
+                    q_descale: &self.fp8_q_scale,
+                    k_descale: &self.fp8_k_scale,
+                    v_descale: &self.fp8_v_scale,
+                    schedule: buffers.schedule(key)?,
+                    softmax_scale: ctx.sdpa_params.softmax_scale,
+                })
+            })?;
+        output
+            .reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .transpose(1, 2)
     }
 
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]

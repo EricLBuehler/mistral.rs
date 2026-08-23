@@ -48,6 +48,7 @@ const CUDA_GRAPH_SPEC_STATE_BUDGET_PERCENT: usize = 4;
 const CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES_ENV: &str = "MISTRALRS_CUDA_GRAPH_SPEC_STATE_BUDGET_BYTES";
 const CUDA_GRAPH_EVENTS_METRIC: &str = "mistralrs_cuda_graph_events_total";
 const CUDA_GRAPH_DISPATCH_METRIC: &str = "mistralrs_cuda_graph_dispatch_total";
+const CUDA_GRAPH_EVICTIONS_METRIC: &str = "mistralrs_cuda_graph_evictions_total";
 static NEXT_CUDA_DECODE_GRAPH_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CUDA_GRAPH_MEMORY_POOL_SCOPES: OnceLock<Mutex<HashMap<usize, MemoryPoolScopeState>>> =
     OnceLock::new();
@@ -219,6 +220,38 @@ fn record_cuda_graph_event(
         "outcome" => labels.outcome,
     )
     .increment(1);
+}
+
+pub(crate) fn record_cuda_graph_evictions(
+    component: CudaGraphComponent,
+    reason: &'static str,
+    count: usize,
+) {
+    metrics::counter!(
+        CUDA_GRAPH_EVICTIONS_METRIC,
+        "component" => component.label(),
+        "reason" => reason
+    )
+    .increment(u64::try_from(count).unwrap_or(u64::MAX));
+}
+
+pub(crate) fn reclaim_cuda_graph_entries(
+    max_entries: usize,
+    reclaim_target: impl FnOnce(usize) -> usize,
+    reclaim_speculative: impl FnOnce(usize) -> usize,
+) -> usize {
+    if max_entries == 0 {
+        return 0;
+    }
+    let target = reclaim_target(max_entries);
+    debug_assert!(target <= max_entries);
+    let remaining = max_entries - target;
+    if remaining == 0 {
+        return target;
+    }
+    let speculative = reclaim_speculative(remaining);
+    debug_assert!(speculative <= remaining);
+    target + speculative
 }
 
 #[must_use]
@@ -1305,6 +1338,7 @@ impl CudaDecodeGraphMetadataBuffers {
             is_final_prompt_chunk: metadata.is_final_prompt_chunk,
             prompt_chunk_attention_policy: metadata.prompt_chunk_attention_policy,
             has_noncausal_mm_context: metadata.has_noncausal_mm_context,
+            prefix_gather_workspace_limit: metadata.prefix_gather_workspace_limit,
             mm_prefix_ranges: metadata.mm_prefix_ranges.clone(),
             full_mm_prefix_ranges: metadata.full_mm_prefix_ranges.clone(),
             prefill_attention_heads: metadata.prefill_attention_heads,
@@ -1485,10 +1519,22 @@ impl CudaDecodeGraphLaunch {
     }
 
     fn matches(&self, entry: &CudaDecodeGraphEntry) -> bool {
-        self.generation == entry.generation
-            && self.replay_epoch == entry.replay_epoch
-            && self.key == entry.key
+        cuda_graph_replay_version_matches(
+            entry.generation,
+            entry.replay_epoch,
+            self.generation,
+            self.replay_epoch,
+        ) && self.key == entry.key
     }
+}
+
+fn cuda_graph_replay_version_matches(
+    entry_generation: u64,
+    entry_replay_epoch: u64,
+    launch_generation: u64,
+    launch_replay_epoch: u64,
+) -> bool {
+    entry_generation == launch_generation && entry_replay_epoch == launch_replay_epoch
 }
 
 impl fmt::Debug for CudaDecodeGraphLaunch {
@@ -1683,6 +1729,17 @@ impl CudaDecodeGraphState {
     pub(crate) fn clear(&mut self) {
         self.eager_retry_blocked = false;
         release_cuda_graph_entries(std::mem::take(&mut self.entries));
+    }
+
+    pub(crate) fn evict_lru_for_memory_pressure(&mut self, max_entries: usize) -> usize {
+        let entries = drain_lru_entries(&mut self.entries, max_entries);
+        let evicted = entries.len();
+        if evicted == 0 {
+            return 0;
+        }
+        release_cuda_graph_entries(entries);
+        record_cuda_graph_evictions(CudaGraphComponent::Target, "memory_pressure", evicted);
+        evicted
     }
 
     pub(crate) fn observe_recurrent_storage_generation(&mut self, generation: u64) {
@@ -1923,6 +1980,11 @@ impl CudaDecodeGraphState {
             })
             .expect("CUDA decode graph generation overflow")
     }
+}
+
+fn drain_lru_entries<T>(entries: &mut Vec<T>, max_entries: usize) -> Vec<T> {
+    let count = max_entries.min(entries.len());
+    entries.drain(..count).collect()
 }
 
 fn release_cuda_graph_entries(entries: Vec<CudaDecodeGraphEntry>) {
@@ -2178,6 +2240,22 @@ fn cuda_memory_pool(stream: &Arc<CudaStream>) -> candle_core::Result<sys::CUmemo
             .context("CUDA graph mempool lookup failed"));
     }
     Ok(pool)
+}
+
+pub(crate) fn cuda_graph_memory_pool_scope_active(device: &Device) -> candle_core::Result<bool> {
+    let Device::Cuda(device) = device else {
+        return Ok(false);
+    };
+    let stream = device.cuda_stream();
+    if !stream.context().has_async_alloc() {
+        return Ok(false);
+    }
+    let pool = cuda_memory_pool(&stream)? as usize;
+    let scopes = CUDA_GRAPH_MEMORY_POOL_SCOPES.get_or_init(Default::default);
+    let scopes = scopes
+        .lock()
+        .expect("CUDA graph memory pool scopes poisoned");
+    Ok(scopes.contains_key(&pool))
 }
 
 fn trim_cuda_graph_memory_bound(stream: &Arc<CudaStream>) -> candle_core::Result<()> {
@@ -3789,6 +3867,69 @@ mod tests {
         state.resume();
         let third = state.allocate_generation();
         assert!(first < second && second < third);
+        assert!(!cuda_graph_replay_version_matches(second, 0, first, 1));
+        assert!(!cuda_graph_replay_version_matches(third, 0, second, 1));
+        assert!(cuda_graph_replay_version_matches(third, 7, third, 7));
+    }
+
+    #[test]
+    fn memory_pressure_eviction_drains_lru_entries_in_one_batch() {
+        let mut entries = vec![10, 20, 30, 40];
+        assert!(drain_lru_entries(&mut entries, 0).is_empty());
+        assert_eq!(drain_lru_entries(&mut entries, 2), vec![10, 20]);
+        assert_eq!(entries, vec![30, 40]);
+        assert_eq!(drain_lru_entries(&mut entries, usize::MAX), vec![30, 40]);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn graph_reclaim_quota_is_shared_between_target_and_dflash() {
+        let mut target_entries = 2usize;
+        let mut dflash_entries = 4usize;
+        let reclaimed = reclaim_cuda_graph_entries(
+            3,
+            |limit| {
+                let reclaimed = target_entries.min(limit);
+                target_entries -= reclaimed;
+                reclaimed
+            },
+            |limit| {
+                let reclaimed = dflash_entries.min(limit);
+                dflash_entries -= reclaimed;
+                reclaimed
+            },
+        );
+        assert_eq!(reclaimed, 3);
+        assert_eq!(target_entries, 0);
+        assert_eq!(dflash_entries, 3);
+
+        let mut dflash_called = false;
+        assert_eq!(
+            reclaim_cuda_graph_entries(
+                2,
+                |_| 2,
+                |_| {
+                    dflash_called = true;
+                    0
+                }
+            ),
+            2
+        );
+        assert!(!dflash_called);
+
+        let mut target_called = false;
+        assert_eq!(
+            reclaim_cuda_graph_entries(
+                0,
+                |_| {
+                    target_called = true;
+                    0
+                },
+                |_| 0,
+            ),
+            0
+        );
+        assert!(!target_called);
     }
 
     #[test]

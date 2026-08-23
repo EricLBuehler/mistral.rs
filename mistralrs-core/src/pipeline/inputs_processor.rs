@@ -167,6 +167,7 @@ pub mod text_models_inputs_processor {
             Option<Vec<crate::pipeline::prompt_chunks::PromptChunkPlan>>,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub prefix_gather_workspace_limit: Option<usize>,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
         pub full_mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
         pub(crate) enable_packed_prefill: bool,
@@ -226,6 +227,7 @@ pub mod text_models_inputs_processor {
         pub is_final_prompt_chunk: bool,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub prefix_gather_workspace_limit: Option<usize>,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub full_mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
@@ -287,6 +289,7 @@ pub mod text_models_inputs_processor {
                 is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -537,6 +540,7 @@ pub mod text_models_inputs_processor {
                 is_final_prompt_chunk: self.is_final_prompt_chunk,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
+                prefix_gather_workspace_limit: self.prefix_gather_workspace_limit,
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
                 full_mm_prefix_ranges: self.full_mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
@@ -1360,6 +1364,7 @@ pub mod text_models_inputs_processor {
                 // Keep the slow path local to chunks whose query rows overlap a noncausal range.
                 has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
                     || full_mm_prefix_ranges_tensor.is_some(),
+                prefix_gather_workspace_limit: paged_attn_metadata.prefix_gather_workspace_limit,
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
@@ -1951,6 +1956,7 @@ pub mod text_models_inputs_processor {
                 is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
@@ -2259,6 +2265,7 @@ pub mod text_models_inputs_processor {
                 is_final_prompt_chunk: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
                 mm_prefix_ranges: None,
                 full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,

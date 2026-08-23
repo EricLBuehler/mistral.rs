@@ -63,6 +63,8 @@ mod admission;
 pub(crate) mod agentic_loop;
 #[cfg(any(feature = "cuda", test))]
 mod cuda_decode;
+#[cfg(feature = "cuda")]
+mod cuda_memory;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -72,9 +74,13 @@ mod tool_dispatch;
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
 #[cfg(feature = "cuda")]
+use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
+#[cfg(feature = "cuda")]
 use crate::pipeline::execution::{
     submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
 };
+#[cfg(feature = "cuda")]
+use crate::response::Response;
 #[cfg(feature = "cuda")]
 use crate::sequence::Sequence;
 
@@ -810,6 +816,31 @@ impl Engine {
     }
 
     #[cfg(feature = "cuda")]
+    async fn reject_prompt_for_cuda_memory(
+        &self,
+        rows: &[Arc<std::sync::Mutex<Sequence>>],
+        reason: String,
+    ) {
+        tracing::warn!("{reason}");
+        metrics::counter!("mistralrs_cuda_prompt_memory_rejections_total")
+            .increment(u64::try_from(rows.len()).unwrap_or(u64::MAX));
+        for row in rows {
+            let (sequence_id, responder) = {
+                let row = get_mut_arcmutex!(row);
+                row.set_state(SequenceState::Error);
+                (*row.id(), row.responder())
+            };
+            if responder
+                .send(Response::InternalError(reason.clone().into()))
+                .await
+                .is_err()
+            {
+                tracing::warn!("Failed to deliver CUDA memory error for sequence {sequence_id}");
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
     async fn continue_cuda_decode_batch(
         &self,
         lease: CudaDecodeBatchLease,
@@ -959,6 +990,22 @@ impl Engine {
         };
         #[cfg(feature = "cuda")]
         let mut cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
+        #[cfg(feature = "cuda")]
+        let mut cuda_memory_pool = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            let devices = pipeline.execution_devices();
+            let mut unique_devices = Vec::new();
+            for device in devices {
+                if device.is_cuda()
+                    && unique_devices
+                        .iter()
+                        .all(|existing: &candle_core::Device| !existing.same_device(&device))
+                {
+                    unique_devices.push(device);
+                }
+            }
+            cuda_memory::CudaMemoryPoolMaintenance::new(unique_devices)
+        };
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -1047,6 +1094,18 @@ impl Engine {
             if scheduler_idle {
                 if !pending.is_empty() {
                     continue;
+                }
+                #[cfg(feature = "cuda")]
+                if cuda_memory_pool.when_idle() {
+                    debug_assert!(cuda_decode_lease.is_none());
+                    loop {
+                        let reclaimed = get_mut_arcmutex!(self.pipeline)
+                            .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                        if reclaimed == 0 || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                        {
+                            break;
+                        }
+                    }
                 }
                 if channel_disconnected {
                     break 'lp;
@@ -1380,6 +1439,181 @@ impl Engine {
                         get_mut_arcmutex!(self.pipeline)
                             .release_speculative_sequences(&preempted_sequence_ids);
                     }
+                    #[cfg(feature = "cuda")]
+                    let mut prefix_gather_workspace_limit = None;
+                    #[cfg(not(feature = "cuda"))]
+                    let prefix_gather_workspace_limit = None;
+                    #[cfg(feature = "cuda")]
+                    if is_prompt && !output.scheduled.is_empty() {
+                        let (
+                            model_metadata,
+                            activation_dtype,
+                            cache_dtype,
+                            device_is_cuda,
+                            has_sliding_window,
+                            fa3_num_sm_by_layer,
+                        ) = {
+                            let pipeline = get_mut_arcmutex!(self.pipeline);
+                            let metadata = pipeline.get_metadata();
+                            let cache_dtype = metadata
+                                .cache_config
+                                .as_ref()
+                                .map(|config| config.cache_type.to_dtype(metadata.activation_dtype))
+                                .unwrap_or(metadata.activation_dtype);
+                            (
+                                metadata.model_metadata.clone(),
+                                metadata.activation_dtype,
+                                cache_dtype,
+                                pipeline
+                                    .execution_devices()
+                                    .iter()
+                                    .all(candle_core::Device::is_cuda),
+                                metadata.sliding_window.is_some(),
+                                metadata
+                                    .cache_engine
+                                    .as_ref()
+                                    .map(|engine| engine.fa3_prefill_num_sm_by_layer().to_vec())
+                                    .unwrap_or_default(),
+                            )
+                        };
+                        let mut rejected_reason = None;
+                        loop {
+                            let query_lens = output
+                                .scheduled
+                                .iter()
+                                .enumerate()
+                                .map(|(seq_idx, seq)| {
+                                    let seq = get_mut_arcmutex!(seq);
+                                    output
+                                        .scheduled_prompt_chunks
+                                        .as_ref()
+                                        .and_then(|chunks| chunks.get(seq_idx))
+                                        .map(|chunk| chunk.end.saturating_sub(chunk.start))
+                                        .unwrap_or_else(|| seq.num_uncomputed_tokens())
+                                })
+                                .collect::<Vec<_>>();
+                            let full_context_lens = output
+                                .scheduled
+                                .iter()
+                                .zip(&query_lens)
+                                .map(|(seq, query_len)| {
+                                    get_mut_arcmutex!(seq)
+                                        .num_computed_tokens()
+                                        .saturating_add(*query_len)
+                                })
+                                .collect::<Vec<_>>();
+                            let max_pages_per_sequence = {
+                                let sequence_ids = output
+                                    .scheduled
+                                    .iter()
+                                    .map(|seq| *get_mut_arcmutex!(seq).id())
+                                    .collect::<Vec<_>>();
+                                let manager = get_mut_arcmutex!(kv_cache_manager);
+                                sequence_ids
+                                    .iter()
+                                    .map(|seq_id| manager.num_blocks_for_request(*seq_id))
+                                    .max()
+                                    .unwrap_or_default()
+                            };
+                            let has_noncausal_mm_context = output
+                                .scheduled_prompt_chunks
+                                .as_ref()
+                                .and_then(|chunks| chunks.first())
+                                .is_some_and(|chunk| {
+                                    chunk.attention_policy == MultimodalAttentionPolicy::NonCausal
+                                })
+                                || output.scheduled.iter().any(|seq| {
+                                    get_mut_arcmutex!(seq).mm_features().iter().any(|feature| {
+                                        feature.attention_policy
+                                            == MultimodalAttentionPolicy::NonCausal
+                                    })
+                                });
+                            let has_donor_cache_layers = model_metadata.as_deref().is_some_and(
+                                crate::paged_attention::plan::model_has_donor_paged_cache_layers,
+                            );
+                            let requires_prefix_attention = has_noncausal_mm_context
+                                || has_donor_cache_layers
+                                || query_lens
+                                    .iter()
+                                    .zip(&full_context_lens)
+                                    .any(|(query, full)| full > query);
+                            let workspace =
+                                match crate::paged_attention::plan::prompt_prefill_workspace(
+                                    model_metadata.as_deref(),
+                                    crate::paged_attention::plan::PromptPrefillWorkspaceInput {
+                                        activation_dtype,
+                                        cache_dtype,
+                                        device_is_cuda,
+                                        block_size,
+                                        query_lens: &query_lens,
+                                        full_context_lens: &full_context_lens,
+                                        max_pages_per_sequence,
+                                        requires_prefix_attention,
+                                        is_causal: !has_noncausal_mm_context,
+                                        causality_known: true,
+                                        has_custom_mask: has_noncausal_mm_context,
+                                        has_noncausal_mm_context,
+                                        has_sliding_window,
+                                        fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
+                                    },
+                                ) {
+                                    Ok(workspace) => workspace,
+                                    Err(err) => {
+                                        rejected_reason = Some(format!(
+                                        "CUDA prompt memory preflight could not establish a safe attention plan: {err}"
+                                    ));
+                                        break;
+                                    }
+                                };
+                            let workspace_bytes = workspace.bytes;
+                            let mut memory_status =
+                                cuda_memory_pool.before_prompt_step(workspace_bytes);
+                            if memory_status.graph_pressure {
+                                debug_assert!(cuda_decode_lease.is_none());
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
+                                while memory_status.graph_pressure {
+                                    let reclaimed = pipeline.reclaim_cuda_graph_memory(
+                                        cuda_memory::GRAPH_RECLAIM_BATCH_SIZE,
+                                    );
+                                    if reclaimed == 0 {
+                                        break;
+                                    }
+                                    memory_status =
+                                        cuda_memory_pool.after_graph_reclaim(workspace_bytes);
+                                }
+                            }
+                            let previous = output.scheduled.len();
+                            match cuda_memory::prompt_batch_memory_action(
+                                previous,
+                                memory_status.transient_pressure,
+                            ) {
+                                cuda_memory::PromptBatchMemoryAction::Proceed => {
+                                    prefix_gather_workspace_limit =
+                                        Some(workspace.gather_workspace_bytes);
+                                    break;
+                                }
+                                cuda_memory::PromptBatchMemoryAction::Retain(retained) => {
+                                    let first_omitted_id = output
+                                        .retain_prompt_prefix(retained)
+                                        .expect("reduced prompt batch must omit a tail");
+                                    get_mut_arcmutex!(self.scheduler)
+                                        .defer_prompt_tail(first_omitted_id);
+                                    cuda_memory::record_prompt_batch_reduction(previous, retained);
+                                }
+                                cuda_memory::PromptBatchMemoryAction::Reject => {
+                                    rejected_reason = Some(format!(
+                                        "CUDA memory pressure prevented prompt admission requiring {workspace_bytes} bytes of transient workspace"
+                                    ));
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(reason) = rejected_reason {
+                            self.reject_prompt_for_cuda_memory(&output.scheduled, reason)
+                                .await;
+                            continue 'lp;
+                        }
+                    }
                     if !output.scheduled.is_empty() {
                         for seq in output.scheduled.iter() {
                             let mut seq_guard = get_mut_arcmutex!(seq);
@@ -1487,6 +1721,7 @@ impl Engine {
                                     scheduled_prompt_chunks,
                                     prompt_chunk_attention_policy,
                                     has_noncausal_mm_context: false,
+                                    prefix_gather_workspace_limit,
                                     mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     full_mm_prefix_ranges_by_seq_id: HashMap::new(),
                                     enable_packed_prefill: pipeline.supports_packed_prefill(),
@@ -1785,6 +2020,19 @@ impl Engine {
                                     completion_lengths,
                                     ms_from_last_run * 1000.,
                                 );
+                            }
+                        }
+                    }
+                    #[cfg(feature = "cuda")]
+                    if is_prompt && cuda_memory_pool.after_prompt_step() {
+                        debug_assert!(cuda_decode_lease.is_none());
+                        loop {
+                            let reclaimed = get_mut_arcmutex!(self.pipeline)
+                                .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                            if reclaimed == 0
+                                || !cuda_memory_pool.after_graph_reclaim(0).graph_pressure
+                            {
+                                break;
                             }
                         }
                     }

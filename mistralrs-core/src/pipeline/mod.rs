@@ -1125,6 +1125,10 @@ pub trait MetadataMixin {
     fn reset_non_granular_state(&self);
     /// Destroy decode graphs at teardown, while the engine thread's cuTile modules are still loaded.
     fn cleanup_cuda_graphs(&self) {}
+    /// Evict least-recently-used decode graphs without disturbing recurrent state.
+    fn reclaim_cuda_graph_memory(&self, _max_entries: usize) -> usize {
+        0
+    }
     /// Capture the decode graphs for the common batch sizes up front, so live requests never pay for
     /// an eager step plus a capture when the batch composition changes.
     fn precapture_cuda_decode_graphs(&self, _ctx: &DecodeGraphPrecaptureCtx) {}
@@ -1133,6 +1137,17 @@ pub trait MetadataMixin {
         None
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
+    fn execution_devices(&self) -> Vec<Device> {
+        let primary = self.device();
+        let mut devices = self
+            .device_mapper()
+            .map(DeviceMapper::get_unique_devices)
+            .unwrap_or_default();
+        if !devices.iter().any(|device| device.same_device(&primary)) {
+            devices.push(primary);
+        }
+        devices
+    }
 }
 
 /// Implemented by the base model of an AnyMoe.

@@ -309,19 +309,9 @@ const SUPPORTED_BLOCK_SIZE: &[usize] = &[8, 16, 32];
 // Weight-loading transients freed into the stream-ordered pool are fragmented and cannot back the
 // large contiguous KV tensors; return them to the driver before sizing and allocating the cache.
 #[cfg(feature = "cuda")]
-fn trim_cuda_mempool(device: &Device) {
-    use candle_core::cuda_backend::cudarc::driver::sys;
-    let Device::Cuda(cuda) = device else { return };
-    let stream = cuda.cuda_stream();
-    if !stream.context().has_async_alloc() {
-        return;
-    }
-    let dev = stream.context().cu_device();
-    let mut pool = std::ptr::null_mut();
-    if unsafe { sys::cuDeviceGetMemPool(&mut pool, dev) } != sys::CUresult::CUDA_SUCCESS {
-        return;
-    }
-    unsafe { sys::cuMemPoolTrimTo(pool, 0) };
+fn trim_cuda_mempool(device: &Device) -> candle_core::Result<()> {
+    MemoryUsage.trim_cuda_memory_pool(device, 0)?;
+    Ok(())
 }
 
 const SIZE_IN_MB: usize = 1024 * 1024;
@@ -442,9 +432,13 @@ pub fn calculate_cache_config(
         // Weight loading enqueues stream-ordered frees without draining; sync so the memory
         // reading and the cache allocation right after this see the real free VRAM.
         if device.is_cuda() {
-            device.synchronize()?;
             #[cfg(feature = "cuda")]
-            trim_cuda_mempool(device);
+            {
+                MemoryUsage.synchronize_cuda_context(device)?;
+                trim_cuda_mempool(device)?;
+            }
+            #[cfg(not(feature = "cuda"))]
+            device.synchronize()?;
         }
         let post_load_memory = if model_weight_size_in_bytes.is_none() && device.is_cuda() {
             Some(MemoryUsage.query(device)?)

@@ -73,6 +73,27 @@ pub struct PagedAttentionSchedulerOutput {
     pub(crate) scheduled_prompt_chunks: Option<Vec<PromptChunkPlan>>,
 }
 
+impl PagedAttentionSchedulerOutput {
+    #[cfg(any(test, feature = "cuda"))]
+    pub(crate) fn retain_prompt_prefix(&mut self, retained: usize) -> Option<usize> {
+        assert!(retained > 0);
+        assert_eq!(self.num_cached_tokens.len(), self.scheduled.len());
+        if let Some(chunks) = self.scheduled_prompt_chunks.as_ref() {
+            assert_eq!(chunks.len(), self.scheduled.len());
+        }
+        let first_omitted = self
+            .scheduled
+            .get(retained)
+            .map(|seq| *get_mut_arcmutex!(seq).id())?;
+        self.scheduled.truncate(retained);
+        self.num_cached_tokens.truncate(retained);
+        if let Some(chunks) = self.scheduled_prompt_chunks.as_mut() {
+            chunks.truncate(retained);
+        }
+        Some(first_omitted)
+    }
+}
+
 pub struct PagedAttentionSchedulerConfig {
     pub max_num_seqs: usize,
     pub max_num_batched_tokens: usize,
@@ -1331,6 +1352,10 @@ impl Scheduler for PagedAttentionScheduler {
         self.scheduler_visible_prompt_chunks = enabled;
         self.prompt_chunks_require_block_alignment = require_block_alignment;
         self.prefix_policy = prefix_policy;
+    }
+
+    fn defer_prompt_tail(&mut self, first_omitted_sequence_id: usize) {
+        self.next_prompt_sequence_id = Some(first_omitted_sequence_id);
     }
 
     fn can_continue_decode_batch(&self, sequence_ids: &[usize]) -> bool {
@@ -2735,6 +2760,92 @@ mod tests {
         assert_eq!(prompt.scheduled.len(), 3);
         assert_eq!(prompt.prompt_chunk_size, Some(1));
         assert_eq!(scheduler.waiting.len(), 2);
+    }
+
+    #[test]
+    fn deferred_prompt_tail_runs_first_without_reallocating_kv() {
+        let mut scheduler = test_scheduler();
+        Scheduler::set_scheduler_visible_prompt_chunks(
+            &mut scheduler,
+            true,
+            false,
+            SpeculativePrefixCheckpointPolicy::default(),
+        );
+        for id in 0..3 {
+            let seq = test_sequence(id, 16);
+            get_mut_arcmutex!(seq).set_state(SequenceState::Waiting);
+            scheduler.waiting.push_back(seq);
+        }
+
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let mut first = scheduler.schedule(&logger, None);
+        assert_eq!(
+            first
+                .scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let first_omitted = first.retain_prompt_prefix(1).unwrap();
+        assert_eq!(first_omitted, 1);
+        assert_eq!(first.scheduled.len(), 1);
+        assert_eq!(first.num_cached_tokens.len(), 1);
+        assert_eq!(first.scheduled_prompt_chunks.as_ref().unwrap().len(), 1);
+
+        let kv_before = {
+            let kv_manager = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            (0..3)
+                .map(|id| kv_manager.get_block_ids(id).unwrap().to_vec())
+                .collect::<Vec<_>>()
+        };
+        let states_before = scheduler
+            .running
+            .iter()
+            .map(|seq| get_mut_arcmutex!(seq).getstate())
+            .collect::<Vec<_>>();
+
+        Scheduler::defer_prompt_tail(&mut scheduler, first_omitted);
+
+        let kv_after_deferral = {
+            let kv_manager = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            (0..3)
+                .map(|id| kv_manager.get_block_ids(id).unwrap().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kv_after_deferral, kv_before);
+        assert_eq!(
+            scheduler
+                .running
+                .iter()
+                .map(|seq| get_mut_arcmutex!(seq).getstate())
+                .collect::<Vec<_>>(),
+            states_before
+        );
+
+        let next = scheduler.schedule(&logger, None);
+        assert_eq!(
+            next.scheduled
+                .iter()
+                .map(|seq| *get_mut_arcmutex!(seq).id())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 0]
+        );
+        let kv_after_schedule = {
+            let kv_manager = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            (0..3)
+                .map(|id| kv_manager.get_block_ids(id).unwrap().to_vec())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(kv_after_schedule, kv_before);
+        assert_eq!(
+            scheduler
+                .running
+                .iter()
+                .map(|seq| get_mut_arcmutex!(seq).getstate())
+                .collect::<Vec<_>>(),
+            states_before
+        );
     }
 
     #[test]

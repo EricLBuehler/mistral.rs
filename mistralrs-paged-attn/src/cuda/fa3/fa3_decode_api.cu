@@ -170,9 +170,10 @@ __global__ void materialize_paged_metadata_kernel(
     const int32_t *__restrict__ paged_kv_indices,
     const int32_t *__restrict__ paged_kv_last_page_len,
     int32_t *__restrict__ page_table, int32_t *__restrict__ seqused_k,
-    int32_t query_len, int32_t page_table_batch_stride, int32_t page_size) {
+    int32_t source_rows_per_sequence, int32_t source_row_offset,
+    int32_t page_table_batch_stride, int32_t page_size) {
     const int32_t batch = blockIdx.x;
-    const int32_t source_row = (batch + 1) * query_len - 1;
+    const int32_t source_row = batch * source_rows_per_sequence + source_row_offset;
     const int32_t begin = paged_kv_indptr[source_row];
     const int32_t end = paged_kv_indptr[source_row + 1];
     const int32_t page_count = end - begin;
@@ -274,16 +275,30 @@ extern "C" int fa3_fp8_decode_materialize_paged_metadata(
     const int32_t *paged_kv_last_page_len, int32_t *page_table,
     int32_t *seqused_k, int32_t batch_size, int32_t query_len,
     int32_t page_table_batch_stride, int32_t page_size, cudaStream_t stream) {
+    return fa3_fp8_paged_materialize_metadata(
+        paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len, page_table,
+        seqused_k, batch_size, query_len, query_len - 1,
+        page_table_batch_stride, page_size, stream);
+}
+
+extern "C" int fa3_fp8_paged_materialize_metadata(
+    const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
+    const int32_t *paged_kv_last_page_len, int32_t *page_table,
+    int32_t *seqused_k, int32_t batch_size, int32_t source_rows_per_sequence,
+    int32_t source_row_offset, int32_t page_table_batch_stride, int32_t page_size,
+    cudaStream_t stream) {
     if (paged_kv_indptr == nullptr || paged_kv_indices == nullptr ||
         paged_kv_last_page_len == nullptr || page_table == nullptr ||
-        seqused_k == nullptr || batch_size <= 0 || query_len <= 0 ||
-        query_len > kMaxQueryLen ||
+        seqused_k == nullptr || batch_size <= 0 || source_rows_per_sequence <= 0 ||
+        source_rows_per_sequence > kMaxQueryLen || source_row_offset < 0 ||
+        source_row_offset >= source_rows_per_sequence ||
         page_table_batch_stride <= 0 || page_size <= 0) {
         return cudaErrorInvalidValue;
     }
     materialize_paged_metadata_kernel<<<batch_size, kMetadataThreads, 0, stream>>>(
         paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len, page_table,
-        seqused_k, query_len, page_table_batch_stride, page_size);
+        seqused_k, source_rows_per_sequence, source_row_offset,
+        page_table_batch_stride, page_size);
     return cudaPeekAtLastError();
 }
 

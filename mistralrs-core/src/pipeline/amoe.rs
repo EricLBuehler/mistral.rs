@@ -256,6 +256,9 @@ impl MetadataMixin for AnyMoePipeline {
     fn cleanup_cuda_graphs(&self) {
         get_mut_arcmutex!(self.target).cleanup_cuda_graphs()
     }
+    fn reclaim_cuda_graph_memory(&self, max_entries: usize) -> usize {
+        get_mut_arcmutex!(self.target).reclaim_cuda_graph_memory(max_entries)
+    }
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         get_mut_arcmutex!(self.target).generation_defaults()
     }
@@ -264,6 +267,9 @@ impl MetadataMixin for AnyMoePipeline {
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         None
+    }
+    fn execution_devices(&self) -> Vec<Device> {
+        get_mut_arcmutex!(self.target).execution_devices()
     }
 }
 

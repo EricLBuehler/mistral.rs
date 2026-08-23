@@ -12,7 +12,10 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-use candle_core::{cuda_backend::cudarc::driver::sys, Var};
+use candle_core::{
+    cuda_backend::cudarc::driver::{sys, CudaStream},
+    Var,
+};
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use mistralrs_quant::{
     IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, ShardedVarBuilder, UnquantLinear,
@@ -134,6 +137,15 @@ fn dflash_graph_precapture_shapes(
     shapes.sort_unstable();
     shapes.dedup();
     shapes
+}
+
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn drain_dflash_lru_entries<T>(entries: &mut Vec<T>, max_entries: usize) -> Vec<T> {
+    let count = max_entries.min(entries.len());
+    entries.drain(..count).collect()
 }
 
 fn dflash_prefix_replay(
@@ -1116,15 +1128,23 @@ struct DFlashCudaGraphOutput {
     candidate_probs: Option<Tensor>,
 }
 
+#[cfg(any(
+    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
+    test
+))]
+fn copy_dflash_graph_output_rows(output: &Tensor, real_batch: usize) -> Result<Tensor> {
+    output.narrow(0, 0, real_batch)?.copy()
+}
+
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphOutput {
     fn finish(self, real_batch: usize) -> Result<DFlashProposalBatch> {
-        let tokens = self.tokens.narrow(0, 0, real_batch)?.copy()?;
+        let tokens = copy_dflash_graph_output_rows(&self.tokens, real_batch)?;
         match (self.candidate_ids, self.candidate_probs) {
             (Some(candidate_ids), Some(candidate_probs)) => Ok(DFlashProposalBatch::DeviceSparse {
                 tokens,
-                candidate_ids: candidate_ids.narrow(0, 0, real_batch)?.copy()?,
-                candidate_probs: candidate_probs.narrow(0, 0, real_batch)?.copy()?,
+                candidate_ids: copy_dflash_graph_output_rows(&candidate_ids, real_batch)?,
+                candidate_probs: copy_dflash_graph_output_rows(&candidate_probs, real_batch)?,
             }),
             (None, None) => Ok(DFlashProposalBatch::DeviceTokens(tokens)),
             _ => candle_core::bail!("DFlash selector returned incomplete sparse probabilities"),
@@ -1439,28 +1459,102 @@ impl DFlashCudaGraphEntry {
         self.staging.order_before_graph()?;
         self.launch(real_batch)
     }
-}
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-fn release_dflash_cuda_graph(entry: DFlashCudaGraphEntry) {
-    let stream = entry.graph.stream().clone();
-    drop(entry);
-    if let Err(err) = crate::pipeline::cuda_graph::trim_cuda_graph_memory(&stream) {
-        tracing::warn!("Failed to trim released DFlash CUDA graph memory: {err:?}");
+    fn release(self) -> (Arc<CudaStream>, Result<()>) {
+        let Self {
+            key: _,
+            staging,
+            buffers,
+            token_embedding,
+            lm_head,
+            mask_token_id: _,
+            host_rows,
+            graph,
+        } = self;
+        let release = release_dflash_cuda_graph_resources(graph, (staging, buffers, host_rows));
+        drop((token_embedding, lm_head));
+        release
     }
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-impl Drop for DFlashCudaGraphState {
-    fn drop(&mut self) {
-        for entry in self.entries.drain(..) {
-            release_dflash_cuda_graph(entry);
+fn release_dflash_cuda_graph_resources<T>(
+    graph: crate::pipeline::cuda_graph::CudaGraphHandle,
+    resources: T,
+) -> (Arc<CudaStream>, Result<()>) {
+    let stream = graph.stream().clone();
+    let mut release_result = stream
+        .synchronize()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("DFlash CUDA graph entry release wait failed"));
+    drop(resources);
+    if let Err(err) = stream.context().check_err() {
+        if release_result.is_ok() {
+            release_result = Err(candle_core::Error::wrap(err)
+                .context("DFlash CUDA graph entry storage release failed"));
+        }
+    }
+    let storage_result = stream
+        .synchronize()
+        .map_err(candle_core::Error::wrap)
+        .map_err(|err| err.context("DFlash CUDA graph entry storage release wait failed"));
+    if release_result.is_ok() {
+        release_result = storage_result;
+    }
+    drop(graph);
+    (stream, release_result)
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+fn release_dflash_cuda_graphs(entries: Vec<DFlashCudaGraphEntry>) {
+    let mut streams = Vec::new();
+    for entry in entries {
+        let (stream, release_result) = entry.release();
+        if let Err(err) = release_result {
+            tracing::warn!("Failed to release DFlash CUDA graph entry storage: {err:?}");
+        }
+        if !streams.iter().any(|known: &Arc<CudaStream>| {
+            known.context().cu_device() == stream.context().cu_device()
+        }) {
+            streams.push(stream);
+        }
+    }
+    for stream in streams {
+        if let Err(err) = crate::pipeline::cuda_graph::trim_cuda_graph_memory(&stream) {
+            tracing::warn!("Failed to trim released DFlash CUDA graph memory: {err:?}");
         }
     }
 }
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+fn release_dflash_cuda_graph(entry: DFlashCudaGraphEntry) {
+    release_dflash_cuda_graphs(vec![entry]);
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+impl Drop for DFlashCudaGraphState {
+    fn drop(&mut self) {
+        release_dflash_cuda_graphs(std::mem::take(&mut self.entries));
+    }
+}
+
+#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
 impl DFlashCudaGraphState {
+    fn evict_lru_for_memory_pressure(&mut self, max_entries: usize) -> usize {
+        let entries = drain_dflash_lru_entries(&mut self.entries, max_entries);
+        let evicted = entries.len();
+        if evicted == 0 {
+            return 0;
+        }
+        release_dflash_cuda_graphs(entries);
+        crate::pipeline::cuda_graph::record_cuda_graph_evictions(
+            CudaGraphComponent::DFlash,
+            "memory_pressure",
+            evicted,
+        );
+        evicted
+    }
+
     fn store(&mut self, entry: DFlashCudaGraphEntry) {
         if self.entries.len() >= DFLASH_CUDA_GRAPH_CACHE_CAPACITY {
             release_dflash_cuda_graph(self.entries.remove(0));
@@ -1919,6 +2013,21 @@ pub(crate) fn windowed_kv_cache_size_in_bytes(
 }
 
 impl DFlashDraftModel {
+    pub(crate) fn evict_cuda_graphs_lru(&self, max_entries: usize) -> usize {
+        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        {
+            self.cuda_graphs
+                .lock()
+                .expect("dflash CUDA graph cache poisoned")
+                .evict_lru_for_memory_pressure(max_entries)
+        }
+        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        {
+            let _ = max_entries;
+            0
+        }
+    }
+
     /// Loads a DFlash/DFlash2 drafter from a local path or HF repo. `target_num_layers` and
     /// `target_hidden_size` validate the checkpoint against the target model; the config's draft
     /// ISQ type requantizes the projection weights so drafting reads match the target's own.
@@ -3514,16 +3623,17 @@ mod tests {
     use candle_core::{Device, Result, Tensor, D};
     use mistralrs_quant::QuantMethod;
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-    use super::windowed_kv_checkpoint_capacity;
     use super::{
-        contiguous_row_range, dflash_adaptive_env_value, dflash_graph_host_rows,
-        dflash_graph_plans, dflash_graph_positions_fit, dflash_graph_precapture_shapes,
-        dflash_prefix_replay, dflash_rope_from_positions, gather_ctx_taps, linear_from_weight,
+        contiguous_row_range, copy_dflash_graph_output_rows, dflash_adaptive_env_value,
+        dflash_graph_host_rows, dflash_graph_plans, dflash_graph_positions_fit,
+        dflash_graph_precapture_shapes, dflash_prefix_replay, dflash_rope_from_positions,
+        drain_dflash_lru_entries, gather_ctx_taps, linear_from_weight,
         resolve_dflash_sampling_policy, select_ctx_kv_rows, select_dflash_depth,
         update_dormant_sequences, DFlashGraphHostInput, DFlashSamplingInputs,
         DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
     };
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    use super::{release_dflash_cuda_graph_resources, windowed_kv_checkpoint_capacity};
     #[cfg(feature = "cuda")]
     use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
     use crate::speculative::MtpDraftSamplingMethod;
@@ -3833,6 +3943,81 @@ mod tests {
                 (8, 2),
             ]
         );
+    }
+
+    #[test]
+    fn graph_pressure_eviction_drains_lru_entries_in_one_batch() {
+        let mut entries = vec![10, 20, 30, 40];
+        assert!(drain_dflash_lru_entries(&mut entries, 0).is_empty());
+        assert_eq!(drain_dflash_lru_entries(&mut entries, 2), vec![10, 20]);
+        assert_eq!(entries, vec![30, 40]);
+        assert_eq!(
+            drain_dflash_lru_entries(&mut entries, usize::MAX),
+            vec![30, 40]
+        );
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn graph_outputs_do_not_alias_reclaimable_buffers() -> Result<()> {
+        use candle_core::Var;
+
+        let source = Var::from_tensor(&Tensor::from_vec(
+            vec![1u32, 2, 3, 4, 5, 6],
+            (2, 3),
+            &Device::Cpu,
+        )?)?;
+        let output = copy_dflash_graph_output_rows(&source.as_detached_tensor(), 1)?;
+        source.set(&Tensor::from_vec(
+            vec![11u32, 12, 13, 14, 15, 16],
+            (2, 3),
+            &Device::Cpu,
+        )?)?;
+        assert_eq!(output.to_vec2::<u32>()?, vec![vec![1, 2, 3]]);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn graph_release_waits_for_detached_output_copies() -> anyhow::Result<()> {
+        use candle_core::{cuda_backend::cudarc::driver::sys, Var};
+
+        use crate::pipeline::cuda_graph::{
+            disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
+            restore_event_tracking_after_capture, CudaGraphHandle, CudaGraphHostStaging,
+        };
+
+        let device = Device::new_cuda(0)?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let _memory_pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let input = Var::from_tensor(&Tensor::from_vec(
+            vec![1f32, 2.0, 3.0, 4.0, 5.0, 6.0],
+            (2, 3),
+            &device,
+        )?)?;
+        let output = Var::zeros((2, 3), candle_core::DType::F32, &device)?;
+        device.synchronize()?;
+
+        let restore_event_tracking = disable_event_tracking_for_capture(&stream);
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        let captured = input.as_detached_tensor().affine(2.0, 1.0)?;
+        crate::cuda::graph::copy_tensor(&captured, &output.as_detached_tensor())?;
+        let graph = CudaGraphHandle::end_capture(&stream)?
+            .ok_or_else(|| anyhow::anyhow!("DFlash graph capture returned no graph"))?;
+        restore_event_tracking_after_capture(&stream, restore_event_tracking);
+        graph.upload()?;
+
+        let mut staging = CudaGraphHostStaging::new(stream)?;
+        graph.launch()?;
+        staging.record_graph_complete()?;
+        let detached = copy_dflash_graph_output_rows(&output.as_detached_tensor(), 1)?;
+        let (_, release_result) =
+            release_dflash_cuda_graph_resources(graph, (staging, input, output, captured));
+        release_result?;
+
+        assert_eq!(detached.to_vec2::<f32>()?, vec![vec![3.0, 5.0, 7.0]]);
+        Ok(())
     }
 
     #[test]

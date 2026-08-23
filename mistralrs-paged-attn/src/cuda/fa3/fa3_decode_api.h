@@ -71,6 +71,12 @@ int fa3_fp8_decode_materialize_paged_metadata(
     const int32_t *paged_kv_last_page_len, int32_t *page_table,
     int32_t *seqused_k, int32_t batch_size, int32_t query_len,
     int32_t page_table_batch_stride, int32_t page_size, cudaStream_t stream);
+int fa3_fp8_paged_materialize_metadata(
+    const int32_t *paged_kv_indptr, const int32_t *paged_kv_indices,
+    const int32_t *paged_kv_last_page_len, int32_t *page_table,
+    int32_t *seqused_k, int32_t batch_size, int32_t source_rows_per_sequence,
+    int32_t source_row_offset, int32_t page_table_batch_stride, int32_t page_size,
+    cudaStream_t stream);
 int fa3_fp8_decode_prepare(const Fa3Fp8DecodeScheduleParams *params, cudaStream_t stream);
 int fa3_fp8_decode_run(const Fa3Fp8DecodeParams *params, cudaStream_t stream);
 int fa3_bf16_to_e4m3_static(const void *input, void *output, int32_t rows, int32_t columns,

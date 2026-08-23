@@ -60,7 +60,7 @@ pub(crate) use backends::{
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
-const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
+pub(crate) const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
 
 #[cfg(any(
     feature = "flash-attn",

@@ -1543,6 +1543,26 @@ impl MetadataMixin for MultimodalPipeline {
             }
         }
     }
+    fn reclaim_cuda_graph_memory(&self, max_entries: usize) -> usize {
+        #[cfg(feature = "cuda")]
+        {
+            crate::pipeline::cuda_graph::reclaim_cuda_graph_entries(
+                max_entries,
+                |limit| {
+                    self.cuda_decode_graph
+                        .lock()
+                        .expect("CUDA graph mutex poisoned")
+                        .evict_lru_for_memory_pressure(limit)
+                },
+                |limit| self.model.evict_speculative_cuda_graphs(limit),
+            )
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = max_entries;
+            0
+        }
+    }
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         {
