@@ -1828,7 +1828,8 @@ impl NormalPipeline {
             return Ok(Some(replay));
         }
 
-        let logits = self.capture_cuda_decode_graph_step(
+        let replay_key = key.clone();
+        let _ = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -1836,17 +1837,20 @@ impl NormalPipeline {
             flash_meta,
             cache_config.block_size,
             recurrent_batch_kind,
+            true,
         )?;
+        step.input_ids.device().synchronize()?;
+        let replay = state
+            .replay(&replay_key, &step, CudaDecodeGraphReplayInput::Host)?
+            .ok_or_else(|| {
+                candle_core::Error::msg("newly captured CUDA decode graph was not replayable")
+            })?;
         record_cuda_graph_dispatch(
             CudaGraphComponent::Target,
             CudaGraphDispatchMode::Eager,
             CudaGraphDispatchReason::CachePopulation,
         );
-        Ok(Some(CudaDecodeGraphReplay {
-            logits,
-            spec_state: None,
-            launch: None,
-        }))
+        Ok(Some(replay))
     }
 
     fn precapture_cuda_decode_graphs_impl(
@@ -1917,6 +1921,7 @@ impl NormalPipeline {
                 &inputs.flash_meta,
                 cache_config.block_size,
                 RecurrentBatchKind::Decode,
+                false,
             )?;
             captured += 1;
         }
@@ -1940,6 +1945,7 @@ impl NormalPipeline {
         flash_meta: &FlashParams,
         block_size: usize,
         recurrent_batch_kind: RecurrentBatchKind,
+        rollback_live_state: bool,
     ) -> candle_core::Result<Tensor> {
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
@@ -2010,6 +2016,7 @@ impl NormalPipeline {
             capture_attempt,
             recurrent_snapshots.as_deref(),
             live_state_indices.as_ref(),
+            rollback_live_state,
         )?;
         state.insert(entry);
         graph_event.success();
@@ -2041,18 +2048,33 @@ impl NormalPipeline {
         attempt: candle_core::Result<T>,
         recurrent_snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
         live_state_indices: Option<&HybridStateIndicesSnapshot>,
+        rollback_live_state: bool,
     ) -> candle_core::Result<T> {
         self.restore_hybrid_state_indices(live_state_indices);
-        let Err(capture_err) = attempt else {
-            return attempt;
-        };
-        if let Err(restore_err) = self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots) {
-            state.block_eager_retry();
-            return Err(candle_core::Error::msg(format!(
-                "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
-            )));
+        match attempt {
+            Ok(value) if !rollback_live_state => Ok(value),
+            Ok(value) => {
+                self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
+                    .map_err(|restore_err| {
+                        state.block_eager_retry();
+                        candle_core::Error::msg(format!(
+                            "CUDA graph captured, but recurrent checkpoint rollback failed: {restore_err}"
+                        ))
+                    })?;
+                Ok(value)
+            }
+            Err(capture_err) => {
+                if let Err(restore_err) =
+                    self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
+                {
+                    state.block_eager_retry();
+                    return Err(candle_core::Error::msg(format!(
+                        "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
+                    )));
+                }
+                Err(capture_err)
+            }
         }
-        Err(capture_err)
     }
 
     fn snapshot_hybrid_recurrent_checkpoints(

@@ -1878,7 +1878,8 @@ impl MultimodalPipeline {
             return Ok(Some(replay));
         }
 
-        let logits = self.capture_cuda_decode_graph_step(
+        let replay_key = key.clone();
+        let _ = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -1889,17 +1890,26 @@ impl MultimodalPipeline {
                 block_size: cache_config.block_size,
                 speculative,
             },
+            true,
         )?;
+        step.input_ids.device().synchronize()?;
+        let replay = state
+            .replay(&replay_key, &step, CudaDecodeGraphReplayInput::Host)?
+            .ok_or_else(|| {
+                candle_core::Error::msg("newly captured CUDA decode graph was not replayable")
+            })?;
+        if let Some(spec_state) = replay.spec_state.as_deref() {
+            if let Err(err) = self.model.install_speculative_graph_state(spec_state) {
+                state.block_eager_retry();
+                return Err(err);
+            }
+        }
         record_cuda_graph_dispatch(
             CudaGraphComponent::Target,
             CudaGraphDispatchMode::Eager,
             CudaGraphDispatchReason::CachePopulation,
         );
-        Ok(Some(CudaDecodeGraphReplay {
-            logits,
-            spec_state: None,
-            launch: None,
-        }))
+        Ok(Some(replay))
     }
 
     fn precapture_cuda_decode_graphs_impl(
@@ -2004,6 +2014,7 @@ impl MultimodalPipeline {
                         block_size: cache_config.block_size,
                         speculative,
                     },
+                    false,
                 )?;
                 captured += 1;
             }
@@ -2028,6 +2039,7 @@ impl MultimodalPipeline {
         key: CudaDecodeGraphKey,
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
+        rollback_live_state: bool,
     ) -> candle_core::Result<Tensor> {
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::Target, CudaGraphEvent::Capture);
@@ -2187,6 +2199,7 @@ impl MultimodalPipeline {
             capture_attempt,
             recurrent_snapshots.as_deref(),
             live_state_indices.as_ref(),
+            rollback_live_state,
         )?;
         state.insert(entry);
         graph_event.success();
@@ -2218,18 +2231,33 @@ impl MultimodalPipeline {
         attempt: candle_core::Result<T>,
         recurrent_snapshots: Option<&[(usize, RecurrentCheckpointStateSnapshot)]>,
         live_state_indices: Option<&HybridStateIndicesSnapshot>,
+        rollback_live_state: bool,
     ) -> candle_core::Result<T> {
         self.restore_hybrid_state_indices(live_state_indices);
-        let Err(capture_err) = attempt else {
-            return attempt;
-        };
-        if let Err(restore_err) = self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots) {
-            state.block_eager_retry();
-            return Err(candle_core::Error::msg(format!(
-                "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
-            )));
+        match attempt {
+            Ok(value) if !rollback_live_state => Ok(value),
+            Ok(value) => {
+                self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
+                    .map_err(|restore_err| {
+                        state.block_eager_retry();
+                        candle_core::Error::msg(format!(
+                            "CUDA graph captured, but recurrent checkpoint rollback failed: {restore_err}"
+                        ))
+                    })?;
+                Ok(value)
+            }
+            Err(capture_err) => {
+                if let Err(restore_err) =
+                    self.restore_hybrid_recurrent_checkpoints(recurrent_snapshots)
+                {
+                    state.block_eager_retry();
+                    return Err(candle_core::Error::msg(format!(
+                        "CUDA graph capture failed: {capture_err}; recurrent checkpoint rollback failed: {restore_err}"
+                    )));
+                }
+                Err(capture_err)
+            }
         }
-        Err(capture_err)
     }
 
     fn disable_cuda_decode_graph(&self, err: &candle_core::Error) -> bool {
